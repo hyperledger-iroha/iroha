@@ -689,14 +689,7 @@ pub struct Kura {
     native_amx_evidence_prune_intent_max_bytes: usize,
     /// On-disk merge-ledger log and in-memory cache.
     merge_log: Mutex<MergeLedgerLog>,
-<<<<<<< HEAD
-    /// Optional telemetry sink for storage budget reporting.
-=======
-    /// Durably persisted legacy roster projection for rollback auditing only.
-    #[allow(dead_code)]
-    roster_log: Arc<RwLock<CommitRosterJournal>>,
     /// Optional telemetry sink for storage and durable finality reporting.
->>>>>>> origin/optimizations
     telemetry: OnceLock<StateTelemetry>,
     /// Last fatal writer fault observed by the background persistence loop.
     writer_fault: Mutex<Option<String>>,

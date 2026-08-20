@@ -573,7 +573,7 @@ impl RecoveryFixture {
         let ledger = self.ledger(Vec::new());
         let ledger_store = self.persist_ledger(ledger_directory, &ledger);
         let cut = ledger
-            .into_durable_certified_fetch_storage_recovery_cut(
+            .into_durable_certified_body_pipeline_storage_recovery_cut(
                 self.verified.clone(),
                 ledger_store,
                 body_store,
@@ -602,7 +602,7 @@ impl RecoveryFixture {
         let ledger = self.ledger(Vec::new());
         let ledger_store = self.persist_ledger(ledger_directory, &ledger);
         let cut = ledger
-            .into_durable_certified_fetch_storage_recovery_cut(
+            .into_durable_certified_body_pipeline_storage_recovery_cut(
                 self.verified.clone(),
                 ledger_store,
                 body_store,
@@ -720,7 +720,7 @@ impl RecoveryFixture {
             .authenticate(&self.verified, &self.keys[0], &body_store)
             .expect("authenticate terminal Serve payload");
         let cut = ledger
-            .into_durable_certified_fetch_storage_recovery_cut(
+            .into_durable_certified_body_pipeline_storage_recovery_cut(
                 self.verified.clone(),
                 ledger_store,
                 body_store,
@@ -2644,7 +2644,7 @@ fn complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness() 
             .expect("open exact CompleteTip successor payload owner");
         let cut = post
             .clone()
-            .into_durable_certified_fetch_storage_recovery_cut(
+            .into_durable_certified_body_pipeline_storage_recovery_cut(
                 verified_successor.clone(),
                 successor_store.clone(),
                 body_store,

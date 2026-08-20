@@ -1,7 +1,7 @@
 //! Sealed projection from exact runtime-bound adapter effects into lifecycle admission.
 use super::replay_authority::{
     CertifiedFetchReplayEvidenceV1, CertifiedServeReplayEvidencePairV1,
-    CertifiedServeTerminalReplayAuthorityPairV1, exact_direct_signed_admission_authority,
+    CertifiedServeTerminalReplayAuthorityPairV1, RecoveredStandaloneValidateSourceV1,
 };
 use super::schema::{
     AdmissionRequest, CandidateAdmission, CausalRoot, DurableBodyFrameReference,
@@ -70,8 +70,6 @@ pub(crate) enum AdapterEffectAdmissionError {
     MissingInheritedStatement,
     /// Broadcast carried a transport-only auxiliary payload.
     UnsupportedBroadcastPayload,
-    /// No exact sealed replay wrapper exists at this raw admission boundary.
-    UnsupportedReplayAuthority,
 }
 /// Authority-free projection of one exact runtime-bound adapter effect.
 ///
@@ -137,6 +135,15 @@ impl AuthenticatedDurableBodyFrameRecovery {
     pub(super) fn into_certified_fetch_body(
         self,
         evidence: &CertifiedFetchReplayEvidenceV1,
+    ) -> Option<DurableBodyReceipt> {
+        evidence
+            .exactly_matches_recovered_body_frame(&self.reference, &self.manifest, &self.receipt)
+            .then_some(self.receipt)
+    }
+    /// Consume this catalog seal only through an exact recovered standalone Validate family.
+    pub(super) fn into_standalone_validate_body(
+        self,
+        evidence: &RecoveredStandaloneValidateSourceV1,
     ) -> Option<DurableBodyReceipt> {
         evidence
             .exactly_matches_recovered_body_frame(&self.reference, &self.manifest, &self.receipt)
@@ -1893,29 +1900,6 @@ fn certified_serve_candidate(
         .admission_candidate(active_context)
         .ok_or(CertifiedServeAdmissionError::InvalidRequest)
 }
-pub(super) fn admission_request(
-    active_context: LifecycleContext,
-    verified: &VerifiedHeightContext,
-    effect: &AdapterEffect,
-    binding: &PendingRuntimeEffectBinding,
-) -> Result<AdmissionRequest, AdapterEffectAdmissionError> {
-    let projected = authority_free_admission_projection(active_context, verified, effect, binding)?;
-    let replay_authority = exact_direct_signed_admission_authority(effect, binding)
-        .ok_or(AdapterEffectAdmissionError::UnsupportedReplayAuthority)?;
-    let candidate = CandidateAdmission::new(
-        projected.key,
-        projected.causal_root,
-        projected.work_class,
-        projected.stage,
-        projected.initial_state,
-        projected.reconstruction_source,
-        DurablePayloadReference::None,
-        replay_authority,
-        projected.physical_geometry,
-        None,
-    );
-    Ok(AdmissionRequest::Candidate(candidate))
-}
 /// Project exact runtime coordinates without attaching replay authority.
 ///
 /// The returned value is inert. Closed replay evidence must perform the final
@@ -2749,7 +2733,7 @@ pub(super) fn durable_validation_wait_source(
 /// borrow-bound adapter token. Including both authenticated context identity
 /// and height makes accidental cross-height context reuse fail closed.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(super) fn reducer_fence_wait_source(context: LifecycleContext) -> WaitSource {
+pub(in crate::sumeragi) fn reducer_fence_wait_source(context: LifecycleContext) -> WaitSource {
     let encoded = (*context.id().as_bytes(), context.height()).encode();
     WaitSource::External(domain_digest(REDUCER_FENCE_WAIT_SOURCE_DOMAIN, &encoded))
 }

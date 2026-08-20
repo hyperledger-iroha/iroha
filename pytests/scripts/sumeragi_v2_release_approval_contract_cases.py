@@ -158,7 +158,7 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
             "offline-rustc-version",
             "offline-cargo-version",
             "offline-workspace-build",
-            "g-unit-production-865",
+            "g-unit-production-864",
             "g-unit-focused-530",
             "offline-workspace-clippy",
             "offline-workspace-format",

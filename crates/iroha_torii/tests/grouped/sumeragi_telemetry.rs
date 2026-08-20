@@ -14,8 +14,6 @@ mod sse_proof_envelope_hash;
 mod sse_proof_rejected_fields;
 #[path = "../sse_proof_verified_fields.rs"]
 mod sse_proof_verified_fields;
-#[path = "../sumeragi_commit_qc_endpoints.rs"]
-mod sumeragi_commit_qc_endpoints;
 #[path = "../sumeragi_evidence_count_endpoint.rs"]
 mod sumeragi_evidence_count_endpoint;
 #[path = "../sumeragi_evidence_list_endpoint.rs"]

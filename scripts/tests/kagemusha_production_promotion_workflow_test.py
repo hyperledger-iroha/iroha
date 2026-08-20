@@ -15,6 +15,11 @@ READINESS_GATE = ROOT / "ci/check_kagemusha_production_readiness.sh"
 READINESS_SOURCE_CONTRACT = (
     ROOT / "ci/check_kagemusha_production_readiness_source_contract.py"
 )
+NATIVE_PYTHON_LAUNCHER = (
+    ROOT
+    / "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller"
+    / "kagemusha_python_launcher.rs"
+)
 
 
 def test_production_job_is_distinct_from_the_untrusted_controller_build() -> None:
@@ -54,15 +59,23 @@ def test_production_job_installs_and_qualifies_the_exact_controller_image() -> N
         'gate_snapshot="$gate_launch_dir/check_kagemusha_production_readiness.sh"',
         qualify,
     )
-    gate = promotion.index("exec /bin/bash /dev/fd/10 promotion", gate_snapshot)
+    gate = promotion.index("launch-kagemusha-readiness-v1", gate_snapshot)
     assert install < publish < post_digest < qualify < gate
     assert gate_snapshot < gate
-    assert 'exec 8<"$gate_snapshot"' in promotion[gate_snapshot:gate]
-    assert 'exec 9<"$gate_snapshot"' in promotion[gate_snapshot:gate]
-    assert 'exec 10<"$gate_snapshot"' in promotion[gate_snapshot:gate]
-    assert "KAGEMUSHA_PRODUCTION_READINESS_GATE_EXECUTION_FD=10" in promotion
-    assert "/usr/bin/shasum -a 256 <&9" in promotion[gate_snapshot:gate]
-    assert 'test "$observed_sha256" = "$expected_sha256"' in promotion[gate_snapshot:gate]
+    native_call = promotion[gate:]
+    assert '--gate-snapshot "$gate_snapshot"' in native_call
+    assert '--gate-source "$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH"' in native_call
+    assert (
+        '--expected-macos-build '
+        '"$KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD"'
+        in native_call
+    )
+    assert (
+        '--python-runtime-tree-sha256 '
+        '"$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256"'
+        in native_call
+    )
+    assert "exec /bin/bash /dev/fd/10 promotion" not in promotion
     assert 'controller_uid" != 0' in promotion
     assert 'controller_gid" != 0' in promotion
     assert 'controller_mode" != 555' in promotion
@@ -130,11 +143,13 @@ def test_promotion_forwards_every_required_external_pin_under_env_clear() -> Non
     source = PROMOTION_WORKFLOW.read_text(encoding="utf-8")
     promotion = source.split("  production-promotion:\n", 1)[1]
     required = (
+        "KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH",
         "KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256",
         "KAGEMUSHA_PRODUCTION_READINESS_PYTHON",
         "KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256",
         "KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT",
         "KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256",
+        "KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD",
         "KAGEMUSHA_V4_RELEASE_POLICY_PATH",
         "KAGEMUSHA_V4_ARTIFACT_ROOT",
         "KAGEMUSHA_V4_KAGAMI_BIN",
@@ -163,6 +178,8 @@ def test_promotion_forwards_every_required_external_pin_under_env_clear() -> Non
         "KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH_SHA256",
         "KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH",
         "KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH_SHA256",
+        "KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH",
+        "KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256",
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT",
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID",
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY",
@@ -170,11 +187,91 @@ def test_promotion_forwards_every_required_external_pin_under_env_clear() -> Non
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID",
         "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY",
     )
+    launcher = NATIVE_PYTHON_LAUNCHER.read_text(encoding="utf-8")
+    native_inventory = launcher.split(
+        "const READINESS_EXTERNAL_ENVIRONMENT_NAMES: &[&str] = &[", 1
+    )[1].split("];", 1)[0]
+    native_names = tuple(
+        line.strip().removesuffix(",").strip('"')
+        for line in native_inventory.splitlines()
+        if line.strip().startswith('"')
+    )
+    assert native_names == required
+    native_command_environment = promotion.split(
+        "sudo -n /usr/bin/env -i", 1
+    )[1].split("launch-kagemusha-readiness-v1", 1)[0]
+    workflow_names = tuple(
+        line.strip().split("=", 1)[0]
+        for line in native_command_environment.splitlines()
+        if line.strip().startswith("KAGEMUSHA_")
+    )
+    assert workflow_names == required
     for name in required:
         assert f"{name}: ${{{{ vars.{name} }}}}" in promotion
         assert f'{name}="${name}"' in promotion
     assert "sudo -n /usr/bin/env -i" in promotion
     assert "KAGEMUSHA_PRODUCTION_READINESS_ROOT" not in promotion
+
+
+def test_native_readiness_launcher_rejects_ambient_extensions_and_clears_child_env() -> None:
+    """Unknown Kagemusha names must not cross the native pre-exec boundary."""
+
+    source = NATIVE_PYTHON_LAUNCHER.read_text(encoding="utf-8")
+    readiness = source.split("fn launch_readiness_macos", 1)[1].split(
+        "fn launch_builder_macos", 1
+    )[0]
+    validator = source.split("fn validate_readiness_environment", 1)[1].split(
+        "fn exit_status", 1
+    )[0]
+    assert "READINESS_EXTERNAL_ENVIRONMENT_NAMES" in source
+    assert "variable inventory is not exact" in source
+    assert '!name.starts_with("KAGEMUSHA_")' not in validator
+    assert ".env_clear()" in readiness
+    assert ".envs(readiness_environment)" in readiness
+    assert '.arg("/dev/fd/10")' in readiness
+
+
+def test_native_builder_executes_pinned_descriptor_and_cleanup_pins_pgid() -> None:
+    """Path replacement and descendant escape controls remain in the native TCB."""
+
+    source = NATIVE_PYTHON_LAUNCHER.read_text(encoding="utf-8")
+    builder = source.split("fn launch_builder_macos", 1)[1].split(
+        "fn native_launch_json", 1
+    )[0]
+    captured = source.split("pub(super) fn run_captured", 1)[1].split(
+        "pub(super) fn high_descriptor", 1
+    )[0]
+    assert 'let builder_fd = high_descriptor(&builder.file, 71)?;' in builder
+    assert '.arg("/dev/fd/12")' in builder
+    assert ".arg(&launch.builder)" not in builder
+    assert "WNOWAIT" in captured
+    observe = captured.index("leader_exited_nowait")
+    sweep = captured.index("sweep_pinned_process_group", observe)
+    reap = captured.index(".wait()", sweep)
+    assert observe < sweep < reap
+    assert ".try_wait()" not in captured
+    assert "ensure_empty_process_group(process_group)?" in captured[reap:]
+
+
+def test_promotion_cross_binds_native_v2_report_to_live_trust_pins() -> None:
+    """A structurally valid forged V2 envelope must not select another TCB."""
+
+    gate = READINESS_GATE.read_text(encoding="utf-8")
+    promotion = gate.rsplit("def promotion_errors()", 1)[1]
+    report = promotion.split(
+        "sealed_build_report_identity = validate_sealed_build_report", 1
+    )[1]
+    launch_call = report.split("validate_native_build_launch_binding(", 1)[1]
+    for binding in (
+        "tool_controller_sha256",
+        "trusted_python_sha256",
+        "trusted_python_runtime_tree_sha256",
+        "trusted_native_macos_build",
+        "trusted_native_os_tcb_sha256",
+    ):
+        assert binding in launch_call
+    assert "validate_native_builder_entrypoint_binding(" in report
+    assert "sealed_build_report_identity, helper_bytes" in report
 
 
 def test_python_runtime_is_a_full_preimport_tree_closure() -> None:

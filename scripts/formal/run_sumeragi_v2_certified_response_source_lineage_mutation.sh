@@ -164,5 +164,5 @@ run_case outer-transport-source-mutant \
   "2 states generated, 2 distinct states found, 0 states left on queue." \
   "The depth of the complete state graph search is 2."
 
-echo "[tlc] embedded cited-signer surrogate retained certified-response ownership"
+echo "[tlc] embedded cited-signer surrogate certified-response claim ownership"
 echo "[tlc] outer untrusted transport source orphaned the Decision recovery owner"

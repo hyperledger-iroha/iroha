@@ -57,25 +57,18 @@ use super::{
         AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLifecycleRepair, CandidateAdmission,
-<<<<<<< HEAD
-        DurableValidateApplyReplayEvidenceV1, DurableValidateReplayEvidenceV1,
-        ExactStoreRecoveredWalPersistError, ExactStoreRecoveredWalSignInstallError,
-        InstalledRecoveredWalSignStorage, InvalidBodyReportRegistryWorkProjectionPermit,
-        InvalidBodyReportReplayEvidenceV1, LifecycleContext, LifecycleDigest, LifecycleLedgerV1,
-        LifecycleWorkRegistryHolder, LiveValidateApplyRegistryReservation,
-        LiveValidateReportRegistryReservation, LiveValidateSignRegistryReservation,
-=======
         DurableValidateReplayEvidenceV1, ExactStoreRecoveredWalPersistError,
         ExactStoreRecoveredWalSignInstallError, InstalledRecoveredWalSignStorage,
         InvalidBodyReportReplayEvidenceV1, LifecycleContext, LifecycleDigest, LifecycleLedgerError,
-        LifecycleLedgerV1, LifecycleWorkRegistryHolder, LiveValidateSignRegistryReservation,
->>>>>>> origin/optimizations
+        LifecycleLedgerV1, LifecycleWorkRegistryHolder, LiveValidateApplyRegistryReservation,
+        LiveValidateApplyWorkProjectionPermit, LiveValidateReportRegistryReservation,
+        LiveValidateReportWorkProjectionPermit, LiveValidateSignRegistryReservation,
         LiveValidateSignWorkProjectionPermit, OpenedRecoveredWalValidateLedger,
-        PersistedRecoveredWalValidateLedger, PreparedInvalidBodyReportRegistryWork,
-        PreparedLiveValidateSignRegistryWork, PreparedValidateApplyRegistryWork,
+        PersistedRecoveredWalValidateLedger, PreparedLiveValidateApplyRegistryWork,
+        PreparedLiveValidateReportRegistryWork, PreparedLiveValidateSignRegistryWork,
         ProductionLifecycleOwnerV1, ProductionOpenedRecoveredWalSignLifecycleCut,
-<<<<<<< HEAD
-        ProductionRecoveredWalStorageError, ReadyRejectedAdapterAuthority,
+        ProductionRecoveredWalStorageError, PublishedFinalizedLifecycleRetainedFloorV1,
+        ReadyRejectedAdapterAuthority, ReadyValidateApplyPredecessorAuthority,
         ReadyValidateSignPredecessorAuthority, ReadyValidatedAdapterAuthority,
         RecoveredDecisionApplyCandidateLineageV1, RecoveredDecisionApplyCompletionProjectionPermit,
         RecoveredDecisionApplyDispatchIdentityV1, RecoveredDecisionApplyDispatchKeyV1,
@@ -84,21 +77,8 @@ use super::{
         RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
         RecoveredWalParentFactoryError, RecoveredWalProductionOwnerOpenV1,
         RecoveredWalVoteReplayEvidenceV1, SealedInvalidBodyReportProjectionPermit,
-        SealedLiveWalPersistedEffectV1, SealedValidateSignProjectionPermit,
-        ValidateApplyRegistryWorkProjectionPermit,
-=======
-        ProductionRecoveredWalStorageError, PublishedFinalizedLifecycleRetainedFloorV1,
-        ReadyRejectedAdapterAuthority, ReadyValidateSignPredecessorAuthority,
-        ReadyValidatedAdapterAuthority, RecoveredDecisionApplyCandidateLineageV1,
-        RecoveredDecisionApplyCompletionProjectionPermit, RecoveredDecisionApplyDispatchIdentityV1,
-        RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionApplyPendingLineageV1,
-        RecoveredDecisionApplyRegistryProjectionPermit, RecoveredDecisionFetchStoreProjectionV1,
-        RecoveredLifecycleNextWalVoteSealV1, RecoveredWalControlReplayEvidenceV1,
-        RecoveredWalDecisionFetchReplayEvidenceV1, RecoveredWalParentFactoryError,
-        RecoveredWalProductionOwnerOpenV1, RecoveredWalVoteReplayEvidenceV1,
-        SealedInvalidBodyReportProjectionPermit, SealedLiveWalPersistedEffectV1,
+        SealedLiveWalPersistedEffectV1, SealedValidateApplyProjectionPermit,
         SealedValidateSignProjectionPermit,
->>>>>>> origin/optimizations
     },
     v2_runtime::{
         PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit,
@@ -814,6 +794,138 @@ impl RecoveredLifecycleLocalProposalAttemptV1 {
 pub(crate) struct ProductionLifecycleAdapterStartupV1 {
     state: ProductionLifecycleAdapterStartupStateV1,
 }
+/// One exact reducer input that must be replayed before a durable ordinary
+/// certified-body successor can become executable after restart.
+///
+/// The lifecycle storage join constructs these steps from the authenticated
+/// terminal parent rows and their sealed body frames. They are deliberately
+/// ordinal-bearing so cold replay has one canonical order even when Fetch,
+/// Store, and Validate capacity classes contain different owners.
+#[derive(Clone, Debug)]
+pub(in crate::sumeragi) struct CertifiedBodyPipelineColdReplayStepV1 {
+    ordinal: u128,
+    kind: CertifiedBodyPipelineColdReplayKindV1,
+}
+#[derive(Clone, Debug)]
+enum CertifiedBodyPipelineColdReplayKindV1 {
+    BodyAvailable {
+        tag: reducer::EventTag,
+        manifest: wire::PayloadManifest,
+        expected_store: AdapterEffect,
+    },
+    BodyStored {
+        tag: reducer::EventTag,
+        durable: DurableBodyReceipt,
+        expected_validate: AdapterEffect,
+    },
+}
+impl CertifiedBodyPipelineColdReplayStepV1 {
+    /// Stable cold-replay order. Standalone Proposal Validate recovery uses
+    /// both reducer inputs at one immutable lifecycle ordinal.
+    pub(in crate::sumeragi) const fn order_key(&self) -> (u128, u8) {
+        let sequence = match &self.kind {
+            CertifiedBodyPipelineColdReplayKindV1::BodyAvailable { .. } => 0,
+            CertifiedBodyPipelineColdReplayKindV1::BodyStored { .. } => 1,
+        };
+        (self.ordinal, sequence)
+    }
+    /// Seal one terminal Fetch input and its exact live Store effect.
+    pub(in crate::sumeragi) fn body_available(
+        ordinal: u128,
+        tag: reducer::EventTag,
+        manifest: wire::PayloadManifest,
+        expected_store: AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::StoreBody {
+            tag: store_tag,
+            round,
+            subject,
+        } = &expected_store
+        else {
+            return None;
+        };
+        (ordinal != 0
+            && *store_tag == tag
+            && *round == manifest.round
+            && *subject == manifest.subject)
+            .then_some(Self {
+                ordinal,
+                kind: CertifiedBodyPipelineColdReplayKindV1::BodyAvailable {
+                    tag,
+                    manifest,
+                    expected_store,
+                },
+            })
+    }
+
+    /// Seal one terminal Store input and its exact live Validate effect.
+    pub(in crate::sumeragi) fn body_stored(
+        ordinal: u128,
+        tag: reducer::EventTag,
+        durable: DurableBodyReceipt,
+        expected_validate: AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::ValidateBody {
+            tag: validate_tag,
+            round,
+            subject,
+        } = &expected_validate
+        else {
+            return None;
+        };
+        (ordinal != 0
+            && *validate_tag == tag
+            && *round == durable.round()
+            && *subject == durable.subject())
+        .then_some(Self {
+            ordinal,
+            kind: CertifiedBodyPipelineColdReplayKindV1::BodyStored {
+                tag,
+                durable,
+                expected_validate,
+            },
+        })
+    }
+
+    /// Return the terminal parent ordinal that orders this replay input.
+    pub(in crate::sumeragi) const fn ordinal(&self) -> u128 {
+        self.ordinal
+    }
+
+    #[cfg(test)]
+    fn is_structurally_exact_for_test(&self) -> bool {
+        match &self.kind {
+            CertifiedBodyPipelineColdReplayKindV1::BodyAvailable {
+                tag,
+                manifest,
+                expected_store,
+            } => matches!(
+                expected_store,
+                AdapterEffect::StoreBody {
+                    tag: store_tag,
+                    round,
+                    subject,
+                } if store_tag == tag
+                    && *round == manifest.round
+                    && *subject == manifest.subject
+            ),
+            CertifiedBodyPipelineColdReplayKindV1::BodyStored {
+                tag,
+                durable,
+                expected_validate,
+            } => matches!(
+                expected_validate,
+                AdapterEffect::ValidateBody {
+                    tag: validate_tag,
+                    round,
+                    subject,
+                } if validate_tag == tag
+                    && *round == durable.round()
+                    && *subject == durable.subject()
+            ),
+        }
+    }
+}
 /// Move-only Kura- and recovery-bound lifecycle storage authority.
 ///
 /// Recovery is the sole production mint. It freezes the exact Kura instance,
@@ -900,6 +1012,7 @@ impl RecoveredLifecycleLaunchStoragePathsV1 {
         &self.wal_path
     }
     /// Borrow the exact recovery-derived chunk root for durable Serve restore.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn chunk_root(&self) -> &std::path::Path {
         &self.chunk_root
     }
@@ -1198,6 +1311,128 @@ impl ProductionLifecycleAdapterStartupV1 {
                 leader_wire_launch_prepared: false,
             },
         }
+    }
+    /// Replay the exact terminal ordinary certified-body prefix retained by
+    /// LedgerV1 before any Store or Validate successor is exposed as Ready.
+    ///
+    /// Each input is prepared on cloned reducer state and must apply with the
+    /// exact effect already authenticated by the lifecycle/body-store join.
+    /// Busy, stale, duplicate, missing-work, or effect-shape outcomes are all
+    /// startup-fatal: accepting any of them would publish a concrete carrier
+    /// whose reducer predecessor was not reconstructed in this process.
+    pub(in crate::sumeragi) fn replay_certified_body_pipeline(
+        self,
+        steps: &[CertifiedBodyPipelineColdReplayStepV1],
+    ) -> Result<Self, &'static str> {
+        if steps
+            .windows(2)
+            .any(|pair| pair[0].order_key() >= pair[1].order_key())
+        {
+            return Err("certified body cold replay steps are not canonically ordered");
+        }
+        if steps.is_empty() {
+            return Ok(self);
+        }
+        let (
+            mut adapter,
+            effects,
+            pending_kura_apply,
+            local_proposal_attempt,
+            leader_wire_launch_prepared,
+        ) = match self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered {
+                adapter,
+                effects,
+                pending_kura_apply,
+                local_proposal_attempt,
+                leader_wire_launch_prepared,
+            } => (
+                adapter,
+                effects,
+                pending_kura_apply,
+                local_proposal_attempt,
+                leader_wire_launch_prepared,
+            ),
+            #[cfg(test)]
+            ProductionLifecycleAdapterStartupStateV1::Fixture => {
+                if steps
+                    .iter()
+                    .all(CertifiedBodyPipelineColdReplayStepV1::is_structurally_exact_for_test)
+                {
+                    return Ok(Self {
+                        state: ProductionLifecycleAdapterStartupStateV1::Fixture,
+                    });
+                }
+                return Err("fixture adapter cannot replay certified body pipeline");
+            }
+        };
+        if !effects.is_empty()
+            || leader_wire_launch_prepared
+            || adapter.pending_persistence_id.is_some()
+            || !adapter.deferred_completions.is_empty()
+            || !adapter.deferred_progress_inputs.is_empty()
+            || !adapter.deferred_inputs.is_empty()
+            || adapter.ensure_ingress().is_err()
+        {
+            return Err("certified body cold replay adapter is not pristine");
+        }
+        for step in steps {
+            match &step.kind {
+                CertifiedBodyPipelineColdReplayKindV1::BodyAvailable {
+                    tag,
+                    manifest,
+                    expected_store,
+                } => {
+                    let prepared = adapter
+                        .prepare_direct_certified_body_available(*tag, manifest)
+                        .map_err(|_| "certified body cold BodyAvailable replay failed")?;
+                    let DirectCertifiedBodyAvailablePreparation::Applied(prepared) = prepared
+                    else {
+                        return Err("certified body cold BodyAvailable replay did not apply");
+                    };
+                    if prepared.store_effect() != expected_store {
+                        return Err("certified body cold BodyAvailable emitted a foreign Store");
+                    }
+                    let emitted = prepared.commit();
+                    if emitted != *expected_store {
+                        return Err("certified body cold BodyAvailable commit changed Store");
+                    }
+                }
+                CertifiedBodyPipelineColdReplayKindV1::BodyStored {
+                    tag,
+                    durable,
+                    expected_validate,
+                } => {
+                    let prepared = adapter
+                        .prepare_direct_body_stored(
+                            *tag,
+                            durable.round(),
+                            durable.subject(),
+                            durable,
+                        )
+                        .map_err(|_| "certified body cold BodyStored replay failed")?;
+                    let DirectBodyStoredPreparation::Applied(prepared) = prepared else {
+                        return Err("certified body cold BodyStored replay did not apply");
+                    };
+                    if prepared.validate_effect() != expected_validate {
+                        return Err("certified body cold BodyStored emitted a foreign Validate");
+                    }
+                    let emitted = prepared.commit();
+                    if emitted != *expected_validate {
+                        return Err("certified body cold BodyStored commit changed Validate");
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            state: ProductionLifecycleAdapterStartupStateV1::Recovered {
+                adapter,
+                effects,
+                pending_kura_apply,
+                local_proposal_attempt,
+                leader_wire_launch_prepared,
+            },
+        })
     }
     /// Compare the sealed adapter startup with one exact verified owner.
     pub(in crate::sumeragi) fn authorizes_verified_context(
@@ -1530,17 +1765,20 @@ impl ProductionLifecycleAdapterStartupV1 {
         {
             return Err("recovered signed Broadcast is not the exact single-child successor");
         }
-        let next_fence = adapter.reducer_fence_projection(&next_reducer);
-        let next_fence_generation =
-            if next_fence == adapter.reducer_fence_projection(&adapter.reducer) {
-                adapter.reducer_fence_generation
-            } else {
-                adapter
-                    .reducer_fence_generation
-                    .checked_add(1)
-                    .filter(|next| *next != u64::MAX)
-                    .ok_or("recovered signed Broadcast exhausted reducer fence generation")?
-            };
+        let next_fence = ReducerFenceProjection {
+            pending_persistence: None,
+            awaiting_signature: None,
+            replay_complete: adapter.replay_complete,
+        };
+        let next_fence_generation = if next_fence == adapter.reducer_fence_projection() {
+            adapter.reducer_fence_generation
+        } else {
+            adapter
+                .reducer_fence_generation
+                .checked_add(1)
+                .filter(|next| *next != u64::MAX)
+                .ok_or("recovered signed Broadcast exhausted reducer fence generation")?
+        };
         adapter.reducer = next_reducer;
         adapter.registry = next_registry;
         adapter.reducer_fence_generation = next_fence_generation;
@@ -1694,17 +1932,20 @@ impl ProductionLifecycleAdapterStartupV1 {
         {
             return Err("recovered Broadcast-and-Sign children changed across restart");
         }
-        let next_fence = adapter.reducer_fence_projection(&next_reducer);
-        let next_fence_generation =
-            if next_fence == adapter.reducer_fence_projection(&adapter.reducer) {
-                adapter.reducer_fence_generation
-            } else {
-                adapter
-                    .reducer_fence_generation
-                    .checked_add(1)
-                    .filter(|next| *next != u64::MAX)
-                    .ok_or("recovered Broadcast-and-Sign exhausted reducer fence generation")?
-            };
+        let next_fence = ReducerFenceProjection {
+            pending_persistence: None,
+            awaiting_signature: next_reducer.awaiting_signature().cloned(),
+            replay_complete: adapter.replay_complete,
+        };
+        let next_fence_generation = if next_fence == adapter.reducer_fence_projection() {
+            adapter.reducer_fence_generation
+        } else {
+            adapter
+                .reducer_fence_generation
+                .checked_add(1)
+                .filter(|next| *next != u64::MAX)
+                .ok_or("recovered Broadcast-and-Sign exhausted reducer fence generation")?
+        };
         let mut adapter = adapter;
         adapter.reducer = next_reducer;
         adapter.registry = next_registry;
@@ -1793,9 +2034,9 @@ impl ProductionLifecycleAdapterStartupV1 {
         }
     }
 }
-// TODO: The lifecycle completion transaction must consume the current recovered
-// Sign, execute its reducer acknowledgement through this retained adapter, and
-// authenticate only the next `awaiting_signature` emitted by that step. Queued
+// The lifecycle completion transaction consumes the current recovered Sign,
+// executes its reducer acknowledgement through this retained adapter, and
+// authenticates only the next `awaiting_signature` emitted by that step. Queued
 // signatures deliberately have no eager lifecycle token or pre-bound event tag.
 struct ProductionRecoveredLifecycleOwnerAssemblyLinearity;
 impl Drop for ProductionRecoveredLifecycleOwnerAssemblyLinearity {
@@ -1998,6 +2239,7 @@ struct StorageRecoveredWalSignInstallError<'registry> {
     _startup: ProductionLifecycleAdapterStartupV1,
     error: ExactStoreRecoveredWalSignInstallError<'registry>,
 }
+/// Fail-stop recovered lifecycle-open diagnostic with no retry authority.
 #[must_use = "failed exact-store lifecycle open requires process restart"]
 struct StorageRecoveredWalOpenError<'registry> {
     failure: StorageRecoveredWalOpenFailure<'registry>,
@@ -2005,11 +2247,9 @@ struct StorageRecoveredWalOpenError<'registry> {
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum StorageRecoveredWalOpenFailure<'registry> {
     Storage {
-        _adapter_startup: ProductionLifecycleAdapterStartupV1,
         error: ProductionRecoveredWalStorageError,
     },
     OwnerSeal {
-        _adapter_startup: ProductionLifecycleAdapterStartupV1,
         _opened: ProductionOpenedRecoveredWalSignLifecycleCut<'registry>,
     },
 }
@@ -3241,6 +3481,27 @@ struct ReducerFenceProjection {
     awaiting_signature: Option<reducer::SignableMessage>,
     replay_complete: bool,
 }
+/// Exact process-local generation which wakes direct lifecycle body work.
+///
+/// The source is derived from the adapter's immutable height context and the
+/// generation is sampled from the same serialized runtime.  Callers may feed
+/// this opaque pair only into the lifecycle scheduler; no raw generation mint
+/// is exposed outside the adapter/executor boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct LifecycleReducerFenceObservationV1 {
+    source: super::v2_lifecycle_coordinator::WaitSource,
+    generation: u64,
+}
+impl LifecycleReducerFenceObservationV1 {
+    /// Return the context-scoped external wait source.
+    pub(in crate::sumeragi) const fn source(self) -> super::v2_lifecycle_coordinator::WaitSource {
+        self.source
+    }
+    /// Return the exact sampled reducer-fence generation.
+    pub(in crate::sumeragi) const fn generation(self) -> u64 {
+        self.generation
+    }
+}
 /// Borrow-bound generation snapshot for one direct completion blocked by the
 /// reducer's persistence or signature fence.
 ///
@@ -3249,7 +3510,7 @@ struct ReducerFenceProjection {
 /// external-generation wait.
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "the sampled reducer fence must be settled or deliberately abandoned"]
-struct PreparedReducerFenceWait<'a> {
+pub(in crate::sumeragi) struct PreparedReducerFenceWait<'a> {
     _adapter: &'a mut SumeragiV2Adapter,
     context_id: wire::HeightContextId,
     generation: u64,
@@ -3258,12 +3519,12 @@ struct PreparedReducerFenceWait<'a> {
 impl PreparedReducerFenceWait<'_> {
     /// Return the authenticated height-context identity used to derive the
     /// coordinator's domain-separated external wait source.
-    const fn context_id(&self) -> wire::HeightContextId {
+    pub(in crate::sumeragi) const fn context_id(&self) -> wire::HeightContextId {
         self.context_id
     }
     /// Return the exact monotone reducer-fence generation observed by this
     /// blocked attempt.
-    const fn generation(&self) -> u64 {
+    pub(in crate::sumeragi) const fn generation(&self) -> u64 {
         self.generation
     }
 }
@@ -3282,8 +3543,6 @@ enum DirectCertifiedBodyAvailableInactive {
     Stutter(DirectCertifiedBodyAvailableStutter),
     /// The effect belongs to a stale reducer incarnation or view.
     Superseded(reducer::IgnoreReason),
-    /// A conflicting Busy-deferred proposal still owns registry state.
-    DeferredConflict,
 }
 /// Borrow-bound non-applied direct-completion classification.
 ///
@@ -3306,7 +3565,7 @@ impl PreparedDirectCertifiedBodyAvailableInactive<'_> {
 /// Fully checked direct `BodyAvailable -> StoreBody` transition.
 ///
 /// Preparation executes the reducer transition only on cloned state and holds
-/// the exclusive adapter borrow. Consequently the future post-dequeue tail can
+/// the exclusive adapter borrow. Consequently the post-publication tail can
 /// install this exact state without another fallible reducer call or a parallel
 /// producer-continuation reservation.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -3320,6 +3579,38 @@ struct PreparedDirectCertifiedBodyAvailable<'a> {
     store_effect: AdapterEffect,
     next_fence_generation: u64,
 }
+/// Closed adapter half of one ordinary certified Fetch-to-Store transaction.
+///
+/// The derived Store effect stays nested beside the cloned reducer state.  It
+/// can be inspected only by the exact registry successor and committed only
+/// after LedgerV1 publication.
+#[must_use = "the certified Fetch adapter successor has not been published"]
+pub(in crate::sumeragi) struct PreparedCertifiedFetchStoreAdapterV1<'a> {
+    preview: PreparedDirectCertifiedBodyAvailable<'a>,
+}
+impl PreparedCertifiedFetchStoreAdapterV1<'_> {
+    /// Borrow the exact Store effect for registry successor projection.
+    pub(in crate::sumeragi) const fn store_effect(&self) -> &AdapterEffect {
+        self.preview.store_effect()
+    }
+    /// Install the already-checked reducer transition after durable publication.
+    pub(in crate::sumeragi) fn commit_after_durable_publication(self) {
+        let expected = self.preview.store_effect().clone();
+        let committed = self.preview.commit();
+        assert_eq!(committed, expected);
+    }
+}
+/// Outcome of previewing one ordinary certified Fetch completion.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[must_use = "the direct certified Fetch preview must be settled"]
+pub(in crate::sumeragi) enum CertifiedFetchStoreAdapterPreparationV1<'a> {
+    /// The exact Fetch-to-Store reducer transition is ready for publication.
+    Applied(PreparedCertifiedFetchStoreAdapterV1<'a>),
+    /// A reducer persistence/signature fence must advance before retry.
+    Blocked(PreparedReducerFenceWait<'a>),
+    /// The lifecycle carrier and reducer no longer describe the same live edge.
+    Inactive,
+}
 /// Borrow-bound direct adapter preview for recovered Decision Fetch settlement.
 ///
 /// The body authority remains opaque beside the cloned reducer transition.
@@ -3329,22 +3620,6 @@ struct PreparedDirectCertifiedBodyAvailable<'a> {
 pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchStoreAdapterV1<'a> {
     preview: PreparedDirectCertifiedBodyAvailable<'a>,
     body: super::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1,
-}
-/// Borrow-bound ordinary certified-Fetch reducer preview.
-#[must_use = "certified Fetch Store adapter preview has not been published"]
-pub(in crate::sumeragi) struct PreparedCertifiedFetchStoreAdapterV1<'a> {
-    preview: PreparedDirectCertifiedBodyAvailable<'a>,
-}
-impl PreparedCertifiedFetchStoreAdapterV1<'_> {
-    /// Borrow the single reducer-derived Store successor.
-    pub(in crate::sumeragi) const fn store_effect(&self) -> &AdapterEffect {
-        self.preview.store_effect()
-    }
-    /// Install the checked reducer cut after lifecycle publication.
-    pub(in crate::sumeragi) fn commit_after_durable_settlement(self) {
-        let expected = self.preview.store_effect().clone();
-        assert_eq!(self.preview.commit(), expected);
-    }
 }
 impl PreparedRecoveredDecisionFetchStoreAdapterV1<'_> {
     /// Borrow the reducer-derived Store effect only for fixed registry projection.
@@ -3374,7 +3649,7 @@ impl PreparedDirectCertifiedBodyAvailable<'_> {
     /// Install the already-checked reducer and registry state.
     ///
     /// This method performs only infallible in-memory moves and accounting. The
-    /// future composite transaction must call it only after every fallible
+    /// lifecycle transaction calls it only after every fallible
     /// lifecycle/registry/service preflight succeeds and the selected ingress
     /// occurrence is committed under the output fail-stop guard.
     // Recovered Decision Fetch settlement now reaches this commit only while
@@ -3412,12 +3687,7 @@ enum DirectCertifiedBodyAvailablePreparation<'a> {
     Applied(PreparedDirectCertifiedBodyAvailable<'a>),
     /// A reducer-owned persistence/signature fence must advance before retry.
     Blocked(PreparedReducerFenceWait<'a>),
-    /// The exact attempt was an idempotent stutter, a superseded incarnation,
-    /// or a transitional deferred conflict.
-    ///
-    /// TODO: Remove the deferred-conflict member with the deferred producer store.
-    /// The production lifecycle cut must never call that store merely to make a
-    /// direct completion executable.
+    /// The exact attempt was an idempotent stutter or a superseded incarnation.
     Inactive(PreparedDirectCertifiedBodyAvailableInactive<'a>),
 }
 /// Exact idempotent disposition of one direct durable-body completion.
@@ -3471,21 +3741,33 @@ struct PreparedDirectBodyStored<'a> {
     validate_effect: AdapterEffect,
     next_fence_generation: u64,
 }
-/// Borrow-bound ordinary Store-to-Validate reducer preview.
-#[must_use = "durable Store Validate adapter preview has not been published"]
+/// Closed adapter half of one ordinary Store-to-Validate transaction.
+#[must_use = "the durable Store adapter successor has not been published"]
 pub(in crate::sumeragi) struct PreparedDurableStoreValidateAdapterV1<'a> {
     preview: PreparedDirectBodyStored<'a>,
 }
 impl PreparedDurableStoreValidateAdapterV1<'_> {
-    /// Borrow the single reducer-derived Validate successor.
+    /// Borrow the exact Validate effect for registry successor projection.
     pub(in crate::sumeragi) const fn validate_effect(&self) -> &AdapterEffect {
         self.preview.validate_effect()
     }
-    /// Install the checked reducer cut after lifecycle publication.
-    pub(in crate::sumeragi) fn commit_after_durable_settlement(self) {
+    /// Install the already-checked reducer transition after durable publication.
+    pub(in crate::sumeragi) fn commit_after_durable_publication(self) {
         let expected = self.preview.validate_effect().clone();
-        assert_eq!(self.preview.commit(), expected);
+        let committed = self.preview.commit();
+        assert_eq!(committed, expected);
     }
+}
+/// Outcome of previewing one ordinary durable Store completion.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[must_use = "the direct durable Store preview must be settled"]
+pub(in crate::sumeragi) enum DurableStoreValidateAdapterPreparationV1<'a> {
+    /// The exact Store-to-Validate reducer transition is ready for publication.
+    Applied(PreparedDurableStoreValidateAdapterV1<'a>),
+    /// A reducer persistence/signature fence must advance before retry.
+    Blocked(PreparedReducerFenceWait<'a>),
+    /// The lifecycle carrier and reducer no longer describe the same live edge.
+    Inactive,
 }
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectBodyStored<'_> {
@@ -3495,9 +3777,10 @@ impl PreparedDirectBodyStored<'_> {
     }
     /// Install the already-checked reducer and registry state.
     ///
-    /// This method performs only infallible in-memory moves and accounting. It
-    /// is consumed only by the move-only Store parent-to-child transaction
-    /// after durable successor publication.
+    /// This method performs only infallible in-memory moves and accounting. The
+    /// move-only Store parent-to-child registry transaction calls it only after
+    /// LedgerV1 publication; cold open replays the same body-stage edge before
+    /// exposing the child carrier.
     fn commit(self) -> AdapterEffect {
         let Self {
             adapter,
@@ -3582,7 +3865,9 @@ struct PreparedDirectValidationFailedInactive<'a> {
     _adapter: &'a mut SumeragiV2Adapter,
     next_reducer: reducer::Reducer,
     next_registry: WireRegistry,
+    event: reducer::Event,
     disposition: DirectValidationFailedInactive,
+    next_fence_generation: u64,
 }
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectValidationFailedInactive<'_> {
@@ -3829,7 +4114,9 @@ struct PreparedDirectValidationSucceededInactive<'a> {
     _adapter: &'a mut SumeragiV2Adapter,
     next_reducer: reducer::Reducer,
     next_registry: WireRegistry,
+    event: reducer::Event,
     disposition: DirectValidationSucceededInactive,
+    next_fence_generation: u64,
 }
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectValidationSucceededInactive<'_> {
@@ -3913,65 +4200,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterCompletionAuthorityV
     dispatch_key: RecoveredDecisionApplyDispatchKeyV1,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
-}
-impl RecoveredDecisionApplyAdapterCompletionAuthorityV1 {
-    /// Authenticate an Apply completion emitted by the ordinary durable
-    /// Validate successor installed in the shared address-keyed Apply owner.
-    ///
-    /// The registry-minted permit proves that the completion still belongs to
-    /// the active claimed address. This projection independently rechecks the
-    /// retained WAL/body authority and every worker-produced receipt/artifact
-    /// coordinate before adapter state may be staged.
-    pub(in crate::sumeragi) fn from_validate_apply_registry(
-        _permit: RecoveredDecisionApplyCompletionProjectionPermit,
-        replay: &DurableValidateApplyReplayEvidenceV1,
-        effect: &AdapterEffect,
-        pending: &PendingRuntimeEffectBinding,
-        validated_receipt: &ValidatedBodyReceipt,
-        completion: &super::v2_apply::RecoveredDecisionApplyCompletionV1,
-    ) -> Option<Self> {
-        let AdapterEffect::Apply {
-            tag,
-            subject,
-            certificate,
-        } = effect
-        else {
-            return None;
-        };
-        let mut context_id = [0_u8; 32];
-        context_id.copy_from_slice(certificate.round.context_id.0.as_ref());
-        let context =
-            LifecycleContext::new(LifecycleDigest::new(context_id), certificate.round.height);
-        let digest = LifecycleDigest::new(*pending.exact_effect_identity().as_ref());
-        let key = completion.dispatch_key();
-        let artifact = completion.artifact();
-        let receipt = completion.receipt();
-        if !replay.validates_installed_apply(context, effect, pending, validated_receipt)
-            || !key.matches_carrier(context, digest)
-            || completion.subject() != *subject
-            || completion.certificate() != certificate
-            || completion.validated_receipt() != validated_receipt
-            || artifact.validate().is_err()
-            || !key.matches_height_context(&artifact.height_context)
-            || artifact.subject != *subject
-            || &artifact.commit_qc != certificate
-            || receipt.height() != artifact.height_context.height
-            || receipt.context_id() != artifact.height_context.id()
-            || receipt.block_hash() != subject.block_hash
-            || receipt.subject() != *subject
-            || receipt.certificate() != certificate.as_ref()
-            || receipt.artifact_hash() != HashOf::new(artifact)
-        {
-            return None;
-        }
-        Some(Self {
-            tag: *tag,
-            subject: *subject,
-            dispatch_key: key,
-            receipt: receipt.clone(),
-            artifact: artifact.clone(),
-        })
-    }
 }
 /// Adapter-private one-shot permit for unpacking a guarded recovered Sign result.
 ///
@@ -6221,60 +6449,6 @@ impl PreparedDirectValidationSucceededApply<'_> {
     const fn apply_effect(&self) -> &AdapterEffect {
         &self.apply_effect
     }
-    fn authenticated_decision_capability(
-        &self,
-    ) -> Option<AuthenticatedDecisionValidateApplyCapability> {
-        let AdapterEffect::Apply {
-            tag,
-            subject,
-            certificate,
-        } = &self.apply_effect
-        else {
-            return None;
-        };
-        for frame in self._adapter.wal.recovered_records().iter().rev() {
-            let (wal_identity, envelope) =
-                self._adapter.authenticate_recovered_wal_frame(frame).ok()?;
-            match envelope.record {
-                WalRecordV2::Decision(candidate)
-                    if candidate == *certificate
-                        && certificate.phase == wire::GlobalPhase::Commit
-                        && certificate.subject == *subject
-                        && tag.height() == certificate.round.height
-                        && tag.view() >= certificate.round.view =>
-                {
-                    return Some(AuthenticatedDecisionValidateApplyCapability {
-                        wal_identity,
-                        apply_effect: self.apply_effect.clone(),
-                    });
-                }
-                WalRecordV2::ProposalIntent(_)
-                | WalRecordV2::PrepareIntent(_)
-                | WalRecordV2::ObservePrepare(_)
-                | WalRecordV2::LockAndCommit { .. }
-                | WalRecordV2::TimeoutIntent(_)
-                | WalRecordV2::InstallTimeout(_)
-                | WalRecordV2::Decision(_) => {}
-            }
-        }
-        None
-    }
-}
-/// Adapter-authenticated proof that one Apply successor is owned by an exact
-/// fsynced Decision WAL frame.
-#[derive(Debug)]
-#[must_use = "Decision Apply capability must enter the sealed replay join"]
-pub(in crate::sumeragi) struct AuthenticatedDecisionValidateApplyCapability {
-    wal_identity: RecoveredWalFrameIdentity,
-    apply_effect: AdapterEffect,
-}
-impl AuthenticatedDecisionValidateApplyCapability {
-    pub(in crate::sumeragi) fn exactly_matches(&self, effect: &AdapterEffect) -> bool {
-        &self.apply_effect == effect && self.wal_identity.is_exact()
-    }
-    pub(in crate::sumeragi) fn into_parts(self) -> (RecoveredWalFrameIdentity, AdapterEffect) {
-        (self.wal_identity, self.apply_effect)
-    }
 }
 /// Borrow-bound applied validation which emits one exact safety-WAL request.
 ///
@@ -6309,7 +6483,690 @@ enum DirectValidationSucceededPreparation<'a> {
     Persist(PreparedDirectValidationSucceededPersist<'a>),
 }
 // READY_DURABLE_VALIDATE_ADAPTER_PREVIEW_BEGIN
-include!("v2_ready_durable_validate_adapter_publication.rs");
+/// Opaque adapter-owned half of one fixed Ready Validate preview join.
+///
+/// Construction requires a non-forgeable registry authority. The wrapper has
+/// no accessor or commit surface and can only be retained beside the consumed
+/// registry token by the registry-owned join.
+#[allow(dead_code)]
+#[must_use = "a sealed Ready Validate adapter preview retains its adapter borrow"]
+pub(crate) struct SealedReadyDurableValidateAdapterPreview<'a>(
+    ReadyDurableValidateAdapterPreviewKind<'a>,
+);
+/// Closed adapter classifications accepted by the fixed registry join.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[allow(dead_code)]
+enum ReadyDurableValidateAdapterPreviewKind<'a> {
+    /// Successful validation is blocked by the current reducer fence.
+    ValidatedBusy(PreparedDirectValidationSucceededBusy<'a>),
+    /// Successful validation is inactive or idempotently complete.
+    ValidatedInactive(PreparedDirectValidationSucceededInactive<'a>),
+    /// Successful validation applied without a child effect.
+    ValidatedNoEffect(PreparedDirectValidationSucceededNoEffect<'a>),
+    /// Successful validation prepared one exact decision application.
+    ValidatedApply(PreparedDirectValidationSucceededApply<'a>),
+    /// Successful validation prepared one exact safety-WAL request.
+    ValidatedPersist(PreparedDirectValidationSucceededPersist<'a>),
+    /// Deterministic rejection is blocked by the current reducer fence.
+    RejectedBusy(PreparedDirectValidationFailedBusy<'a>),
+    /// Deterministic rejection is inactive or idempotently complete.
+    RejectedInactive(PreparedDirectValidationFailedInactive<'a>),
+    /// Deterministic rejection applied without a child effect.
+    RejectedNoEffect(PreparedDirectValidationFailedNoEffect<'a>),
+    /// Deterministic rejection prepared one exact invalid-body report.
+    RejectedReport(PreparedDirectValidationFailedReport<'a>),
+}
+/// Closed publication shape retained after the adapter finishes every
+/// fallible, non-durable Ready Validate refinement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum ReadyDurableValidateAdapterPublicationKind {
+    /// Successful validation remains behind the sampled reducer fence.
+    ValidatedBusy,
+    /// Successful validation was inactive or idempotently complete.
+    ValidatedInactive,
+    /// Successful validation applied without a child effect.
+    ValidatedNoEffect,
+    /// Successful validation prepared one exact decision application.
+    ValidatedApply,
+    /// Successful validation prepared one encoded WAL payload and Sign continuation.
+    ValidatedPersist,
+    /// Deterministic rejection remains behind the sampled reducer fence.
+    RejectedBusy,
+    /// Deterministic rejection was inactive or idempotently complete.
+    RejectedInactive,
+    /// Deterministic rejection applied without a child effect.
+    RejectedNoEffect,
+    /// Deterministic rejection prepared one exact invalid-body report.
+    RejectedReport,
+}
+/// Opaque, drop-inert adapter publication preflight for one Ready Validate row.
+///
+/// Every variant retains the exclusive adapter borrow and all staged state.
+/// The sole public observation is its closed discriminator; no encoded WAL
+/// bytes, reducer event, effect, or installation authority can escape.
+#[allow(dead_code)]
+#[must_use = "a prepared Ready Validate publication has not published any state"]
+pub(crate) struct PreparedReadyDurableValidateAdapterPublication<'a>(
+    ReadyDurableValidateAdapterPublicationState<'a>,
+);
+/// Adapter-owned half of one closed invalid-body replay pre-admission cut.
+///
+/// The rejected preview, report effect, derived child binding, and canonical
+/// runtime evidence remain private and keep the exclusive adapter borrow.
+/// Dropping this value publishes no effect and restores no already-published
+/// state because the underlying preview is itself mutation-free.
+#[allow(dead_code)]
+#[must_use = "invalid-body adapter replay authority has not entered pre-admission"]
+pub(in crate::sumeragi) struct PreparedInvalidBodyReportAdapterReplay<'a> {
+    prepared: PreparedDirectValidationFailedReport<'a>,
+    child_pending: PendingRuntimeEffectBinding,
+    replay_evidence: InvalidBodyReportReplayEvidenceV1,
+}
+/// Adapter-owned report publication after canonical replay evidence has minted
+/// one mandatory-bound concrete child.
+///
+/// All reducer and wire-registry mutations remain staged until the fixed
+/// LedgerV1 transaction installs the report row through its exclusive
+/// parent/child registry reservation.
+#[must_use = "prepared invalid-body report adapter publication awaits LedgerV1 fsync"]
+pub(in crate::sumeragi) struct PreparedInvalidBodyReportAdapterPublication<'a> {
+    adapter: &'a mut SumeragiV2Adapter,
+    next_reducer: reducer::Reducer,
+    next_registry: WireRegistry,
+    event: reducer::Event,
+    core_effect: reducer::Effect,
+    next_fence_generation: u64,
+    registry_work: PreparedLiveValidateReportRegistryWork,
+}
+/// Adapter-owned validated Apply publication bound to the exact retained live
+/// Decision WAL frame and durable Validate predecessor.
+#[must_use = "prepared Validate Apply publication awaits lifecycle settlement"]
+pub(in crate::sumeragi) struct PreparedReadyDurableValidateApplyPublication<'a> {
+    adapter: &'a mut SumeragiV2Adapter,
+    next_reducer: reducer::Reducer,
+    next_registry: WireRegistry,
+    event: reducer::Event,
+    core_effect: reducer::Effect,
+    next_fence_generation: u64,
+    persisted_apply: Option<SealedLiveWalPersistedEffectV1>,
+    registry_work: Option<PreparedLiveValidateApplyRegistryWork>,
+}
+#[cfg_attr(not(test), allow(dead_code))]
+impl PreparedReadyDurableValidateAdapterPublication<'_> {
+    /// Return only the exact closed publication discriminator.
+    pub(crate) const fn kind(&self) -> ReadyDurableValidateAdapterPublicationKind {
+        match &self.0 {
+            ReadyDurableValidateAdapterPublicationState::ValidatedBusy(_) => {
+                ReadyDurableValidateAdapterPublicationKind::ValidatedBusy
+            }
+            ReadyDurableValidateAdapterPublicationState::ValidatedInactive(_) => {
+                ReadyDurableValidateAdapterPublicationKind::ValidatedInactive
+            }
+            ReadyDurableValidateAdapterPublicationState::ValidatedNoEffect(_) => {
+                ReadyDurableValidateAdapterPublicationKind::ValidatedNoEffect
+            }
+            ReadyDurableValidateAdapterPublicationState::ValidatedApply(_) => {
+                ReadyDurableValidateAdapterPublicationKind::ValidatedApply
+            }
+            ReadyDurableValidateAdapterPublicationState::ValidatedPersist(_) => {
+                ReadyDurableValidateAdapterPublicationKind::ValidatedPersist
+            }
+            ReadyDurableValidateAdapterPublicationState::RejectedBusy(_) => {
+                ReadyDurableValidateAdapterPublicationKind::RejectedBusy
+            }
+            ReadyDurableValidateAdapterPublicationState::RejectedInactive(_) => {
+                ReadyDurableValidateAdapterPublicationKind::RejectedInactive
+            }
+            ReadyDurableValidateAdapterPublicationState::RejectedNoEffect(_) => {
+                ReadyDurableValidateAdapterPublicationKind::RejectedNoEffect
+            }
+            ReadyDurableValidateAdapterPublicationState::RejectedReport(_) => {
+                ReadyDurableValidateAdapterPublicationKind::RejectedReport
+            }
+        }
+    }
+    /// Return whether this preflight retains the supplied exact emitted child.
+    ///
+    /// No effect bytes or staged adapter state escape this equality oracle.
+    /// Branches which emit no child always return `false`.
+    pub(crate) fn matches_exact_successor_effect(&self, effect: &AdapterEffect) -> bool {
+        match &self.0 {
+            ReadyDurableValidateAdapterPublicationState::ValidatedApply(prepared) => {
+                prepared.apply_effect() == effect
+            }
+            ReadyDurableValidateAdapterPublicationState::ValidatedPersist(prepared) => {
+                &prepared.sign_effect == effect
+            }
+            ReadyDurableValidateAdapterPublicationState::RejectedReport(prepared) => {
+                prepared.report_effect() == effect
+            }
+            ReadyDurableValidateAdapterPublicationState::ValidatedBusy(_)
+            | ReadyDurableValidateAdapterPublicationState::ValidatedInactive(_)
+            | ReadyDurableValidateAdapterPublicationState::ValidatedNoEffect(_)
+            | ReadyDurableValidateAdapterPublicationState::RejectedBusy(_)
+            | ReadyDurableValidateAdapterPublicationState::RejectedInactive(_)
+            | ReadyDurableValidateAdapterPublicationState::RejectedNoEffect(_) => false,
+        }
+    }
+    /// Return the context and generation retained by the exact `Busy` branch.
+    ///
+    /// All non-Busy branches return `None`; no staged reducer or registry state
+    /// escapes this observation.
+    pub(in crate::sumeragi) fn busy_reducer_fence(&self) -> Option<(wire::HeightContextId, u64)> {
+        match &self.0 {
+            ReadyDurableValidateAdapterPublicationState::ValidatedBusy(prepared) => {
+                Some((prepared.context_id(), prepared.generation()))
+            }
+            ReadyDurableValidateAdapterPublicationState::RejectedBusy(prepared) => {
+                Some((prepared.context_id(), prepared.generation()))
+            }
+            ReadyDurableValidateAdapterPublicationState::ValidatedInactive(_)
+            | ReadyDurableValidateAdapterPublicationState::ValidatedNoEffect(_)
+            | ReadyDurableValidateAdapterPublicationState::ValidatedApply(_)
+            | ReadyDurableValidateAdapterPublicationState::ValidatedPersist(_)
+            | ReadyDurableValidateAdapterPublicationState::RejectedInactive(_)
+            | ReadyDurableValidateAdapterPublicationState::RejectedNoEffect(_)
+            | ReadyDurableValidateAdapterPublicationState::RejectedReport(_) => None,
+        }
+    }
+}
+impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
+    /// Commit an exact inactive or effect-free Validate branch after LedgerV1.
+    ///
+    /// The fixed registry join proves the branch before durable publication;
+    /// reaching another variant here is therefore a violated internal contract.
+    pub(in crate::sumeragi) fn commit_no_successor_after_durable_ledger(self) {
+        match self.0 {
+            ReadyDurableValidateAdapterPublicationState::ValidatedInactive(prepared) => {
+                let PreparedDirectValidationSucceededInactive {
+                    _adapter: adapter,
+                    next_reducer,
+                    next_registry,
+                    event,
+                    disposition,
+                    next_fence_generation,
+                } = prepared;
+                let disposition = match disposition {
+                    DirectValidationSucceededInactive::Stutter(
+                        DirectValidationSucceededStutter::NoMatchingWork,
+                    ) => reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork),
+                    DirectValidationSucceededInactive::Stutter(
+                        DirectValidationSucceededStutter::Duplicate,
+                    ) => reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate),
+                    DirectValidationSucceededInactive::Superseded(reason) => {
+                        reducer::StepDisposition::Ignored(reason)
+                    }
+                };
+                adapter.reducer = next_reducer;
+                adapter.registry = next_registry;
+                adapter.reducer_fence_generation = next_fence_generation;
+                adapter.record_reducer_outcome(&event, disposition, &[]);
+                adapter.log_body_progress(&event, disposition, 0);
+            }
+            ReadyDurableValidateAdapterPublicationState::ValidatedNoEffect(prepared) => {
+                let PreparedDirectValidationSucceededNoEffect {
+                    _adapter: adapter,
+                    next_reducer,
+                    next_registry,
+                    event,
+                    next_fence_generation,
+                } = prepared;
+                adapter.reducer = next_reducer;
+                adapter.registry = next_registry;
+                adapter.reducer_fence_generation = next_fence_generation;
+                adapter.record_reducer_outcome(&event, reducer::StepDisposition::Applied, &[]);
+                adapter.log_body_progress(&event, reducer::StepDisposition::Applied, 0);
+            }
+            ReadyDurableValidateAdapterPublicationState::RejectedInactive(prepared) => {
+                let PreparedDirectValidationFailedInactive {
+                    _adapter: adapter,
+                    next_reducer,
+                    next_registry,
+                    event,
+                    disposition,
+                    next_fence_generation,
+                } = prepared;
+                let disposition = match disposition {
+                    DirectValidationFailedInactive::Stutter(
+                        DirectValidationFailedStutter::NoMatchingWork,
+                    ) => reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork),
+                    DirectValidationFailedInactive::Stutter(
+                        DirectValidationFailedStutter::Duplicate,
+                    ) => reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate),
+                    DirectValidationFailedInactive::Superseded(reason) => {
+                        reducer::StepDisposition::Ignored(reason)
+                    }
+                };
+                adapter.reducer = next_reducer;
+                adapter.registry = next_registry;
+                adapter.reducer_fence_generation = next_fence_generation;
+                adapter.record_reducer_outcome(&event, disposition, &[]);
+                adapter.log_body_progress(&event, disposition, 0);
+            }
+            ReadyDurableValidateAdapterPublicationState::RejectedNoEffect(prepared) => {
+                let PreparedDirectValidationFailedNoEffect {
+                    _adapter: adapter,
+                    next_reducer,
+                    next_registry,
+                    event,
+                    next_fence_generation,
+                } = prepared;
+                adapter.reducer = next_reducer;
+                adapter.registry = next_registry;
+                adapter.reducer_fence_generation = next_fence_generation;
+                adapter.record_reducer_outcome(&event, reducer::StepDisposition::Applied, &[]);
+                adapter.log_body_progress(&event, reducer::StepDisposition::Applied, 0);
+            }
+            ReadyDurableValidateAdapterPublicationState::ValidatedBusy(_)
+            | ReadyDurableValidateAdapterPublicationState::ValidatedApply(_)
+            | ReadyDurableValidateAdapterPublicationState::ValidatedPersist(_)
+            | ReadyDurableValidateAdapterPublicationState::RejectedBusy(_)
+            | ReadyDurableValidateAdapterPublicationState::RejectedReport(_) => {
+                unreachable!("sealed no-successor transition retained another adapter branch")
+            }
+        }
+    }
+    /// Consume only the exact rejected-report branch into canonical replay evidence.
+    ///
+    /// The caller is the fixed registry join and supplies only values borrowed
+    /// from its still-installed completion. Failure returns this publication
+    /// unchanged so both authority borrows remain retryable and drop-inert.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn seal_invalid_body_report_replay(
+        self,
+        validate_origin: DurableValidateReplayEvidenceV1,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<PreparedInvalidBodyReportAdapterReplay<'a>, Self> {
+        let Self(state) = self;
+        let prepared = match state {
+            ReadyDurableValidateAdapterPublicationState::RejectedReport(prepared) => prepared,
+            other => return Err(Self(other)),
+        };
+        let Some(capability) = prepared.registered_prepare_report_capability() else {
+            return Err(Self(
+                ReadyDurableValidateAdapterPublicationState::RejectedReport(prepared),
+            ));
+        };
+        let report_effect = prepared.report_effect();
+        let child_pending = validate_pending
+            .project_validate_report_invalid_certified_body_successor(
+                validate_effect,
+                report_effect,
+            )
+            .or_else(|| {
+                validate_pending
+                    .project_validate_report_invalid_certified_body_with_registered_prepare(
+                        validate_effect,
+                        report_effect,
+                        &capability,
+                    )
+            });
+        let Some(child_pending) = child_pending else {
+            return Err(Self(
+                ReadyDurableValidateAdapterPublicationState::RejectedReport(prepared),
+            ));
+        };
+        let Some(replay_evidence) = DurableValidateReplayEvidenceV1::seal_invalid_body_report(
+            capability,
+            validate_origin,
+            validate_effect,
+            validate_pending,
+            receipt,
+            report_effect,
+            &child_pending,
+        ) else {
+            return Err(Self(
+                ReadyDurableValidateAdapterPublicationState::RejectedReport(prepared),
+            ));
+        };
+        let sealed = PreparedInvalidBodyReportAdapterReplay {
+            prepared,
+            child_pending,
+            replay_evidence,
+        };
+        if !sealed.exactly_matches(validate_effect, validate_pending, receipt) {
+            let PreparedInvalidBodyReportAdapterReplay { prepared, .. } = sealed;
+            return Err(Self(
+                ReadyDurableValidateAdapterPublicationState::RejectedReport(prepared),
+            ));
+        }
+        Ok(sealed)
+    }
+
+    /// Bind only the exact validated Apply branch to the registry-minted
+    /// predecessor and the adapter's retained Decision-WAL replay seal.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn bind_validate_apply_predecessor(
+        self,
+        predecessor: ReadyValidateApplyPredecessorAuthority<'_>,
+    ) -> Result<PreparedReadyDurableValidateApplyPublication<'a>, Self> {
+        let Self(state) = self;
+        let PreparedDirectValidationSucceededApply {
+            _adapter: adapter,
+            next_reducer,
+            next_registry,
+            event,
+            core_effect,
+            apply_effect,
+            next_fence_generation,
+        } = match state {
+            ReadyDurableValidateAdapterPublicationState::ValidatedApply(prepared) => prepared,
+            other => return Err(Self(other)),
+        };
+        let Some(persisted) = adapter.pending_live_decision_apply.take() else {
+            return Err(Self(
+                ReadyDurableValidateAdapterPublicationState::ValidatedApply(
+                    PreparedDirectValidationSucceededApply {
+                        _adapter: adapter,
+                        next_reducer,
+                        next_registry,
+                        event,
+                        core_effect,
+                        apply_effect,
+                        next_fence_generation,
+                    },
+                ),
+            ));
+        };
+        let persisted = match predecessor.bind_persisted_apply(persisted, &apply_effect) {
+            Ok(persisted) => persisted,
+            Err(persisted) => {
+                adapter.pending_live_decision_apply = Some(persisted);
+                return Err(Self(
+                    ReadyDurableValidateAdapterPublicationState::ValidatedApply(
+                        PreparedDirectValidationSucceededApply {
+                            _adapter: adapter,
+                            next_reducer,
+                            next_registry,
+                            event,
+                            core_effect,
+                            apply_effect,
+                            next_fence_generation,
+                        },
+                    ),
+                ));
+            }
+        };
+        Ok(PreparedReadyDurableValidateApplyPublication {
+            adapter,
+            next_reducer,
+            next_registry,
+            event,
+            core_effect,
+            next_fence_generation,
+            persisted_apply: Some(persisted),
+            registry_work: None,
+        })
+    }
+}
+impl<'a> PreparedInvalidBodyReportAdapterReplay<'a> {
+    /// Compare the complete adapter report and canonical replay envelope with
+    /// one already-retained Validate origin without exposing either side.
+    pub(in crate::sumeragi) fn exactly_matches(
+        &self,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> bool {
+        let Some(capability) = self.prepared.registered_prepare_report_capability() else {
+            return false;
+        };
+        let report_effect = self.prepared.report_effect();
+        let projected = validate_pending
+            .project_validate_report_invalid_certified_body_successor(
+                validate_effect,
+                report_effect,
+            )
+            .or_else(|| {
+                validate_pending
+                    .project_validate_report_invalid_certified_body_with_registered_prepare(
+                        validate_effect,
+                        report_effect,
+                        &capability,
+                    )
+            });
+        capability.exactly_matches_report(report_effect)
+            && projected.as_ref() == Some(&self.child_pending)
+            && self.replay_evidence.exactly_matches(
+                validate_effect,
+                validate_pending,
+                receipt,
+                report_effect,
+                &self.child_pending,
+            )
+    }
+    /// Project the exact report candidate while this adapter half remains
+    /// nested under its registry-owned replay token.
+    ///
+    /// The transition module's private non-Copy permit prevents any raw report
+    /// effect or pending binding from reaching a generic admission path.
+    pub(in crate::sumeragi) fn project_invalid_body_report_candidate(
+        &self,
+        permit: &SealedInvalidBodyReportProjectionPermit,
+        verified: &VerifiedHeightContext,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        if !self.exactly_matches(validate_effect, validate_pending, receipt) {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+        self.replay_evidence
+            .project_sealed_invalid_body_report_candidate(
+                permit,
+                verified,
+                validate_effect,
+                validate_pending,
+                receipt,
+                self.prepared.report_effect(),
+                &self.child_pending,
+            )
+    }
+
+    /// Consume the sealed replay envelope into closed mandatory-bound registry
+    /// work while retaining all staged adapter state.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_registry_work(
+        self,
+        permit: LiveValidateReportWorkProjectionPermit,
+    ) -> Result<PreparedInvalidBodyReportAdapterPublication<'a>, Self> {
+        let Self {
+            prepared,
+            child_pending,
+            replay_evidence,
+        } = self;
+        let PreparedDirectValidationFailedReport {
+            _adapter: adapter,
+            next_reducer,
+            next_registry,
+            event,
+            core_effect,
+            report_effect,
+            next_fence_generation,
+        } = prepared;
+        let registry_work = match replay_evidence.into_live_validate_report_work(
+            permit,
+            report_effect,
+            child_pending,
+        ) {
+            Ok(work) => work,
+            Err((replay_evidence, report_effect, child_pending)) => {
+                return Err(Self {
+                    prepared: PreparedDirectValidationFailedReport {
+                        _adapter: adapter,
+                        next_reducer,
+                        next_registry,
+                        event,
+                        core_effect,
+                        report_effect,
+                        next_fence_generation,
+                    },
+                    child_pending,
+                    replay_evidence,
+                });
+            }
+        };
+        Ok(PreparedInvalidBodyReportAdapterPublication {
+            adapter,
+            next_reducer,
+            next_registry,
+            event,
+            core_effect,
+            next_fence_generation,
+            registry_work,
+        })
+    }
+}
+impl PreparedInvalidBodyReportAdapterPublication<'_> {
+    /// Match the bound child against the staged lifecycle coordinates.
+    pub(in crate::sumeragi) fn registry_work_matches(
+        &self,
+        owner: super::v2_lifecycle_coordinator::OwnerId,
+        ordinal: u128,
+        slot: super::v2_lifecycle_coordinator::PhysicalSlotId,
+        digest: LifecycleDigest,
+    ) -> bool {
+        self.registry_work
+            .validates_publication(owner, ordinal, slot, digest)
+    }
+
+    /// Install the prechecked report row and staged reducer state after fsync.
+    pub(in crate::sumeragi) fn install_registry_and_commit_adapter(
+        self,
+        reservation: LiveValidateReportRegistryReservation<'_>,
+    ) {
+        let Self {
+            adapter,
+            next_reducer,
+            next_registry,
+            event,
+            core_effect,
+            next_fence_generation,
+            registry_work,
+        } = self;
+        reservation.install_live_report(registry_work);
+        adapter.reducer = next_reducer;
+        adapter.registry = next_registry;
+        adapter.reducer_fence_generation = next_fence_generation;
+        adapter.record_reducer_outcome(
+            &event,
+            reducer::StepDisposition::Applied,
+            core::slice::from_ref(&core_effect),
+        );
+        adapter.log_body_progress(&event, reducer::StepDisposition::Applied, 1);
+    }
+}
+impl PreparedReadyDurableValidateApplyPublication<'_> {
+    /// Project the exact body-frame-completed WAL Apply candidate.
+    pub(in crate::sumeragi) fn project_validate_apply_candidate(
+        &self,
+        permit: &SealedValidateApplyProjectionPermit,
+        verified: &VerifiedHeightContext,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        self.persisted_apply
+            .as_ref()
+            .ok_or(AdapterEffectAdmissionError::InvalidCarrier)?
+            .project_sealed_validate_apply_candidate(permit, verified, receipt)
+    }
+    /// Consume the completed WAL seal into closed ordinary Apply registry work.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_registry_work(
+        mut self,
+        permit: LiveValidateApplyWorkProjectionPermit,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<Self, Self> {
+        if self.registry_work.is_some() {
+            return Err(self);
+        }
+        let persisted = self
+            .persisted_apply
+            .take()
+            .expect("prepared Validate Apply retains its completed WAL seal");
+        match persisted.into_live_validate_apply_work(permit, receipt) {
+            Ok(work) => {
+                self.registry_work = Some(work);
+                Ok(self)
+            }
+            Err(persisted) => {
+                self.persisted_apply = Some(persisted);
+                Err(self)
+            }
+        }
+    }
+    /// Match the closed Apply row against the staged lifecycle coordinates.
+    pub(in crate::sumeragi) fn registry_work_matches(
+        &self,
+        owner: super::v2_lifecycle_coordinator::OwnerId,
+        ordinal: u128,
+        slot: super::v2_lifecycle_coordinator::PhysicalSlotId,
+        digest: LifecycleDigest,
+    ) -> bool {
+        self.persisted_apply.is_none()
+            && self
+                .registry_work
+                .as_ref()
+                .is_some_and(|work| work.validates_publication(owner, ordinal, slot, digest))
+    }
+    /// Install the prechecked Apply row and staged validation transition after fsync.
+    pub(in crate::sumeragi) fn install_registry_and_commit_adapter(
+        mut self,
+        reservation: LiveValidateApplyRegistryReservation<'_>,
+    ) {
+        let work = self
+            .registry_work
+            .take()
+            .expect("pre-fsync Validate Apply retains one exact registry row");
+        work.install_into(reservation);
+        self.adapter.reducer = self.next_reducer;
+        self.adapter.registry = self.next_registry;
+        self.adapter.reducer_fence_generation = self.next_fence_generation;
+        self.adapter.record_reducer_outcome(
+            &self.event,
+            reducer::StepDisposition::Applied,
+            core::slice::from_ref(&self.core_effect),
+        );
+        self.adapter
+            .log_body_progress(&self.event, reducer::StepDisposition::Applied, 1);
+    }
+}
+/// Private retained authority for every prepared publication branch.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[allow(dead_code)]
+enum ReadyDurableValidateAdapterPublicationState<'a> {
+    ValidatedBusy(PreparedDirectValidationSucceededBusy<'a>),
+    ValidatedInactive(PreparedDirectValidationSucceededInactive<'a>),
+    ValidatedNoEffect(PreparedDirectValidationSucceededNoEffect<'a>),
+    ValidatedApply(PreparedDirectValidationSucceededApply<'a>),
+    ValidatedPersist(PreparedReadyDurableValidatePersistPublication<'a>),
+    RejectedBusy(PreparedDirectValidationFailedBusy<'a>),
+    RejectedInactive(PreparedDirectValidationFailedInactive<'a>),
+    RejectedNoEffect(PreparedDirectValidationFailedNoEffect<'a>),
+    RejectedReport(PreparedDirectValidationFailedReport<'a>),
+}
+/// Purely preflighted `Persist -> Persisted -> Sign` branch.
+///
+/// The encoded payload is retained but unappended. The reducer and registry are
+/// the exact post-acknowledgement clones, so the sole atomic consumer can order
+/// WAL sync before ledger publication without another reducer call.
+#[allow(dead_code)]
+struct PreparedReadyDurableValidatePersistPublication<'a> {
+    _adapter: &'a mut SumeragiV2Adapter,
+    next_reducer: reducer::Reducer,
+    next_registry: WireRegistry,
+    validation_event: reducer::Event,
+    persist_effect: reducer::Effect,
+    expected_wal_sequence: u64,
+    encoded_wal_payload: Vec<u8>,
+    persisted_event: reducer::Event,
+    sign_core_effect: reducer::Effect,
+    sign_effect: AdapterEffect,
+    registered_prepare: Option<RegisteredPrepareValidateSignCapability>,
+    next_fence_generation: u64,
+}
 // READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN
 /// Pre-WAL Ready-Validate vote publication bound to the exact installed
 /// Validate predecessor without exposing either pending binding.
@@ -10075,6 +10932,9 @@ pub(crate) struct SumeragiV2Adapter {
     aggregator: Box<dyn SignatureAggregator>,
     active_subject: Option<(reducer::Round, reducer::Subject)>,
     pending_persistence_id: Option<u64>,
+    /// Source-only replay seal for the exact live Decision WAL frame whose
+    /// Apply child waits for a durable Validate body frame.
+    pending_live_decision_apply: Option<SealedLiveWalPersistedEffectV1>,
     ingress_equivocations: BTreeMap<IngressSemanticKey, IngressEquivocationRecord>,
     ingress_deliveries: BTreeMap<IngressSemanticKey, IngressDeliveryRecord>,
     deferred_completions: VecDeque<DeferredInput>,
@@ -10500,6 +11360,7 @@ impl SumeragiV2Adapter {
             aggregator,
             active_subject,
             pending_persistence_id: None,
+            pending_live_decision_apply: None,
             ingress_equivocations: BTreeMap::new(),
             ingress_deliveries: BTreeMap::new(),
             deferred_completions: VecDeque::new(),
@@ -11162,8 +12023,9 @@ impl SumeragiV2Adapter {
                 | WalRecordV2::Decision(_) => {}
             }
         }
-        let (wal_identity, prepare_certificate) =
-            owner.ok_or(AdapterError::RecoveredVoteSignMismatch)?;
+        let Some((wal_identity, prepare_certificate)) = owner else {
+            return Err(AdapterError::RecoveredVoteSignMismatch);
+        };
         let mut vote_effects = startup_effects
             .iter()
             .enumerate()
@@ -11183,9 +12045,11 @@ impl SumeragiV2Adapter {
         if tag != expected_tag || startup_vote != &vote {
             return Err(AdapterError::RecoveredVoteSignMismatch);
         }
-        let replay_evidence =
+        let Some(replay_evidence) =
             RecoveredWalVoteReplayEvidenceV1::from_sealed_recovered_vote(wal_identity, tag, &vote)
-                .ok_or(AdapterError::RecoveredVoteSignMismatch)?;
+        else {
+            return Err(AdapterError::RecoveredVoteSignMismatch);
+        };
         let removed = startup_effects.remove(effect_index);
         debug_assert!(matches!(
             removed,
@@ -11349,7 +12213,9 @@ impl SumeragiV2Adapter {
                         break;
                     }
                 }
-                let owner = owner.ok_or(AdapterError::RecoveredControlSignMismatch)?;
+                let Some(owner) = owner else {
+                    return Err(AdapterError::RecoveredControlSignMismatch);
+                };
                 (
                     owner,
                     AdapterEffect::Sign {
@@ -11386,7 +12252,9 @@ impl SumeragiV2Adapter {
                         break;
                     }
                 }
-                let owner = owner.ok_or(AdapterError::RecoveredControlSignMismatch)?;
+                let Some(owner) = owner else {
+                    return Err(AdapterError::RecoveredControlSignMismatch);
+                };
                 (
                     owner,
                     AdapterEffect::Sign {
@@ -11486,19 +12354,23 @@ impl SumeragiV2Adapter {
                 break;
             }
         }
-        let wal_identity = owner.ok_or(AdapterError::RecoveredDecisionFetchMismatch)?;
+        let Some(wal_identity) = owner else {
+            return Err(AdapterError::RecoveredDecisionFetchMismatch);
+        };
         let verified = VerifiedHeightContext {
             context: self.wire_context.clone(),
             proofs_of_possession: self.proofs_of_possession.clone(),
             parent_verification: self.parent_verification.clone(),
         };
-        let replay_evidence =
+        let Some(replay_evidence) =
             RecoveredWalDecisionFetchReplayEvidenceV1::from_sealed_recovered_decision_fetch(
                 &verified,
                 wal_identity,
                 &expected,
             )
-            .ok_or(AdapterError::RecoveredDecisionFetchMismatch)?;
+        else {
+            return Err(AdapterError::RecoveredDecisionFetchMismatch);
+        };
         let effect = startup_effects
             .pop()
             .expect("one exact Decision Fetch was compared above");
@@ -12796,36 +13668,55 @@ impl SumeragiV2Adapter {
             body: authority.into_body(),
         })
     }
-    /// Preview the ordinary certified-Fetch `BodyAvailable -> StoreBody` cut.
+    /// Preview one ordinary certified Fetch-to-Store lifecycle transition.
+    ///
+    /// The result never exposes raw reducer state.  Applied work remains
+    /// borrow-bound until the registry and LedgerV1 transaction publish it;
+    /// Busy returns the exact reducer-fence generation; every other inactive
+    /// disposition is fail-closed because cold open reconstructed this carrier
+    /// as live before scheduling it.
     pub(in crate::sumeragi) fn prepare_certified_fetch_store(
         &mut self,
         tag: reducer::EventTag,
         manifest: &wire::PayloadManifest,
-    ) -> Result<PreparedCertifiedFetchStoreAdapterV1<'_>, AdapterError> {
-        let preview = match self.prepare_direct_certified_body_available(tag, manifest)? {
-            DirectCertifiedBodyAvailablePreparation::Applied(preview) => preview,
-            DirectCertifiedBodyAvailablePreparation::Blocked(_)
-            | DirectCertifiedBodyAvailablePreparation::Inactive(_) => {
-                return Err(AdapterError::DirectCertifiedBodyAvailableContractViolation);
+    ) -> Result<CertifiedFetchStoreAdapterPreparationV1<'_>, AdapterError> {
+        match self.prepare_direct_certified_body_available(tag, manifest)? {
+            DirectCertifiedBodyAvailablePreparation::Applied(preview) => {
+                Ok(CertifiedFetchStoreAdapterPreparationV1::Applied(
+                    PreparedCertifiedFetchStoreAdapterV1 { preview },
+                ))
             }
-        };
-        Ok(PreparedCertifiedFetchStoreAdapterV1 { preview })
+            DirectCertifiedBodyAvailablePreparation::Blocked(wait) => {
+                Ok(CertifiedFetchStoreAdapterPreparationV1::Blocked(wait))
+            }
+            DirectCertifiedBodyAvailablePreparation::Inactive(inactive) => {
+                drop(inactive);
+                Ok(CertifiedFetchStoreAdapterPreparationV1::Inactive)
+            }
+        }
     }
-    /// Preview the ordinary durable-Store `BodyStored -> ValidateBody` cut.
+    /// Preview one ordinary durable Store-to-Validate lifecycle transition.
     pub(in crate::sumeragi) fn prepare_durable_store_validate(
         &mut self,
         tag: reducer::EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         receipt: &DurableBodyReceipt,
-    ) -> Result<PreparedDurableStoreValidateAdapterV1<'_>, AdapterError> {
-        let preview = match self.prepare_direct_body_stored(tag, round, subject, receipt)? {
-            DirectBodyStoredPreparation::Applied(preview) => preview,
-            DirectBodyStoredPreparation::Blocked(_) | DirectBodyStoredPreparation::Inactive(_) => {
-                return Err(AdapterError::DirectBodyStoredContractViolation);
+    ) -> Result<DurableStoreValidateAdapterPreparationV1<'_>, AdapterError> {
+        match self.prepare_direct_body_stored(tag, round, subject, receipt)? {
+            DirectBodyStoredPreparation::Applied(preview) => {
+                Ok(DurableStoreValidateAdapterPreparationV1::Applied(
+                    PreparedDurableStoreValidateAdapterV1 { preview },
+                ))
             }
-        };
-        Ok(PreparedDurableStoreValidateAdapterV1 { preview })
+            DirectBodyStoredPreparation::Blocked(wait) => {
+                Ok(DurableStoreValidateAdapterPreparationV1::Blocked(wait))
+            }
+            DirectBodyStoredPreparation::Inactive(inactive) => {
+                drop(inactive);
+                Ok(DurableStoreValidateAdapterPreparationV1::Inactive)
+            }
+        }
     }
     /// Preview a certified Fetch completion directly against the sole reducer.
     ///
@@ -12853,17 +13744,6 @@ impl SumeragiV2Adapter {
         let mut next_registry = self.registry.clone();
         let round = next_registry.round_to_core(manifest.round, &self.wire_context)?;
         let subject = next_registry.register_subject(manifest.subject)?;
-        if self
-            .deferred_conflicting_proposal_owner(round, subject, manifest)
-            .is_some()
-        {
-            return Ok(DirectCertifiedBodyAvailablePreparation::Inactive(
-                PreparedDirectCertifiedBodyAvailableInactive {
-                    _adapter: self,
-                    disposition: DirectCertifiedBodyAvailableInactive::DeferredConflict,
-                },
-            ));
-        }
         let core_manifest = next_registry.manifest_to_core(manifest, &self.wire_context)?;
         if core_manifest.subject() != subject {
             return Err(AdapterError::DurableBodyMismatch);
@@ -12934,8 +13814,12 @@ impl SumeragiV2Adapter {
             .into_iter()
             .next()
             .expect("validated direct completion emits exactly one StoreBody effect");
-        let next_fence = self.reducer_fence_projection(&next_reducer);
-        let next_fence_generation = if next_fence == self.reducer_fence_projection(&self.reducer) {
+        let next_fence = ReducerFenceProjection {
+            pending_persistence: next_reducer.pending_persistence_record().cloned(),
+            awaiting_signature: next_reducer.awaiting_signature().cloned(),
+            replay_complete: self.replay_complete,
+        };
+        let next_fence_generation = if next_fence == self.reducer_fence_projection() {
             self.reducer_fence_generation
         } else {
             self.reducer_fence_generation
@@ -13061,8 +13945,12 @@ impl SumeragiV2Adapter {
             .into_iter()
             .next()
             .expect("validated durable-body completion emits exactly one ValidateBody effect");
-        let next_fence = self.reducer_fence_projection(&next_reducer);
-        let next_fence_generation = if next_fence == self.reducer_fence_projection(&self.reducer) {
+        let next_fence = ReducerFenceProjection {
+            pending_persistence: next_reducer.pending_persistence_record().cloned(),
+            awaiting_signature: next_reducer.awaiting_signature().cloned(),
+            replay_complete: self.replay_complete,
+        };
+        let next_fence_generation = if next_fence == self.reducer_fence_projection() {
             self.reducer_fence_generation
         } else {
             self.reducer_fence_generation
@@ -13159,6 +14047,19 @@ impl SumeragiV2Adapter {
             if !core_effects.is_empty() {
                 return Err(AdapterError::DirectValidationSucceededContractViolation);
             }
+            let next_fence = ReducerFenceProjection {
+                pending_persistence: next_reducer.pending_persistence_record().cloned(),
+                awaiting_signature: next_reducer.awaiting_signature().cloned(),
+                replay_complete: self.replay_complete,
+            };
+            let next_fence_generation = if next_fence == self.reducer_fence_projection() {
+                reducer_fence_generation
+            } else {
+                reducer_fence_generation
+                    .checked_add(1)
+                    .filter(|next| *next != u64::MAX)
+                    .ok_or(AdapterError::ReducerFenceGenerationExhausted)?
+            };
             let disposition = match reason {
                 reducer::IgnoreReason::NoMatchingWork => {
                     DirectValidationSucceededInactive::Stutter(
@@ -13175,15 +14076,21 @@ impl SumeragiV2Adapter {
                     _adapter: self,
                     next_reducer,
                     next_registry,
+                    event,
                     disposition,
+                    next_fence_generation,
                 },
             ));
         }
         if disposition != reducer::StepDisposition::Applied {
             return Err(AdapterError::DirectValidationSucceededContractViolation);
         }
-        let next_fence = self.reducer_fence_projection(&next_reducer);
-        let next_fence_generation = if next_fence == self.reducer_fence_projection(&self.reducer) {
+        let next_fence = ReducerFenceProjection {
+            pending_persistence: next_reducer.pending_persistence_record().cloned(),
+            awaiting_signature: next_reducer.awaiting_signature().cloned(),
+            replay_complete: self.replay_complete,
+        };
+        let next_fence_generation = if next_fence == self.reducer_fence_projection() {
             reducer_fence_generation
         } else {
             reducer_fence_generation
@@ -13332,6 +14239,19 @@ impl SumeragiV2Adapter {
             if !core_effects.is_empty() {
                 return Err(AdapterError::DirectValidationFailedContractViolation);
             }
+            let next_fence = ReducerFenceProjection {
+                pending_persistence: next_reducer.pending_persistence_record().cloned(),
+                awaiting_signature: next_reducer.awaiting_signature().cloned(),
+                replay_complete: self.replay_complete,
+            };
+            let next_fence_generation = if next_fence == self.reducer_fence_projection() {
+                reducer_fence_generation
+            } else {
+                reducer_fence_generation
+                    .checked_add(1)
+                    .filter(|next| *next != u64::MAX)
+                    .ok_or(AdapterError::ReducerFenceGenerationExhausted)?
+            };
             let disposition = match reason {
                 reducer::IgnoreReason::NoMatchingWork => DirectValidationFailedInactive::Stutter(
                     DirectValidationFailedStutter::NoMatchingWork,
@@ -13346,15 +14266,21 @@ impl SumeragiV2Adapter {
                     _adapter: self,
                     next_reducer,
                     next_registry,
+                    event,
                     disposition,
+                    next_fence_generation,
                 },
             ));
         }
         if disposition != reducer::StepDisposition::Applied {
             return Err(AdapterError::DirectValidationFailedContractViolation);
         }
-        let next_fence = self.reducer_fence_projection(&next_reducer);
-        let next_fence_generation = if next_fence == self.reducer_fence_projection(&self.reducer) {
+        let next_fence = ReducerFenceProjection {
+            pending_persistence: next_reducer.pending_persistence_record().cloned(),
+            awaiting_signature: next_reducer.awaiting_signature().cloned(),
+            replay_complete: self.replay_complete,
+        };
+        let next_fence_generation = if next_fence == self.reducer_fence_projection() {
             reducer_fence_generation
         } else {
             reducer_fence_generation
@@ -14298,11 +15224,15 @@ impl SumeragiV2Adapter {
         // independently verified justification, QC, and subject material stays
         // registered for subsequent progress.
         let key = (round, subject);
-        let registered_manifest = self.registry.manifests.get(&key).cloned()?;
+        let Some(registered_manifest) = self.registry.manifests.get(&key).cloned() else {
+            return None;
+        };
         if registered_manifest == *canonical {
             return None;
         }
-        let registered_proposal = self.registry.proposals.get(&key).cloned()?;
+        let Some(registered_proposal) = self.registry.proposals.get(&key).cloned() else {
+            return None;
+        };
         if registered_proposal.round != canonical.round
             || registered_proposal.subject != canonical.subject
             || registered_proposal.manifest != registered_manifest
@@ -14315,7 +15245,10 @@ impl SumeragiV2Adapter {
         };
         let expected_fingerprint =
             IngressFingerprint::Proposal(Hash::new(registered_proposal.signature_preimage()));
-        let registered_equivocation = self.ingress_equivocations.get(&admission_key).cloned()?;
+        let Some(registered_equivocation) = self.ingress_equivocations.get(&admission_key).cloned()
+        else {
+            return None;
+        };
         if registered_equivocation.fingerprint != expected_fingerprint {
             return None;
         }
@@ -14730,8 +15663,12 @@ impl SumeragiV2Adapter {
         if !expected_shape_is_exact {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
-        let next_fence = self.reducer_fence_projection(&next_reducer);
-        let next_fence_generation = if next_fence == self.reducer_fence_projection(&self.reducer) {
+        let next_fence = ReducerFenceProjection {
+            pending_persistence: next_reducer.pending_persistence_record().cloned(),
+            awaiting_signature: next_reducer.awaiting_signature().cloned(),
+            replay_complete: self.replay_complete,
+        };
+        let next_fence_generation = if next_fence == self.reducer_fence_projection() {
             self.reducer_fence_generation
         } else {
             self.reducer_fence_generation
@@ -14823,8 +15760,12 @@ impl SumeragiV2Adapter {
         {
             return Err(AdapterError::RecoveredDecisionApplyCompletionMismatch);
         }
-        let next_fence = self.reducer_fence_projection(&next_reducer);
-        let next_fence_generation = if next_fence == self.reducer_fence_projection(&self.reducer) {
+        let next_fence = ReducerFenceProjection {
+            pending_persistence: next_reducer.pending_persistence_record().cloned(),
+            awaiting_signature: next_reducer.awaiting_signature().cloned(),
+            replay_complete: self.replay_complete,
+        };
+        let next_fence_generation = if next_fence == self.reducer_fence_projection() {
             self.reducer_fence_generation
         } else {
             self.reducer_fence_generation
@@ -17034,10 +17975,10 @@ impl SumeragiV2Adapter {
     fn serviced_candidate_views_for_test(&self) -> BTreeSet<wire::View> {
         self.serviced_candidates.values().copied().collect()
     }
-    fn reducer_fence_projection(&self, reducer: &reducer::Reducer) -> ReducerFenceProjection {
+    fn reducer_fence_projection(&self) -> ReducerFenceProjection {
         ReducerFenceProjection {
-            pending_persistence: reducer.pending_persistence_record().cloned(),
-            awaiting_signature: reducer.awaiting_signature().cloned(),
+            pending_persistence: self.reducer.pending_persistence_record().cloned(),
+            awaiting_signature: self.reducer.awaiting_signature().cloned(),
             replay_complete: self.replay_complete,
         }
     }
@@ -17057,9 +17998,9 @@ impl SumeragiV2Adapter {
         &mut self,
         event: reducer::Event,
     ) -> Result<reducer::StepOutcome, AdapterError> {
-        let before = self.reducer_fence_projection(&self.reducer);
+        let before = self.reducer_fence_projection();
         let outcome = self.reducer.step(event)?;
-        if self.reducer_fence_projection(&self.reducer) != before {
+        if self.reducer_fence_projection() != before {
             self.advance_reducer_fence_generation()?;
         }
         Ok(outcome)
@@ -17072,6 +18013,19 @@ impl SumeragiV2Adapter {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn reducer_fence_generation(&self) -> u64 {
         self.reducer_fence_generation
+    }
+    /// Seal the current reducer-fence source and generation for lifecycle planning.
+    pub(in crate::sumeragi) fn lifecycle_reducer_fence_observation(
+        &self,
+    ) -> LifecycleReducerFenceObservationV1 {
+        let mut context_id = [0_u8; 32];
+        context_id.copy_from_slice(self.wire_context.id().0.as_ref());
+        let context =
+            LifecycleContext::new(LifecycleDigest::new(context_id), self.wire_context.height);
+        LifecycleReducerFenceObservationV1 {
+            source: super::v2_lifecycle_coordinator::reducer_fence_wait_source(context),
+            generation: self.reducer_fence_generation,
+        }
     }
     fn ensure_ingress(&self) -> Result<(), AdapterError> {
         if self.fail_closed {
@@ -18423,19 +19377,31 @@ impl SumeragiV2Adapter {
             }
         };
         let sealed = (|| {
-            let mismatch = || AdapterError::WalFrameIdentityMismatch {
-                frame_sequence: receipt.sequence(),
-                persistence_id: id.get(),
-                frame_hash: receipt.frame_hash(),
+            let Some(frame) = self.wal.recovered_records().last() else {
+                return Err(AdapterError::WalFrameIdentityMismatch {
+                    frame_sequence: receipt.sequence(),
+                    persistence_id: id.get(),
+                    frame_hash: receipt.frame_hash(),
+                });
             };
-            let frame = self.wal.recovered_records().last().ok_or_else(&mismatch)?;
             if frame.payload() != payload.as_slice()
                 || receipt.sequence().checked_add(1) != Some(id.get())
             {
-                return Err(mismatch());
+                return Err(AdapterError::WalFrameIdentityMismatch {
+                    frame_sequence: receipt.sequence(),
+                    persistence_id: id.get(),
+                    frame_hash: receipt.frame_hash(),
+                });
             }
-            let wal_identity = LiveWalFrameIdentity::from_append_receipt(frame, receipt, id.get())
-                .ok_or_else(mismatch)?;
+            let Some(wal_identity) =
+                LiveWalFrameIdentity::from_append_receipt(frame, receipt, id.get())
+            else {
+                return Err(AdapterError::WalFrameIdentityMismatch {
+                    frame_sequence: receipt.sequence(),
+                    persistence_id: id.get(),
+                    frame_hash: receipt.frame_hash(),
+                });
+            };
             self.pending_persistence_id = None;
             let persisted = reducer::Event::Persisted { tag, id };
             let continuation = self.step_reducer(persisted.clone())?;
@@ -18747,6 +19713,39 @@ impl SumeragiV2Adapter {
                             persistence_id: id.get(),
                             frame_hash: receipt.frame_hash(),
                         });
+                    }
+                    if let reducer::WalRecord::Decision(certificate) = entry.record() {
+                        if self.pending_live_decision_apply.is_some() {
+                            self.fail_closed = true;
+                            return Err(AdapterError::LiveWalReplayCauseMismatch);
+                        }
+                        let Some(frame) = self.wal.recovered_records().last() else {
+                            self.fail_closed = true;
+                            return Err(AdapterError::LiveWalReplayCauseMismatch);
+                        };
+                        let Some(wal_identity) =
+                            LiveWalFrameIdentity::from_append_receipt(frame, receipt, id.get())
+                        else {
+                            self.fail_closed = true;
+                            return Err(AdapterError::LiveWalReplayCauseMismatch);
+                        };
+                        let apply = AdapterEffect::Apply {
+                            tag,
+                            subject: self.registry.subject(certificate.subject())?,
+                            certificate: self
+                                .registry
+                                .qc_to_wire(certificate, self.aggregator.as_ref())?,
+                        };
+                        let Some(sealed) = SealedLiveWalPersistedEffectV1::from_exact_live_append(
+                            ExactLiveWalPersistedContinuationCause::Apply {
+                                wal_identity,
+                                effect: apply,
+                            },
+                        ) else {
+                            self.fail_closed = true;
+                            return Err(AdapterError::LiveWalReplayCauseMismatch);
+                        };
+                        self.pending_live_decision_apply = Some(sealed);
                     }
                     self.pending_persistence_id = None;
                     let persisted = reducer::Event::Persisted { tag, id };

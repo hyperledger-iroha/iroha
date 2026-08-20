@@ -779,7 +779,6 @@ fn run_lifecycle_active_height(
             admitted_discovered_commit_qc = true;
         }
         if drain_disposition.requires_yield() {
-            committed_lane_status_publisher.publish_if_changed(&lane_work);
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }
@@ -962,7 +961,6 @@ fn run_lifecycle_active_height(
             false
         };
         if ready_to_finish && !rollover_ready {
-            committed_lane_status_publisher.publish_if_changed(&lane_work);
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }

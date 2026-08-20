@@ -1274,12 +1274,8 @@ fn freeze_live_geometry(
             if u128::from(entry.admission_ordinal) >= physical_cut {
                 continue;
             }
-            let queue_gate = fair_v2_ingress_queue_gate_verdict(
-                source,
-                lane,
-                index,
-                leader_wire_projection,
-            );
+            let queue_gate =
+                fair_v2_ingress_queue_gate_verdict(source, lane, index, leader_wire_projection);
             let obsolete = entry
                 .leader_wire_token
                 .as_ref()
@@ -2846,7 +2842,8 @@ mod tests {
                 started_tx
                     .send(())
                     .expect("same-wire producer start receiver remains live");
-                let result = ingress.try_push(InboundBlockMessage::new(message, Some(peer)));
+                let result =
+                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, peer));
                 result_tx
                     .send(result)
                     .expect("same-wire producer result receiver remains live");
@@ -2906,7 +2903,8 @@ mod tests {
                 started_tx
                     .send(())
                     .expect("append producer start receiver remains live");
-                let result = ingress.try_push(InboundBlockMessage::new(appended, Some(peer)));
+                let result =
+                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(appended, peer));
                 result_tx
                     .send(result)
                     .expect("append producer result receiver remains live");
@@ -2961,7 +2959,10 @@ mod tests {
             "dropping an unpublished exact dequeue releases its producer fence"
         );
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(appended.clone(), Some(peer))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                appended.clone(),
+                peer,
+            )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
 

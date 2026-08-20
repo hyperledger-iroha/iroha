@@ -1468,10 +1468,7 @@ struct ProductionTransportFixture {
     manifest: wire::PayloadManifest,
     canonical_commitment: wire::ExecutionCommitment,
     conflicting_commitment: wire::ExecutionCommitment,
-<<<<<<< HEAD
-=======
     _lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
->>>>>>> origin/optimizations
     executor: V2EffectExecutor,
 }
 impl ProductionTransportFixture {
@@ -1586,7 +1583,7 @@ impl ProductionTransportFixture {
             started,
             Duration::from_secs(10),
             RuntimeQueueConfig::default(),
-            lifecycle_ordinals,
+            lifecycle_ordinals.clone(),
         )
         .expect("serialized production runtime");
         assert!(startup_effects.is_empty());
@@ -1619,10 +1616,7 @@ impl ProductionTransportFixture {
             manifest,
             canonical_commitment,
             conflicting_commitment,
-<<<<<<< HEAD
-=======
             _lifecycle_ordinals: lifecycle_ordinals,
->>>>>>> origin/optimizations
             executor,
         }
     }

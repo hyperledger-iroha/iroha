@@ -690,9 +690,9 @@ owner retaining the verified context, coordinator, registry, payload store, and
 body store. Every failure is startup-fatal and exposes no authority or retry
 parts. Unsupported live classes still fail closed. The serialized lifecycle
 runner owns this startup transaction and the corresponding completion
-settlement; the count-only compatibility drain remains fail-closed if reached.
-This is first-release V1 only: there is no legacy decoder, fallback,
-compatibility branch, or dual scheduler path.
+settlement; there is no count-only lifecycle drain or alternate completion
+scheduler. This is first-release V1 only: there is no migration decoder,
+fallback, or dual scheduler path.
 Selector debt zero remains valid only when the complete typed verdict census
 proves that no pre-cut occurrence owns priority.
 
@@ -786,10 +786,11 @@ successor, require the same `OwnerId` with a newly allocated record ordinal,
 install the Store concrete work, and publish one lifecycle-ledger replacement.
 Only after every coordinator, registry, body, service, request, response-claim,
 and queue preflight is exact may the already-previewed adapter state be moved
-into place. A post-dequeue mismatch is process fail-stop, never retry. This
-direct path remains unreachable until restart can reconstruct the exact ready
-body and replay or inject the matching `BodyAvailable` before exposing a live
-Store row; process fail-stop cannot substitute for that power-loss contract.
+into place. A post-publication mismatch is process fail-stop, never retry. Cold
+open authenticates the terminal Fetch and live Store rows against the exact
+body frame, replays `BodyAvailable` into the adapter, and requires the emitted
+Store effect to equal the ledger child before exposing it. The direct path is
+therefore live without weakening the power-loss contract.
 
 The next direct seam advances that durable Store row to `ValidateBody` without
 reviving a parallel completion scheduler. Its sealed pending binding projects
@@ -801,7 +802,7 @@ nested `DurableBodyReceipt` against the frozen context and registered manifest,
 then previews `BodyStored` on cloned reducer and wire-registry state. Applied is
 valid only for one exact `ValidateBody`; Busy and every inactive result retain
 the adapter borrow, and commit remains an infallible state installation inside
-the future Store registry transaction.
+the Store registry transaction.
 
 The concrete registry mirrors that boundary with two closed, move-only body
 carriers. `DurableStoreBody` and `DurableValidateBody` each retain their exact
@@ -812,21 +813,21 @@ receipt's catalog hash instead of treating the receipt as both sides of the
 comparison. Typed borrow-bound preflights re-project each carrier under the
 verified height context and require the claimed lifecycle key, causal owner,
 stage, reconstruction source, and complete consumed one-slot Effect geometry.
-Generic registry borrow/take operations reject both closed forms, and the
-current tokens expose no constructor, installation, removal, commit, or parts
-extraction. The sealed Fetch-to-Store and Store-to-Validate successors project
-their mandatory replay authority and body-frame payload only while retaining
-the exact parent registry borrow. Coordinator staging consumes each token into
-a dual-borrow, drop-inert prepared cut; it still cannot publish until the
-adapter, coordinator, registry, ledger, and recovery cuts can commit together.
+Generic registry borrow/take operations reject both closed forms. The sealed
+Fetch-to-Store and Store-to-Validate successors project their mandatory replay
+authority and body-frame payload only while retaining the exact parent
+registry borrow. Coordinator staging consumes each token into a dual-borrow,
+drop-inert prepared cut. LedgerV1 is fsynced before the infallible registry,
+coordinator, and adapter commit tail installs the child.
 
 Because the Store input already names a synchronised body-store frame, restart
-must reload those exact bytes from the durable catalog rather than depend on
-the volatile `ready_bodies` cache. Publishing the Store-to-Validate ledger replacement is
-safe only when recovery can replay `BodyAvailable` and then `BodyStored` for
-that exact manifest before exposing the reconstructed Validate row. Durable
-bytes alone do not prove that either reducer transition was replayed, and
-process fail-stop does not replace this power-loss ordering contract.
+reloads those exact bytes from the durable catalog rather than depending on
+the volatile `ready_bodies` cache. Cold open authenticates a terminal
+Fetch-to-terminal-Store-to-live-Validate chain, replays `BodyAvailable` and
+then `BodyStored` in global ordinal order, and requires both emitted effects to
+equal their ledger children before exposing Validate. Durable bytes alone do
+not prove that either reducer transition was replayed, so any mismatch fails
+startup closed.
 
 Successful deterministic validation has a wider closed reducer result than the
 earlier body stages. Its private, borrow-bound preview registers the

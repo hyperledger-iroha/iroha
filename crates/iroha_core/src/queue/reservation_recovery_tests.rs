@@ -842,13 +842,8 @@ fn reservation_restart_restore_blocks_resync_until_explicit_release() {
     let dir = tempdir().expect("tempdir");
     let plan_path = dir.path().join("queue-plans.norito");
     let reservation_path = dir.path().join("lane-reservations.norito");
-<<<<<<< HEAD
-    let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.hash_as_entrypoint();
-=======
     let tx = accepted_queue_plan_tx_by_someone(&time_source);
-    let hash = tx.hash();
->>>>>>> origin/optimizations
+    let hash = tx.hash_as_entrypoint();
     let key = {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         queue
@@ -925,13 +920,8 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
     let reservation_path = dir
         .path()
         .join("lane-reservations-committed-live-owner.norito");
-<<<<<<< HEAD
-    let transaction = accepted_tx_by_someone(&time_source);
-    let hash = transaction.hash_as_entrypoint();
-=======
     let transaction = accepted_queue_plan_tx_by_someone(&time_source);
-    let hash = transaction.hash();
->>>>>>> origin/optimizations
+    let hash = transaction.hash_as_entrypoint();
     let key = {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         queue
@@ -1045,13 +1035,8 @@ fn expired_live_reservation_replays_payload_without_fifo_or_tombstone() {
         expired_cull_batch: nonzero!(16_usize),
         ..config_factory()
     };
-<<<<<<< HEAD
-    let transaction = accepted_tx_by_someone(&time_source);
-    let hash = transaction.hash_as_entrypoint();
-=======
     let transaction = accepted_queue_plan_tx_by_someone(&time_source);
-    let hash = transaction.hash();
->>>>>>> origin/optimizations
+    let hash = transaction.hash_as_entrypoint();
     let reserved_key = {
         let queue = Arc::new(Queue::test(config, &time_source));
         queue
@@ -1138,13 +1123,8 @@ fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
         capacity_per_user: nonzero!(1_usize),
         ..config_factory()
     };
-<<<<<<< HEAD
-    let transaction = accepted_tx_by_someone(&time_source);
-    let transaction_hash = transaction.hash_as_entrypoint();
-=======
     let transaction = accepted_queue_plan_tx_by_someone(&time_source);
-    let transaction_hash = transaction.hash();
->>>>>>> origin/optimizations
+    let transaction_hash = transaction.hash_as_entrypoint();
     let retained_cost = Queue::retained_byte_cost(Queue::compute_tx_encoded_len(&transaction));
     {
         let queue = Arc::new(Queue::test(one_slot_config(), &time_source));
@@ -1441,13 +1421,8 @@ fn stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan() {
         queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("install reservation journal");
-<<<<<<< HEAD
-        let transaction = accepted_tx_by_someone(&time_source);
-        hash = transaction.hash_as_entrypoint();
-=======
         let transaction = accepted_queue_plan_tx_by_someone(&time_source);
-        hash = transaction.hash();
->>>>>>> origin/optimizations
+        hash = transaction.hash_as_entrypoint();
         push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
         let mut stale = *queue
             .reserve_transactions_for_lane(
@@ -1499,13 +1474,8 @@ fn stale_reservation_commit_binding_cannot_tombstone_or_forget_live_plan() {
         queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("install reservation journal");
-<<<<<<< HEAD
-        let transaction = accepted_tx_by_someone(&time_source);
-        hash = transaction.hash_as_entrypoint();
-=======
         let transaction = accepted_queue_plan_tx_by_someone(&time_source);
-        hash = transaction.hash();
->>>>>>> origin/optimizations
+        hash = transaction.hash_as_entrypoint();
         push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
         let mut stale = *queue
             .reserve_transactions_for_lane(
@@ -1762,10 +1732,9 @@ fn restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_for
         .as_ref()
         .header();
     let mut state_block = state.block(block_header);
-    state_block.transactions.insert_block(
-        HashSet::from([key.entrypoint_hash]),
-        nonzero!(1_usize),
-    );
+    state_block
+        .transactions
+        .insert_block(HashSet::from([key.entrypoint_hash]), nonzero!(1_usize));
     state_block
         .commit()
         .expect("commit exact transaction identity");
@@ -1858,10 +1827,9 @@ fn restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_fo
         .as_ref()
         .header();
     let mut state_block = state.block(block_header);
-    state_block.transactions.insert_block(
-        HashSet::from([key.entrypoint_hash]),
-        nonzero!(1_usize),
-    );
+    state_block
+        .transactions
+        .insert_block(HashSet::from([key.entrypoint_hash]), nonzero!(1_usize));
     state_block
         .commit()
         .expect("commit exact transaction identity");
@@ -2055,10 +2023,9 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
         .as_ref()
         .header();
     let mut state_block = state.block(block_header);
-    state_block.transactions.insert_block(
-        HashSet::from([key.entrypoint_hash]),
-        nonzero!(1_usize),
-    );
+    state_block
+        .transactions
+        .insert_block(HashSet::from([key.entrypoint_hash]), nonzero!(1_usize));
     state_block
         .commit()
         .expect("commit exact transaction identity");
@@ -2196,10 +2163,9 @@ fn unmarked_commit_without_live_or_retained_v4_tombstone_fails_closed() {
         .as_ref()
         .header();
     let mut state_block = state.block(block_header);
-    state_block.transactions.insert_block(
-        HashSet::from([key.entrypoint_hash]),
-        nonzero!(1_usize),
-    );
+    state_block
+        .transactions
+        .insert_block(HashSet::from([key.entrypoint_hash]), nonzero!(1_usize));
     state_block
         .commit()
         .expect("commit exact transaction identity");
@@ -2263,10 +2229,9 @@ fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
         .as_ref()
         .header();
     let mut state_block = state.block(block_header);
-    state_block.transactions.insert_block(
-        HashSet::from([key.entrypoint_hash]),
-        nonzero!(1_usize),
-    );
+    state_block
+        .transactions
+        .insert_block(HashSet::from([key.entrypoint_hash]), nonzero!(1_usize));
     state_block
         .commit()
         .expect("commit exact transaction identity");
@@ -2351,13 +2316,8 @@ fn globally_bound_reservation_survives_expiry_until_canonical_commit() {
     ));
     let dir = tempdir().expect("tempdir");
     install_test_reservation_journal(&queue, &dir);
-<<<<<<< HEAD
-    let transaction = accepted_tx_by_someone(&time_source);
-    let hash = transaction.hash_as_entrypoint();
-=======
     let transaction = accepted_queue_plan_tx_by_someone(&time_source);
-    let hash = transaction.hash();
->>>>>>> origin/optimizations
+    let hash = transaction.hash_as_entrypoint();
     let binding = push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let key = queue
         .reserve_transactions_for_lane(
@@ -2478,15 +2438,9 @@ include!("native_amx_reservation_tests.rs");
 fn opposite_global_and_lane_call_orders_never_select_the_same_hash() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
-<<<<<<< HEAD
-    let first = accepted_tx_by_someone(&time_source);
-    let second = accepted_tx_by_someone(&time_source);
-    let all_hashes = BTreeSet::from([first.hash_as_entrypoint(), second.hash_as_entrypoint()]);
-=======
     let first = accepted_queue_plan_tx_by_someone(&time_source);
     let second = accepted_queue_plan_tx_by_someone(&time_source);
-    let all_hashes = BTreeSet::from([first.hash(), second.hash()]);
->>>>>>> origin/optimizations
+    let all_hashes = BTreeSet::from([first.hash_as_entrypoint(), second.hash_as_entrypoint()]);
     let run = |lane_first: bool, suffix: &str| {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let dir = tempdir().expect("tempdir");

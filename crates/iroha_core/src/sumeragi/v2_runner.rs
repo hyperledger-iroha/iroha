@@ -133,10 +133,6 @@ pub(in crate::sumeragi) use lifecycle_runner_authority::{
     ProductionLifecyclePendingKuraRunnerActivationV1, ProductionLifecycleRunnerActivationV1,
     RecoveredLifecycleOwnerFactoryDependencyPermitV1,
 };
-use ordinary_ingress_consumer::{
-    PreparedDequeuedV2IngressV1, ProductionPreparedOrdinaryIngressConsumptionV1,
-    consume_prepared_dequeued_v2_ingress,
-};
 pub(in crate::sumeragi) use preactivation_ingress::ProductionLifecycleCanonicalRecoveryIngressV1;
 
 const IDLE_POLL: Duration = Duration::from_millis(10);

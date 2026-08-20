@@ -1746,7 +1746,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 LifecycleRunnerRankTarget::Completion,
                 |runner| match launched.drive_completion_turn(runner, &mut lane_work) {
                     ProductionLifecycleCompletionTurnV1::Selected(
-                        ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result),
+                        ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result),
                     ) => {
                         result.unwrap_or_else(|error| panic!("dispatch recovered Apply: {error:?}"))
                     }
@@ -1762,7 +1762,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             assert_eq!(after_apply_selection, LifecycleRunnerRankTarget::Runtime);
             assert!(matches!(
                 queued,
-                super::super::v2_lifecycle_coordinator::ProductionRecoveredCompletionDispatchV1::ApplyQueued { .. }
+                super::super::v2_lifecycle_coordinator::ProductionCompletionDispatchV1::ApplyQueued { .. }
             ));
             let completion_deadline = Instant::now() + Duration::from_secs(5);
             loop {
@@ -2667,14 +2667,16 @@ fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store() {
     let opened = installed
         .open_coordinator_for_test(&verified, ledger.path(), &mut payload_store, recovery)
         .unwrap_or_else(|error| panic!("open exact owner-seal coordinator: {}", error.reason()));
-    let owner_seal = ProductionOpenedRecoveredWalSignLifecycleCut::from_opened_for_test(
-        opened,
-        verified,
-        &body_store,
-        &payload_store,
-    )
-    .into_production_owner_open()
-    .unwrap_or_else(|_opened| panic!("convert exact open into owner seal"));
+    let (adapter_startup, owner_seal) =
+        ProductionOpenedRecoveredWalSignLifecycleCut::from_opened_for_test(
+            opened,
+            ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+            verified,
+            &body_store,
+            &payload_store,
+        )
+        .into_production_owner_open()
+        .unwrap_or_else(|_opened| panic!("convert exact open into owner seal"));
     let (foreign_payload_store, _foreign_recovery) =
         super::super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
             payload.path(),
@@ -2682,7 +2684,7 @@ fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store() {
         )
         .expect("reopen the same payload path as a distinct instance");
     let paired = ProductionRecoveredLifecycleOwnerStartupV1 {
-        adapter_startup: ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+        adapter_startup,
         opened: owner_seal,
     };
     let error = match paired.into_owner(holder, foreign_payload_store, body_store) {

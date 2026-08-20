@@ -1840,6 +1840,44 @@ def validate_sealed_build_report(payload: bytes) -> dict[str, object]:
             raise ValueError(f"sealed build report {report_key} is not build-bound")
     report["native_launch_attestation"] = native_launch
     return report
+def validate_native_build_launch_binding(
+    report: dict[str, object],
+    controller_sha256: str,
+    python_sha256: str,
+    python_runtime_tree_sha256: str,
+    macos_build: str,
+    os_tcb_sha256: str,
+) -> dict[str, object]:
+    """Bind a parsed V2 build envelope to the live readiness trust roots."""
+    native_build_launch = report.get("native_launch_attestation")
+    if (
+        not isinstance(native_build_launch, dict)
+        or native_build_launch.get("controller_sha256") != controller_sha256
+        or native_build_launch.get("python_interpreter_sha256") != python_sha256
+        or native_build_launch.get("python_runtime_tree_sha256")
+        != python_runtime_tree_sha256
+        or native_build_launch.get("macos_build") != macos_build
+        or native_build_launch.get("os_tcb_sha256") != os_tcb_sha256
+    ):
+        raise ValueError(
+            "native sealed-builder launch differs from the authenticated "
+            "readiness controller, Python closure, or macOS TCB"
+        )
+    return native_build_launch
+def validate_native_builder_entrypoint_binding(
+    report: dict[str, object], builder_bytes: bytes
+) -> None:
+    """Bind the descriptor-executed builder to its reviewed signed source."""
+    native_build_launch = report.get("native_launch_attestation")
+    if (
+        not isinstance(native_build_launch, dict)
+        or native_build_launch.get("builder_entrypoint_sha256")
+        != hashlib.sha256(builder_bytes).hexdigest()
+    ):
+        raise ValueError(
+            "native sealed-builder entrypoint differs from the reviewed "
+            "signed source closure"
+        )
 def reviewed_source_commit_from_closure(payload: bytes) -> tuple[dict[str, object], str]:
     """Parse the independently pinned closure enough to authenticate its helpers."""
     closure = strict_json_bytes(payload, "reviewed source closure")
@@ -3718,6 +3756,14 @@ def promotion_errors() -> list[str]:
         sealed_build_report_identity = validate_sealed_build_report(
             sealed_build_report_bytes
         )
+        validate_native_build_launch_binding(
+            sealed_build_report_identity,
+            tool_controller_sha256,
+            trusted_python_sha256,
+            trusted_python_runtime_tree_sha256,
+            trusted_native_macos_build,
+            trusted_native_os_tcb_sha256,
+        )
         trusted_file_pins.append(
             (sealed_build_report, descriptor, fingerprint, label)
         )
@@ -3969,6 +4015,14 @@ def promotion_errors() -> list[str]:
                 reviewed_source_commit,
                 MAX_REVIEWED_HELPER_BYTES,
             )
+            if relative == "scripts/build_kagemusha_v4_candidate_bundle.py":
+                if sealed_build_report_identity is None:
+                    raise ValueError(
+                        "sealed candidate double-build report was not authenticated"
+                    )
+                validate_native_builder_entrypoint_binding(
+                    sealed_build_report_identity, helper_bytes
+                )
             producer_package_payloads[relative] = helper_bytes
         source_producer_package_snapshot, producer_package_root = (
             snapshot_private_python_package(

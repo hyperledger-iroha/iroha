@@ -691,13 +691,9 @@ impl From<path::Error> for Error {
 mod tests {
     #![allow(clippy::too_many_lines, clippy::needless_raw_string_hashes)]
     use crate::{
-<<<<<<< HEAD
-=======
         GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-        GENERATED_SUMERAGI_BODY_SOURCE_BYTES, PeerSettings, PreparedBuildLine,
->>>>>>> origin/optimizations
-        PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile, PreparedValidator,
-        Swarm, base64_standard,
+        GENERATED_SUMERAGI_BODY_SOURCE_BYTES, PeerSettings, PreparedGenesisArtifacts,
+        PreparedRuntimeFile, PreparedSecretFile, PreparedValidator, Swarm, base64_standard,
         peer::{self, PeerOverride},
     };
     const IMAGE: &str = "hyperledger/iroha:dev";

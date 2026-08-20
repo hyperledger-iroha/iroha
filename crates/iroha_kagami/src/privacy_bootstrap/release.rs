@@ -40,6 +40,9 @@ const MAX_BROKER_EXPORT_BYTES_V1: u64 = 4 * 1024 * 1024;
 const CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const CHAIN_DISCRIMINANT_V1: u64 = 369;
 const GENESIS_AUTHORITY_V1: &str = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A";
+const NEVO_PUBLIC_INPUT_SCHEMA_V1: &str = "iroha.taira.nevo-reset-public-inputs.v2";
+const NEVO_FEE_ASSET_DEFINITION_ID_V1: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+const NEVO_FEE_SPONSOR_PROGRAM_NAME_V1: &str = "cbsi_web";
 const PROVIDER_HANDLE_V1: &str = "runtime://privacy/bootle-lantern/taira-primary";
 const PROVIDER_REVISION_V1: u64 = 1;
 const AUTHORIZATION_LIFETIME_BLOCKS_V1: u64 = 300;
@@ -56,6 +59,14 @@ const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/config.toml");
 const CANONICAL_GENESIS_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/genesis.json");
+const GOLDEN_NEVO_UNSIGNED_V2: &[u8] =
+    include_bytes!("../../tests/fixtures/taira_nevo_v2/unsigned-genesis.json");
+const GOLDEN_NEVO_REVIEW_V2: &[u8] =
+    include_bytes!("../../tests/fixtures/taira_nevo_v2/review.json");
+const GOLDEN_NEVO_ONBOARDING_V2: &str = "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP";
+const GOLDEN_NEVO_API_SIGNER_V2: &str = "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP";
+const GOLDEN_NEVO_INORI_V2: &str = "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9";
+const GOLDEN_NEVO_EPR_GUARD_V2: &str = "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT";
 /// Inputs and fresh output paths for one complete Taira privacy release set.
 #[derive(Debug, ClapArgs)]
 pub(super) struct RenderTairaReleaseV1Args {
@@ -77,6 +88,9 @@ pub(super) struct RenderTairaReleaseV1Args {
     /// Canonical Taira genesis without privacy bootstrap instructions.
     #[arg(long)]
     genesis_template: PathBuf,
+    /// Deterministic public NEVO review manifest binding the genesis template.
+    #[arg(long)]
+    nevo_review: PathBuf,
     /// Fresh output path for the complete public release plan.
     #[arg(long)]
     plan_output: PathBuf,
@@ -92,6 +106,7 @@ pub(super) struct RenderTairaReleaseV1Args {
 }
 #[derive(Debug)]
 struct BrokerPublicMaterialV1 {
+    network_id: String,
     public_export_sha256: String,
     qualification_policy_digest_hex: String,
     issuer_parameter_id_hex: String,
@@ -105,6 +120,7 @@ struct ReleaseArtifactsV1 {
     config: Vec<u8>,
     genesis: Vec<u8>,
     broker_public: Vec<u8>,
+    native_recomposition_passed: bool,
 }
 pub(super) fn render_taira_release_v1<T: Write>(
     args: &RenderTairaReleaseV1Args,
@@ -140,6 +156,11 @@ pub(super) fn render_taira_release_v1<T: Write>(
         MAX_TEMPLATE_BYTES_V1,
         "Taira genesis template",
     )?;
+    let nevo_review = read_bounded(
+        &args.nevo_review,
+        MAX_TEMPLATE_BYTES_V1,
+        "Taira NEVO reset review",
+    )?;
     let artifacts = compose_release_artifacts_v1(
         &activation_instructions,
         &activation_report,
@@ -147,6 +168,7 @@ pub(super) fn render_taira_release_v1<T: Write>(
         &plan_template,
         &config_template,
         &genesis_template,
+        Some(&nevo_review),
     )?;
     write_new_artifact_set_v1([
         (
@@ -178,6 +200,7 @@ pub(super) fn render_taira_release_v1<T: Write>(
         "config_sha256": (hex::encode(sha256(&artifacts.config))),
         "genesis_path": (args.genesis_output.display().to_string()),
         "genesis_sha256": (hex::encode(sha256(&artifacts.genesis))),
+        "native_recomposition_passed": (artifacts.native_recomposition_passed),
         "broker_public_path": (args.broker_public_output.display().to_string()),
         "broker_public_sha256": (hex::encode(sha256(&artifacts.broker_public))),
         "qualification_activation_template_count": (PrivacyProtocolIdV1::COUNT as u64),
@@ -194,17 +217,19 @@ fn compose_release_artifacts_v1(
     plan_template: &[u8],
     config_template: &[u8],
     genesis_template: &[u8],
+    nevo_review: Option<&[u8]>,
 ) -> color_eyre::Result<ReleaseArtifactsV1> {
     validate_taira_privacy_bootstrap_v1(activation_instructions, activation_report)?;
     let broker = parse_broker_public_export_v1(broker_export)?;
     let plan = render_release_plan_v1(plan_template, &broker)?;
     let config = render_release_config_v1(config_template, &broker)?;
-    let genesis = render_release_genesis_v1(genesis_template)?;
+    let genesis = render_release_genesis_v1(genesis_template, nevo_review)?;
     Ok(ReleaseArtifactsV1 {
         plan,
         config,
         genesis,
         broker_public: broker_export.to_vec(),
+        native_recomposition_passed: nevo_review.is_some(),
     })
 }
 #[cfg(test)]
@@ -249,6 +274,440 @@ fn activation_material_v1(
     }
     Ok((hashes, encoded, boxes))
 }
+fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<()> {
+    let value: JsonValue =
+        norito::json::from_slice(review).wrap_err("Taira NEVO review is not strict JSON")?;
+    let root = object_v1(&value, "Taira NEVO review")?;
+    expect_exact_keys_v1(
+        root,
+        &[
+            "schema",
+            "chain",
+            "chain_discriminant",
+            "state",
+            "public_inputs_sha256",
+            "base_genesis_sha256",
+            "base_config_sha256",
+            "unsigned_genesis_sha256",
+            "public_identities",
+            "credential_hash_bindings",
+            "genesis_overlay",
+            "secret_boundary",
+            "required_next_steps",
+        ],
+        "Taira NEVO review",
+    )?;
+    expect_string_v1(
+        root,
+        "schema",
+        "iroha.taira.nevo-reset-review.v2",
+        "Taira NEVO review",
+    )?;
+    expect_string_v1(root, "chain", CHAIN_ID_V1, "Taira NEVO review")?;
+    expect_u64_v1(
+        root,
+        "chain_discriminant",
+        CHAIN_DISCRIMINANT_V1,
+        "Taira NEVO review",
+    )?;
+    expect_string_v1(
+        root,
+        "state",
+        "unsigned_operator_review_required",
+        "Taira NEVO review",
+    )?;
+    let digest_fields = [
+        "public_inputs_sha256",
+        "base_genesis_sha256",
+        "base_config_sha256",
+        "unsigned_genesis_sha256",
+    ];
+    for field in digest_fields {
+        fixed_nonzero_sha256_v1(
+            string_field_v1(root, field, "Taira NEVO review")?,
+            &format!("Taira NEVO review {field}"),
+        )?;
+    }
+    if string_field_v1(root, "base_genesis_sha256", "Taira NEVO review")?
+        != hex::encode(sha256(CANONICAL_GENESIS_TEMPLATE_V1))
+        || string_field_v1(root, "base_config_sha256", "Taira NEVO review")?
+            != hex::encode(sha256(CANONICAL_CONFIG_TEMPLATE_V1))
+        || string_field_v1(root, "unsigned_genesis_sha256", "Taira NEVO review")?
+            != hex::encode(sha256(genesis))
+    {
+        bail!("Taira NEVO review digest chain differs from source templates or genesis");
+    }
+
+    let identities = object_field_v1(root, "public_identities", "Taira NEVO review")?;
+    expect_exact_keys_v1(
+        identities,
+        &[
+            "onboarding_authority_account_id",
+            "api_signer_account_id",
+            "dpn_inori_account_id",
+            "dpn_epr_guard_account_id",
+        ],
+        "Taira NEVO public identities",
+    )?;
+    let onboarding = string_field_v1(
+        identities,
+        "onboarding_authority_account_id",
+        "Taira NEVO public identities",
+    )?;
+    let api_signer = string_field_v1(
+        identities,
+        "api_signer_account_id",
+        "Taira NEVO public identities",
+    )?;
+    let dpn_inori = string_field_v1(
+        identities,
+        "dpn_inori_account_id",
+        "Taira NEVO public identities",
+    )?;
+    let dpn_epr_guard = string_field_v1(
+        identities,
+        "dpn_epr_guard_account_id",
+        "Taira NEVO public identities",
+    )?;
+    let public_identities = [onboarding, api_signer, dpn_inori, dpn_epr_guard];
+    if public_identities.iter().any(|identity| identity.is_empty())
+        || public_identities.into_iter().collect::<BTreeSet<_>>().len() != 4
+    {
+        bail!("Taira NEVO review must bind four distinct public account identities");
+    }
+
+    let bindings = root
+        .get("credential_hash_bindings")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("Taira NEVO credential bindings must be an array"))?;
+    if bindings.len() != 2 {
+        bail!("Taira NEVO review must bind exactly two onboarding credentials");
+    }
+    let mut token_hashes = Vec::with_capacity(2);
+    let mut distinct_token_hashes = BTreeSet::new();
+    for (binding, dataspace) in bindings.iter().zip(["is2", "dpn"]) {
+        let binding = object_v1(binding, "Taira NEVO credential binding")?;
+        expect_exact_keys_v1(
+            binding,
+            &["scope", "token_hash"],
+            "Taira NEVO credential binding",
+        )?;
+        let scope = object_field_v1(binding, "scope", "Taira NEVO credential binding")?;
+        expect_exact_keys_v1(scope, &["dataspace"], "Taira NEVO credential scope")?;
+        expect_string_v1(scope, "dataspace", dataspace, "Taira NEVO credential scope")?;
+        let token_hash = string_field_v1(binding, "token_hash", "Taira NEVO credential binding")?;
+        let Some(digest) = token_hash.strip_prefix("blake3:") else {
+            bail!("Taira NEVO credential hash must use the blake3 prefix");
+        };
+        fixed_nonzero_sha256_v1(digest, "Taira NEVO credential hash")?;
+        token_hashes.push(token_hash.to_owned());
+        distinct_token_hashes.insert(token_hash);
+    }
+    if distinct_token_hashes.len() != 2 {
+        bail!("Taira NEVO credential hashes must be distinct");
+    }
+    let expected_public_inputs_sha256 = nevo_public_inputs_sha256_v1(
+        onboarding,
+        api_signer,
+        dpn_inori,
+        dpn_epr_guard,
+        &token_hashes[0],
+        &token_hashes[1],
+    )?;
+    expect_string_v1(
+        root,
+        "public_inputs_sha256",
+        &expected_public_inputs_sha256,
+        "Taira NEVO review",
+    )?;
+
+    let overlay = object_field_v1(root, "genesis_overlay", "Taira NEVO review")?;
+    let expected_program_id = format!("{GENESIS_AUTHORITY_V1}/{NEVO_FEE_SPONSOR_PROGRAM_NAME_V1}");
+    let expected_overlay = norito::json!({
+        "transaction_count": (1_u64),
+        "instruction_count": (27_u64),
+        "dataspace_roots": [
+            {"alias": "dpn", "id": (10_u64)},
+            {"alias": "is2", "id": (8_477_022_798_449_861_195_u64)},
+        ],
+        "domain": "nevo.dpn",
+        "fee_asset_definition_id": NEVO_FEE_ASSET_DEFINITION_ID_V1,
+        "account_funding_amount": "1000000",
+        "fee_sponsor_program_id": (expected_program_id),
+        "fee_sponsor_beneficiaries": [
+            (onboarding), (api_signer), (dpn_inori), (dpn_epr_guard),
+        ],
+        "account_aliases": [
+            {"alias": "admin@universal", "target_account_id": (api_signer), "role": "primary"},
+            {"alias": "inori@universal", "target_account_id": (dpn_inori), "role": "primary"},
+            {"alias": "source_guard@universal", "target_account_id": (dpn_epr_guard), "role": "primary"},
+        ],
+        "contract_deployment_permission_grant": {
+            "account_id": (api_signer),
+            "permission": "CanRegisterSmartContractCode",
+            "payload": null,
+        },
+        "dpn_permission_grants": [
+            {"account_id": (api_signer), "permissions": ["DpnAdmin", "DpnUser"]},
+            {"account_id": (dpn_inori), "permissions": ["DpnInori", "DpnSettlement", "DpnUser"]},
+            {"account_id": (dpn_epr_guard), "permissions": ["DpnEprGuard"]},
+        ],
+        "dpn_settlement_holder_account_id": (dpn_inori),
+        "ensure_alias_derived_owner_permissions": [
+            "CanManageAccountAlias",
+            "CanDelegateAccountAliasResolution",
+            "CanResolveAccountAlias",
+        ],
+    });
+    if expected_overlay.as_object() != Some(overlay) {
+        bail!("Taira NEVO genesis overlay inventory is not exact");
+    }
+
+    let boundary = object_field_v1(root, "secret_boundary", "Taira NEVO review")?;
+    expect_exact_keys_v1(
+        boundary,
+        &[
+            "raw_tokens_accepted",
+            "private_keys_accepted",
+            "genesis_signed",
+        ],
+        "Taira NEVO secret boundary",
+    )?;
+    if boundary
+        .values()
+        .any(|value| value.as_bool() != Some(false))
+    {
+        bail!("Taira NEVO review must remain unsigned and secret-free");
+    }
+    if string_array_field_v1(root, "required_next_steps", "Taira NEVO review")?
+        != [
+            "review the exact unsigned genesis and this digest record",
+            "bind validator runtime credentials to these exact token hashes",
+            "validate the unsigned manifest with the source-matched Kagami binary",
+            "sign only through the independently provisioned digest-pinned external signer",
+            "deploy and pin the reviewed NEVO contract after the reset finalizes",
+            "initialize the application factoring policy after API deployment",
+        ]
+    {
+        bail!("Taira NEVO required-next-step inventory is not exact");
+    }
+    let actual_genesis: JsonValue =
+        norito::json::from_slice(genesis).wrap_err("Taira NEVO genesis is not strict JSON")?;
+    if expected_nevo_genesis_v1(onboarding, api_signer, dpn_inori, dpn_epr_guard)? != actual_genesis
+    {
+        bail!(
+            "Taira NEVO genesis differs from native exact overlay recomposition over the source template"
+        );
+    }
+    Ok(())
+}
+
+fn nevo_public_inputs_sha256_v1(
+    onboarding: &str,
+    api_signer: &str,
+    dpn_inori: &str,
+    dpn_epr_guard: &str,
+    is2_token_hash: &str,
+    dpn_token_hash: &str,
+) -> color_eyre::Result<String> {
+    // Python's source composer hashes sort-key, compact UTF-8 JSON plus one LF.
+    // Keep the insertion order lexical so this native derivation is byte-identical.
+    let inputs = norito::json!({
+        "api_signer_account_id": (api_signer),
+        "dpn_onboarding_token_hash": (dpn_token_hash),
+        "dpn_epr_guard_account_id": (dpn_epr_guard),
+        "dpn_inori_account_id": (dpn_inori),
+        "is2_onboarding_token_hash": (is2_token_hash),
+        "onboarding_authority_account_id": (onboarding),
+        "schema": NEVO_PUBLIC_INPUT_SCHEMA_V1,
+    });
+    let mut canonical = norito::json::to_json(&inputs)
+        .wrap_err("failed to render native Taira NEVO public inputs")?;
+    canonical.push('\n');
+    Ok(hex::encode(sha256(canonical.as_bytes())))
+}
+
+fn replace_nevo_golden_identity_v2(value: &mut JsonValue, source: &str, target: &str) -> usize {
+    match value {
+        JsonValue::String(text) => {
+            let count = text.matches(source).count();
+            if count != 0 {
+                *text = text.replace(source, target);
+            }
+            count
+        }
+        JsonValue::Array(values) => values
+            .iter_mut()
+            .map(|value| replace_nevo_golden_identity_v2(value, source, target))
+            .sum(),
+        JsonValue::Object(fields) => fields
+            .values_mut()
+            .map(|value| replace_nevo_golden_identity_v2(value, source, target))
+            .sum(),
+        _ => 0,
+    }
+}
+
+fn expected_nevo_genesis_v1(
+    onboarding: &str,
+    api_signer: &str,
+    dpn_inori: &str,
+    dpn_epr_guard: &str,
+) -> color_eyre::Result<JsonValue> {
+    let mut expected: JsonValue = norito::json::from_slice(GOLDEN_NEVO_UNSIGNED_V2)
+        .wrap_err("failed to decode the source-pinned Python NEVO v2 golden")?;
+    for (source, target, label) in [
+        (GOLDEN_NEVO_ONBOARDING_V2, onboarding, "onboarding"),
+        (GOLDEN_NEVO_API_SIGNER_V2, api_signer, "API signer"),
+        (GOLDEN_NEVO_INORI_V2, dpn_inori, "Inori"),
+        (GOLDEN_NEVO_EPR_GUARD_V2, dpn_epr_guard, "EPR guard"),
+    ] {
+        if replace_nevo_golden_identity_v2(&mut expected, source, target) == 0 {
+            bail!("compiled Python NEVO v2 golden omitted the {label} identity");
+        }
+    }
+    Ok(expected)
+}
+
+#[allow(dead_code)]
+fn expected_nevo_genesis_v1_legacy(
+    onboarding: &str,
+    api_signer: &str,
+) -> color_eyre::Result<JsonValue> {
+    let program = norito::json!({
+        "sponsor": GENESIS_AUTHORITY_V1,
+        "name": NEVO_FEE_SPONSOR_PROGRAM_NAME_V1,
+    });
+    let quote_guard = norito::json!({
+        "expected_policy_version": (2_u64),
+        "expected_payment_asset": NEVO_FEE_ASSET_DEFINITION_ID_V1,
+        "max_amount": "0.5",
+        "valid_until_ms": (u64::MAX),
+    });
+    let transaction = norito::json!({
+        "instructions": [
+            {
+                "Register": {
+                    "Account": {
+                        "id": (onboarding),
+                        "metadata": {"purpose": "nevo_taira_onboarding_authority"},
+                    },
+                },
+            },
+            {
+                "Register": {
+                    "Account": {
+                        "id": (api_signer),
+                        "metadata": {"purpose": "nevo_dpn_api_signer"},
+                    },
+                },
+            },
+            {
+                "Mint": {
+                    "Asset": {
+                        "destination": (format!("{NEVO_FEE_ASSET_DEFINITION_ID_V1}#{onboarding}")),
+                        "object": "1000000",
+                    },
+                },
+            },
+            {
+                "Mint": {
+                    "Asset": {
+                        "destination": (format!("{NEVO_FEE_ASSET_DEFINITION_ID_V1}#{api_signer}")),
+                        "object": "1000000",
+                    },
+                },
+            },
+            {
+                "EnsureAlias": {
+                    "intent": {
+                        "kind": "dataspace",
+                        "intent": {
+                            "dataspace": {"canonical_name": "dpn", "dataspace_id": 10_u64},
+                            "owner": (onboarding),
+                        },
+                    },
+                    "acquisition": {"term_years": 1_u64, "pricing_class_hint": null},
+                    "quote_guard": (quote_guard.clone()),
+                },
+            },
+            {
+                "EnsureAlias": {
+                    "intent": {
+                        "kind": "dataspace",
+                        "intent": {
+                            "dataspace": {
+                                "canonical_name": "is2",
+                                "dataspace_id": 8_477_022_798_449_861_195_u64,
+                            },
+                            "owner": (onboarding),
+                        },
+                    },
+                    "acquisition": {"term_years": 1_u64, "pricing_class_hint": null},
+                    "quote_guard": (quote_guard.clone()),
+                },
+            },
+            {
+                "EnsureAlias": {
+                    "intent": {
+                        "kind": "domain",
+                        "intent": {
+                            "domain": {"canonical_name": "nevo.dpn", "dataspace_id": 10_u64},
+                            "owner": (onboarding),
+                        },
+                    },
+                    "acquisition": {"term_years": 1_u64, "pricing_class_hint": null},
+                    "quote_guard": (quote_guard),
+                },
+            },
+            {
+                "Grant": {
+                    "Permission": {
+                        "destination": (onboarding),
+                        "object": {
+                            "name": "CanRegisterAccount",
+                            "payload": {"domain": "nevo.dpn"},
+                        },
+                    },
+                },
+            },
+            {
+                "Grant": {
+                    "Permission": {
+                        "destination": (onboarding),
+                        "object": {
+                            "name": "CanEnrollFeeSponsorProgram",
+                            "payload": {"program_id": (program.clone())},
+                        },
+                    },
+                },
+            },
+            {
+                "EnrollFeeSponsorBeneficiary": {
+                    "program_id": (program.clone()),
+                    "beneficiary": (onboarding),
+                },
+            },
+            {
+                "EnrollFeeSponsorBeneficiary": {
+                    "program_id": (program),
+                    "beneficiary": (api_signer),
+                },
+            },
+        ],
+        "ivm_triggers": [],
+        "topology": [],
+    });
+    let mut expected: JsonValue = norito::json::from_slice(CANONICAL_GENESIS_TEMPLATE_V1)
+        .wrap_err("failed to decode the source-pinned Taira genesis")?;
+    expected
+        .get_mut("transactions")
+        .and_then(JsonValue::as_array_mut)
+        .ok_or_else(|| eyre!("source-pinned Taira genesis has no transaction array"))?
+        .push(transaction);
+    Ok(expected)
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "broker export admission keeps canonical-byte, identity, digest, policy, and instruction checks in one ordered verification pass"
@@ -292,11 +751,15 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
         "broker public export",
     )?;
     expect_string_v1(fields, "chain_id", CHAIN_ID_V1, "broker public export")?;
-    let network_id = string_field_v1(fields, "network_id", "broker public export")?
+    let network_id_text = string_field_v1(fields, "network_id", "broker public export")?;
+    let network_id = network_id_text
         .parse::<NetworkId>()
         .wrap_err("broker public export network_id is not canonical")?;
     if network_id.as_bytes().iter().all(|byte| *byte == 0) {
         bail!("broker public export network_id must be non-zero");
+    }
+    if network_id.to_string() != network_id_text {
+        bail!("broker public export network_id is not in canonical emitted form");
     }
     expect_string_v1(
         fields,
@@ -459,6 +922,7 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
         bail!("broker structured registration differs from its boxed Norito instruction");
     }
     Ok(BrokerPublicMaterialV1 {
+        network_id: network_id_text.to_owned(),
         public_export_sha256: hex::encode(sha256(bytes)),
         qualification_policy_digest_hex: string_field_v1(
             fields,
@@ -481,6 +945,10 @@ fn render_release_plan_v1(
     validate_staging_plan_v1(&plan)?;
     expect_canonical_template_bytes_v1(bytes, CANONICAL_PLAN_TEMPLATE_V1, "Taira privacy plan")?;
     let root = object_mut_v1(&mut plan, "privacy plan")?;
+    root.insert(
+        "network_id".to_owned(),
+        JsonValue::String(broker.network_id.clone()),
+    );
     let bootle = object_field_mut_v1(root, "bootle_lantern_issuer", "privacy plan")?;
     bootle.insert(
         "public_export_sha256".to_owned(),
@@ -529,6 +997,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
             "genesis_authority",
             "governance_rollout",
             "governance_permission",
+            "network_id",
             "privacy_catalog",
             "schema",
             "schema_version",
@@ -543,6 +1012,9 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     )?;
     expect_u64_v1(root, "schema_version", 1, "privacy plan")?;
     expect_string_v1(root, "chain_id", CHAIN_ID_V1, "privacy plan")?;
+    if !root.get("network_id").is_some_and(JsonValue::is_null) {
+        bail!("Taira privacy plan staging network_id must be null");
+    }
     expect_u64_v1(
         root,
         "chain_discriminant",
@@ -729,7 +1201,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         "stock-local-runtime-provider-broker-v1",
         "Bootle/Lantern provider plan",
     )?;
-    expect_u64_v1(provider, "slot_wire_id", 54, "Bootle/Lantern provider plan")?;
+    expect_u64_v1(provider, "slot_wire_id", 56, "Bootle/Lantern provider plan")?;
     expect_string_v1(
         provider,
         "handle",
@@ -1017,7 +1489,10 @@ fn expect_toml_string_v1(
     clippy::too_many_lines,
     reason = "genesis rendering preserves ordered native and JSON-level admission before its deterministic append"
 )]
-fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
+fn render_release_genesis_v1(
+    bytes: &[u8],
+    nevo_review: Option<&[u8]>,
+) -> color_eyre::Result<Vec<u8>> {
     iroha_genesis::init_instruction_registry();
     validate_genesis_manifest_json(bytes)
         .wrap_err("Taira genesis template exceeds fixed resource bounds")?;
@@ -1101,7 +1576,11 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
             "Taira genesis does not contain the exact ordered privacy governance authority and grant"
         );
     }
-    expect_canonical_template_bytes_v1(bytes, CANONICAL_GENESIS_TEMPLATE_V1, "Taira genesis")?;
+    if let Some(review) = nevo_review {
+        validate_nevo_review_v1(bytes, review)?;
+    } else {
+        expect_canonical_template_bytes_v1(bytes, CANONICAL_GENESIS_TEMPLATE_V1, "Taira genesis")?;
+    }
     let final_transaction = transactions
         .last()
         .and_then(JsonValue::as_object)
@@ -1121,12 +1600,16 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
         bail!("Taira genesis final transaction is not instruction-only");
     }
     let rendered = json_pretty_bytes_v1(&genesis, "Taira privacy release genesis")?;
-    validate_genesis_manifest_json(&rendered)
+    validate_genesis_manifest_json(bytes)
         .wrap_err("Taira release genesis exceeds fixed resource bounds")?;
-    if rendered != bytes {
+    if nevo_review.is_none() && rendered != bytes {
         bail!("Taira release genesis changed while proving that privacy activation is absent");
     }
-    Ok(rendered)
+    Ok(if nevo_review.is_some() {
+        bytes.to_vec()
+    } else {
+        rendered
+    })
 }
 fn registered_account_id_v1(instruction: &JsonValue) -> Option<&str> {
     instruction
@@ -1354,6 +1837,104 @@ mod tests {
         include_bytes!("../../../../configs/soranexus/taira/config.toml");
     const GENESIS_TEMPLATE_V1: &[u8] =
         include_bytes!("../../../../configs/soranexus/taira/genesis.json");
+    const NEVO_ONBOARDING_ACCOUNT_V1: &str = "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP";
+    const NEVO_API_SIGNER_ACCOUNT_V1: &str =
+        "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP";
+    const GOLDEN_NEVO_IS2_TOKEN_HASH_V2: &str =
+        "blake3:11590239c854c8e1033a98997443be5280c3a883ef97b8999ee45539a8d4197e";
+    const GOLDEN_NEVO_DPN_TOKEN_HASH_V2: &str =
+        "blake3:1c0a72b28a75a1ef2c09779c7de338ae5afc99e4945ceab869fa72b12bc0efcb";
+    fn nevo_fixture_v1() -> (Vec<u8>, Vec<u8>) {
+        (
+            GOLDEN_NEVO_UNSIGNED_V2.to_vec(),
+            GOLDEN_NEVO_REVIEW_V2.to_vec(),
+        )
+    }
+    #[allow(dead_code)]
+    fn nevo_fixture_legacy_v1() -> (Vec<u8>, Vec<u8>) {
+        let is2_token_hash = format!("blake3:{}", "11".repeat(32));
+        let dpn_token_hash = format!("blake3:{}", "22".repeat(32));
+        let genesis = json_pretty_bytes_v1(
+            &expected_nevo_genesis_v1(
+                NEVO_ONBOARDING_ACCOUNT_V1,
+                NEVO_API_SIGNER_ACCOUNT_V1,
+                GOLDEN_NEVO_INORI_V2,
+                GOLDEN_NEVO_EPR_GUARD_V2,
+            )
+            .expect("compose native NEVO fixture genesis"),
+            "native NEVO fixture genesis",
+        )
+        .expect("render native NEVO fixture genesis");
+        let public_inputs_sha256 = nevo_public_inputs_sha256_v1(
+            NEVO_ONBOARDING_ACCOUNT_V1,
+            NEVO_API_SIGNER_ACCOUNT_V1,
+            GOLDEN_NEVO_INORI_V2,
+            GOLDEN_NEVO_EPR_GUARD_V2,
+            &is2_token_hash,
+            &dpn_token_hash,
+        )
+        .expect("derive native NEVO public-input digest");
+        let review = norito::json!({
+            "schema": "iroha.taira.nevo-reset-review.v1",
+            "chain": CHAIN_ID_V1,
+            "chain_discriminant": CHAIN_DISCRIMINANT_V1,
+            "state": "unsigned_operator_review_required",
+            "public_inputs_sha256": (public_inputs_sha256),
+            "base_genesis_sha256": (hex::encode(sha256(CANONICAL_GENESIS_TEMPLATE_V1))),
+            "base_config_sha256": (hex::encode(sha256(CANONICAL_CONFIG_TEMPLATE_V1))),
+            "unsigned_genesis_sha256": (hex::encode(sha256(&genesis))),
+            "public_identities": {
+                "onboarding_authority_account_id": NEVO_ONBOARDING_ACCOUNT_V1,
+                "api_signer_account_id": NEVO_API_SIGNER_ACCOUNT_V1,
+            },
+            "credential_hash_bindings": [
+                {"scope": {"dataspace": "is2"}, "token_hash": (is2_token_hash)},
+                {"scope": {"dataspace": "dpn"}, "token_hash": (dpn_token_hash)},
+            ],
+            "genesis_overlay": {
+                "transaction_count": 1_u64,
+                "instruction_count": 11_u64,
+                "dataspace_roots": [
+                    {"alias": "dpn", "id": 10_u64},
+                    {"alias": "is2", "id": 8_477_022_798_449_861_195_u64},
+                ],
+                "domain": "nevo.dpn",
+                "fee_asset_definition_id": NEVO_FEE_ASSET_DEFINITION_ID_V1,
+                "account_funding_amount": "1000000",
+                "fee_sponsor_program_id": (format!(
+                    "{GENESIS_AUTHORITY_V1}/{NEVO_FEE_SPONSOR_PROGRAM_NAME_V1}"
+                )),
+                "ensure_alias_derived_owner_permissions": [
+                    "CanManageAccountAlias",
+                    "CanDelegateAccountAliasResolution",
+                    "CanResolveAccountAlias",
+                ],
+            },
+            "secret_boundary": {
+                "raw_tokens_accepted": false,
+                "private_keys_accepted": false,
+                "genesis_signed": false,
+            },
+            "required_next_steps": [
+                "review the exact unsigned genesis and this digest record",
+                "bind validator runtime credentials to these exact token hashes",
+                "validate the unsigned manifest with the source-matched Kagami binary",
+                "sign only through the independently provisioned digest-pinned external signer",
+                "deploy and pin the reviewed NEVO contract after the reset finalizes",
+                "initialize the application factoring policy after API deployment",
+            ],
+        });
+        let review = json_pretty_bytes_v1(&review, "NEVO fixture review")
+            .expect("render NEVO fixture review");
+        (genesis, review)
+    }
+    fn mutate_nevo_review_v1(review: &[u8], mutation: impl FnOnce(&mut JsonMap)) -> Vec<u8> {
+        let mut value: JsonValue =
+            norito::json::from_slice(review).expect("parse NEVO fixture review");
+        mutation(value.as_object_mut().expect("NEVO fixture review object"));
+        json_pretty_bytes_v1(&value, "mutated NEVO fixture review")
+            .expect("render mutated NEVO fixture review")
+    }
     fn activation_fixture_v1() -> TairaPrivacyBootstrapArtifactsV1 {
         static FIXTURE: OnceLock<TairaPrivacyBootstrapArtifactsV1> = OnceLock::new();
         FIXTURE
@@ -1529,6 +2110,7 @@ mod tests {
                 PLAN_TEMPLATE_V1,
                 CONFIG_TEMPLATE_V1,
                 GENESIS_TEMPLATE_V1,
+                None,
             )
             .expect_err("closed ZK-X509 evidence gate must prevent release composition");
             assert!(
@@ -1544,6 +2126,7 @@ mod tests {
             PLAN_TEMPLATE_V1,
             CONFIG_TEMPLATE_V1,
             GENESIS_TEMPLATE_V1,
+            None,
         )
         .expect("compose complete release");
         let second = compose_release_artifacts_v1(
@@ -1553,6 +2136,7 @@ mod tests {
             PLAN_TEMPLATE_V1,
             CONFIG_TEMPLATE_V1,
             GENESIS_TEMPLATE_V1,
+            None,
         )
         .expect("recompose complete release");
         assert_eq!(first.plan, second.plan);
@@ -1561,6 +2145,13 @@ mod tests {
         assert_eq!(first.broker_public, second.broker_public);
         assert_eq!(first.broker_public, export);
         let plan: JsonValue = norito::json::from_slice(&first.plan).expect("parse release plan");
+        let broker_export: JsonValue =
+            norito::json::from_slice(&export).expect("parse broker public export");
+        assert_eq!(
+            plan.get("network_id"),
+            broker_export.get("network_id"),
+            "rendered plan must bind the authenticated broker NetworkId"
+        );
         assert_eq!(
             plan.pointer("/governance_rollout/activation_state")
                 .and_then(JsonValue::as_str),
@@ -1587,6 +2178,44 @@ mod tests {
         assert!(!String::from_utf8_lossy(&first.plan).contains("issuer_seed"));
         assert!(!String::from_utf8_lossy(&first.config).contains("bearer_token"));
         assert!(!String::from_utf8_lossy(&first.genesis).contains("principal_seed"));
+    }
+    #[test]
+    fn release_plan_requires_null_staging_network_and_binds_broker_network() {
+        let export = broker_export_fixture_v1();
+        let broker = parse_broker_public_export_v1(&export).expect("admit broker fixture");
+        let rendered = render_release_plan_v1(PLAN_TEMPLATE_V1, &broker)
+            .expect("render release plan from exact staging template");
+        let rendered: JsonValue =
+            norito::json::from_slice(&rendered).expect("parse rendered release plan");
+        assert_eq!(
+            rendered.get("network_id").and_then(JsonValue::as_str),
+            Some(broker.network_id.as_str())
+        );
+
+        let mut populated: JsonValue =
+            norito::json::from_slice(PLAN_TEMPLATE_V1).expect("parse staging plan");
+        populated
+            .as_object_mut()
+            .expect("staging plan object")
+            .insert(
+                "network_id".to_owned(),
+                JsonValue::String(broker.network_id.clone()),
+            );
+        assert!(
+            validate_staging_plan_v1(&populated)
+                .expect_err("prepopulated staging NetworkId must be rejected")
+                .to_string()
+                .contains("staging network_id must be null")
+        );
+
+        populated
+            .as_object_mut()
+            .expect("staging plan object")
+            .remove("network_id");
+        assert!(
+            validate_staging_plan_v1(&populated).is_err(),
+            "missing staging NetworkId key must be rejected"
+        );
     }
     #[test]
     fn bare_trailing_digest_and_secret_field_broker_substitutions_are_rejected() {
@@ -1657,12 +2286,89 @@ mod tests {
         }
     }
     #[test]
+    fn reviewed_nevo_genesis_is_natively_recomposed_and_splices_are_rejected() {
+        let (genesis, review) = nevo_fixture_v1();
+        assert_eq!(
+            render_release_genesis_v1(&genesis, Some(&review))
+                .expect("accept exact natively recomposed NEVO genesis"),
+            genesis
+        );
+
+        let generic_forgery = mutate_nevo_review_v1(&review, |root| {
+            root.insert(
+                "unsigned_genesis_sha256".to_owned(),
+                JsonValue::String(hex::encode(sha256(GENESIS_TEMPLATE_V1))),
+            );
+        });
+        assert!(
+            render_release_genesis_v1(GENESIS_TEMPLATE_V1, Some(&generic_forgery))
+                .expect_err("generic genesis cannot be review-wrapped as NEVO")
+                .to_string()
+                .contains("native exact overlay recomposition")
+        );
+
+        let identity_splice = mutate_nevo_review_v1(&review, |root| {
+            let identities = root
+                .get_mut("public_identities")
+                .and_then(JsonValue::as_object_mut)
+                .expect("NEVO public identities");
+            identities.insert(
+                "onboarding_authority_account_id".to_owned(),
+                JsonValue::String(NEVO_API_SIGNER_ACCOUNT_V1.to_owned()),
+            );
+            identities.insert(
+                "api_signer_account_id".to_owned(),
+                JsonValue::String(NEVO_ONBOARDING_ACCOUNT_V1.to_owned()),
+            );
+            let digest = nevo_public_inputs_sha256_v1(
+                NEVO_API_SIGNER_ACCOUNT_V1,
+                NEVO_ONBOARDING_ACCOUNT_V1,
+                GOLDEN_NEVO_INORI_V2,
+                GOLDEN_NEVO_EPR_GUARD_V2,
+                GOLDEN_NEVO_IS2_TOKEN_HASH_V2,
+                GOLDEN_NEVO_DPN_TOKEN_HASH_V2,
+            )
+            .expect("derive swapped identity digest");
+            root.insert("public_inputs_sha256".to_owned(), JsonValue::String(digest));
+        });
+        let identity_error = render_release_genesis_v1(&genesis, Some(&identity_splice))
+            .expect_err("coherently rehashed identity splice must change the overlay");
+        assert!(
+            identity_error.to_string().contains("overlay inventory")
+                || identity_error
+                    .to_string()
+                    .contains("native exact overlay recomposition")
+        );
+
+        for spliced in [
+            mutate_nevo_review_v1(&review, |root| {
+                root.insert(
+                    "public_inputs_sha256".to_owned(),
+                    JsonValue::String("33".repeat(32)),
+                );
+            }),
+            mutate_nevo_review_v1(&review, |root| {
+                root.get_mut("credential_hash_bindings")
+                    .and_then(JsonValue::as_array_mut)
+                    .expect("NEVO credential bindings")[0]
+                    .get_mut("token_hash")
+                    .map(|value| *value = JsonValue::String(format!("blake3:{}", "44".repeat(32))))
+                    .expect("NEVO token hash");
+            }),
+        ] {
+            assert!(
+                render_release_genesis_v1(&genesis, Some(&spliced)).is_err(),
+                "public-input digest and token-hash splices must fail native admission"
+            );
+        }
+    }
+    #[test]
     fn coordinated_governance_authority_substitution_is_rejected_natively() {
         let mut plan: JsonValue =
             norito::json::from_slice(PLAN_TEMPLATE_V1).expect("parse staging plan");
         plan.as_object_mut().expect("plan object").insert(
             "genesis_authority".to_owned(),
-            JsonValue::String("attacker@wonderland".to_owned()),
+            JsonValue::String("unreviewed-authority".to_owned()),
         );
         assert!(validate_staging_plan_v1(&plan).is_err());
     }
@@ -1771,7 +2477,7 @@ mod tests {
         let mut genesis = b"\n".to_vec();
         genesis.extend_from_slice(GENESIS_TEMPLATE_V1);
         assert!(
-            render_release_genesis_v1(&genesis)
+            render_release_genesis_v1(&genesis, None)
                 .expect_err("reject whitespace-drifted genesis template")
                 .to_string()
                 .contains("differs byte-for-byte")
@@ -1803,7 +2509,7 @@ mod tests {
             .push(injected);
         let tampered = json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
         assert!(
-            render_release_genesis_v1(&tampered)
+            render_release_genesis_v1(&tampered, None)
                 .expect_err("reject pre-existing decoded privacy instruction")
                 .to_string()
                 .contains("already contains a privacy bootstrap instruction")
@@ -1866,8 +2572,8 @@ mod tests {
             }
             let tampered =
                 json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
-            let error =
-                render_release_genesis_v1(&tampered).expect_err("reject invalid governance grant");
+            let error = render_release_genesis_v1(&tampered, None)
+                .expect_err("reject invalid governance grant");
             assert!(
                 error.to_string().contains("wrong authority")
                     || error.to_string().contains("must be unscoped")

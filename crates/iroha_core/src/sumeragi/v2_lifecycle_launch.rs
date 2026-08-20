@@ -42,18 +42,15 @@ pub(in crate::sumeragi) use turn_driver::{
 };
 
 use super::{
-<<<<<<< HEAD
-    LifecycleDurableValidateDispatchKeyV1, PreparedLifecycleIngressSelector,
-=======
     CertifiedFetchBodyPersistenceCompletionError, PreparedLifecycleIngressSelector,
+    ProductionCompletionDispatchErrorV1, ProductionCompletionDispatchV1,
     ProductionIngressSchedulerInputsError, ProductionIngressTurnPreparation,
->>>>>>> origin/optimizations
-    ProductionLifecycleOwnerV1, ProductionRecoveredCompletionDispatchErrorV1,
-    ProductionRecoveredCompletionDispatchV1, ProductionRecoveredDecisionFetchPersistenceErrorV1,
+    ProductionLifecycleOwnerV1, ProductionRecoveredDecisionFetchPersistenceErrorV1,
     ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
     ProductionRecoveredLifecycleSignDispatchV1,
     ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
     ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
+    RegisteredLifecycleValidateSidecarWaitV1,
     ingress_position::{FairIngressTurnContextCut, FairIngressTurnCut},
     work_registry::RecoveredDecisionApplyTerminalPublicationError,
 };
@@ -78,13 +75,8 @@ use crate::{
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
         v2_worker::{
             DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
-<<<<<<< HEAD
-            LifecycleDurableValidateCapacityCaptureV1, LifecycleDurableValidateCompletionKindV1,
-            LifecycleDurableValidateRetryV1, PreparedCertifiedFetchBodyPersistenceCompletion,
-            PreparedLifecycleDurableValidateCompletionV1,
-=======
             LifecycleCompletionTakeV1, PreparedCertifiedFetchBodyPersistenceCompletion,
->>>>>>> origin/optimizations
+            PreparedDeferredLifecycleValidateCompletionV1, PreparedLifecycleValidateCompletionV1,
             PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
@@ -235,34 +227,6 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     // before live clocks can admit fresh local proposal work.
     recovered_local_proposal_attempt:
         Option<super::super::v2::RecoveredLifecycleLocalProposalAttemptV1>,
-<<<<<<< HEAD
-    // Guarded completion/retry owners drop only after their exact service has
-    // stopped, so their fail-stop queue identities remain representable.
-    recovered_decision_apply_deferred: Option<RetainedRecoveredDecisionApplyDeferredV1>,
-    // Dedicated persisted Fetch completion drops after services have stopped
-    // its worker, while retaining the queue Arc and fail-stop guard.
-    recovered_decision_fetch_body_completion:
-        Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,
-    // Ordinary persisted Fetch completion is owned by this lifecycle until
-    // Phase B advances the exact queue, registry, coordinator, and worker row.
-    certified_fetch_body_completion: Option<PreparedCertifiedFetchBodyPersistenceCompletion>,
-    // Ordinary Validate completion owns the address-keyed worker index until
-    // the exact Waiting→Ready publication or unchanged retry commits.
-    lifecycle_durable_validate_completion: Option<PreparedLifecycleDurableValidateCompletionV1>,
-    // Services drop before this completion and stop the worker. This guard then
-    // drops while its own retained queue Arc still represents the exact owner.
-    recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>,
-    // The wait retains the exact selector and service-generation fence. It is
-    // never split back into a caller-selected ordinal or raw queue witness.
-    recovered_ingress_capacity_wait: Option<super::PreparedProductionIngressCapacityWait>,
-    // Ordinary and recovered selectors are intentionally parked separately:
-    // their release paths consume different authenticated response authority.
-    certified_fetch_ingress_capacity_wait: Option<super::PreparedProductionIngressCapacityWait>,
-    // Current-height Serve retains only the worker release-generation fence;
-    // after it advances the full fair-ingress census is captured again.
-    certified_serve_capacity_wait:
-        Option<crate::sumeragi::v2_worker::LifecycleCertifiedServeCapacityWaitV1>,
-=======
     // Exactly one guarded completion/retry owner may be parked. It drops only
     // after its exact service has stopped, so fail-stop queue identity remains
     // representable without parallel optional owner slots.
@@ -270,7 +234,6 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     // A single typed owner retains the exact selector and service-generation
     // fence. The variant fixes which Phase-A transaction may resume it.
     pending_ingress_capacity: Option<PendingIngressCapacityV1>,
->>>>>>> origin/optimizations
     #[allow(dead_code)]
     completion_observer_activation: Option<ProductionV2CompletionObserverActivationPermitV1>,
     // Rust drops fields in declaration order. Keep this last so the service
@@ -290,6 +253,13 @@ enum PendingLifecycleCompletionV1 {
     RecoveredDecisionFetch(PreparedRecoveredDecisionFetchBodyCompletionV1),
     /// Recovered Sign persistence awaits its adapter-family settlement.
     RecoveredSign(PreparedRecoveredLifecycleSignCompletionV1),
+    /// One executed lifecycle Validate awaits same-address Ready publication.
+    Validate(PreparedLifecycleValidateCompletionV1),
+    /// A missing-sidecar lifecycle Validate remains parked under its exact wait owner.
+    DeferredValidate(PreparedDeferredLifecycleValidateCompletionV1),
+    /// The exact missing-sidecar registration is fsynced and retains either
+    /// the live guarded completion or its authenticated cold-open equivalent.
+    RegisteredDeferredValidate(RegisteredLifecycleValidateSidecarWaitV1),
 }
 
 impl PendingLifecycleCompletionV1 {
@@ -334,7 +304,20 @@ impl PendingLifecycleCompletionV1 {
             Self::RecoveredSign(completion) => Some(completion),
             Self::RecoveredDecisionApplyDeferred(_)
             | Self::CertifiedFetch(_)
-            | Self::RecoveredDecisionFetch(_) => None,
+            | Self::RecoveredDecisionFetch(_)
+            | Self::Validate(_)
+            | Self::DeferredValidate(_)
+            | Self::RegisteredDeferredValidate(_) => None,
+        }
+    }
+
+    fn take_validate(slot: &mut Option<Self>) -> Option<PreparedLifecycleValidateCompletionV1> {
+        match slot.take() {
+            Some(Self::Validate(completion)) => Some(completion),
+            other => {
+                *slot = other;
+                None
+            }
         }
     }
 }
@@ -1545,6 +1528,9 @@ pub(in crate::sumeragi) enum ProductionLifecycleLaunchErrorV1 {
     /// The ordered I/O worker could not start with the transferred store.
     #[error("production I/O launch failed: {0}")]
     Services(String),
+    /// A durable Validate sidecar registration could not be authenticated and rebound.
+    #[error("Validate sidecar registration recovery failed: {0}")]
+    ValidateSidecarRegistration(String),
     /// A post-construction process-identity check failed.
     #[error("launched lifecycle stack lost exact process ownership")]
     OwnershipMismatch,
@@ -2051,23 +2037,8 @@ impl ActivatedProductionLifecycleV1 {
         if !self.launched.executor.ready_to_finish()
             || self.launched.pending_kura_apply_replay.is_some()
             || self.launched.recovered_local_proposal_attempt.is_some()
-<<<<<<< HEAD
-            || self
-                .launched
-                .recovered_decision_fetch_body_completion
-                .is_some()
-            || self.launched.recovered_decision_apply_deferred.is_some()
-            || self.launched.recovered_lifecycle_sign_completion.is_some()
-            || self
-                .launched
-                .lifecycle_durable_validate_completion
-                .is_some()
-            || self.launched.recovered_ingress_capacity_wait.is_some()
-            || self.launched.certified_serve_capacity_wait.is_some()
-=======
             || self.launched.pending_lifecycle_completion.is_some()
             || self.launched.pending_ingress_capacity.is_some()
->>>>>>> origin/optimizations
             || self.launched.completion_observer_activation.is_some()
             || !self
                 .launched
@@ -2102,52 +2073,20 @@ impl ActivatedProductionLifecycleV1 {
             services,
             pending_kura_apply_replay,
             recovered_local_proposal_attempt,
-<<<<<<< HEAD
-            recovered_decision_apply_deferred,
-            recovered_decision_fetch_body_completion,
-            certified_fetch_body_completion,
-            lifecycle_durable_validate_completion,
-            recovered_lifecycle_sign_completion,
-            recovered_ingress_capacity_wait,
-            certified_fetch_ingress_capacity_wait,
-            certified_serve_capacity_wait,
-=======
             pending_lifecycle_completion,
             pending_ingress_capacity,
->>>>>>> origin/optimizations
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
         debug_assert!(pending_kura_apply_replay.is_none());
         debug_assert!(recovered_local_proposal_attempt.is_none());
-<<<<<<< HEAD
-        debug_assert!(recovered_decision_apply_deferred.is_none());
-        debug_assert!(recovered_decision_fetch_body_completion.is_none());
-        debug_assert!(certified_fetch_body_completion.is_none());
-        debug_assert!(lifecycle_durable_validate_completion.is_none());
-        debug_assert!(recovered_lifecycle_sign_completion.is_none());
-        debug_assert!(recovered_ingress_capacity_wait.is_none());
-        debug_assert!(certified_fetch_ingress_capacity_wait.is_none());
-        debug_assert!(certified_serve_capacity_wait.is_none());
-=======
         debug_assert!(pending_lifecycle_completion.is_none());
         debug_assert!(pending_ingress_capacity.is_none());
->>>>>>> origin/optimizations
         debug_assert!(completion_observer_activation.is_none());
         drop(pending_lifecycle_completion);
         drop(pending_kura_apply_replay);
         drop(recovered_local_proposal_attempt);
-<<<<<<< HEAD
-        drop(recovered_decision_fetch_body_completion);
-        drop(certified_fetch_body_completion);
-        drop(lifecycle_durable_validate_completion);
-        drop(recovered_lifecycle_sign_completion);
-        drop(recovered_ingress_capacity_wait);
-        drop(certified_fetch_ingress_capacity_wait);
-        drop(certified_serve_capacity_wait);
-=======
         drop(pending_ingress_capacity);
->>>>>>> origin/optimizations
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
 
@@ -2209,54 +2148,21 @@ impl ActivatedProductionLifecycleV1 {
             services,
             pending_kura_apply_replay,
             recovered_local_proposal_attempt,
-<<<<<<< HEAD
-            recovered_decision_apply_deferred,
-            recovered_decision_fetch_body_completion,
-            certified_fetch_body_completion,
-            lifecycle_durable_validate_completion,
-            recovered_lifecycle_sign_completion,
-            recovered_ingress_capacity_wait,
-            certified_fetch_ingress_capacity_wait,
-            certified_serve_capacity_wait,
-=======
             pending_lifecycle_completion,
             pending_ingress_capacity,
->>>>>>> origin/optimizations
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
         assert!(pending_kura_apply_replay.is_none());
         assert!(recovered_local_proposal_attempt.is_none());
-<<<<<<< HEAD
-        assert!(recovered_decision_apply_deferred.is_none());
-        assert!(recovered_decision_fetch_body_completion.is_none());
-        assert!(certified_fetch_body_completion.is_none());
-        assert!(lifecycle_durable_validate_completion.is_none());
-        assert!(recovered_lifecycle_sign_completion.is_none());
-        assert!(recovered_ingress_capacity_wait.is_none());
-        assert!(certified_fetch_ingress_capacity_wait.is_none());
-        assert!(certified_serve_capacity_wait.is_none());
-=======
         assert!(pending_lifecycle_completion.is_none());
         assert!(pending_ingress_capacity.is_none());
->>>>>>> origin/optimizations
         assert!(completion_observer_activation.is_none());
         drop(executor);
         drop(pending_kura_apply_replay);
         drop(recovered_local_proposal_attempt);
-<<<<<<< HEAD
-        drop(recovered_decision_apply_deferred);
-        drop(recovered_decision_fetch_body_completion);
-        drop(certified_fetch_body_completion);
-        drop(lifecycle_durable_validate_completion);
-        drop(recovered_lifecycle_sign_completion);
-        drop(recovered_ingress_capacity_wait);
-        drop(certified_fetch_ingress_capacity_wait);
-        drop(certified_serve_capacity_wait);
-=======
         drop(pending_lifecycle_completion);
         drop(pending_ingress_capacity);
->>>>>>> origin/optimizations
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
         ProductionLifecyclePostOutputHandoffV1 {
@@ -2534,6 +2440,14 @@ impl ProductionLifecycleOwnerV1 {
         } {
             return Err(ProductionLifecycleLaunchErrorV1::InvalidOwner);
         }
+        let recovered_validate_sidecar =
+            RegisteredLifecycleValidateSidecarWaitV1::recover_at_launch(
+                &mut self.coordinator,
+                &self.registry,
+            )
+            .map_err(|error| {
+                ProductionLifecycleLaunchErrorV1::ValidateSidecarRegistration(error.to_string())
+            })?;
         let launch_storage = self
             .kura_binding
             .as_ref()
@@ -2671,19 +2585,9 @@ impl ProductionLifecycleOwnerV1 {
             services,
             pending_kura_apply_replay,
             recovered_local_proposal_attempt,
-<<<<<<< HEAD
-            recovered_decision_apply_deferred: None,
-            recovered_decision_fetch_body_completion: None,
-            certified_fetch_body_completion: None,
-            lifecycle_durable_validate_completion: None,
-            recovered_lifecycle_sign_completion: None,
-            recovered_ingress_capacity_wait: None,
-            certified_fetch_ingress_capacity_wait: None,
-            certified_serve_capacity_wait: None,
-=======
-            pending_lifecycle_completion: None,
+            pending_lifecycle_completion: recovered_validate_sidecar
+                .map(PendingLifecycleCompletionV1::RegisteredDeferredValidate),
             pending_ingress_capacity: None,
->>>>>>> origin/optimizations
             completion_observer_activation: Some(
                 ProductionV2CompletionObserverActivationPermitV1 {
                     _seal: ProductionV2CompletionObserverActivationPermitSealV1,

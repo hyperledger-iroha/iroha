@@ -1346,7 +1346,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "288424fb05c59c35ab662e7ef17e5a09b3c69e9e63071cafd73baa960e42a59f"
+        "d1eee2c7fcb9bd94d50e519f434b78d50d9887cc38bf77c1980e877822704571"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1406,7 +1406,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "b0f80b64612e436979c51bef1a607147f2fcc3c4c5b127a3738a4ca3410cc40f"
     ),
     "drive_effects": (
-        "7493eed9736bb149f208b8990ba5f1b69d1b9aa6645dc8c2ded7c91a87a20255"
+        "5adf00903e0a88fb10917c9e614352be22f3ec1feb7ec94767a5a5f4dc243a08"
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNTIME_STRUCT_SHA256 = {
@@ -1443,7 +1443,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "62d6456a13677fe5a033c4f508b13db1e22c587875448e9fd92e915132886bb5"
+        "42cf34f73d1e1293dd466cc4fea05b3195c7536df5b74e62fff30f50b8758511"
     ),
     "freeze_due_clock_owners": (
         "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
@@ -1454,16 +1454,13 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "minimum_active_lifecycle_ordinal_excluding": (
         "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
     ),
-    "minimum_runnable_lifecycle_ordinal": (
-        "3c782c6e97e8a3639ea8d9c1eece964b64f9863f2cface7013c95d6e8ed17c61"
-    ),
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
     ),
     "observe_effects": (
         "23d97acae28bbe7990bc3316cb6f38f38c412511f4613657a842e12f9a5517a7"
     ),
-    "step": "cf7ea7ef32f0e4a7f8b418780848c030bf6cc04ccb2c04a61bb0037b684547a3",
+    "step": "aaa41e0366ae660537780528c97e763e8f292e9a80234c21d4cc37a390eea414",
     "finish_dispatched_step": (
         "79b15a8142c81629b078a64822c4bba3a7cc930d1da75eb816c7f64609021285"
     ),
@@ -1484,7 +1481,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
-    "launch": "6b74510906f87755de55b779c17ce3b7eb64b670f77026c2b7f14f4aadfcd48d",
+    "launch": "1a34076aed7b1758af2efd56af77b5b66cb1606d41db0e04836470497abbb626",
     "into_serialized_runtime": "1afc003a9b27312c1d9b4868eb6dc1c42d6bd4f838b3ebe383131627c40972bd",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {

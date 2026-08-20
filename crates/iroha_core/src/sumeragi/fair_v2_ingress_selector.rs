@@ -206,9 +206,7 @@ fn fair_v2_ingress_queue_gate_verdict(
         });
     let dependency_bypass = !ingress_barrier_allows
         && leader_wire_control_barrier
-        && (earlier_dependency
-            || timeout_control_dependency
-            || certified_fence_escape_dependency);
+        && (earlier_dependency || timeout_control_dependency || certified_fence_escape_dependency);
     if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
         FairV2IngressQueueGateVerdict::Blocked
     } else if dependency_bypass {

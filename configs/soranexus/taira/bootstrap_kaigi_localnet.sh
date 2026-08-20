@@ -12,9 +12,9 @@ KAIGI_MANIFEST="${IROHA_TAIRA_KAIGI_MANIFEST:-$LOCALNET_DIR/genesis.kaigi.json}"
 KAIGI_BOUND_MANIFEST="${IROHA_TAIRA_KAIGI_BOUND_MANIFEST:-$LOCALNET_DIR/genesis.kaigi.bound.json}"
 TAIRA_PROFILE_CONFIG="${IROHA_TAIRA_PROFILE_CONFIG:-$ROOT_DIR/configs/soranexus/taira/config.toml}"
 TAIRA_SECRETS_FILE="${IROHA_TAIRA_SECRETS_FILE:-$ROOT_DIR/configs/soranexus/taira/validator_secrets.local.toml}"
-TAIRA_ONBOARDING_TOKEN_FILE="${IROHA_TAIRA_ONBOARDING_TOKEN_FILE:-}"
+TAIRA_DPN_ONBOARDING_TOKEN_FILE="${IROHA_TAIRA_DPN_ONBOARDING_TOKEN_FILE:-${IROHA_TAIRA_ONBOARDING_TOKEN_FILE:-}}"
 SITE_BINDINGS_FILE="${IROHA_TAIRA_SITE_BINDINGS_FILE:-$ROOT_DIR/configs/soranexus/taira/sorafs_sites.json}"
-CALL_DOMAIN="${IROHA_TAIRA_KAIGI_CALL_DOMAIN:-wonderland.universal}"
+CALL_DOMAIN="${IROHA_TAIRA_KAIGI_CALL_DOMAIN:-sora.universal}"
 CALL_NAME="${IROHA_TAIRA_KAIGI_CALL_NAME:-taira-relay-bootstrap}"
 REPORTED_AT_MS="${IROHA_TAIRA_KAIGI_REPORTED_AT_MS:-1890864000000}"
 RELAY_DOMAIN="${IROHA_TAIRA_KAIGI_RELAY_DOMAIN:-nexus.universal}"
@@ -23,7 +23,7 @@ KAIGI_HELPER_BIN="${IROHA_TAIRA_KAIGI_HELPER_BIN:-}"
 KAGAMI_BIN="${IROHA_TAIRA_KAGAMI_BIN:-}"
 DPN_DATASPACE_ID="${IROHA_TAIRA_DPN_DATASPACE_ID:-10}"
 DPN_DATASPACE_ALIAS="${IROHA_TAIRA_DPN_DATASPACE_ALIAS:-dpn}"
-DPN_ACCOUNT_DOMAIN="${IROHA_TAIRA_DPN_ACCOUNT_DOMAIN:-wonderland.dpn}"
+DPN_ACCOUNT_DOMAIN="${IROHA_TAIRA_DPN_ACCOUNT_DOMAIN:-nevo.dpn}"
 DPN_SPONSOR_ACCOUNT_ID="${IROHA_TAIRA_DPN_SPONSOR_ACCOUNT_ID:-}"
 DPN_SPONSOR_FUND_AMOUNT="${IROHA_TAIRA_DPN_SPONSOR_FUND_AMOUNT:-1000}"
 TAIRA_AUTHORITY_FUND_AMOUNT="${IROHA_TAIRA_AUTHORITY_FUND_AMOUNT:-1000000000}"
@@ -165,45 +165,27 @@ print(cfg["torii"]["max_content_len"])
 block = cfg.get("sumeragi", {}).get("block", {})
 print(shared.get("account_onboarding_authority", ""))
 print(shared.get("account_onboarding_private_key", ""))
-print(shared.get("account_onboarding_api_token", ""))
-print(shared.get("account_onboarding_credential_id", ""))
-print(shared.get("account_onboarding_scope_domain", ""))
-print(shared.get("account_onboarding_scope_dataspace", ""))
 print(block.get("max_transactions", ""))
 print(block.get("max_payload_bytes", ""))
 print(block.get("proposal_queue_scan_multiplier", ""))
 PY
   )
-  if [[ "${#values[@]}" -lt 10 ]]; then
+  if [[ "${#values[@]}" -lt 6 ]]; then
     echo "failed to load Taira max_content_len/block-budget/shared local bootstrap signer defaults from $TAIRA_PROFILE_CONFIG" >&2
     exit 1
   fi
   TAIRA_TORII_MAX_CONTENT_LEN="${IROHA_TAIRA_TORII_MAX_CONTENT_LEN:-${values[0]}}"
   TAIRA_AUTHORITY="${IROHA_TAIRA_AUTHORITY:-${values[1]}}"
   TAIRA_AUTHORITY_PRIVATE_KEY="${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-${values[2]}}"
-  TAIRA_ONBOARDING_API_TOKEN="${values[3]}"
-  TAIRA_ONBOARDING_CREDENTIAL_ID="${values[4]:-local-dev}"
-  TAIRA_ONBOARDING_SCOPE_DOMAIN="${values[5]}"
-  TAIRA_ONBOARDING_SCOPE_DATASPACE="${values[6]}"
-  TAIRA_BLOCK_MAX_TRANSACTIONS="${IROHA_TAIRA_BLOCK_MAX_TRANSACTIONS:-${values[7]}}"
-  TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${IROHA_TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-${values[8]}}"
-  TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${IROHA_TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-${values[9]}}"
+  TAIRA_BLOCK_MAX_TRANSACTIONS="${IROHA_TAIRA_BLOCK_MAX_TRANSACTIONS:-${values[3]}}"
+  TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${IROHA_TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-${values[4]}}"
+  TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${IROHA_TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-${values[5]}}"
   if [[ -z "$TAIRA_AUTHORITY" || -z "$TAIRA_AUTHORITY_PRIVATE_KEY" ]]; then
     echo "set IROHA_TAIRA_AUTHORITY and IROHA_TAIRA_AUTHORITY_PRIVATE_KEY or provide [shared] account_onboarding_* values in $TAIRA_SECRETS_FILE; local bootstrap reuses that shared signer for the served faucet too" >&2
     exit 1
   fi
-  if [[ -n "$TAIRA_ONBOARDING_TOKEN_FILE" ]]; then
-    need_file "$TAIRA_ONBOARDING_TOKEN_FILE"
-    TAIRA_ONBOARDING_API_TOKEN="$(<"$TAIRA_ONBOARDING_TOKEN_FILE")"
-  fi
-  if [[ -z "$TAIRA_ONBOARDING_API_TOKEN" ]]; then
-    TAIRA_ONBOARDING_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-  fi
-  if [[ -z "$TAIRA_ONBOARDING_SCOPE_DOMAIN" && -z "$TAIRA_ONBOARDING_SCOPE_DATASPACE" ]]; then
-    TAIRA_ONBOARDING_SCOPE_DOMAIN="$CALL_DOMAIN"
-  elif [[ -n "$TAIRA_ONBOARDING_SCOPE_DOMAIN" && -n "$TAIRA_ONBOARDING_SCOPE_DATASPACE" ]]; then
-    echo "configure exactly one account onboarding domain or dataspace scope" >&2
-    exit 1
+  if [[ -n "$TAIRA_DPN_ONBOARDING_TOKEN_FILE" ]]; then
+    need_file "$TAIRA_DPN_ONBOARDING_TOKEN_FILE"
   fi
 }
 
@@ -235,10 +217,8 @@ patch_peer_configs_for_taira_authority() {
   local fee_asset_id="$1"
   TAIRA_AUTHORITY="$TAIRA_AUTHORITY" \
   TAIRA_AUTHORITY_PRIVATE_KEY="$TAIRA_AUTHORITY_PRIVATE_KEY" \
-  TAIRA_ONBOARDING_API_TOKEN="$TAIRA_ONBOARDING_API_TOKEN" \
-  TAIRA_ONBOARDING_CREDENTIAL_ID="$TAIRA_ONBOARDING_CREDENTIAL_ID" \
-  TAIRA_ONBOARDING_SCOPE_DOMAIN="$TAIRA_ONBOARDING_SCOPE_DOMAIN" \
-  TAIRA_ONBOARDING_SCOPE_DATASPACE="$TAIRA_ONBOARDING_SCOPE_DATASPACE" \
+  TAIRA_SECRETS_FILE="$TAIRA_SECRETS_FILE" \
+  TAIRA_DPN_ONBOARDING_TOKEN_FILE="$TAIRA_DPN_ONBOARDING_TOKEN_FILE" \
   TAIRA_TORII_MAX_CONTENT_LEN="$TAIRA_TORII_MAX_CONTENT_LEN" \
   TAIRA_BLOCK_MAX_TRANSACTIONS="${TAIRA_BLOCK_MAX_TRANSACTIONS:-}" \
   TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-}" \
@@ -253,14 +233,19 @@ import blake3
 import json
 import os
 import re
+import secrets
+import unicodedata
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 localnet_dir = Path(os.environ["LOCALNET_DIR"])
 authority = os.environ["TAIRA_AUTHORITY"]
 private_key = os.environ["TAIRA_AUTHORITY_PRIVATE_KEY"]
-api_token = os.environ["TAIRA_ONBOARDING_API_TOKEN"]
-credential_id = os.environ["TAIRA_ONBOARDING_CREDENTIAL_ID"]
-scope_domain = os.environ["TAIRA_ONBOARDING_SCOPE_DOMAIN"]
-scope_dataspace = os.environ["TAIRA_ONBOARDING_SCOPE_DATASPACE"]
+secrets_file = Path(os.environ["TAIRA_SECRETS_FILE"])
+dpn_token_file_raw = os.environ["TAIRA_DPN_ONBOARDING_TOKEN_FILE"]
 max_content_len = os.environ["TAIRA_TORII_MAX_CONTENT_LEN"]
 block_budget_values = {
     "max_transactions": os.environ.get("TAIRA_BLOCK_MAX_TRANSACTIONS", "").strip(),
@@ -272,6 +257,108 @@ block_budget_values = {
 fee_asset_id = os.environ["TAIRA_FEE_ASSET_ID"]
 fee_sponsor_program_id = os.environ["TAIRA_ONBOARDING_FEE_SPONSOR_PROGRAM_ID"]
 site_bindings_file = str(Path(os.environ["SITE_BINDINGS_FILE"]).resolve())
+
+def validate_token(value: object, context: str) -> str:
+    if not isinstance(value, str):
+        raise SystemExit(f"{context} must be a string")
+    try:
+        payload = value.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise SystemExit(f"{context} must contain printable ASCII only") from error
+    if not 32 <= len(payload) <= 256 or any(
+        byte <= 0x20 or byte > 0x7E for byte in payload
+    ):
+        raise SystemExit(
+            f"{context} must contain 32 to 256 non-whitespace printable ASCII bytes"
+        )
+    return value
+
+def validate_credential_id(value: object, context: str) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise SystemExit(f"{context} must be an exact non-empty string")
+    if (
+        len(value.encode("utf-8")) > 255
+        or unicodedata.normalize("NFC", value) != value
+        or any(
+            character.isspace() or unicodedata.category(character) == "Cc"
+            for character in value
+        )
+        or any(character in "@#$" for character in value)
+    ):
+        raise SystemExit(f"{context} must be a canonical Iroha Name")
+    return value
+
+shared = {}
+if secrets_file.is_file():
+    with secrets_file.open("rb") as handle:
+        secret_payload = tomllib.load(handle)
+    candidate = secret_payload.get("shared", {})
+    if not isinstance(candidate, dict):
+        raise SystemExit(f"{secrets_file} [shared] must be a TOML table")
+    shared = candidate
+
+raw_credentials = shared.get("account_onboarding_credentials", [])
+if not isinstance(raw_credentials, list):
+    raise SystemExit(
+        "shared.account_onboarding_credentials must be an array of TOML tables"
+    )
+if not raw_credentials:
+    raw_credentials = [
+        {
+            "id": "boi-mobile",
+            "api_token": secrets.token_urlsafe(32),
+            "scope_dataspace": "is2",
+        },
+        {
+            "id": "dpn-api",
+            "api_token": secrets.token_urlsafe(32),
+            "scope_dataspace": "dpn",
+        },
+    ]
+
+credentials = []
+expected_fields = {"id", "api_token", "scope_dataspace"}
+for index, raw_credential in enumerate(raw_credentials, start=1):
+    context = f"shared.account_onboarding_credentials entry #{index}"
+    if not isinstance(raw_credential, dict) or set(raw_credential) != expected_fields:
+        raise SystemExit(
+            f"{context} must contain exactly id, api_token, and scope_dataspace"
+        )
+    credential_id = validate_credential_id(raw_credential["id"], f"{context}.id")
+    token = validate_token(raw_credential["api_token"], f"{context}.api_token")
+    scope = raw_credential["scope_dataspace"]
+    if scope not in {"dpn", "is", "is2"}:
+        raise SystemExit(f"{context}.scope_dataspace must be dpn, is, or is2")
+    credentials.append({"id": credential_id, "api_token": token, "scope": scope})
+
+dpn_token_file = Path(dpn_token_file_raw) if dpn_token_file_raw else None
+if dpn_token_file is not None:
+    dpn_credentials = [item for item in credentials if item["scope"] == "dpn"]
+    if len(dpn_credentials) != 1:
+        raise SystemExit(
+            "a DPN onboarding token override requires exactly one dpn-scoped credential"
+        )
+    token_payload = dpn_token_file.read_text(encoding="ascii")
+    if token_payload.endswith("\n"):
+        token_payload = token_payload[:-1]
+        if token_payload.endswith("\r"):
+            token_payload = token_payload[:-1]
+    dpn_credentials[0]["api_token"] = validate_token(
+        token_payload, "DPN onboarding token file"
+    )
+
+credential_ids = [item["id"] for item in credentials]
+credential_tokens = [item["api_token"] for item in credentials]
+if len(set(credential_ids)) != len(credential_ids):
+    raise SystemExit("account onboarding credential ids must be unique")
+if len(set(credential_tokens)) != len(credential_tokens):
+    raise SystemExit("account onboarding credentials must not reuse API tokens")
+missing_scopes = sorted({"dpn", "is2"}.difference(item["scope"] for item in credentials))
+if missing_scopes:
+    raise SystemExit(
+        "account onboarding credentials must include dpn and is2 scopes; missing "
+        + ", ".join(missing_scopes)
+    )
 
 localnet_dir.chmod(0o700)
 runtime_dir = localnet_dir / "runtime"
@@ -289,13 +376,31 @@ def write_private(path: Path, value: str) -> Path:
 
 onboarding_key_file = write_private(runtime_dir / "onboarding-signer.key", private_key)
 faucet_key_file = write_private(runtime_dir / "faucet-signer.key", private_key)
-write_private(runtime_dir / "onboarding-token", api_token)
-token_hash = f"blake3:{blake3.blake3(api_token.encode('utf-8')).hexdigest()}"
-scope = (
-    f"{{ domain = {json.dumps(scope_domain)} }}"
-    if scope_domain
-    else f"{{ dataspace = {json.dumps(scope_dataspace)} }}"
-)
+credential_blocks = []
+for index, credential in enumerate(credentials, start=1):
+    token_path = write_private(
+        runtime_dir / f"onboarding-token-{index:02d}-{credential['scope']}",
+        credential["api_token"],
+    )
+    token_hash = (
+        "blake3:"
+        + blake3.blake3(credential["api_token"].encode("ascii")).hexdigest()
+    )
+    credential_blocks.append(
+        "\n".join(
+            [
+                "[[torii.account_onboarding.credentials]]",
+                f"id = {json.dumps(credential['id'])}",
+                f"scope = {{ dataspace = {json.dumps(credential['scope'])} }}",
+                f"token_hash = {json.dumps(token_hash)}",
+            ]
+        )
+    )
+    print(
+        "onboarding token sidecar "
+        f"({credential['id']}, {credential['scope']}): {token_path}"
+    )
+credentials_toml = "\n\n".join(credential_blocks)
 
 gitignore = localnet_dir / ".gitignore"
 if not gitignore.exists():
@@ -308,10 +413,7 @@ lease_term_years = 1
 additional_permissions = []
 fee_sponsor_program_id = "{fee_sponsor_program_id}"
 
-[[torii.account_onboarding.credentials]]
-id = {json.dumps(credential_id)}
-scope = {scope}
-token_hash = {json.dumps(token_hash)}
+{credentials_toml}
 """
 
 soracloud_submission_block = f"""[soracloud_runtime.submission]
@@ -1129,7 +1231,6 @@ fi
 patch_peer_configs_for_dpn_dataspace_alias
 patch_peer_configs_for_taira_authority "$FEE_ASSET_ID"
 echo "onboarding signer sidecar: $LOCALNET_DIR/runtime/onboarding-signer.key"
-echo "onboarding token sidecar: $LOCALNET_DIR/runtime/onboarding-token"
 echo "faucet signer sidecar: $LOCALNET_DIR/runtime/faucet-signer.key"
 ensure_private_dataspace_onboarding_permissions
 ensure_dpn_genesis_seed_state "$FEE_ASSET_ID"

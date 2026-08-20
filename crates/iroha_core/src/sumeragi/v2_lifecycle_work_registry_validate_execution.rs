@@ -67,17 +67,20 @@ impl PreparedDurableValidateCompletion<'_> {
 // DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableValidateDispatch {
-    /// Return the exact address/digest identity retained by the dedicated worker.
-    pub(in crate::sumeragi) fn dispatch_key(&self) -> LifecycleDurableValidateDispatchKeyV1 {
-        let context = LifecycleContext::new(
-            digest_from_bytes(self.request.durable_receipt.context_id().0.as_ref()),
-            self.request.durable_receipt.round().height,
-        );
-        LifecycleDurableValidateDispatchKeyV1::new(
-            context,
-            self.request.address,
-            self.request.incumbent_digest,
-        )
+    /// Recheck the registry-attested immutable worker key before queue publication.
+    pub(in crate::sumeragi) fn matches_dispatch_key(
+        &self,
+        key: super::LifecycleValidateDispatchKeyV1,
+    ) -> bool {
+        self.request.address.owner == key.owner()
+            && self.request.address.ordinal == key.lifecycle_ordinal()
+            && self.request.address.slot == key.slot()
+            && self.request.incumbent_digest == key.digest()
+            && self.request.lifecycle_key.context().as_bytes()
+                == self.request.round.context_id.0.as_ref()
+            && self.request.lifecycle_key.round().height() == self.request.round.height
+            && self.request.lifecycle_key.phase() == super::LifecyclePhase::Validate
+            && self.request.lifecycle_stage.kind() == super::LifecycleStageKind::ValidateBody
     }
     /// Execute the exact request after its claimed lifecycle row became an
     /// external wait.
@@ -104,41 +107,15 @@ impl DurableValidateDispatch {
 }
 #[cfg_attr(not(test), allow(dead_code))]
 impl ExecutedDurableValidateDispatch {
-    /// Return the exact worker identity retained across execution.
-    pub(in crate::sumeragi) fn dispatch_key(&self) -> LifecycleDurableValidateDispatchKeyV1 {
-        let context = LifecycleContext::new(
-            digest_from_bytes(
-                self.executed
-                    .request
-                    .durable_receipt
-                    .context_id()
-                    .0
-                    .as_ref(),
-            ),
-            self.executed.request.durable_receipt.round().height,
-        );
-        LifecycleDurableValidateDispatchKeyV1::new(
-            context,
-            self.executed.request.address,
-            self.executed.request.incumbent_digest,
-        )
-    }
-    /// Convert only a missing-sidecar outcome back into its unchanged request.
-    ///
-    /// The durable validation marker is deliberately discarded because this
-    /// outcome did not validate or reject the body. The exact wait authority
-    /// remains paired with the original request for bounded worker retry.
-    pub(in crate::sumeragi) fn into_missing_sidecar_retry(
-        self,
-    ) -> Result<DurableValidateDispatch, Self> {
-        if self.outcome().missing_merge_sidecar().is_none() {
-            return Err(self);
-        }
-        let Self { executed, wake } = self;
-        Ok(DurableValidateDispatch {
-            request: executed.request,
-            wake,
-        })
+    /// Recheck the immutable worker key retained from command through completion.
+    pub(in crate::sumeragi) fn matches_dispatch_key(
+        &self,
+        key: super::LifecycleValidateDispatchKeyV1,
+    ) -> bool {
+        self.executed.request.address.owner == key.owner()
+            && self.executed.request.address.ordinal == key.lifecycle_ordinal()
+            && self.executed.request.address.slot == key.slot()
+            && self.executed.request.incumbent_digest == key.digest()
     }
     /// Borrow the closed result without separating it from wake authority.
     pub(super) const fn outcome(&self) -> &DurableBodyValidationOutcome {
@@ -242,8 +219,9 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
     }
     /// Retain a missing merge-sidecar result without changing either live row.
     ///
-    /// TODO: Consume this token only in a sealed sidecar registration plus
-    /// same-row wake transaction; raw wait authority remains inaccessible.
+    /// The lifecycle sidecar owner consumes this token only in its sealed
+    /// registration and same-row wake transaction; raw wait authority remains
+    /// inaccessible.
     pub(super) fn defer_merge_sidecar(self) -> DeferredDurableValidateDispatch {
         debug_assert!(self.authority.is_deferred_merge_sidecar());
         debug_assert!(self.dispatch.outcome().missing_merge_sidecar().is_some());
@@ -481,16 +459,40 @@ impl Drop for StagedDurableValidateCompletion<'_> {
 }
 #[cfg_attr(not(test), allow(dead_code))]
 impl DeferredDurableValidateDispatch {
+    /// Recheck the immutable worker key without exposing the retained request.
+    pub(in crate::sumeragi) fn matches_dispatch_key(
+        &self,
+        key: super::LifecycleValidateDispatchKeyV1,
+    ) -> bool {
+        self.dispatch.matches_dispatch_key(key)
+    }
+
+    /// Project the sole durable sidecar-registration identity from the sealed
+    /// request, missing-sidecar outcome, and exact Waiting generation.
+    pub(in crate::sumeragi) fn sidecar_registration_identity(
+        &self,
+        key: super::LifecycleValidateDispatchKeyV1,
+    ) -> Option<super::validate_sidecar::LifecycleValidateSidecarRegistrationIdentityV1> {
+        self.matches_dispatch_key(key).then(|| {
+            let request = &self.dispatch.executed.request;
+            super::validate_sidecar::LifecycleValidateSidecarRegistrationIdentityV1::from_sealed_dispatch(
+                key,
+                request.lifecycle_key,
+                request.lifecycle_stage,
+                request.round,
+                request.subject,
+                self.dispatch.wake.wait_token,
+                self.missing_reference().clone(),
+            )
+        })?
+    }
+
     /// Borrow the exact missing sidecar reference without exposing wake parts.
-    pub(super) fn missing_reference(&self) -> &CertifiedMergeLedgerReference {
+    pub(in crate::sumeragi) fn missing_reference(&self) -> &CertifiedMergeLedgerReference {
         self.dispatch
             .outcome()
             .missing_merge_sidecar()
             .expect("deferred Validate token retains one exact merge-sidecar reference")
-    }
-    /// Return the exact executed dispatch to its dedicated worker owner.
-    pub(in crate::sumeragi) fn into_executed_dispatch(self) -> ExecutedDurableValidateDispatch {
-        self.dispatch
     }
     #[cfg(test)]
     const fn dispatch_for_test(&self) -> &ExecutedDurableValidateDispatch {
@@ -897,11 +899,8 @@ fn certified_pipeline_replay_evidence_with_certificate_for_test(
     Some((store, validate))
 }
 fn digest_from_hash(hash: &iroha_crypto::Hash) -> LifecycleDigest {
-    digest_from_bytes(hash.as_ref())
-}
-fn digest_from_bytes(hash: &[u8]) -> LifecycleDigest {
     let mut bytes = [0_u8; 32];
-    bytes.copy_from_slice(hash);
+    bytes.copy_from_slice(hash.as_ref());
     LifecycleDigest::new(bytes)
 }
 fn durable_validate_body_payload(receipt: &DurableBodyReceipt) -> Option<DurablePayloadReference> {

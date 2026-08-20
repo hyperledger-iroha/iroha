@@ -559,9 +559,6 @@ fn run_pending_active_height(
             },
         )?;
         if !rollover_ready {
-            activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
-                committed_lane_status_publisher.publish_if_changed(lane_work)
-            });
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }

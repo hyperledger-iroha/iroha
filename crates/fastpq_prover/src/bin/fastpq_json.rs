@@ -6,16 +6,18 @@ use fastpq_prover::{
     AXT_DEFAULT_PARAMETER, OperationKind, Proof, Prover, PublicInputs, StateTransition,
     TransitionBatch, axt_proof_blob_from_bound_batch,
     batch_manifest_sha256 as axt_batch_manifest_sha256, bind_axt_batch_with_proof_metadata,
-    transition_batch_from_model, verify,
+    canonicalize_binding, set_axt_remote_spend_claims, transition_batch_from_model,
+    verify_axt_bound_batch,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
     fastpq::{FastpqTransitionBatch, normalized_numeric_to_u64},
     nexus::{
-        AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtTouchSpec,
+        AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtRemoteSpendClaimV1, AxtTouchSpec,
         LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob,
-        TouchManifest, lane_relay_fastpq_claim_digest,
+        TouchManifest, compute_remote_spend_claim_commitment_v1,
+        lane_relay_fastpq_claim_digest,
     },
 };
 use norito::{
@@ -121,9 +123,13 @@ struct ProofRequest {
     batch_base64: String,
     #[norito(default)]
     effect_binding: Option<EffectBindingRequest>,
-    /// Sorted proof-bound remote-spend intent commitments as 32-byte hex strings.
+    /// Proof-bound remote-spend claim preimages.
+    ///
+    /// The wrapper derives and sorts their commitments itself and binds these
+    /// exact preimages into the batch before sealing; callers cannot provide an
+    /// unlinked commitment-only authorization set.
     #[norito(default)]
-    remote_spend_intent_commitments: Vec<String>,
+    remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
     /// Norito-encoded lane envelope carrying a compact global-finality reference.
     #[norito(default)]
     finalized_relay_envelope_hex: String,
@@ -384,6 +390,7 @@ fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
         parameter: normalized_parameter(&input.request.parameter),
         ..input.request
     };
+    let binding = request_to_binding(&request)?;
     let batch = build_batch_from_request(&request)?;
     let proof_bytes = BASE64_STANDARD
         .decode(input.proof_bytes_base64.as_bytes())
@@ -391,7 +398,8 @@ fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
     let proof: Proof = norito::decode_from_bytes(&proof_bytes)
         .map_err(|err| format!("failed to decode proof bytes: {err}"))?;
     let started = Instant::now();
-    verify(&batch, &proof).map_err(|err| format!("FASTPQ verification failed: {err}"))?;
+    verify_axt_bound_batch(&batch, &proof, &binding)
+        .map_err(|err| format!("FASTPQ verification failed: {err}"))?;
     let verify_time = started.elapsed();
     Ok(VerifyResponse {
         passed: true,
@@ -491,16 +499,18 @@ fn trimmed_filter(value: Option<String>) -> Option<String> {
 fn prove_request(
     request: &ProofRequest,
 ) -> Result<(Vec<u8>, Duration, Duration, String, String), String> {
+    let binding = request_to_binding(request)?;
     let batch = build_batch_from_request(request)?;
     let prover = Prover::canonical(&request.parameter)
         .map_err(|err| format!("failed to construct FASTPQ prover: {err}"))?;
     let prove_started = Instant::now();
     let proof = prover
-        .prove(&batch)
+        .prove_axt_bound(&batch, &binding)
         .map_err(|err| format!("FASTPQ prove failed: {err}"))?;
     let prove_time = prove_started.elapsed();
     let verify_started = Instant::now();
-    verify(&batch, &proof).map_err(|err| format!("FASTPQ verification failed: {err}"))?;
+    verify_axt_bound_batch(&batch, &proof, &binding)
+        .map_err(|err| format!("FASTPQ verification failed: {err}"))?;
     let verify_time = verify_started.elapsed();
     let proof_bytes =
         norito::to_bytes(&proof).map_err(|err| format!("proof encode failed: {err}"))?;
@@ -527,6 +537,9 @@ fn build_batch_from_request(request: &ProofRequest) -> Result<TransitionBatch, S
         &batch_manifest_sha256(request),
         "batch_manifest_sha256",
     )?);
+    let claims = canonical_remote_spend_claims(request);
+    set_axt_remote_spend_claims(&mut batch, &binding, &claims)
+        .map_err(|err| format!("failed to bind remote-spend claims to FASTPQ batch: {err}"))?;
     bind_axt_batch_with_proof_metadata(
         &mut batch,
         &binding,
@@ -568,7 +581,7 @@ fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<Axt
         &batch_manifest_sha256(request),
         "batch_manifest_sha256",
     )?);
-    let checked_blob = axt_proof_blob_from_bound_batch(
+    let effect_proof_blob = axt_proof_blob_from_bound_batch(
         &batch,
         proof,
         manifest_root,
@@ -576,17 +589,6 @@ fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<Axt
         Some(AXT_JSON_PROOF_EXPIRY_SLOT),
     )
     .map_err(|err| format!("failed to package AXT proof envelope: {err}"))?;
-    let mut proof_envelope = norito::decode_canonical::<AxtProofEnvelope>(&checked_blob.payload)
-        .map_err(|err| format!("failed to decode checked AXT proof envelope: {err}"))?;
-    proof_envelope.amount_commitment = Some(hex_digest32(
-        &request.policy_commitment,
-        "policy_commitment",
-    )?);
-    let effect_proof_blob = ProofBlob {
-        payload: to_bytes(&proof_envelope)
-            .map_err(|err| format!("AXT proof envelope encode failed: {err}"))?,
-        expiry_slot: checked_blob.expiry_slot,
-    };
     let relay = (!request.finalized_relay_envelope_hex.trim().is_empty())
         .then(|| build_relay_artifacts(request, manifest_root))
         .transpose()?;
@@ -746,10 +748,8 @@ fn build_lane_relay_proof_blob(
     let prover = Prover::canonical(&request.parameter)
         .map_err(|err| format!("failed to construct lane relay FASTPQ prover: {err}"))?;
     let proof = prover
-        .prove(&batch)
+        .prove_axt_bound(&batch, &binding)
         .map_err(|err| format!("lane relay FASTPQ prove failed: {err}"))?;
-    verify(&batch, &proof)
-        .map_err(|err| format!("lane relay FASTPQ verification failed: {err}"))?;
     axt_proof_blob_from_bound_batch(
         &batch,
         proof,
@@ -859,7 +859,8 @@ fn batch_manifest_sha256(request: &ProofRequest) -> String {
         .unwrap_or_else(|err| panic!("{err}"))
 }
 fn request_to_binding(request: &ProofRequest) -> Result<AxtFastpqBinding, String> {
-    Ok(AxtFastpqBinding {
+    let claims = canonical_remote_spend_claims(request);
+    let binding = AxtFastpqBinding {
         parameter: normalized_parameter(&request.parameter),
         source_dsid: request.source_dsid,
         source_dataspace: if request.source_dataspace.trim().is_empty() {
@@ -883,12 +884,17 @@ fn request_to_binding(request: &ProofRequest) -> Result<AxtFastpqBinding, String
         verifier_version: normalized_verifier_version(&request.verifier_version),
         target_dsids: request.target_dsids.clone(),
         effect_binding: request.effect_binding.as_ref().map(effect_binding_to_model),
-        remote_spend_intent_commitments: request
-            .remote_spend_intent_commitments
+        remote_spend_intent_commitments: claims
             .iter()
-            .map(|value| hex_digest32(value, "remote_spend_intent_commitments"))
-            .collect::<Result<Vec<_>, _>>()?,
-    })
+            .map(compute_remote_spend_claim_commitment_v1)
+            .collect(),
+    };
+    canonicalize_binding(&binding).map_err(|err| format!("invalid AXT FASTPQ binding: {err}"))
+}
+fn canonical_remote_spend_claims(request: &ProofRequest) -> Vec<AxtRemoteSpendClaimV1> {
+    let mut claims = request.remote_spend_claims.clone();
+    claims.sort_unstable_by_key(compute_remote_spend_claim_commitment_v1);
+    claims
 }
 fn effect_binding_to_model(binding: &EffectBindingRequest) -> AxtEffectBinding {
     AxtEffectBinding {
@@ -940,6 +946,8 @@ fn duration_ms(duration: Duration) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::nexus::{AxtHandleReplayKey, AxtProofEnvelope, LaneId};
+    use iroha_primitives::Quantity;
     fn proof_request(batch_base64: impl Into<String>) -> ProofRequest {
         ProofRequest {
             parameter: AXT_DEFAULT_PARAMETER.to_owned(),
@@ -960,7 +968,7 @@ mod tests {
             relay_block_height: 1,
             batch_base64: batch_base64.into(),
             effect_binding: None,
-            remote_spend_intent_commitments: Vec::new(),
+            remote_spend_claims: Vec::new(),
             finalized_relay_envelope_hex: String::new(),
             relay_parent_state_root: String::new(),
             relay_post_state_root: String::new(),
@@ -979,6 +987,69 @@ mod tests {
             },
         );
         BASE64_STANDARD.encode(to_bytes(&batch).expect("encode transition batch"))
+    }
+    fn remote_spend_claim(sub_nonce: u64) -> AxtRemoteSpendClaimV1 {
+        AxtRemoteSpendClaimV1::new(
+            AxtHandleReplayKey::from_parts(
+                DataSpaceId::new(12),
+                [0xA5; 32],
+                7,
+                sub_nonce,
+                LaneId::new(1),
+            ),
+            iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid fixture asset"),
+            "transfer",
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+            Quantity::from(5_u64),
+        )
+    }
+    #[test]
+    fn proof_request_derives_canonical_commitments_from_claim_preimages() {
+        let mut request = proof_request(empty_batch_base64());
+        let first = remote_spend_claim(1);
+        let second = remote_spend_claim(2);
+        request.remote_spend_claims = vec![second.clone(), first.clone()];
+        let binding = request_to_binding(&request).expect("claim-backed binding");
+        let mut expected = vec![
+            compute_remote_spend_claim_commitment_v1(&first),
+            compute_remote_spend_claim_commitment_v1(&second),
+        ];
+        expected.sort_unstable();
+        assert_eq!(binding.remote_spend_intent_commitments, expected);
+
+        request.remote_spend_claims = vec![first.clone(), first];
+        assert!(
+            request_to_binding(&request).is_err(),
+            "duplicate claim commitments must fail closed"
+        );
+    }
+    fn captured_batch_base64(source_dsid: u64, source_tx_commitment: [u8; 32]) -> String {
+        let mut batch = TransitionBatch::new(
+            AXT_DEFAULT_PARAMETER.to_string(),
+            PublicInputs {
+                dsid: dsid_bytes(source_dsid),
+                slot: 1,
+                old_root: [1; 32],
+                new_root: [2; 32],
+                perm_root: [3; 32],
+                tx_set_hash: [4; 32],
+            },
+        );
+        batch.push(StateTransition::new(
+            b"axt/fastpq-json/test".to_vec(),
+            b"before".to_vec(),
+            b"after".to_vec(),
+            OperationKind::MetaSet,
+        ));
+        batch.sort();
+        batch
+            .metadata
+            .insert("entry_hash".to_owned(), source_tx_commitment.to_vec());
+        BASE64_STANDARD.encode(to_bytes(&batch).expect("encode captured transition batch"))
     }
     #[test]
     fn prove_and_verify_batch_builder_rejects_missing_execution_capture() {
@@ -1010,5 +1081,27 @@ mod tests {
             Some("alice".into())
         );
         assert_eq!(trimmed_filter(None), None);
+    }
+    #[test]
+    fn effect_proof_blob_does_not_relabel_policy_digest_as_amount_commitment() {
+        let source_tx_commitment = [0x11; 32];
+        let mut request = proof_request(captured_batch_base64(12, source_tx_commitment));
+        request.target_dsids = vec![12];
+        request.claim_type = "authorization".to_owned();
+        request.verified_effect_type = "fixture_effect".to_owned();
+        request.verifier_id = "fastpq".to_owned();
+        request.verifier_version = "v1".to_owned();
+
+        let (proof_bytes, ..) = prove_request(&request).expect("prove captured AXT batch");
+        let artifacts =
+            build_axt_materials(&request, &proof_bytes).expect("build checked AXT materials");
+        let encoded_blob = hex::decode(artifacts.effect_proof_blob).expect("decode proof blob hex");
+        let blob: ProofBlob =
+            norito::decode_canonical(&encoded_blob).expect("decode canonical proof blob");
+        let envelope: AxtProofEnvelope =
+            norito::decode_canonical(&blob.payload).expect("decode canonical AXT envelope");
+
+        assert_eq!(envelope.amount_commitment, None);
+        fastpq_prover::verify_axt_proof_blob(&blob).expect("effect proof blob verifies");
     }
 }

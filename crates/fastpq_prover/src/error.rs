@@ -197,6 +197,21 @@ pub enum Error {
         /// Number of bytes encountered in the value representation.
         length: usize,
     },
+    /// A numeric asset value did not use the canonical fixed-width encoding.
+    #[error("invalid asset value length {length}; expected exactly 8 little-endian bytes")]
+    InvalidAssetValueLength {
+        /// Number of bytes in the rejected value.
+        length: usize,
+    },
+    /// A numeric asset operation did not use the canonical state-key shape.
+    #[error("invalid asset operation key; expected `asset/<asset-id>/<account>`")]
+    InvalidAssetKey,
+    /// A mint or burn did not change the balance in its required direction.
+    #[error("{operation} must change the asset value in the required direction")]
+    InvalidAssetValueChange {
+        /// Stable operation name (`mint` or `burn`).
+        operation: &'static str,
+    },
     /// Role identifiers must be fixed 32-byte little-endian strings.
     #[error("invalid role identifier length {length}; expected 32 bytes")]
     InvalidRoleIdLength {
@@ -249,6 +264,14 @@ pub enum Error {
     #[error("transfer gadget invariant violated: {details}")]
     TransferInvariant {
         /// Human-readable description of the violation.
+        details: String,
+    },
+    /// A transition batch is not valid for the explicitly selected proof semantics.
+    #[error("invalid FASTPQ `{profile}` proof semantics: {details}")]
+    InvalidProofSemantics {
+        /// Stable name of the selected proof semantics profile.
+        profile: &'static str,
+        /// Human-readable description of the rejected batch shape.
         details: String,
     },
     /// Structured AXT FASTPQ binding was malformed.

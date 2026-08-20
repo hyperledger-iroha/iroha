@@ -105,7 +105,7 @@ Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_
 
 ### SDK sample: remote spend without token egress
 
-1. Build an AXT descriptor listing the dataspace that owns the asset plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
+1. Build an AXT descriptor listing the dataspace bucket that the remote spend uses plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
 2. Call `AXT_TOUCH` for the remote dataspace with the manifest view you expect; optionally attach a proof via `AXT_VERIFY_DS_PROOF` if the host requires it.
 3. Request or refresh the asset handle and invoke `AXT_USE_ASSET_HANDLE` with a `RemoteSpendIntent` that spends inside the remote dataspace (no bridge leg). Budget enforcement uses the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above.
 4. Commit via `AXT_COMMIT`; if the host returns `PermissionDenied`, use the reject label to decide whether to fetch a fresh handle (expiry/sub_nonce/era) or fix the manifest/lane binding.
@@ -174,7 +174,7 @@ The canonical data-model types live in
 | `AxtProofEnvelope.da_commitment` | Outer mirror of the proof-bound optional DA commitment. `axt_fastpq_da_commitment_v1` is always present as 33 bytes: `0 || 32*0` for `None`, or `1 || digest` for `Some(digest)`. |
 | `AxtProofEnvelope.proof` | Non-empty backend proof bytes. |
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
-| `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the descriptor binding, authenticated asset dataspace, exact operation kind, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by `USE_ASSET_HANDLE` must contain the exact runtime intent. |
+| `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the exact authenticated handle replay key (dataspace, descriptor binding, era, sub-nonce, and target lane), exact `AssetDefinitionId`, `transfer` operation, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by `USE_ASSET_HANDLE` must contain and consume exactly one matching claim. |
 | `committed_amount` | Optional non-zero scalar that must exactly match the canonical 16-byte little-endian `u128` in `axt_fastpq_committed_amount_v1` metadata inserted before the FastPQ batch seal and proof are generated. Missing or mismatched proof-bound metadata is rejected. |
 | `amount_commitment` | Optional deterministic hidden-amount copy checked against the spend intent; recomputing it cannot replace or alter the proof-bound `committed_amount`. |
 
@@ -196,21 +196,35 @@ than requests to synthesize defaults.
 This is a first-release proof-format hard cut. Proofs and snapshots generated
 without the required metadata, or with the retired single-field metadata
 projection, are invalid and must be regenerated rather than relabelled.
+`SpendOp.asset_definition_id` and the claim's full `AxtHandleReplayKey` are
+required wire fields; pre-change handles, claims, proofs, and JSON fixtures do
+not decode as V1 and must be regenerated together.
 
 One cryptographically verified proof may be reused for multiple handles in the
-same dataspace. Its binding must carry the sorted, deduplicated commitment for
-every authorized intent, and hosts perform membership independently for every
-handle even on proof-cache hits or dataspace-level fallback. An empty set is
-valid for standalone `VERIFY_DS_PROOF` but cannot authorize a handle. Multiple
-clear intents may carry distinct effective amounts; hidden intents sharing one
-proof necessarily share that envelope's single proof-bound `committed_amount`
-scalar.
+same dataspace only when its binding contains one distinct handle-bound claim
+for every use. The canonical `axt_fastpq_remote_spend_claims_v1` metadata
+carries the commitment preimages, and the verifier requires those preimages to
+reconstruct the complete binding set exactly. It then matches their typed
+`(AssetDefinitionId, AccountId, AccountId, Quantity)` facts one-for-one with
+the proof's concrete `TransferDeltaTranscript` deltas. The effect binding,
+every claim, and every delta must name the same exact source asset definition.
+The `authorization` and `compliance` claim-type labels select an opaque-effect
+profile only; they do not prove authority and cannot carry remote-spend claims.
 
-This commitment prevents intent substitution after proof generation; it does
-not yet prove that each committed intent corresponds to a concrete FastPQ
-`TransferDeltaTranscript`. `RemoteSpendIntent` currently omits the
-`AssetDefinitionId`, so two assets routed to one dataspace cannot be
-distinguished by an exact transcript linkage.
+Hosts and block admission derive each expected commitment from the actual
+authenticated handle and require exact per-proof set consumption. Duplicate
+use of one claim, a proof claim with no corresponding handle, or replay under a
+different era, sub-nonce, lane, dataspace, or descriptor fails closed. An empty
+set remains valid for standalone `VERIFY_DS_PROOF` but cannot authorize a
+handle. The asset definition must also exist in committed world state. A
+dataspace-restricted definition selects the exact signed intent/proof dataspace
+bucket; its owning domain is not balance-scope authority. A global definition
+is valid only when that signed dataspace is universal.
+For a transfer proof, `binding.source_dsid == intent.asset_dsid` is the balance
+partition for both the `from` and `to` rows of every matched transcript delta.
+No definition-home or account-alias routing is inferred. V1 transfer trace keys
+omit an explicit scope component because the public `source_dsid` supplies that
+single proof-wide partition.
 
 Issuers construct an unsigned `AssetHandleDraft`; signing consumes that draft
 and returns an admission-ready `AssetHandle` with a mandatory signature. The
@@ -227,8 +241,9 @@ committed state and the executing IVM before any FASTPQ work.
 2. Derive the authoritative manifest root, optional DA commitment, optional
    committed amount, and optional expiry before proving. Insert their canonical
    FastPQ metadata encodings before sealing the batch. If the proof will
-   authorize handles, compute, sort, and deduplicate every exact remote-spend
-   intent commitment before the same seal.
+   authorize handles, construct one transfer claim from each exact signed
+   handle use, attach its canonical preimage and concrete transfer transcript,
+   then sort the resulting commitments before the same seal.
 3. Prove the sealed batch, then package it with the checked bound-batch builder.
    The builder extracts or exact-compares the outer manifest, DA, amount, and
    expiry mirrors; callers cannot attach different values after proof

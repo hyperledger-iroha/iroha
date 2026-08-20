@@ -2582,6 +2582,7 @@ def local_runner_service_fixture(tmp_path: Path, module) -> Path:
         module,
         "SumeragiV2AsyncNetwork.tla",
     )
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
     (formal_dir / "SumeragiV2AsyncLivenessProofs.tla").write_text(
         module._async_liveness_source(module.FORMAL_DIR),
         encoding="utf-8",
@@ -2611,10 +2612,6 @@ def reviewed_run_inner_source_fidelity_errors(
     if checker_name == "local_runner":
         return module._local_runner_service_contract_source_fidelity_errors(
             module.load_ledger(), repo_root=repo_root, formal_dir=formal_dir
-        )
-    if checker_name == "retained_response":
-        return module._retained_response_escape_latch_source_fidelity_errors(
-            repo_root
         )
     if checker_name == "locked_body":
         return module._locked_body_reproposal_source_fidelity_errors(
@@ -2792,9 +2789,7 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
 
 
 
-# The direct-observation cut keeps the historical test entry-point names so
-# release manifests remain stable, but replaces the removed witness/episode
-# mutation matrix with item-scoped observation and RAII-admission mutations.
+# Direct observation covers the current item-scoped runner contract.
 def test_local_runner_service_contract_source_fidelity_is_current(
     tmp_path: Path,
 ) -> None:
@@ -2806,32 +2801,7 @@ def test_local_runner_service_contract_source_fidelity_is_current(
         repo_root=tmp_path,
         formal_dir=formal_dir,
     )
-
     assert errors == [], errors
-    runner_path = (
-        tmp_path
-        / "crates/iroha_core/src/sumeragi/v2_runner/outer_ingress_cursor.rs"
-    )
-    canonical_cursor = runner_path.read_text(encoding="utf-8")
-    mutate_rust_item_source_in_context(
-        module,
-        runner_path,
-        "advance_current",
-        (("impl", "OuterIngressTurns"),),
-        "OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,",
-        "OuterIngressTurn::Runtime => OuterIngressTurn::Completion,",
-    )
-    errors = module._local_runner_service_contract_source_fidelity_errors(
-        module.load_ledger(),
-        repo_root=tmp_path,
-        formal_dir=formal_dir,
-    )
-    assert any(
-        "cursor advance must preserve Completion/Runtime/Ingress and decrement only after Ingress"
-        in error
-        for error in errors
-    ), errors
-    runner_path.write_text(canonical_cursor, encoding="utf-8")
 
     worker_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
     mutate_rust_item_source_in_context(
@@ -2839,28 +2809,16 @@ def test_local_runner_service_contract_source_fidelity_is_current(
         worker_path,
         "drain_completions_with_lifecycle",
         (("impl", "ProductionV2Services"),),
-        "CompletionDrainPolicy::Fair,",
-        "CompletionDrainPolicy::IoOnly,",
+        "self.drain_completions_inner(executor, MAX_COMPLETION_DRAIN_BATCH)",
+        "self.drain_completions_inner(executor, usize::MAX)",
     )
-    mutated_helpers = tuple(
-        item
-        for item in module.rust_items(
-            worker_path.read_text(encoding="utf-8"),
-            "drain_completions_with_lifecycle",
-        )
-        if item.brace_context == (("impl", "ProductionV2Services"),)
-    )
-    assert len(mutated_helpers) == 1
-    module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256[
-        "ProductionV2Services::drain_completions_with_lifecycle"
-    ] = module._rust_item_token_sha256(mutated_helpers[0])
     errors = module._local_runner_service_contract_source_fidelity_errors(
         module.load_ledger(),
         repo_root=tmp_path,
         formal_dir=formal_dir,
     )
     assert any(
-        "typed completion service must delegate to the fixed finite fair-policy scan"
+        "typed completion service must use the fixed finite completion scan"
         in error
         and "exact reviewed token digest" not in error
         for error in errors

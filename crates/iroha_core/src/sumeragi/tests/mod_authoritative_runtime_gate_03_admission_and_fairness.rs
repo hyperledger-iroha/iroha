@@ -1,4 +1,103 @@
 #[test]
+fn ordinary_selector_preserves_certified_response_before_timeout_vote() {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let response = v2_certified_body_response(0, 0, 1);
+    let round = match &response {
+        BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+            ..
+        }) => response.manifest.round,
+        _ => unreachable!("certified response fixture is a v2 envelope"),
+    };
+    let mut timeout = v2_timeout_vote();
+    match &mut timeout {
+        BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
+            ..
+        }) => vote.round = round,
+        _ => unreachable!("timeout fixture is a v2 envelope"),
+    }
+    let _gate_directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            response,
+            validator.clone(),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            timeout, validator,
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    {
+        let state = ingress.state.lock();
+        let earliest = state
+            .leader_wire_lifecycles
+            .values()
+            .filter(|record| record.status == super::FairV2IngressLeaderWireStatus::Ingress)
+            .min_by_key(|record| record.token.scheduler_ordinal)
+            .expect("one leader-wire barrier is active");
+        assert_eq!(
+            earliest.token.identity.phase,
+            super::FairV2IngressLeaderWirePhase::CertifiedResponse
+        );
+    }
+    let is_timeout_vote = |inbound: &InboundBlockMessage| {
+        matches!(
+            inbound.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                ..
+            })
+        )
+    };
+    assert!(
+        ingress
+            .try_recv_if_checked_retiring_obsolete(is_timeout_vote)
+            .expect("ordinary selection preserves the response barrier")
+            .is_none()
+    );
+    let (mut selected, disposition) = ingress
+        .try_recv_if_checked_retiring_obsolete(|inbound| !is_timeout_vote(inbound))
+        .expect("the lifecycle selector preserves the checked dequeue")
+        .expect("the exact certified response remains first");
+    assert_eq!(disposition, super::FairV2IngressDequeueDisposition::Admit);
+    assert!(!is_timeout_vote(&selected));
+    let ownership = selected
+        .take_ingress_ownership()
+        .expect("the selected certified response retains exact ingress ownership");
+    assert!(ownership.validate_exact());
+    let response_runtime = ownership
+        .leader_wire_runtime_receipt()
+        .expect("the certified response crosses the durable runtime handoff");
+    ingress
+        .mark_leader_wire_volatile_terminal(response_runtime)
+        .expect("retire the consumed certified response");
+    assert_eq!(ingress.len(), 1, "the later TimeoutVote remains queued");
+
+    let (mut selected, disposition) = ingress
+        .try_recv_if_checked_retiring_obsolete(is_timeout_vote)
+        .expect("the strict selector remains live after response retirement")
+        .expect("the TimeoutVote becomes eligible only after its predecessor");
+    assert_eq!(disposition, super::FairV2IngressDequeueDisposition::Admit);
+    assert!(is_timeout_vote(&selected));
+    let ownership = selected
+        .take_ingress_ownership()
+        .expect("the selected TimeoutVote retains exact ingress ownership");
+    assert!(ownership.validate_exact());
+    let timeout_runtime = ownership
+        .leader_wire_runtime_receipt()
+        .expect("the TimeoutVote crosses the ordinary durable runtime handoff");
+    ingress
+        .mark_leader_wire_volatile_terminal(timeout_runtime)
+        .expect("retire the consumed TimeoutVote");
+    assert_eq!(ingress.len(), 0);
+}
+
+#[test]
 fn restored_productive_retry_stays_behind_an_earlier_certified_request_carrier() {
     let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
     assert_eq!(fixture.token.admission_ordinal(), 7);
@@ -390,16 +489,16 @@ fn sealed_height_retirement_parks_late_productive_ingress_before_volatile_releas
     let round = proposal.round;
     let directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             v2_commit_certificate_request(0, &validator),
-            Some(validator.clone()),
+            validator.clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             proposal_message,
-            Some(validator.clone()),
+            validator.clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -503,9 +602,9 @@ fn sealed_height_retirement_crash_after_dormant_fsync_reopens_without_a_carrier(
     let round = proposal.round;
     let directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             proposal_message,
-            Some(validator.clone()),
+            validator.clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -592,7 +691,10 @@ fn sealed_height_retirement_persistence_failure_keeps_the_exact_carrier_bound() 
     };
     let directory = bind_test_leader_wire_gate(&ingress, &validator, proposal.round, 2);
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(proposal_message, Some(validator),)),
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            proposal_message,
+            validator,
+        )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     let (gate, token) = {
@@ -685,9 +787,9 @@ fn sealed_height_retirement_parks_ingress_without_consuming_runtime_owners() {
     ));
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             proposal,
-            Some(validator.clone()),
+            validator.clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -708,7 +810,9 @@ fn sealed_height_retirement_parks_ingress_without_consuming_runtime_owners() {
             .is_some_and(|ownership| ownership.leader_wire_runtime_receipt().is_some())
     );
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(timeout, Some(validator))),
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            timeout, validator,
+        )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     let gate = ingress
@@ -764,7 +868,9 @@ fn sealed_height_retirement_requires_all_three_queued_token_projections() {
     };
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, proposal_payload.round, 2);
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(proposal, Some(validator))),
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            proposal, validator,
+        )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     let (gate, token) = {

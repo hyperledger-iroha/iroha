@@ -1427,15 +1427,9 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "initialize_recovered_local_proposal": "8295ba9249430d0f8f6c3ecc65b11b48873adc3b9f3408c313f1425f2a68ff01",
     "prepared_local_proposal_exactly_matches": "666d62c1d4104e6f0e07548434bd2d789514d23531e598032b743ed66e2afc5a",
     "activate_with_prepared_local_proposal": "dbfce16c82f866d3f833f0d04c490851d72ce48fad28e178e16ef059355ddadc",
-<<<<<<< HEAD
     "run_non_pending_lifecycle_loop": "fe38b2b2ab597569383e9b693deabb75346eee956713ec26e3c5174eca38f767",
-    "run_lifecycle_active_height": "9132194372fc1d4c4f8a61f44dc019cd4829a5c233b0317c3334355cf284398e",
-    "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner": "ad38dabcaf0b4e2464c7aa4ed4d9867949588f617feb74cad713fb78b7cb9510",
-=======
-    "run_non_pending_lifecycle_loop": "cf1175fb9703fb722dea4460957dd63847e4a6ec98b5394c66823f8aed0576cf",
-    "run_lifecycle_active_height": "0965aa3a17ce5ae4148a0b216fa0528879fbd92fc5273832e613211f90ea9f5d",
+    "run_lifecycle_active_height": "db34e60af369167f11d7b24cdfec25bf428a68b84aac974ba9d2b3a97c15df15",
     "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade": "e82974c532219438b4b7af86dbd17c2c3ffeea7631b591b28708c5c3c66da452",
->>>>>>> origin/optimizations
     "prepared_local_proposal_state_is_affine_and_context_directive_bound": "e2e8af92151f3b187cdb8eca6f40bb67a5472060ed6fdc79b5fea0127d02c3b3",
     "schedule_local_proposal": "71bdd71f7ae9466bdac666fd8af8e7690d8385d5b854ba29a6415f3a45564a89",
     "locked_body_recovery_plan": "9f3f04e35b943a2bc09756833f08a782c050cccdd6c59aa2997eb1e9f0c1cf7b",

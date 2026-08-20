@@ -24,13 +24,8 @@ use toml::{Value as TomlValue, value::Table as TomlTable};
 /// Supported network profiles for the wizard.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum Profile {
-<<<<<<< HEAD
-    /// Canonical single-lane local network (no Sora profile needed).
+    /// Canonical local single-lane profile.
     Local,
-=======
-    /// Generic single-lane selection; new networks must use `localnet-wizard` instead.
-    Iroha2,
->>>>>>> origin/optimizations
     /// Sora Nexus (mainnet).
     Nexus,
     /// Sora Taira (testnet).
@@ -39,11 +34,7 @@ pub enum Profile {
 impl fmt::Display for Profile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-<<<<<<< HEAD
             Profile::Local => write!(f, "Local (single lane)"),
-=======
-            Profile::Iroha2 => write!(f, "Iroha2 (use localnet-wizard)"),
->>>>>>> origin/optimizations
             Profile::Nexus => write!(f, "Sora Nexus (mainnet)"),
             Profile::Taira => write!(f, "Sora Taira (testnet)"),
         }
@@ -289,11 +280,6 @@ impl<T: Write> RunArgs<T> for Args {
 }
 fn gather_answers(args: &Args) -> Result<Answers> {
     let profile = resolve_profile(args)?;
-    if profile == Profile::Iroha2 {
-        return Err(eyre!(
-            "kagami wizard only stages onboarding for an existing Sora Nexus or Taira network; use `kagami localnet-wizard` to create a new generic/single-lane network"
-        ));
-    }
     let defaults = ProfileDefaults::for_profile(profile);
     let chain = resolve_text(
         "Chain ID",
@@ -565,21 +551,11 @@ fn resolve_profile(args: &Args) -> Result<Profile> {
         return Ok(profile);
     }
     if args.non_interactive {
-<<<<<<< HEAD
         return Ok(Profile::Local);
     }
     Select::new(
         "Which profile do you want to set up?",
         vec![Profile::Local, Profile::Nexus, Profile::Taira],
-=======
-        return Err(eyre!(
-            "non-interactive wizard onboarding requires --profile nexus or --profile taira; use `kagami localnet-wizard` for a new network"
-        ));
-    }
-    Select::new(
-        "Which profile do you want to set up?",
-        vec![Profile::Nexus, Profile::Taira],
->>>>>>> origin/optimizations
     )
     .prompt()
     .wrap_err("failed to read profile selection")
@@ -656,7 +632,7 @@ fn write_wizard_readme(
             "4. Confirm `trusted_peers` and `trusted_peers_pop` are the full operator-authenticated validator roster encoded by the signed genesis; the generated local peer starts as an observer.\n",
             "5. Provision the operator-authenticated Taira lane-manifest set under `manifests/`.\n",
         ),
-        Profile::Iroha2 => "",
+        Profile::Local => "",
     };
     let rendered = format!(
         concat!(
@@ -910,7 +886,7 @@ fn apply_overrides(
     );
     set_table(config, "torii", torii);
     let mut genesis = table(config, "genesis");
-    if answers.profile == Profile::Iroha2 {
+    if answers.profile == Profile::Local {
         genesis.insert(
             "public_key".into(),
             TomlValue::String(keypair.public_key().to_string()),
@@ -1486,9 +1462,9 @@ mod tests {
         );
     }
     #[test]
-    fn wizard_rejects_generic_network_creation_in_favor_of_localnet_wizard() {
+    fn wizard_non_interactive_defaults_to_local_profile() {
         let args = Args {
-            profile: Some(Profile::Iroha2),
+            profile: None,
             output_dir: PathBuf::from("out"),
             non_interactive: true,
             chain_id: None,
@@ -1501,10 +1477,9 @@ mod tests {
             trusted_peers: None,
             trusted_peers_pop: None,
         };
-        let error = gather_answers(&args).expect_err("generic creation is not an onboarding flow");
-        assert!(
-            error.to_string().contains("localnet-wizard"),
-            "unexpected wizard guidance: {error:?}"
+        assert_eq!(
+            resolve_profile(&args).expect("non-interactive profile resolution"),
+            Profile::Local
         );
     }
     #[test]
@@ -1705,7 +1680,7 @@ mod tests {
         queues.insert("body_bytes".into(), TomlValue::Integer(1));
         set_table(&mut config, "sumeragi.queues", queues);
         let answers = Answers {
-            profile: Profile::Iroha2,
+            profile: Profile::Local,
             chain: "chain-x".to_owned(),
             p2p_host: "127.0.0.1".to_owned(),
             p2p_port: 1337,
@@ -1970,7 +1945,6 @@ mod tests {
             // Mirror `iroha3d` CLI resolution: an explicit authored value survives profile
             // defaults. The raw assertion above proves the wizard emitted that explicit value.
             actual.torii.sorafs_storage.enabled = configured_storage_enabled;
-            assert!(actual.nexus.enabled);
             assert!(!actual.torii.sorafs_storage.enabled);
         }
     }

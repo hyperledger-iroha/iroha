@@ -44,7 +44,7 @@ struct Args {
     #[arg(long, default_value = "nexus")]
     relay_domain: String,
     /// Domain recorded in the seeded feedback's Kaigi call id.
-    #[arg(long, default_value = "wonderland")]
+    #[arg(long, default_value = "fixture")]
     call_domain: String,
     /// Call name recorded in the seeded feedback's Kaigi call id.
     #[arg(long, default_value = "taira-relay-bootstrap")]
@@ -482,7 +482,7 @@ mod tests {
         let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
         let relay_domain = DomainId::try_new("nexus", "universal").expect("relay domain");
         let call_id = KaigiId::new(
-            DomainId::try_new("wonderland", "universal").expect("call domain"),
+            DomainId::try_new("fixture", "universal").expect("call domain"),
             Name::from_str("taira-relay-bootstrap").expect("call name"),
         );
         let host = AccountId::new(

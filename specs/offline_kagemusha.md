@@ -571,8 +571,19 @@ last digest authenticates a canonical report containing both independent build
 identities, output byte identities, and the selected generator. The launcher
 opens and holds that report, authenticates a private executable snapshot against
 its selected-generator identity, and launches the snapshot rather than reopening
-the supplied pathname. The sealed
-builder hashes the actual absolute `CARGO` and `RUSTC` executables before the
+the supplied pathname. A production report is only the native controller's
+`iroha.kagemusha.native_sealed_candidate_double_build_report.v2` envelope; a
+direct Python V1 report is never promotion-admissible. The controller authenticates
+the complete symlink-free Mach-O Python runtime and pinned macOS build before
+exec, executes the reviewed builder through its held `/dev/fd/12` descriptor,
+launches with an empty, reconstructed environment, and publishes the envelope
+without replacement below its fixed root-owned report parent. Promotion binds
+that envelope back to the exact controller, Python interpreter/runtime tree,
+macOS TCB, and signed builder entrypoint used by the live readiness gate. The
+readiness controller likewise accepts one exact named promotion environment,
+rejects unknown `KAGEMUSHA_*` variables, clears the child environment, and
+injects only its descriptor and native-TCB receipts. The sealed builder hashes
+the actual absolute `CARGO` and `RUSTC` executables before the
 build script accepts the external pins. It then materializes the authenticated
 commit, dependency cache, nightly-Cargo root, stable-rustc/sysroot, and native
 helper allowlist into inode-independent root-owned snapshots, drops to a

@@ -6073,20 +6073,11 @@ impl Sumeragi {
         let minimum_body_sources = queues
             .authenticated_non_validator_sources
             .get()
-<<<<<<< HEAD
             .checked_add(1);
-        let minimum_body_messages = queues
-            .authenticated_non_validator_sources
-            .get()
-            .checked_mul(3)
-            .and_then(|sources| sources.checked_add(5));
-=======
-            .checked_add(2);
         let minimum_body_messages = actual::sumeragi_v2_body_ingress_required_message_capacity(
             1,
             queues.authenticated_non_validator_sources.get(),
         );
->>>>>>> origin/optimizations
         match minimum_body_messages {
             Some(minimum) if queues.bodies.get() < minimum => {
                 emitter.emit(
@@ -32297,129 +32288,62 @@ policy_digest_hex = "{policy_digest_hex}"
             "{report}"
         );
     }
-    #[test]
-    fn nexus_autoscale_parse_rejects_reserved_managed_metadata() {
+    fn assert_reserved_autoscale_metadata_rejected(key: &str, value: &str, error_context: &str) {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
-        let mut default_lane = Table::new();
-        default_lane.insert("index".into(), Value::Integer(0));
-        default_lane.insert("alias".into(), Value::String("default".to_owned()));
-        let mut metadata = Table::new();
-        metadata.insert("autoscale.managed".into(), Value::String("true".to_owned()));
-        default_lane.insert("metadata".into(), Value::Table(metadata));
+        let mut default_lane = lane_descriptor(0, "default");
+        default_lane
+            .as_table_mut()
+            .and_then(|lane| lane.get_mut("metadata"))
+            .and_then(Value::as_table_mut)
+            .expect("lane metadata table")
+            .insert(key.into(), Value::String(value.to_owned()));
         nexus.insert(
             "lane_catalog".into(),
-            Value::Array(vec![
-                Value::Table(default_lane),
-                lane_descriptor(3, "governance"),
-            ]),
+            Value::Array(vec![default_lane, lane_descriptor(3, "governance")]),
         );
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("operators must not set reserved autoscale metadata");
+        let error =
+            actual::Root::from_toml_source(TomlSource::inline(table)).expect_err(error_context);
         let report = format!("{error:?}");
         assert!(
-            report.contains(
-                "metadata key `autoscale.managed` is reserved for the consensus autoscaler"
-            ),
+            report.contains(&format!(
+                "metadata key `{key}` is reserved for the consensus autoscaler"
+            )),
             "{report}"
+        );
+    }
+    #[test]
+    fn nexus_autoscale_parse_rejects_reserved_managed_metadata() {
+        assert_reserved_autoscale_metadata_rejected(
+            "autoscale.managed",
+            "true",
+            "operators must not set reserved autoscale metadata",
         );
     }
     #[test]
     fn nexus_autoscale_parse_rejects_reserved_created_height_metadata() {
-        let mut table = base_table();
-        let nexus = nexus_table_mut(&mut table);
-        set_valid_autoscale_defaults(nexus);
-        set_lane_count(nexus, 4);
-        let mut default_lane = Table::new();
-        default_lane.insert("index".into(), Value::Integer(0));
-        default_lane.insert("alias".into(), Value::String("default".to_owned()));
-        let mut metadata = Table::new();
-        metadata.insert(
-            "autoscale.created_height".into(),
-            Value::String("42".to_owned()),
-        );
-        default_lane.insert("metadata".into(), Value::Table(metadata));
-        nexus.insert(
-            "lane_catalog".into(),
-            Value::Array(vec![
-                Value::Table(default_lane),
-                lane_descriptor(3, "governance"),
-            ]),
-        );
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("operators must not set reserved autoscale marker metadata");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains(
-                "metadata key `autoscale.created_height` is reserved for the consensus autoscaler"
-            ),
-            "{report}"
+        assert_reserved_autoscale_metadata_rejected(
+            "autoscale.created_height",
+            "42",
+            "operators must not set reserved autoscale marker metadata",
         );
     }
     #[test]
     fn nexus_autoscale_parse_rejects_reserved_drain_state_metadata() {
-        let mut table = base_table();
-        let nexus = nexus_table_mut(&mut table);
-        set_valid_autoscale_defaults(nexus);
-        set_lane_count(nexus, 4);
-        let mut default_lane = Table::new();
-        default_lane.insert("index".into(), Value::Integer(0));
-        default_lane.insert("alias".into(), Value::String("default".to_owned()));
-        let mut metadata = Table::new();
-        metadata.insert(
-            "autoscale.drain_state".into(),
-            Value::String("forged".to_owned()),
-        );
-        default_lane.insert("metadata".into(), Value::Table(metadata));
-        nexus.insert(
-            "lane_catalog".into(),
-            Value::Array(vec![
-                Value::Table(default_lane),
-                lane_descriptor(3, "governance"),
-            ]),
-        );
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("operators must not forge consensus lane drain state");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains(
-                "metadata key `autoscale.drain_state` is reserved for the consensus autoscaler"
-            ),
-            "{report}"
+        assert_reserved_autoscale_metadata_rejected(
+            "autoscale.drain_state",
+            "forged",
+            "operators must not forge consensus lane drain state",
         );
     }
     #[test]
     fn nexus_autoscale_parse_rejects_reserved_committee_metadata() {
-        let mut table = base_table();
-        let nexus = nexus_table_mut(&mut table);
-        set_valid_autoscale_defaults(nexus);
-        set_lane_count(nexus, 4);
-        let mut default_lane = Table::new();
-        default_lane.insert("index".into(), Value::Integer(0));
-        default_lane.insert("alias".into(), Value::String("default".to_owned()));
-        let mut metadata = Table::new();
-        metadata.insert(
-            "autoscale.committee_v1".into(),
-            Value::String("forged".to_owned()),
-        );
-        default_lane.insert("metadata".into(), Value::Table(metadata));
-        nexus.insert(
-            "lane_catalog".into(),
-            Value::Array(vec![
-                Value::Table(default_lane),
-                lane_descriptor(3, "governance"),
-            ]),
-        );
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("operators must not forge an elastic-lane committee pin");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains(
-                "metadata key `autoscale.committee_v1` is reserved for the consensus autoscaler"
-            ),
-            "{report}"
+        assert_reserved_autoscale_metadata_rejected(
+            "autoscale.committee_v1",
+            "forged",
+            "operators must not forge an elastic-lane committee pin",
         );
     }
     struct OnboardingKeyFile(PathBuf);
@@ -34003,7 +33927,7 @@ publish_delay_seconds = 17
             authenticated_non_validator_sources,
         )
         .expect("fixture message geometry is representable");
-        assert_eq!(required, 28, "fixture must pin the production geometry");
+        assert_eq!(required, 26, "fixture must pin the production geometry");
 
         let set_bodies_with_exact_fanout = |table: &mut Table, bodies: usize| {
             table
@@ -34551,121 +34475,53 @@ publish_delay_seconds = 17
             "a zero component cap means unlimited downstream and must fail parsing"
         );
     }
+    macro_rules! assert_all_eq {
+        ($($actual:expr => $expected:expr),+ $(,)?) => {
+            $(assert_eq!($actual, $expected);)+
+        };
+    }
+    fn table_with_soracloud_runtime(source: &str) -> Table {
+        let runtime = toml::from_str(source).expect("parse SoraCloud runtime fixture");
+        let mut table = base_table();
+        table.insert("soracloud_runtime".into(), Value::Table(runtime));
+        table
+    }
     #[test]
     fn soracloud_runtime_defaults_apply() {
         let actual = load_root(base_table());
-        assert_eq!(
-            actual.soracloud_runtime.production_mode,
-            defaults::soracloud_runtime::PRODUCTION_MODE
-        );
-        assert_eq!(
-            actual.soracloud_runtime.state_dir,
-            defaults::soracloud_runtime::state_dir()
-        );
-        assert_eq!(
-            actual.soracloud_runtime.reconcile_interval,
-            StdDuration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS)
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hydration_concurrency,
-            defaults::soracloud_runtime::HYDRATION_CONCURRENCY
-        );
-        assert_eq!(
-            actual.soracloud_runtime.cache_budgets.bundle_bytes,
-            defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.max_concurrent_vms,
-            defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.enabled,
-            defaults::soracloud_runtime::INROU_ENABLED
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.proxy_only,
-            defaults::soracloud_runtime::INROU_PROXY_ONLY
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_compressed_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_decoded_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.bundle_archive_max_entries,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.bundle_archive_max_file_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_total_file_bytes,
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES
+        let runtime = &actual.soracloud_runtime;
+        let inrou = &runtime.inrou;
+        let hf = &runtime.hf;
+        assert_all_eq!(
+            runtime.production_mode => defaults::soracloud_runtime::PRODUCTION_MODE,
+            runtime.state_dir => defaults::soracloud_runtime::state_dir(),
+            runtime.reconcile_interval => StdDuration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS),
+            runtime.hydration_concurrency => defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
+            runtime.cache_budgets.bundle_bytes => defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
+            inrou.max_concurrent_vms => defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+            inrou.enabled => defaults::soracloud_runtime::INROU_ENABLED,
+            inrou.proxy_only => defaults::soracloud_runtime::INROU_PROXY_ONLY,
+            inrou.bundle_archive_max_compressed_bytes => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
+            inrou.bundle_archive_max_decoded_bytes => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
+            inrou.bundle_archive_max_entries => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
+            inrou.bundle_archive_max_file_bytes => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
+            inrou.bundle_archive_max_total_file_bytes => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
+            inrou.start_grace => StdDuration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS),
+            runtime.egress.default_allow => defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW,
+            hf.hub_base_url => defaults::soracloud_runtime::hf::HUB_BASE_URL,
+            hf.local_execution_enabled => defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED,
+            hf.local_runner_program => defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM,
+            hf.model_host_heartbeat_ttl => StdDuration::from_millis(defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS),
+            hf.import_max_files => defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
+            hf.model_info_max_response_bytes => defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES,
+            hf.inference_max_response_bytes => defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES,
+            hf.allow_inference_bridge_fallback => defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK,
         );
         assert!(matches!(
-            actual.soracloud_runtime.submission.fee_payer,
+            &runtime.submission.fee_payer,
             actual::SoracloudRuntimeFeePayer::Authority
         ));
-        assert_eq!(
-            actual.soracloud_runtime.inrou.start_grace,
-            StdDuration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS)
-        );
-        assert_eq!(
-            actual.soracloud_runtime.egress.default_allow,
-            defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.hub_base_url,
-            defaults::soracloud_runtime::hf::HUB_BASE_URL
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.local_execution_enabled,
-            defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.local_runner_program,
-            defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.model_host_heartbeat_ttl,
-            StdDuration::from_millis(defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS)
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_max_files,
-            defaults::soracloud_runtime::hf::IMPORT_MAX_FILES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.model_info_max_response_bytes,
-            defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.inference_max_response_bytes,
-            defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.allow_inference_bridge_fallback,
-            defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK
-        );
-        assert!(
-            actual
-                .soracloud_runtime
-                .hf
-                .inference_credential_provider
-                .is_none()
-        );
+        assert!(hf.inference_credential_provider.is_none());
     }
     #[test]
     fn soracloud_runtime_inrou_bundle_archive_limits_allow_equal_file_total_and_decoded() {
@@ -34675,29 +34531,11 @@ publish_delay_seconds = 17
             ("bundle_archive_max_total_file_bytes", 4_096),
         ]);
         let actual = load_root(table);
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_decoded_bytes
-                .get(),
-            4_096
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_file_bytes
-                .get(),
-            4_096
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_total_file_bytes
-                .get(),
-            4_096
+        let inrou = &actual.soracloud_runtime.inrou;
+        assert_all_eq!(
+            inrou.bundle_archive_max_decoded_bytes.get() => 4_096,
+            inrou.bundle_archive_max_file_bytes.get() => 4_096,
+            inrou.bundle_archive_max_total_file_bytes.get() => 4_096,
         );
     }
     #[test]
@@ -34763,37 +34601,12 @@ publish_delay_seconds = 17
             )
         });
         let actual = load_root(table_with_soracloud_inrou_values(&values));
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_compressed_bytes
-                .get(),
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_decoded_bytes
-                .get(),
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_file_bytes
-                .get(),
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_total_file_bytes
-                .get(),
-            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT
+        let inrou = &actual.soracloud_runtime.inrou;
+        assert_all_eq!(
+            inrou.bundle_archive_max_compressed_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT,
+            inrou.bundle_archive_max_decoded_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT,
+            inrou.bundle_archive_max_file_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT,
+            inrou.bundle_archive_max_total_file_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT,
         );
     }
     #[test]
@@ -34854,25 +34667,13 @@ publish_delay_seconds = 17
             ),
         ]);
         let actual = load_root(table);
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_max_files,
-            defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_max_file_bytes,
-            defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_max_total_bytes,
-            defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.model_info_max_response_bytes,
-            defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.inference_max_response_bytes,
-            defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT
+        let hf = &actual.soracloud_runtime.hf;
+        assert_all_eq!(
+            hf.import_max_files => defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT,
+            hf.import_max_file_bytes => defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT,
+            hf.import_max_total_bytes => defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT,
+            hf.model_info_max_response_bytes => defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT,
+            hf.inference_max_response_bytes => defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT,
         );
     }
     #[test]
@@ -34929,148 +34730,124 @@ publish_delay_seconds = 17
         let key_pair = checked_onboarding_authority_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
         let (_, public_key) = key_pair.public_key().to_bytes();
-        let mut signer = Table::new();
-        signer.insert(
-            "handle".into(),
-            Value::String("software://sorafs/ai/runtime-primary".into()),
-        );
-        signer.insert("authority".into(), Value::String(authority.to_string()));
-        signer.insert("algorithm".into(), Value::String("ed25519".into()));
-        signer.insert(
-            "public_key_hex".into(),
-            Value::String(hex::encode(public_key)),
-        );
-        signer.insert("revision".into(), Value::Integer(7));
-        signer.insert(
-            "policy_digest_hex".into(),
-            Value::String(hex::encode([0xA7; 32])),
-        );
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("authority".into()));
-        submission.insert("signer".into(), Value::Table(signer));
-        submission
+        Table::from_iter([
+            ("fee_payer".into(), Value::String("authority".into())),
+            (
+                "signer".into(),
+                Value::Table(Table::from_iter([
+                    (
+                        "handle".into(),
+                        Value::String("software://sorafs/ai/runtime-primary".into()),
+                    ),
+                    ("authority".into(), Value::String(authority.to_string())),
+                    ("algorithm".into(), Value::String("ed25519".into())),
+                    (
+                        "public_key_hex".into(),
+                        Value::String(hex::encode(public_key)),
+                    ),
+                    ("revision".into(), Value::Integer(7)),
+                    (
+                        "policy_digest_hex".into(),
+                        Value::String(hex::encode([0xA7; 32])),
+                    ),
+                ])),
+            ),
+        ])
+    }
+    fn production_soracloud_runtime_table(
+        inrou_posture: Option<(bool, bool)>,
+        bounded_egress: bool,
+    ) -> Table {
+        let mut source = "production_mode = true\n".to_owned();
+        if let Some((enabled, proxy_only)) = inrou_posture {
+            source.push_str(&format!(
+                r#"
+[inrou]
+enabled = {enabled}
+max_concurrent_vms = 8
+proxy_only = {proxy_only}
+start_grace_ms = 30000
+stop_grace_ms = 10000
+"#,
+            ));
+        }
+        if bounded_egress {
+            source.push_str(
+                r#"
+[egress]
+default_allow = false
+allowed_hosts = []
+rate_per_minute = 60
+max_bytes_per_minute = 1048576
+"#,
+            );
+        }
+        let mut table = table_with_soracloud_runtime(&source);
+        table
+            .get_mut("soracloud_runtime")
+            .and_then(Value::as_table_mut)
+            .expect("soracloud_runtime table")
+            .insert(
+                "submission".into(),
+                Value::Table(production_soracloud_submission_table()),
+            );
+        table
     }
     #[test]
     #[should_panic(expected = "egress.rate_per_minute")]
     fn soracloud_runtime_production_mode_requires_fail_closed_egress_limits() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        runtime.insert("production_mode".into(), Value::Boolean(true));
-        let mut inrou = Table::new();
-        inrou.insert("enabled".into(), Value::Boolean(true));
-        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
-        inrou.insert("proxy_only".into(), Value::Boolean(false));
-        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
-        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
-        runtime.insert("inrou".into(), Value::Table(inrou));
-        runtime.insert(
-            "submission".into(),
-            Value::Table(production_soracloud_submission_table()),
-        );
-        let _ = load_root(table);
+        let _ = load_root(production_soracloud_runtime_table(
+            Some((true, false)),
+            false,
+        ));
     }
     #[test]
     fn soracloud_runtime_production_mode_accepts_bounded_posture() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        runtime.insert("production_mode".into(), Value::Boolean(true));
-        let mut inrou = Table::new();
-        inrou.insert("enabled".into(), Value::Boolean(true));
-        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
-        inrou.insert("proxy_only".into(), Value::Boolean(false));
-        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
-        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
-        runtime.insert("inrou".into(), Value::Table(inrou));
-        runtime.insert(
-            "submission".into(),
-            Value::Table(production_soracloud_submission_table()),
-        );
-        let mut egress = Table::new();
-        egress.insert("default_allow".into(), Value::Boolean(false));
-        egress.insert("allowed_hosts".into(), Value::Array(Vec::new()));
-        egress.insert("rate_per_minute".into(), Value::Integer(60));
-        egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
-        runtime.insert("egress".into(), Value::Table(egress));
-        let actual = load_root(table);
-        assert!(actual.soracloud_runtime.production_mode);
+        let actual = load_root(production_soracloud_runtime_table(
+            Some((true, false)),
+            true,
+        ));
+        let runtime = actual.soracloud_runtime;
+        assert!(runtime.production_mode);
         assert_eq!(
-            actual
-                .soracloud_runtime
-                .egress
-                .rate_per_minute
-                .expect("rate quota")
-                .get(),
+            runtime.egress.rate_per_minute.expect("rate quota").get(),
             60
         );
-        assert!(!actual.soracloud_runtime.hf.allow_inference_bridge_fallback);
-        let signer = actual
-            .soracloud_runtime
+        assert!(!runtime.hf.allow_inference_bridge_fallback);
+        let signer = runtime
             .submission
             .signer
             .expect("production signer binding");
-        assert_eq!(signer.handle, "software://sorafs/ai/runtime-primary");
-        assert_eq!(signer.algorithm, Algorithm::Ed25519);
-        assert_eq!(signer.revision, 7);
-        assert_eq!(signer.policy_digest, [0xA7; 32]);
+        assert_all_eq!(
+            signer.handle => "software://sorafs/ai/runtime-primary",
+            signer.algorithm => Algorithm::Ed25519,
+            signer.revision => 7,
+            signer.policy_digest => [0xA7; 32],
+        );
     }
     #[test]
     #[should_panic(expected = "inrou.enabled")]
     fn soracloud_runtime_production_mode_rejects_disabled_inrou() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        runtime.insert("production_mode".into(), Value::Boolean(true));
-        runtime.insert(
-            "submission".into(),
-            Value::Table(production_soracloud_submission_table()),
-        );
-        let _ = load_root(table);
+        let _ = load_root(production_soracloud_runtime_table(None, false));
     }
     #[test]
     #[should_panic(expected = "sponsor payer requires fee_program_id")]
     fn soracloud_runtime_sponsor_payer_requires_exact_program() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("sponsor".into()));
-        runtime.insert("submission".into(), Value::Table(submission));
-        let _ = load_root(table);
+        let _ = load_root(table_with_soracloud_runtime(
+            "[submission]\nfee_payer = \"sponsor\"\n",
+        ));
     }
     #[test]
     fn soracloud_runtime_sponsor_payer_parses_exact_program_revision() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
         let sponsor = iroha_data_model::account::AccountId::new(
             checked_onboarding_authority_ed25519_key_fixture()
                 .public_key()
                 .clone(),
         );
         let program_id = format!("{sponsor}/runtime");
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("sponsor".into()));
-        submission.insert("fee_program_id".into(), Value::String(program_id.clone()));
-        submission.insert("fee_program_revision".into(), Value::Integer(7));
-        runtime.insert("submission".into(), Value::Table(submission));
-        let actual = load_root(table);
+        let actual = load_root(table_with_soracloud_runtime(&format!(
+            "[submission]\nfee_payer = \"sponsor\"\nfee_program_id = \"{program_id}\"\nfee_program_revision = 7\n"
+        )));
         let actual::SoracloudRuntimeFeePayer::Sponsor {
             program_id: parsed,
             program_revision,
@@ -35083,25 +34860,14 @@ publish_delay_seconds = 17
     }
     #[test]
     fn soracloud_runtime_sponsor_payer_rejects_noncanonical_program_literal() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
         let sponsor = iroha_data_model::account::AccountId::new(
             checked_onboarding_authority_ed25519_key_fixture()
                 .public_key()
                 .clone(),
         );
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("sponsor".into()));
-        submission.insert(
-            "fee_program_id".into(),
-            Value::String(format!(" {sponsor}/runtime")),
-        );
-        submission.insert("fee_program_revision".into(), Value::Integer(7));
-        runtime.insert("submission".into(), Value::Table(submission));
+        let table = table_with_soracloud_runtime(&format!(
+            "[submission]\nfee_payer = \"sponsor\"\nfee_program_id = \" {sponsor}/runtime\"\nfee_program_revision = 7\n"
+        ));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load_root(table)));
         assert!(
             result.is_err(),
@@ -35111,358 +34877,146 @@ publish_delay_seconds = 17
     #[test]
     #[should_panic(expected = "inrou.proxy_only")]
     fn soracloud_runtime_production_mode_rejects_proxy_only_inrou() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        runtime.insert("production_mode".into(), Value::Boolean(true));
-        let mut egress = Table::new();
-        egress.insert("default_allow".into(), Value::Boolean(false));
-        egress.insert("allowed_hosts".into(), Value::Array(Vec::new()));
-        egress.insert("rate_per_minute".into(), Value::Integer(60));
-        egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
-        runtime.insert("egress".into(), Value::Table(egress));
-        runtime.insert(
-            "submission".into(),
-            Value::Table(production_soracloud_submission_table()),
-        );
-        let mut inrou = Table::new();
-        inrou.insert("enabled".into(), Value::Boolean(true));
-        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
-        inrou.insert("proxy_only".into(), Value::Boolean(true));
-        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
-        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
-        runtime.insert("inrou".into(), Value::Table(inrou));
-        let _ = load_root(table);
+        let _ = load_root(production_soracloud_runtime_table(Some((true, true)), true));
     }
     #[test]
     fn soracloud_runtime_partial_hf_overrides_keep_defaults() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        let mut hf = Table::new();
-        hf.insert(
-            "hub_base_url".into(),
-            Value::String("http://127.0.0.1:52220".to_owned()),
-        );
-        hf.insert(
-            "api_base_url".into(),
-            Value::String("http://127.0.0.1:52220/api".to_owned()),
-        );
-        runtime.insert("hf".into(), Value::Table(hf));
-        let actual = load_root(table);
-        assert_eq!(
-            actual.soracloud_runtime.hf.hub_base_url,
-            "http://127.0.0.1:52220"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.api_base_url,
-            "http://127.0.0.1:52220/api"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.inference_base_url,
-            defaults::soracloud_runtime::hf::INFERENCE_BASE_URL
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.request_timeout,
-            StdDuration::from_millis(defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS)
+        let actual = load_root(table_with_soracloud_runtime(
+            "[hf]\nhub_base_url = \"http://127.0.0.1:52220\"\napi_base_url = \"http://127.0.0.1:52220/api\"\n",
+        ));
+        let hf = &actual.soracloud_runtime.hf;
+        assert_all_eq!(
+            hf.hub_base_url => "http://127.0.0.1:52220",
+            hf.api_base_url => "http://127.0.0.1:52220/api",
+            hf.inference_base_url => defaults::soracloud_runtime::hf::INFERENCE_BASE_URL,
+            hf.request_timeout => StdDuration::from_millis(defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS),
         );
         let mut expected_allowlist = defaults::soracloud_runtime::hf::import_file_allowlist();
         expected_allowlist.sort();
         expected_allowlist.dedup();
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_file_allowlist,
-            expected_allowlist
-        );
+        assert_eq!(hf.import_file_allowlist, expected_allowlist);
     }
     #[test]
     fn soracloud_runtime_parse_applies_explicit_overrides() {
-        let mut table = base_table();
-        let runtime = table
-            .entry("soracloud_runtime")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("soracloud_runtime table");
-        runtime.insert(
-            "state_dir".into(),
-            Value::String("./runtime/custom".to_string()),
-        );
-        runtime.insert("reconcile_interval_ms".into(), Value::Integer(2_500));
-        runtime.insert("hydration_concurrency".into(), Value::Integer(7));
-        let mut cache_budgets = Table::new();
-        cache_budgets.insert("bundle_bytes".into(), Value::Integer(1_024));
-        cache_budgets.insert("static_asset_bytes".into(), Value::Integer(2_048));
-        cache_budgets.insert("journal_bytes".into(), Value::Integer(3_072));
-        cache_budgets.insert("checkpoint_bytes".into(), Value::Integer(4_096));
-        cache_budgets.insert("model_artifact_bytes".into(), Value::Integer(5_120));
-        cache_budgets.insert("model_weight_bytes".into(), Value::Integer(6_144));
-        runtime.insert("cache_budgets".into(), Value::Table(cache_budgets));
-        let mut inrou = Table::new();
-        inrou.insert("max_concurrent_vms".into(), Value::Integer(5));
-        inrou.insert("enabled".into(), Value::Boolean(true));
-        inrou.insert("proxy_only".into(), Value::Boolean(true));
-        inrou.insert(
-            "bundle_archive_max_compressed_bytes".into(),
-            Value::Integer(10_000),
-        );
-        inrou.insert(
-            "bundle_archive_max_decoded_bytes".into(),
-            Value::Integer(40_000),
-        );
-        inrou.insert("bundle_archive_max_entries".into(), Value::Integer(123));
-        inrou.insert(
-            "bundle_archive_max_file_bytes".into(),
-            Value::Integer(20_000),
-        );
-        inrou.insert(
-            "bundle_archive_max_total_file_bytes".into(),
-            Value::Integer(30_000),
-        );
-        inrou.insert("start_grace_ms".into(), Value::Integer(7_500));
-        inrou.insert("stop_grace_ms".into(), Value::Integer(9_500));
-        runtime.insert("inrou".into(), Value::Table(inrou));
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String(" authority ".to_string()));
-        runtime.insert("submission".into(), Value::Table(submission));
-        let mut egress = Table::new();
-        egress.insert("default_allow".into(), Value::Boolean(true));
-        egress.insert(
-            "allowed_hosts".into(),
-            Value::Array(vec![
-                Value::String("cdn.sora.test".to_string()),
-                Value::String(" api.sora.test ".to_string()),
-                Value::String("cdn.sora.test".to_string()),
-            ]),
-        );
-        egress.insert("rate_per_minute".into(), Value::Integer(120));
-        egress.insert("max_bytes_per_minute".into(), Value::Integer(262_144));
-        runtime.insert("egress".into(), Value::Table(egress));
-        let mut hf = Table::new();
-        hf.insert(
-            "hub_base_url".into(),
-            Value::String(" https://mirror.hf.test/ ".to_string()),
-        );
-        hf.insert(
-            "api_base_url".into(),
-            Value::String("https://mirror.hf.test/api/".to_string()),
-        );
-        hf.insert(
-            "inference_base_url".into(),
-            Value::String("https://router.hf.test/hf-inference/models/".to_string()),
-        );
-        hf.insert("request_timeout_ms".into(), Value::Integer(21_000));
-        hf.insert("local_execution_enabled".into(), Value::Boolean(false));
-        hf.insert(
-            "local_runner_program".into(),
-            Value::String(" python3.12 ".to_string()),
-        );
-        hf.insert("local_runner_timeout_ms".into(), Value::Integer(45_000));
-        hf.insert("model_host_heartbeat_ttl_ms".into(), Value::Integer(18_000));
-        hf.insert(
-            "allow_inference_bridge_fallback".into(),
-            Value::Boolean(false),
-        );
-        hf.insert("import_max_files".into(), Value::Integer(48));
-        hf.insert("import_max_file_bytes".into(), Value::Integer(777_777));
-        hf.insert("import_max_total_bytes".into(), Value::Integer(9_999_999));
-        hf.insert(
-            "model_info_max_response_bytes".into(),
-            Value::Integer(1_234_567),
-        );
-        hf.insert(
-            "inference_max_response_bytes".into(),
-            Value::Integer(7_654_321),
-        );
-        hf.insert(
-            "import_file_allowlist".into(),
-            Value::Array(vec![
-                Value::String(" config.json ".to_string()),
-                Value::String("*.safetensors".to_string()),
-                Value::String("CONFIG.JSON".to_string()),
-            ]),
-        );
-        let mut credential_provider = Table::new();
-        credential_provider.insert(
-            "handle".into(),
-            Value::String("kms://soracloud/hf-inference-primary".to_owned()),
-        );
-        credential_provider.insert("revision".into(), Value::Integer(7));
-        credential_provider.insert("policy_digest_hex".into(), Value::String("a7".repeat(32)));
-        hf.insert(
-            "inference_credential_provider".into(),
-            Value::Table(credential_provider),
-        );
-        runtime.insert("hf".into(), Value::Table(hf));
-        let actual = load_root(table);
+        let actual = load_root(table_with_soracloud_runtime(&format!(
+            r#"
+state_dir = "./runtime/custom"
+reconcile_interval_ms = 2500
+hydration_concurrency = 7
+
+[cache_budgets]
+bundle_bytes = 1024
+static_asset_bytes = 2048
+journal_bytes = 3072
+checkpoint_bytes = 4096
+model_artifact_bytes = 5120
+model_weight_bytes = 6144
+
+[inrou]
+max_concurrent_vms = 5
+enabled = true
+proxy_only = true
+bundle_archive_max_compressed_bytes = 10000
+bundle_archive_max_decoded_bytes = 40000
+bundle_archive_max_entries = 123
+bundle_archive_max_file_bytes = 20000
+bundle_archive_max_total_file_bytes = 30000
+start_grace_ms = 7500
+stop_grace_ms = 9500
+
+[submission]
+fee_payer = " authority "
+
+[egress]
+default_allow = true
+allowed_hosts = ["cdn.sora.test", " api.sora.test ", "cdn.sora.test"]
+rate_per_minute = 120
+max_bytes_per_minute = 262144
+
+[hf]
+hub_base_url = " https://mirror.hf.test/ "
+api_base_url = "https://mirror.hf.test/api/"
+inference_base_url = "https://router.hf.test/hf-inference/models/"
+request_timeout_ms = 21000
+local_execution_enabled = false
+local_runner_program = " python3.12 "
+local_runner_timeout_ms = 45000
+model_host_heartbeat_ttl_ms = 18000
+allow_inference_bridge_fallback = false
+import_max_files = 48
+import_max_file_bytes = 777777
+import_max_total_bytes = 9999999
+model_info_max_response_bytes = 1234567
+inference_max_response_bytes = 7654321
+import_file_allowlist = [" config.json ", "*.safetensors", "CONFIG.JSON"]
+
+[hf.inference_credential_provider]
+handle = "kms://soracloud/hf-inference-primary"
+revision = 7
+policy_digest_hex = "{}"
+"#,
+            "a7".repeat(32),
+        )));
+        let runtime = &actual.soracloud_runtime;
+        let inrou = &runtime.inrou;
+        let egress = &runtime.egress;
+        let hf = &runtime.hf;
         assert!(
-            actual
-                .soracloud_runtime
+            runtime
                 .state_dir
                 .to_string_lossy()
                 .ends_with("runtime/custom"),
             "resolved path should retain configured suffix: {}",
-            actual.soracloud_runtime.state_dir.display()
+            runtime.state_dir.display()
         );
-        assert_eq!(
-            actual.soracloud_runtime.reconcile_interval,
-            StdDuration::from_millis(2_500)
+        assert_all_eq!(
+            runtime.reconcile_interval => StdDuration::from_millis(2_500),
+            runtime.hydration_concurrency.get() => 7,
+            runtime.cache_budgets.bundle_bytes.get() => 1_024,
+            runtime.cache_budgets.model_weight_bytes.get() => 6_144,
+            inrou.max_concurrent_vms.get() => 5,
+            inrou.bundle_archive_max_compressed_bytes.get() => 10_000,
+            inrou.bundle_archive_max_decoded_bytes.get() => 40_000,
+            inrou.bundle_archive_max_entries.get() => 123,
+            inrou.bundle_archive_max_file_bytes.get() => 20_000,
+            inrou.bundle_archive_max_total_file_bytes.get() => 30_000,
+            inrou.start_grace => StdDuration::from_millis(7_500),
+            inrou.stop_grace => StdDuration::from_millis(9_500),
+            egress.allowed_hosts => vec!["api.sora.test".to_string(), "cdn.sora.test".to_string()],
+            egress.rate_per_minute.expect("rate cap").get() => 120,
+            egress.max_bytes_per_minute.expect("byte cap").get() => 262_144,
+            hf.hub_base_url => "https://mirror.hf.test",
+            hf.api_base_url => "https://mirror.hf.test/api",
+            hf.inference_base_url => "https://router.hf.test/hf-inference/models",
+            hf.request_timeout => StdDuration::from_millis(21_000),
+            hf.local_runner_program => "python3.12",
+            hf.local_runner_timeout => StdDuration::from_millis(45_000),
+            hf.model_host_heartbeat_ttl => StdDuration::from_millis(18_000),
+            hf.import_max_files => 48,
+            hf.import_max_file_bytes => 777_777,
+            hf.import_max_total_bytes => 9_999_999,
+            hf.model_info_max_response_bytes => 1_234_567,
+            hf.inference_max_response_bytes => 7_654_321,
+            hf.import_file_allowlist => vec!["*.safetensors".to_string(), "config.json".to_string()],
         );
-        assert_eq!(actual.soracloud_runtime.hydration_concurrency.get(), 7);
-        assert_eq!(
-            actual.soracloud_runtime.cache_budgets.bundle_bytes.get(),
-            1_024
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .cache_budgets
-                .model_weight_bytes
-                .get(),
-            6_144
-        );
-        assert_eq!(actual.soracloud_runtime.inrou.max_concurrent_vms.get(), 5);
-        assert!(actual.soracloud_runtime.inrou.enabled);
-        assert!(actual.soracloud_runtime.inrou.proxy_only);
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_compressed_bytes
-                .get(),
-            10_000
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_decoded_bytes
-                .get(),
-            40_000
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_entries
-                .get(),
-            123
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_file_bytes
-                .get(),
-            20_000
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .inrou
-                .bundle_archive_max_total_file_bytes
-                .get(),
-            30_000
-        );
+        assert!(inrou.enabled);
+        assert!(inrou.proxy_only);
         assert!(matches!(
-            actual.soracloud_runtime.submission.fee_payer,
+            &runtime.submission.fee_payer,
             actual::SoracloudRuntimeFeePayer::Authority
         ));
-        assert_eq!(
-            actual.soracloud_runtime.inrou.start_grace,
-            StdDuration::from_millis(7_500)
-        );
-        assert_eq!(
-            actual.soracloud_runtime.inrou.stop_grace,
-            StdDuration::from_millis(9_500)
-        );
-        assert!(actual.soracloud_runtime.egress.default_allow);
-        assert_eq!(
-            actual.soracloud_runtime.egress.allowed_hosts,
-            vec!["api.sora.test".to_string(), "cdn.sora.test".to_string()]
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .egress
-                .rate_per_minute
-                .expect("rate cap")
-                .get(),
-            120
-        );
-        assert_eq!(
-            actual
-                .soracloud_runtime
-                .egress
-                .max_bytes_per_minute
-                .expect("byte cap")
-                .get(),
-            262_144
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.hub_base_url,
-            "https://mirror.hf.test"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.api_base_url,
-            "https://mirror.hf.test/api"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.inference_base_url,
-            "https://router.hf.test/hf-inference/models"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.request_timeout,
-            StdDuration::from_millis(21_000)
-        );
-        assert!(!actual.soracloud_runtime.hf.local_execution_enabled);
-        assert_eq!(
-            actual.soracloud_runtime.hf.local_runner_program,
-            "python3.12"
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.local_runner_timeout,
-            StdDuration::from_millis(45_000)
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.model_host_heartbeat_ttl,
-            StdDuration::from_millis(18_000)
-        );
-        assert!(!actual.soracloud_runtime.hf.allow_inference_bridge_fallback);
-        assert_eq!(actual.soracloud_runtime.hf.import_max_files, 48);
-        assert_eq!(actual.soracloud_runtime.hf.import_max_file_bytes, 777_777);
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_max_total_bytes,
-            9_999_999
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.model_info_max_response_bytes,
-            1_234_567
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.inference_max_response_bytes,
-            7_654_321
-        );
-        assert_eq!(
-            actual.soracloud_runtime.hf.import_file_allowlist,
-            vec!["*.safetensors".to_string(), "config.json".to_string()]
-        );
-        let credential_provider = actual
-            .soracloud_runtime
-            .hf
+        assert!(egress.default_allow);
+        assert!(!hf.local_execution_enabled);
+        assert!(!hf.allow_inference_bridge_fallback);
+        let credential_provider = hf
             .inference_credential_provider
             .as_ref()
             .expect("credential-provider binding");
-        assert_eq!(
-            credential_provider.handle,
-            "kms://soracloud/hf-inference-primary"
+        assert_all_eq!(
+            credential_provider.handle => "kms://soracloud/hf-inference-primary",
+            credential_provider.revision => 7,
+            credential_provider.policy_digest => [0xA7; 32],
         );
-        assert_eq!(credential_provider.revision, 7);
-        assert_eq!(credential_provider.policy_digest, [0xA7; 32]);
     }
     include!("user/runtime_tail_tests.rs");
 }

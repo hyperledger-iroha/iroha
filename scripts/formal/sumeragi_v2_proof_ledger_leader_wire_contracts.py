@@ -276,15 +276,8 @@ let ingress_predecessors = state
     _require_rust_token_sequence(
         ingress_path,
         ordinary_selector,
-        """
-self.try_recv_if_at_checked_classified(
-    service_attempt_at,
-    false,
-    FairV2IngressBarrierBypass::None,
-    predicate,
-)
-""",
-        "ordinary timestamped ingress must delegate with no barrier bypass",
+        "self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)",
+        "ordinary timestamped ingress must delegate to the single classifier",
         errors,
     )
 
@@ -378,7 +371,6 @@ let verdict = fair_v2_ingress_queue_gate_verdict(
     lane,
     index,
     &leader_wire_projection,
-    barrier_bypass,
 );
 """,
         "every candidate must use the sealed queue-local gate verdict",

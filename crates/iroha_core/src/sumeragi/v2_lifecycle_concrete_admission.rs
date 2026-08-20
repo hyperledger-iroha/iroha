@@ -1,22 +1,28 @@
 //! Atomic admission boundary between digest-only lifecycle state and concrete work.
 use super::{
-    AdmissionDecision, AdmissionRequest, CoordinatorFault, LifecycleCoordinator, LifecycleDigest,
-    LifecyclePhase, LifecycleStageKind, LifecycleState, LifecycleWorkClass, PredecessorScope,
-    TurnLease, TurnOutcome, WaitSource, WaitToken,
+    AdmissionDecision, AdmissionRequest, CandidateAdmission, CoordinatorFault,
+    LifecycleCoordinator, LifecycleDigest, LifecyclePhase, LifecycleStageKind, LifecycleState,
+    LifecycleWorkClass, PredecessorScope, TurnLease, TurnOutcome, WaitSource, WaitToken,
     body_pipeline_transition::durable_validate_payload_is_exact,
-    projection::{self, AdapterEffectAdmissionError},
     schema::AttestedReadyValidateDemand,
     work_registry::{
-        AuthenticatedRecoveredWalValidateLifecycleRepair, ConcreteLifecycleWork,
+        AuthenticatedRecoveredWalValidateLifecycleRepair, BoundAdapterRegistryPublicationErrorV1,
         ConcreteLifecycleWorkRegistry, ConcreteWorkAddress, DurableValidateCompletionAuthority,
         DurableValidateCompletionPublication, DurableValidateCompletionPublicationError,
-        DurableValidateDispatch, DurableValidateExecutionError, ExecutedDurableValidateDispatch,
-        OpenedRecoveredWalValidateLedger, PreparedRecoveredDecisionApplyDispatch,
-        PublishedDurableValidateCompletion, ReadyRecoveredDecisionApplyAttestation,
-        ReadyRecoveredDecisionApplyAttestationError, ReadyValidateCarrierError,
-        RecoveredDecisionApplyDispatchProjectionError, RecoveredWalParentFactoryError,
-        RegistryError, RegistryPublicationError, reconstruct_recovered_wal_validate_parent,
+        DurableValidateDispatch, DurableValidateExecutionError,
+        DurableValidateRegistryPublicationErrorV1, ExecutedDurableValidateDispatch,
+        OpenedRecoveredWalValidateLedger, PreparedLifecycleAdmissionErrorV1,
+        PreparedLifecycleAdmissionOwnerV1, PreparedLifecycleAdmissionV1,
+        PreparedRecoveredDecisionApplyDispatch, PublishedDurableValidateCompletion,
+        ReadyRecoveredDecisionApplyAttestation, ReadyRecoveredDecisionApplyAttestationError,
+        ReadyValidateCarrierError, RecoveredDecisionApplyDispatchProjectionError,
+        RecoveredWalParentFactoryError, RegistryError, reconstruct_recovered_wal_validate_parent,
     },
+};
+#[cfg(test)]
+use super::{
+    projection::AdapterEffectAdmissionError,
+    work_registry::{ConcreteLifecycleWork, RegistryPublicationError},
 };
 use crate::sumeragi::{
     v2::{AdapterEffect, RecoveredWalVoteSign, VerifiedHeightContext},
@@ -165,30 +171,6 @@ impl LifecycleWorkRegistryHolder {
         self.registry
             .attest_ready_recovered_decision_fetch(coordinator, ordinal)
     }
-    /// Attest one ordinary Ready certified-Fetch completion.
-    pub(super) fn attest_ready_certified_fetch(
-        &self,
-        coordinator: &LifecycleCoordinator,
-        ordinal: u128,
-    ) -> Result<
-        super::work_registry::ReadyCertifiedFetchAttestationV1,
-        super::work_registry::ReadyCertifiedFetchAttestationErrorV1,
-    > {
-        self.registry
-            .attest_ready_certified_fetch(coordinator, ordinal)
-    }
-    /// Attest one ordinary Ready durable Store carrier.
-    pub(super) fn attest_ready_durable_store(
-        &self,
-        coordinator: &LifecycleCoordinator,
-        ordinal: u128,
-    ) -> Result<
-        super::work_registry::ReadyDurableStoreAttestationV1,
-        super::work_registry::ReadyDurableStoreAttestationErrorV1,
-    > {
-        self.registry
-            .attest_ready_durable_store(coordinator, ordinal)
-    }
     /// Bind one guarded worker completion to the exact claimed Apply carrier.
     pub(super) fn prepare_recovered_decision_apply_terminal_transition(
         &self,
@@ -289,8 +271,6 @@ pub(super) enum ReadyValidateDemandAttestationError {
 /// Closed reason an effect/pending pair could not cross the atomic boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AdapterEffectAdmissionFailure {
-    /// The sealed runtime projection rejected the pair or verified context.
-    Projection(AdapterEffectAdmissionError),
     /// Exact admitted-address registration rejected the pair.
     Registry(RegistryError),
     /// The lifecycle ledger could not publish after registry installation.
@@ -310,20 +290,16 @@ pub(super) enum AdapterEffectAdmissionTransaction {
     Returned {
         /// Logical decision governing retry, terminal replay, wait, or drop.
         decision: AdmissionDecision,
-        /// Exact concrete effect supplied by the caller.
-        effect: AdapterEffect,
-        /// Move-only binding supplied with the effect.
-        pending: PendingRuntimeEffectBinding,
+        /// Complete replay-authorized owner supplied by the caller.
+        prepared: PreparedLifecycleAdmissionV1,
     },
     /// Projection, registration, or publication failed before a new logical
     /// record and concrete entry could commit together.
     Failed {
         /// Closed failure classification.
         failure: AdapterEffectAdmissionFailure,
-        /// Exact concrete effect returned to the caller.
-        effect: AdapterEffect,
-        /// Move-only binding returned to the caller.
-        pending: PendingRuntimeEffectBinding,
+        /// Complete replay-authorized owner returned to the caller.
+        prepared: PreparedLifecycleAdmissionV1,
     },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,9 +318,8 @@ impl LifecycleCoordinator {
     /// remains installed and unchanged throughout body-store execution.
     ///
     /// Executable completion is consumed by the volatile same-address
-    /// carrier-plus-Ready transaction below. Merge-sidecar deferral still
-    /// needs a sealed service registration and same-row wake before this path
-    /// is wired.
+    /// carrier-plus-Ready transaction below. A missing merge sidecar instead
+    /// enters the sealed durable registration and same-row wake transaction.
     #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::result_large_err)]
     pub(super) fn begin_durable_validate_dispatch(
@@ -469,8 +444,6 @@ impl LifecycleCoordinator {
             );
         }
         if authority.is_deferred_merge_sidecar() {
-            // TODO: Join the sealed missing-sidecar registration and exact
-            // same-row wake before this deferred token gains a consumer.
             return Ok(DurableValidateCompletionPublication::DeferredMergeSidecar(
                 prepared.defer_merge_sidecar(),
             ));
@@ -604,39 +577,45 @@ impl LifecycleCoordinator {
         AttestedReadyValidateDemand::from_registry_seal(record, seal)
             .ok_or(ReadyValidateDemandAttestationError::InvalidCoordinatorIndex)
     }
-    /// Atomically admit and register one exact adapter effect.
+    /// Prepare one complete signed effect for mandatory replay-bound admission.
     ///
-    /// The effect and pending authority are consumed. A first admission stages
-    /// logical state, installs the exact coordinator-minted owner/ordinal/slot,
-    /// publishes the ledger, and only then exposes both state changes. Registry
-    /// installation is synchronously undone if publication fails. An exact
-    /// recovered retry installs at its existing immutable address with the
-    /// same ordering. Every other decision returns the pair and leaves
-    /// incumbent concrete work untouched.
-    // TODO: The one-cut production switch must retain or drop each returned
-    // pair according to its decision; Retry executes the incumbent entry and
-    // must never replace it with the returned duplicate.
-    pub(super) fn admit_concrete_adapter_effect(
-        &mut self,
-        registry: &mut LifecycleWorkRegistryHolder,
+    /// Projection, candidate construction, and replay-authority attachment
+    /// happen while the exact effect and pending binding remain inside one
+    /// move-only owner.  Failure cannot produce a generic candidate.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn prepare_direct_signed_lifecycle_admission(
+        &self,
         verified: &VerifiedHeightContext,
         effect: AdapterEffect,
         pending: PendingRuntimeEffectBinding,
+    ) -> Result<PreparedLifecycleAdmissionV1, PreparedLifecycleAdmissionErrorV1> {
+        PreparedLifecycleAdmissionV1::direct_signed(self.active_context, verified, effect, pending)
+    }
+    /// Atomically admit one mandatory replay-authorized prepared owner.
+    ///
+    /// A first admission stages logical state, installs the exact
+    /// coordinator-minted owner/ordinal/slot, publishes LedgerV1, and only then
+    /// exposes both state changes. Registry installation is synchronously
+    /// undone if publication fails. An exact recovered retry installs at its
+    /// existing immutable address with the same ordering. Every other decision
+    /// returns the complete prepared owner and leaves incumbent work untouched.
+    // TODO: The production executor switch must retain or drop each returned
+    // prepared owner according to its decision; Retry executes the incumbent
+    // entry and must never replace it with the returned duplicate.
+    pub(super) fn admit_prepared_lifecycle(
+        &mut self,
+        registry: &mut LifecycleWorkRegistryHolder,
+        prepared: PreparedLifecycleAdmissionV1,
     ) -> AdapterEffectAdmissionTransaction {
-        let request =
-            match projection::admission_request(self.active_context, verified, &effect, &pending) {
-                Ok(request) => request,
-                Err(error) => {
-                    return AdapterEffectAdmissionTransaction::Failed {
-                        failure: AdapterEffectAdmissionFailure::Projection(error),
-                        effect,
-                        pending,
-                    };
-                }
+        if !prepared.validates(self.active_context) {
+            return AdapterEffectAdmissionTransaction::Failed {
+                failure: AdapterEffectAdmissionFailure::Registry(RegistryError::CorruptWork),
+                prepared,
             };
-        let recovery_rebind_ordinal = match &request {
-            AdmissionRequest::Candidate(candidate) => self
-                .key_index
+        }
+        let candidate: CandidateAdmission = prepared.candidate().clone();
+        let recovery_rebind_ordinal =
+            self.key_index
                 .get(&candidate.key)
                 .copied()
                 .filter(|ordinal| {
@@ -649,21 +628,9 @@ impl LifecycleCoordinator {
                             })
                         )
                     })
-                }),
-            AdmissionRequest::NonCandidate(_) => None,
-        };
-        let work = match ConcreteLifecycleWork::from_exact(effect, pending) {
-            Ok(work) => work,
-            Err((error, effect, pending)) => {
-                return AdapterEffectAdmissionTransaction::Failed {
-                    failure: AdapterEffectAdmissionFailure::Registry(error),
-                    effect,
-                    pending,
-                };
-            }
-        };
+                });
         let mut next = self.stage_durable_transaction();
-        let decision = next.reduce_admit(request);
+        let decision = next.reduce_admit(AdmissionRequest::Candidate(candidate.clone()));
         let first_admission = matches!(decision, AdmissionDecision::Admitted { .. });
         let recovery_rebind = matches!(
             decision,
@@ -677,54 +644,121 @@ impl LifecycleCoordinator {
             let location = match concrete_work_location(&next, decision, recovery_rebind_ordinal) {
                 Ok(location) => location,
                 Err(error) => {
-                    let (effect, pending) = work.into_pair();
                     return AdapterEffectAdmissionTransaction::Failed {
                         failure: AdapterEffectAdmissionFailure::Registry(error),
-                        effect,
-                        pending,
+                        prepared,
                     };
                 }
             };
-            return match registry.registry.install_before_publication(
-                location.address,
-                location.digest,
-                work,
-                || next.persist_durable_projection(),
-            ) {
-                Ok(()) => {
-                    *self = next;
-                    if first_admission {
-                        AdapterEffectAdmissionTransaction::Admitted(decision)
-                    } else {
-                        AdapterEffectAdmissionTransaction::Rebound(decision)
+            return match prepared.into_owner() {
+                PreparedLifecycleAdmissionOwnerV1::Bound(bound) => {
+                    match registry.registry.install_bound_before_publication(
+                        self.active_context,
+                        &candidate,
+                        location.address,
+                        location.digest,
+                        bound,
+                        || next.persist_durable_projection(),
+                    ) {
+                        Ok(()) => {
+                            *self = next;
+                            if first_admission {
+                                AdapterEffectAdmissionTransaction::Admitted(decision)
+                            } else {
+                                AdapterEffectAdmissionTransaction::Rebound(decision)
+                            }
+                        }
+                        Err(BoundAdapterRegistryPublicationErrorV1::Install(error, bound)) => {
+                            let prepared = PreparedLifecycleAdmissionV1::from_returned_bound(
+                                self.active_context,
+                                candidate,
+                                bound,
+                            )
+                            .expect("registry rollback returns the exact prepared admission owner");
+                            AdapterEffectAdmissionTransaction::Failed {
+                                failure: AdapterEffectAdmissionFailure::Registry(error),
+                                prepared,
+                            }
+                        }
+                        Err(BoundAdapterRegistryPublicationErrorV1::Publication(_, bound)) => {
+                            self.fault = Some(CoordinatorFault::DurabilityFailure);
+                            let prepared = PreparedLifecycleAdmissionV1::from_returned_bound(
+                                self.active_context,
+                                candidate,
+                                bound,
+                            )
+                            .expect(
+                                "publication rollback returns the exact prepared admission owner",
+                            );
+                            AdapterEffectAdmissionTransaction::Failed {
+                                failure: AdapterEffectAdmissionFailure::Durability,
+                                prepared,
+                            }
+                        }
                     }
                 }
-                Err(RegistryPublicationError::Install(error, work)) => {
-                    let (effect, pending) = work.into_pair();
-                    AdapterEffectAdmissionTransaction::Failed {
-                        failure: AdapterEffectAdmissionFailure::Registry(error),
-                        effect,
-                        pending,
-                    }
-                }
-                Err(RegistryPublicationError::Publication(_, work)) => {
-                    self.fault = Some(CoordinatorFault::DurabilityFailure);
-                    let (effect, pending) = work.into_pair();
-                    AdapterEffectAdmissionTransaction::Failed {
-                        failure: AdapterEffectAdmissionFailure::Durability,
-                        effect,
-                        pending,
+                PreparedLifecycleAdmissionOwnerV1::DurableValidate(validate) => {
+                    match registry
+                        .registry
+                        .install_durable_validate_before_publication(
+                            self.active_context,
+                            &candidate,
+                            location.address,
+                            location.digest,
+                            validate,
+                            || next.persist_durable_projection(),
+                        ) {
+                        Ok(()) => {
+                            *self = next;
+                            if first_admission {
+                                AdapterEffectAdmissionTransaction::Admitted(decision)
+                            } else {
+                                AdapterEffectAdmissionTransaction::Rebound(decision)
+                            }
+                        }
+                        Err(DurableValidateRegistryPublicationErrorV1::Install(
+                            error,
+                            validate,
+                        )) => {
+                            let prepared =
+                                PreparedLifecycleAdmissionV1::from_returned_durable_validate(
+                                    self.active_context,
+                                    candidate,
+                                    validate,
+                                )
+                                .expect(
+                                    "registry rollback returns the exact durable Validate owner",
+                                );
+                            AdapterEffectAdmissionTransaction::Failed {
+                                failure: AdapterEffectAdmissionFailure::Registry(error),
+                                prepared,
+                            }
+                        }
+                        Err(DurableValidateRegistryPublicationErrorV1::Publication(
+                            _,
+                            validate,
+                        )) => {
+                            self.fault = Some(CoordinatorFault::DurabilityFailure);
+                            let prepared =
+                                PreparedLifecycleAdmissionV1::from_returned_durable_validate(
+                                    self.active_context,
+                                    candidate,
+                                    validate,
+                                )
+                                .expect(
+                                    "publication rollback returns the exact durable Validate owner",
+                                );
+                            AdapterEffectAdmissionTransaction::Failed {
+                                failure: AdapterEffectAdmissionFailure::Durability,
+                                prepared,
+                            }
+                        }
                     }
                 }
             };
         }
-        let (effect, pending) = work.into_pair();
         *self = next;
-        AdapterEffectAdmissionTransaction::Returned {
-            decision,
-            effect,
-            pending,
-        }
+        AdapterEffectAdmissionTransaction::Returned { decision, prepared }
     }
 }
 fn waiting_durable_validate_record_is_exact(
@@ -1155,6 +1189,18 @@ mod tests {
                 .mint_pending_binding();
             (effect, pending)
         }
+        fn admit(
+            &self,
+            coordinator: &mut LifecycleCoordinator,
+            registry: &mut LifecycleWorkRegistryHolder,
+            effect: AdapterEffect,
+            pending: PendingRuntimeEffectBinding,
+        ) -> AdapterEffectAdmissionTransaction {
+            let prepared = coordinator
+                .prepare_direct_signed_lifecycle_admission(&self.verified, effect, pending)
+                .expect("fixture effect has one mandatory direct-signed replay origin");
+            coordinator.admit_prepared_lifecycle(registry, prepared)
+        }
     }
     fn consensus_slot() -> PhysicalSlotId {
         PhysicalSlotId::for_capacity(super::super::CapacityClass::Consensus, 0)
@@ -1213,16 +1259,10 @@ mod tests {
         let owners_before = coordinator.owner_index.clone();
         let capacity_before = coordinator.capacity_used.clone();
         let (effect, pending) = fixture.pair(effect.clone(), 91);
-        let outcome = coordinator.admit_concrete_adapter_effect(
-            &mut registry,
-            &fixture.verified,
-            effect.clone(),
-            pending,
-        );
+        let outcome = fixture.admit(&mut coordinator, &mut registry, effect.clone(), pending);
         let AdapterEffectAdmissionTransaction::Failed {
             failure: AdapterEffectAdmissionFailure::Registry(RegistryError::Occupied),
-            effect: returned_effect,
-            pending: returned_pending,
+            prepared,
         } = outcome
         else {
             panic!("occupied exact address must return the incoming pair")
@@ -1232,8 +1272,7 @@ mod tests {
         assert_eq!(coordinator.owner_index, owners_before);
         assert_eq!(coordinator.capacity_used, capacity_before);
         assert!(registry.registry.exactly_contains(address, &effect));
-        assert_eq!(returned_effect, effect);
-        assert!(returned_pending.exactly_binds_adapter_effect(&returned_effect));
+        assert!(prepared.exactly_binds_for_test(&effect));
     }
     #[test]
     fn capacity_wait_returns_the_same_pair_for_each_exact_retry() {
@@ -1243,12 +1282,7 @@ mod tests {
         let first = fixture.effect(2);
         let (effect, pending) = fixture.pair(first, 92);
         assert!(matches!(
-            coordinator.admit_concrete_adapter_effect(
-                &mut registry,
-                &fixture.verified,
-                effect,
-                pending,
-            ),
+            fixture.admit(&mut coordinator, &mut registry, effect, pending),
             AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted {
                 ordinal: 1,
                 ..
@@ -1256,41 +1290,27 @@ mod tests {
         ));
         let waiting_effect = fixture.effect(3);
         let (effect, pending) = fixture.pair(waiting_effect.clone(), 93);
-        let outcome = coordinator.admit_concrete_adapter_effect(
-            &mut registry,
-            &fixture.verified,
-            effect,
-            pending,
-        );
+        let outcome = fixture.admit(&mut coordinator, &mut registry, effect, pending);
         let AdapterEffectAdmissionTransaction::Returned {
             decision: AdmissionDecision::WaitForCapacity(first_wait),
-            effect,
-            pending,
+            prepared,
         } = outcome
         else {
             panic!("full exact capacity must return the waiting pair")
         };
-        assert_eq!(effect, waiting_effect);
-        assert!(pending.exactly_binds_adapter_effect(&effect));
+        assert!(prepared.exactly_binds_for_test(&waiting_effect));
         assert_eq!(coordinator.high_water(), 1);
         assert_eq!(coordinator.admission_waits.len(), 1);
-        let outcome = coordinator.admit_concrete_adapter_effect(
-            &mut registry,
-            &fixture.verified,
-            effect,
-            pending,
-        );
+        let outcome = coordinator.admit_prepared_lifecycle(&mut registry, prepared);
         let AdapterEffectAdmissionTransaction::Returned {
             decision: AdmissionDecision::WaitForCapacity(second_wait),
-            effect,
-            pending,
+            prepared,
         } = outcome
         else {
             panic!("unchanged generation must return the exact retry pair")
         };
         assert_eq!(second_wait, first_wait);
-        assert_eq!(effect, waiting_effect);
-        assert!(pending.exactly_binds_adapter_effect(&effect));
+        assert!(prepared.exactly_binds_for_test(&waiting_effect));
         assert_eq!(coordinator.high_water(), 1);
         assert_eq!(coordinator.admission_waits.len(), 1);
         assert_eq!(registry.registry.len(), 1);
@@ -1303,12 +1323,7 @@ mod tests {
         for (marker, source_ordinal) in [(0x31, 91), (0x32, 92)] {
             let (effect, pending) = fixture.pair(fixture.effect(marker), source_ordinal);
             assert!(matches!(
-                coordinator.admit_concrete_adapter_effect(
-                    &mut registry,
-                    &fixture.verified,
-                    effect,
-                    pending,
-                ),
+                fixture.admit(&mut coordinator, &mut registry, effect, pending),
                 AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted { .. })
             ));
         }
@@ -1486,12 +1501,7 @@ mod tests {
         let mut registry = LifecycleWorkRegistryHolder::empty();
         let (effect, pending) = fixture.pair(original.clone(), 95);
         assert!(matches!(
-            coordinator.admit_concrete_adapter_effect(
-                &mut registry,
-                &fixture.verified,
-                effect,
-                pending,
-            ),
+            fixture.admit(&mut coordinator, &mut registry, effect, pending),
             AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted {
                 ordinal: 1,
                 ..
@@ -1502,21 +1512,15 @@ mod tests {
             .expect("exact incumbent address");
         assert!(registry.registry.exactly_contains(address, &original));
         let (effect, pending) = fixture.pair(original.clone(), 96);
-        let outcome = coordinator.admit_concrete_adapter_effect(
-            &mut registry,
-            &fixture.verified,
-            effect,
-            pending,
-        );
+        let outcome = fixture.admit(&mut coordinator, &mut registry, effect, pending);
         let AdapterEffectAdmissionTransaction::Returned {
             decision: AdmissionDecision::Retry { ordinal: 1, .. },
-            effect,
-            pending,
+            prepared,
         } = outcome
         else {
             panic!("live duplicate must return a retry pair")
         };
-        assert!(pending.exactly_binds_adapter_effect(&effect));
+        assert!(prepared.exactly_binds_for_test(&original));
         assert!(registry.registry.exactly_contains(address, &original));
         assert_eq!(registry.registry.len(), 1);
         coordinator
@@ -1526,21 +1530,15 @@ mod tests {
             .state =
             super::super::LifecycleState::Terminal(super::super::TerminalOutcome::Cancelled);
         let (effect, pending) = fixture.pair(original.clone(), 97);
-        let outcome = coordinator.admit_concrete_adapter_effect(
-            &mut registry,
-            &fixture.verified,
-            effect,
-            pending,
-        );
+        let outcome = fixture.admit(&mut coordinator, &mut registry, effect, pending);
         let AdapterEffectAdmissionTransaction::Returned {
             decision: AdmissionDecision::StutterTerminal { .. },
-            effect,
-            pending,
+            prepared,
         } = outcome
         else {
             panic!("terminal duplicate must return its pair")
         };
-        assert!(pending.exactly_binds_adapter_effect(&effect));
+        assert!(prepared.exactly_binds_for_test(&original));
         assert!(registry.registry.exactly_contains(address, &original));
         assert_eq!(registry.registry.len(), 1);
         assert_eq!(coordinator.high_water(), 1);
@@ -1554,12 +1552,7 @@ mod tests {
         let (effect, pending) = fixture.pair(original.clone(), 100);
         let AdapterEffectAdmissionTransaction::Admitted(
             decision @ AdmissionDecision::Admitted { ordinal, .. },
-        ) = live.admit_concrete_adapter_effect(
-            &mut live_registry,
-            &fixture.verified,
-            effect,
-            pending,
-        )
+        ) = fixture.admit(&mut live, &mut live_registry, effect, pending)
         else {
             panic!("fixture must admit one concrete effect")
         };
@@ -1586,12 +1579,7 @@ mod tests {
         assert!(recovered.records[&ordinal].physical_slots.is_empty());
         let mut registry = LifecycleWorkRegistryHolder::empty();
         let (effect, pending) = fixture.pair(original.clone(), 101);
-        let outcome = recovered.admit_concrete_adapter_effect(
-            &mut registry,
-            &fixture.verified,
-            effect,
-            pending,
-        );
+        let outcome = fixture.admit(&mut recovered, &mut registry, effect, pending);
         let AdapterEffectAdmissionTransaction::Rebound(
             retry @ AdmissionDecision::Retry {
                 ordinal: rebound_ordinal,
@@ -1622,12 +1610,7 @@ mod tests {
         let mut live_registry = LifecycleWorkRegistryHolder::empty();
         let (effect, pending) = fixture.pair(original.clone(), 102);
         assert!(matches!(
-            live.admit_concrete_adapter_effect(
-                &mut live_registry,
-                &fixture.verified,
-                effect,
-                pending,
-            ),
+            fixture.admit(&mut live, &mut live_registry, effect, pending),
             AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted {
                 ordinal: 1,
                 ..
@@ -1652,22 +1635,15 @@ mod tests {
         recovered.redirect_test_ledger_to_missing_parent(root.path());
         let mut registry = LifecycleWorkRegistryHolder::empty();
         let (effect, pending) = fixture.pair(original.clone(), 103);
-        let outcome = recovered.admit_concrete_adapter_effect(
-            &mut registry,
-            &fixture.verified,
-            effect,
-            pending,
-        );
+        let outcome = fixture.admit(&mut recovered, &mut registry, effect, pending);
         let AdapterEffectAdmissionTransaction::Failed {
             failure: AdapterEffectAdmissionFailure::Durability,
-            effect,
-            pending,
+            prepared,
         } = outcome
         else {
             panic!("failed recovered rebind publication must return exact work")
         };
-        assert_eq!(effect, original);
-        assert!(pending.exactly_binds_adapter_effect(&effect));
+        assert!(prepared.exactly_binds_for_test(&original));
         assert!(registry.registry.is_empty());
         assert_eq!(recovered.high_water, 1);
         assert!(matches!(
@@ -1692,22 +1668,15 @@ mod tests {
         let mut registry = LifecycleWorkRegistryHolder::empty();
         let original = fixture.effect(6);
         let (effect, pending) = fixture.pair(original.clone(), 98);
-        let outcome = coordinator.admit_concrete_adapter_effect(
-            &mut registry,
-            &fixture.verified,
-            effect,
-            pending,
-        );
+        let outcome = fixture.admit(&mut coordinator, &mut registry, effect, pending);
         let AdapterEffectAdmissionTransaction::Failed {
             failure: AdapterEffectAdmissionFailure::Durability,
-            effect,
-            pending,
+            prepared,
         } = outcome
         else {
             panic!("failed durable publication must return the rolled-back pair")
         };
-        assert_eq!(effect, original);
-        assert!(pending.exactly_binds_adapter_effect(&effect));
+        assert!(prepared.exactly_binds_for_test(&original));
         assert_eq!(coordinator.high_water(), 0);
         assert!(coordinator.records.is_empty());
         assert!(coordinator.key_index.is_empty());
@@ -1719,41 +1688,172 @@ mod tests {
         );
     }
     #[test]
-    fn projection_failure_returns_the_unmodified_pair() {
+    fn mandatory_binding_rejects_an_effect_owned_by_another_pending_slot() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator(64);
+        let actual_owner = fixture.effect(0xA1);
+        let (_, pending) = fixture.pair(actual_owner.clone(), 0xA1);
+        let submitted = fixture.effect(0xA2);
+        let Err(PreparedLifecycleAdmissionErrorV1::Binding(error)) = coordinator
+            .prepare_direct_signed_lifecycle_admission(
+                &fixture.verified,
+                submitted.clone(),
+                pending,
+            )
+        else {
+            panic!("a foreign pending slot must not mint prepared admission")
+        };
+        assert!(error.returns_foreign_owner_for_test(&submitted, &actual_owner));
+        assert_eq!(coordinator.high_water(), 0);
+        assert!(coordinator.records.is_empty());
+    }
+    #[test]
+    fn prepared_admission_rejects_the_exact_effect_under_a_foreign_replay_origin() {
+        let fixture = Fixture::new();
+        let mut coordinator = fixture.coordinator(64);
+        let mut registry = LifecycleWorkRegistryHolder::empty();
+        let effect = fixture.effect(0xA6);
+        let (_, pending) = fixture.pair(effect.clone(), 0xA6);
+        let mut prepared = coordinator
+            .prepare_direct_signed_lifecycle_admission(&fixture.verified, effect.clone(), pending)
+            .expect("exact signed effect prepares one mandatory owner");
+        assert!(prepared.replace_with_foreign_origin_for_test());
+        let AdapterEffectAdmissionTransaction::Failed {
+            failure: AdapterEffectAdmissionFailure::Registry(RegistryError::CorruptWork),
+            prepared,
+        } = coordinator.admit_prepared_lifecycle(&mut registry, prepared)
+        else {
+            panic!("foreign replay origin must fail before logical or concrete admission")
+        };
+        assert!(prepared.has_foreign_origin_for_test(&effect));
+        assert_eq!(coordinator.high_water(), 0);
+        assert!(coordinator.records.is_empty());
+        assert!(registry.registry.is_empty());
+    }
+    #[test]
+    fn bound_registry_transaction_rejects_a_foreign_candidate_owner_before_publication() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator(64);
+        let effect = fixture.effect(0xA3);
+        let (_, pending) = fixture.pair(effect.clone(), 0xA3);
+        let prepared = coordinator
+            .prepare_direct_signed_lifecycle_admission(&fixture.verified, effect.clone(), pending)
+            .expect("exact signed effect prepares one mandatory owner");
+        let mut foreign_candidate = prepared.candidate().clone();
+        foreign_candidate.causal_root =
+            super::super::CausalRoot::new(LifecycleDigest::new([0xA4; 32]));
+        let foreign_owner = OwnerId::new(foreign_candidate.causal_root, 1);
+        let address = ConcreteWorkAddress::new(foreign_owner, 1, consensus_slot())
+            .expect("foreign owner still has a structurally valid address");
+        let PreparedLifecycleAdmissionOwnerV1::Bound(bound) = prepared.into_owner() else {
+            unreachable!("direct signed admission retains a bound adapter owner")
+        };
+        let published = Cell::new(false);
+        let mut registry = LifecycleWorkRegistryHolder::empty();
+        let error = registry
+            .registry
+            .install_bound_before_publication(
+                fixture.active_context(),
+                &foreign_candidate,
+                address,
+                LifecycleDigest::new([0xA5; 32]),
+                bound,
+                || {
+                    published.set(true);
+                    Ok::<_, ()>(())
+                },
+            )
+            .expect_err("foreign candidate owner must fail before registry publication");
+        let BoundAdapterRegistryPublicationErrorV1::Install(RegistryError::CorruptWork, returned) =
+            error
+        else {
+            panic!("foreign owner must return the complete bound adapter effect")
+        };
+        assert!(!published.get());
+        assert!(returned.exactly_binds_for_test(&effect));
+        assert!(registry.registry.is_empty());
+    }
+    #[test]
+    fn prepared_admission_and_bound_effect_have_no_optional_or_clone_surface() {
+        let source = include_str!("v2_lifecycle_work_registry.rs");
+        let bound = source
+            .split_once("pub(super) struct BoundAdapterEffectV1 {")
+            .expect("bound adapter effect has one declaration")
+            .1
+            .split_once('}')
+            .expect("bound declaration is bounded")
+            .0;
+        for required in [
+            "effect: AdapterEffect",
+            "pending: PendingRuntimeEffectBinding",
+            "replay_origin: BoundAdapterReplayOriginV1",
+        ] {
+            assert!(bound.contains(required), "bound owner omitted {required}");
+        }
+        assert!(!bound.contains("Option<"));
+        let prepared = source
+            .split_once("pub(super) struct PreparedLifecycleAdmissionV1 {")
+            .expect("prepared lifecycle admission has one declaration")
+            .1
+            .split_once('}')
+            .expect("prepared declaration is bounded")
+            .0;
+        assert!(prepared.contains("bound: BoundAdapterEffectV1"));
+        assert!(prepared.contains("candidate: CandidateAdmission"));
+        assert!(!prepared.contains("Option<"));
+        for origin in [
+            "LiveWal(LifecycleReplayAuthorityV1)",
+            "LocalBody(LifecycleReplayAuthorityV1)",
+            "RemoteProposal(LifecycleReplayAuthorityV1)",
+            "InvalidBodyReport(LifecycleReplayAuthorityV1)",
+            "DirectSigned(LifecycleReplayAuthorityV1)",
+        ] {
+            assert!(source.contains(origin), "prepared owner omitted {origin}");
+        }
+        for declaration in [
+            "pub(super) struct BoundAdapterEffectV1",
+            "pub(super) struct PreparedLifecycleAdmissionV1",
+        ] {
+            let prefix = source
+                .split_once(declaration)
+                .expect("move-only declaration exists")
+                .0;
+            let attributes = prefix.rsplit_once("///").map_or(prefix, |(_, tail)| tail);
+            assert!(
+                !attributes.contains("derive(Clone"),
+                "{declaration} must remain move-only"
+            );
+        }
+    }
+    #[test]
+    fn projection_failure_returns_the_mandatory_bound_owner() {
         let fixture = Fixture::new();
         let foreign_context = super::super::LifecycleContext::new(
             LifecycleDigest::new([0xFF; 32]),
             fixture.context.height,
         );
-        let mut coordinator = LifecycleCoordinator::new(
+        let coordinator = LifecycleCoordinator::new(
             foreign_context,
             0,
             super::super::schema::CapacityGeometry::new(
                 super::super::CapacityClass::ALL.map(|class| (class, 64)),
             ),
         );
-        let mut registry = LifecycleWorkRegistryHolder::empty();
         let original = fixture.effect(7);
         let (effect, pending) = fixture.pair(original.clone(), 99);
-        let outcome = coordinator.admit_concrete_adapter_effect(
-            &mut registry,
+        let Err(PreparedLifecycleAdmissionErrorV1::Projection {
+            failure: AdapterEffectAdmissionError::ForeignContext,
+            bound,
+        }) = coordinator.prepare_direct_signed_lifecycle_admission(
             &fixture.verified,
             effect,
             pending,
-        );
-        let AdapterEffectAdmissionTransaction::Failed {
-            failure:
-                AdapterEffectAdmissionFailure::Projection(AdapterEffectAdmissionError::ForeignContext),
-            effect,
-            pending,
-        } = outcome
+        )
         else {
-            panic!("foreign projection must return the exact input pair")
+            panic!("foreign projection must return the mandatory bound owner")
         };
-        assert_eq!(effect, original);
-        assert!(pending.exactly_binds_adapter_effect(&effect));
+        assert!(bound.exactly_binds_for_test(&original));
         assert_eq!(coordinator.high_water(), 0);
         assert!(coordinator.records.is_empty());
-        assert!(registry.registry.is_empty());
     }
 }

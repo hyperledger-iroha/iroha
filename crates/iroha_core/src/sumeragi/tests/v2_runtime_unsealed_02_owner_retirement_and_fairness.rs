@@ -204,9 +204,9 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
         .mark_leader_wire_volatile_terminal(retired)
         .expect("publish the consumed proposal's volatile terminal");
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(proposal_message),
-            Some(semantic_origin),
+            semantic_origin,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Coalesced)
     ));

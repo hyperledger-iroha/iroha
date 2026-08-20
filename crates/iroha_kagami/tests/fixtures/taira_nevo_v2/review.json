@@ -1,0 +1,118 @@
+{
+  "schema": "iroha.taira.nevo-reset-review.v2",
+  "chain": "fc56984b-2be7-431d-840e-21514d1883f0",
+  "chain_discriminant": 369,
+  "state": "unsigned_operator_review_required",
+  "public_inputs_sha256": "eacdf8d3cd1e914502ddd7942aaec888d466f38dc97cf514a00bbd0fab458d63",
+  "base_genesis_sha256": "2aecd38c53978b1705152dfd87476fb4c9aa8af57c90224460f55a3e7cdb4573",
+  "base_config_sha256": "b79b9899f1a0b6d4cf175c4aa0cf3083387a906a5d479b264567873485280210",
+  "unsigned_genesis_sha256": "0d3c876ed2e5b1474a2c9e1c21e411e459263fd42feb5a7d02c9454b4c914b5d",
+  "public_identities": {
+    "onboarding_authority_account_id": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
+    "api_signer_account_id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+    "dpn_inori_account_id": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+    "dpn_epr_guard_account_id": "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT"
+  },
+  "credential_hash_bindings": [
+    {
+      "scope": {
+        "dataspace": "is2"
+      },
+      "token_hash": "blake3:11590239c854c8e1033a98997443be5280c3a883ef97b8999ee45539a8d4197e"
+    },
+    {
+      "scope": {
+        "dataspace": "dpn"
+      },
+      "token_hash": "blake3:1c0a72b28a75a1ef2c09779c7de338ae5afc99e4945ceab869fa72b12bc0efcb"
+    }
+  ],
+  "genesis_overlay": {
+    "transaction_count": 1,
+    "instruction_count": 27,
+    "dataspace_roots": [
+      {
+        "alias": "dpn",
+        "id": 10
+      },
+      {
+        "alias": "is2",
+        "id": 8477022798449861195
+      }
+    ],
+    "domain": "nevo.dpn",
+    "fee_asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "account_funding_amount": "1000000",
+    "fee_sponsor_program_id": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web",
+    "fee_sponsor_beneficiaries": [
+      "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
+      "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+      "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+      "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT"
+    ],
+    "account_aliases": [
+      {
+        "alias": "admin@universal",
+        "target_account_id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+        "role": "primary"
+      },
+      {
+        "alias": "inori@universal",
+        "target_account_id": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+        "role": "primary"
+      },
+      {
+        "alias": "source_guard@universal",
+        "target_account_id": "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT",
+        "role": "primary"
+      }
+    ],
+    "contract_deployment_permission_grant": {
+      "account_id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+      "permission": "CanRegisterSmartContractCode",
+      "payload": null
+    },
+    "dpn_permission_grants": [
+      {
+        "account_id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+        "permissions": [
+          "DpnAdmin",
+          "DpnUser"
+        ]
+      },
+      {
+        "account_id": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+        "permissions": [
+          "DpnInori",
+          "DpnSettlement",
+          "DpnUser"
+        ]
+      },
+      {
+        "account_id": "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT",
+        "permissions": [
+          "DpnEprGuard"
+        ]
+      }
+    ],
+    "dpn_settlement_holder_account_id": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+    "ensure_alias_derived_owner_permissions": [
+      "CanManageAccountAlias",
+      "CanDelegateAccountAliasResolution",
+      "CanResolveAccountAlias"
+    ]
+  },
+  "secret_boundary": {
+    "raw_tokens_accepted": false,
+    "private_keys_accepted": false,
+    "genesis_signed": false
+  },
+  "required_next_steps": [
+    "review the exact unsigned genesis and this digest record",
+    "bind validator runtime credentials to these exact token hashes",
+    "validate the unsigned manifest with the source-matched Kagami binary",
+    "sign only through the independently provisioned digest-pinned external signer",
+    "deploy and pin the reviewed NEVO contract after the reset finalizes",
+    "initialize the application factoring policy after API deployment"
+  ]
+}

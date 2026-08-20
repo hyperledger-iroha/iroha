@@ -225,6 +225,14 @@ impl TransferMerkleProof {
         value_after: u64,
         role: &'static str,
     ) -> Result<(), Error> {
+        let expected_path = path_index(key).to_le_bytes();
+        if self.path_bits.as_slice() != expected_path {
+            return Err(Error::TransferInvariant {
+                details: format!(
+                    "transfer {role} SMT proof path does not match the authenticated balance key"
+                ),
+            });
+        }
         let computed_before = self.compute_root(key, value_before);
         if computed_before.as_ref() != self.root_before.as_ref() {
             return Err(Error::TransferInvariant {
@@ -1320,6 +1328,36 @@ mod tests {
         let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
             .expect_err("wrong sibling");
         assert!(matches!(err, Error::TransferInvariant { .. }));
+    }
+    #[test]
+    fn transfer_merkle_proof_rejects_self_consistent_path_for_another_key() {
+        let transcript = sample_transcript();
+        let delta = &transcript.deltas[0];
+        let snapshot = BalanceSnapshot::from_delta(delta).expect("normalized balances");
+        let key = balance_key(&delta.asset_definition, &delta.from_account);
+        let mut proof = TransferMerkleProof::from_witness(&delta.from_smt_witness)
+            .expect("valid sender witness shape");
+
+        proof.path_bits[0] ^= 1;
+        proof.root_before = proof.compute_root(&key, snapshot.from_before).into();
+        proof.root_after = proof.compute_root(&key, snapshot.from_after).into();
+        assert_eq!(
+            <[u8; 32]>::from(proof.compute_root(&key, snapshot.from_before)),
+            proof.root_before
+        );
+        assert_eq!(
+            <[u8; 32]>::from(proof.compute_root(&key, snapshot.from_after)),
+            proof.root_after
+        );
+
+        let error = proof
+            .verify_update(&key, snapshot.from_before, snapshot.from_after, "sender")
+            .expect_err("a self-consistent proof at the wrong path must fail");
+        assert!(matches!(
+            error,
+            Error::TransferInvariant { details }
+                if details.contains("path") && details.contains("balance key")
+        ));
     }
     #[test]
     fn transcripts_to_witnesses_reject_truncated_merkle_proofs() {

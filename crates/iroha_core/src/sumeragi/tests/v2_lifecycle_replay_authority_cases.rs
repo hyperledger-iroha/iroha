@@ -6,16 +6,19 @@ fn pending_binding_with_distinct_root(
 ) -> PendingRuntimeEffectBinding {
     bind_adapter_effect_batch_ownership(
         core::slice::from_ref(effect),
-        vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
-            tag,
-            ordinal,
-            semantic_identity,
-        )],
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                tag,
+                ordinal,
+                semantic_identity,
+            ),
+        ],
     )
     .expect("bind replay fixture with a distinct semantic root")
     .pop()
     .expect("one distinct-root replay fixture owner")
-    .pending_adapter_effect_binding(effect)
+    .current_effect_producer(effect)
+    .map(|producer| producer.mint_pending_binding())
     .expect("mint exact distinct-root pending binding")
 }
 #[test]
@@ -1251,11 +1254,13 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         .expect("local Validate root rebinds to exact ProposalIntent");
     let foreign_ownership = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(&proposal_intent),
-        vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
-            tag,
-            72,
-            b"foreign local proposal intent owner",
-        )],
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                tag,
+                72,
+                b"foreign local proposal intent owner",
+            ),
+        ],
     )
     .expect("bind foreign ProposalIntent owner")
     .pop()

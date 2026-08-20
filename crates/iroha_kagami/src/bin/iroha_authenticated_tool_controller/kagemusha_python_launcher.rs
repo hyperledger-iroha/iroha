@@ -20,18 +20,13 @@ const PYTHON_RELATIVE: &str = "bin/python3";
 const BUILDER_RELATIVE: &str = "scripts/build_kagemusha_v4_candidate_bundle.py";
 const READINESS_CONTRACT: &str = "iroha.kagemusha.native-python-readiness-launch.v1";
 const BUILDER_CONTRACT: &str = "iroha.kagemusha.native-sealed-builder-launch.v1";
-const BUILDER_ARGUMENT_CONTRACT: &str =
-    "iroha.kagemusha.sealed-builder-exact-arguments.v1";
-const BUILDER_ENVIRONMENT_CONTRACT: &str =
-    "iroha.kagemusha.sealed-builder-exact-environment.v1";
+const BUILDER_ARGUMENT_CONTRACT: &str = "iroha.kagemusha.sealed-builder-exact-arguments.v1";
+const BUILDER_ENVIRONMENT_CONTRACT: &str = "iroha.kagemusha.sealed-builder-exact-environment.v1";
 const BUILDER_REPORT_SCHEMA: &str =
     "iroha.kagemusha.native_sealed_candidate_double_build_report.v2";
-const BUILDER_INNER_REPORT_SCHEMA: &str =
-    "iroha.kagemusha.sealed_candidate_double_build_report.v1";
-const REPORT_PUBLICATION_CONTRACT: &str =
-    "iroha.kagemusha.native-no-replace-report-publication.v1";
-const RUNTIME_DEPENDENCY_CONTRACT: &str =
-    "iroha.kagemusha.symlink-free-macho-runtime-closure.v1";
+const BUILDER_INNER_REPORT_SCHEMA: &str = "iroha.kagemusha.sealed_candidate_double_build_report.v1";
+const REPORT_PUBLICATION_CONTRACT: &str = "iroha.kagemusha.native-no-replace-report-publication.v1";
+const RUNTIME_DEPENDENCY_CONTRACT: &str = "iroha.kagemusha.symlink-free-macho-runtime-closure.v1";
 const OS_TCB_CONTRACT: &str = "iroha.kagemusha.macos-os-library-tcb.v1";
 const MAX_RUNTIME_RECORDS: usize = 250_000;
 const MAX_RUNTIME_FILE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -71,6 +66,71 @@ const BUILDER_ARGUMENT_NAMES: [&str; 17] = [
     "--raw-unit-graph-sha256",
     "--normalized-unit-graph",
     "--normalized-unit-graph-sha256",
+];
+
+#[cfg(any(target_os = "macos", test))]
+const READINESS_BASE_ENVIRONMENT: &[(&str, &str)] = &[
+    ("LANG", "C"),
+    ("LC_ALL", "C"),
+    ("PATH", "/usr/bin:/bin"),
+    ("TMPDIR", "/private/var/tmp"),
+];
+
+// This is deliberately the complete caller-visible promotion configuration.
+// The native controller rejects additions as well as omissions before any
+// interpreter or shell is started. Values used only to select the authenticated
+// launch are removed again before the gate child is executed.
+#[cfg(any(target_os = "macos", test))]
+const READINESS_EXTERNAL_ENVIRONMENT_NAMES: &[&str] = &[
+    "KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH",
+    "KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256",
+    "KAGEMUSHA_PRODUCTION_READINESS_PYTHON",
+    "KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256",
+    "KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT",
+    "KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256",
+    "KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD",
+    "KAGEMUSHA_V4_RELEASE_POLICY_PATH",
+    "KAGEMUSHA_V4_ARTIFACT_ROOT",
+    "KAGEMUSHA_V4_KAGAMI_BIN",
+    "KAGEMUSHA_V4_KAGAMI_SHA256",
+    "KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN",
+    "KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256",
+    "KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE",
+    "KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256",
+    "KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH",
+    "KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256",
+    "KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH",
+    "KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_SHA256",
+    "KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION",
+    "KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION_SHA256",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE_SHA256",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS_SHA256",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION_SHA256",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY_SHA256",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH_SHA256",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH",
+    "KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH_SHA256",
+    "KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH",
+    "KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256",
+    "KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT",
+    "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID",
+    "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY",
+    "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY",
+    "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID",
+    "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY",
+];
+
+#[cfg(target_os = "macos")]
+const READINESS_CALLER_ONLY_ENVIRONMENT_NAMES: &[&str] = &[
+    "KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH",
+    "KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD",
 ];
 
 #[derive(Debug)]
@@ -189,10 +249,7 @@ fn parse_builder(arguments: &[OsString]) -> Result<BuilderLaunch> {
     Ok(BuilderLaunch {
         common: parse_common(&values)?,
         builder: normalized_absolute_path(required(&values, "--builder")?)?,
-        builder_sha256: parse_sha256(
-            required(&values, "--builder-sha256")?,
-            "builder SHA-256",
-        )?,
+        builder_sha256: parse_sha256(required(&values, "--builder-sha256")?, "builder SHA-256")?,
         report_output: normalized_absolute_path(required(&values, "--report-output")?)?,
         builder_arguments: trailing,
     })
@@ -392,7 +449,11 @@ fn validate_builder_arguments(arguments: &[OsString]) -> Result<()> {
         let value = values[name];
         if value.is_empty()
             || (value.len() > 1 && value.starts_with('0'))
-            || value.parse::<u32>().ok().filter(|value| *value > 0).is_none()
+            || value
+                .parse::<u32>()
+                .ok()
+                .filter(|value| *value > 0)
+                .is_none()
         {
             return Err(ControllerError::policy(format!(
                 "sealed-builder {name} is invalid"
@@ -439,6 +500,65 @@ fn builder_environment_digest() -> [u8; 32] {
             .into_iter()
             .flat_map(|(name, value)| [name.as_bytes(), value.as_bytes()]),
     )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn validate_exact_environment(
+    entries: Vec<(OsString, OsString)>,
+    external_names: &[&str],
+    label: &str,
+) -> Result<BTreeMap<OsString, OsString>> {
+    let expected = READINESS_BASE_ENVIRONMENT
+        .iter()
+        .map(|(name, _)| OsString::from(*name))
+        .chain(external_names.iter().map(|name| OsString::from(*name)))
+        .collect::<BTreeSet<_>>();
+    let mut actual = BTreeMap::new();
+    for (name, value) in entries {
+        let display_name = name
+            .to_str()
+            .ok_or_else(|| ControllerError::policy(format!("{label} name is not UTF-8")))?
+            .to_owned();
+        if value.to_str().is_none() || value.as_encoded_bytes().contains(&0) {
+            return Err(ControllerError::policy(format!(
+                "{label} value for {display_name} is not canonical UTF-8"
+            )));
+        }
+        if actual.insert(name, value).is_some() {
+            return Err(ControllerError::policy(format!(
+                "{label} contains a duplicate variable {display_name}"
+            )));
+        }
+    }
+    let actual_names = actual.keys().cloned().collect::<BTreeSet<_>>();
+    if actual_names != expected {
+        return Err(ControllerError::policy(format!(
+            "{label} variable inventory is not exact"
+        )));
+    }
+    for &(name, value) in READINESS_BASE_ENVIRONMENT {
+        if actual.get(OsStr::new(name)).map(OsString::as_os_str) != Some(OsStr::new(value)) {
+            return Err(ControllerError::policy(format!(
+                "{label} {name} is not exact"
+            )));
+        }
+    }
+    Ok(actual)
+}
+
+#[cfg(target_os = "macos")]
+fn require_environment_value(
+    environment: &BTreeMap<OsString, OsString>,
+    name: &str,
+    expected: &OsStr,
+    label: &str,
+) -> Result<()> {
+    if environment.get(OsStr::new(name)).map(OsString::as_os_str) != Some(expected) {
+        return Err(ControllerError::policy(format!(
+            "{label} {name} differs from the authenticated launch argument"
+        )));
+    }
+    Ok(())
 }
 
 fn macho(bytes: &[u8]) -> Result<Option<MachoImage>> {
@@ -497,7 +617,10 @@ fn parse_fat_slices(bytes: &[u8], little: bool, wide: bool) -> Result<Vec<MachoS
     for index in 0..count {
         let base = 8 + index * entry_size;
         let (offset, size) = if wide {
-            (read_u64(bytes, base + 8, little)?, read_u64(bytes, base + 16, little)?)
+            (
+                read_u64(bytes, base + 8, little)?,
+                read_u64(bytes, base + 16, little)?,
+            )
         } else {
             (
                 u64::from(read_u32(bytes, base + 8, little)?),
@@ -722,19 +845,19 @@ fn resolve_dependency(
             loader
                 .parent()
                 .ok_or_else(|| ControllerError::policy("Mach-O loader has no parent"))?,
-            suffix,
+            loader_token_suffix(suffix)?,
         )?;
         return require_dependency_target(runtime_root, &target, images);
     }
     if let Some(suffix) = dependency.strip_prefix("@executable_path") {
-        let target = lexical_join(&runtime_root.join("bin"), suffix)?;
+        let target = lexical_join(&runtime_root.join("bin"), loader_token_suffix(suffix)?)?;
         return require_dependency_target(runtime_root, &target, images);
     }
     if let Some(suffix) = dependency.strip_prefix("@rpath") {
         let mut candidates = BTreeSet::new();
         for rpath in &image.rpaths {
             let base = expand_rpath(runtime_root, loader, rpath)?;
-            let target = lexical_join(&base, suffix)?;
+            let target = lexical_join(&base, loader_token_suffix(suffix)?)?;
             if os_tcb_path(&target) {
                 candidates.insert(format!("os:{}", target.display()));
             } else if let Ok(relative) = target.strip_prefix(runtime_root) {
@@ -765,11 +888,11 @@ fn expand_rpath(runtime_root: &Path, loader: &Path, rpath: &str) -> Result<PathB
             loader
                 .parent()
                 .ok_or_else(|| ControllerError::policy("Mach-O loader has no parent"))?,
-            suffix,
+            loader_token_suffix(suffix)?,
         );
     }
     if let Some(suffix) = rpath.strip_prefix("@executable_path") {
-        return lexical_join(&runtime_root.join("bin"), suffix);
+        return lexical_join(&runtime_root.join("bin"), loader_token_suffix(suffix)?);
     }
     if rpath.starts_with('/') {
         return lexical_join(Path::new("/"), rpath);
@@ -777,6 +900,21 @@ fn expand_rpath(runtime_root: &Path, loader: &Path, rpath: &str) -> Result<PathB
     Err(ControllerError::policy(format!(
         "Mach-O runtime search path is unsupported: {rpath}"
     )))
+}
+
+fn loader_token_suffix(suffix: &str) -> Result<&str> {
+    if suffix.is_empty() {
+        return Ok(suffix);
+    }
+    let relative = suffix.strip_prefix('/').ok_or_else(|| {
+        ControllerError::policy("Mach-O loader token is not followed by a path separator")
+    })?;
+    if relative.starts_with('/') {
+        return Err(ControllerError::policy(
+            "Mach-O loader token suffix is not one relative path",
+        ));
+    }
+    Ok(relative)
 }
 
 fn lexical_join(base: &Path, suffix: &str) -> Result<PathBuf> {
@@ -866,19 +1004,26 @@ fn os_tcb_digest(build: &str) -> [u8; 32] {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(
+    unsafe_code,
+    reason = "audited Darwin sysctl, ACL, descriptor, waitid, and pre-exec boundaries"
+)]
 mod macos {
     use super::*;
     use crate::{
-        bounded_reader, effective_gid, effective_uid, ensure_empty_process_group,
-        prepare_isolated_child, send_job_signal, validate_no_inherited_fds,
-        validate_trusted_path_acl, MacosJob, Watchdog,
+        MacosJob, Watchdog, bounded_reader, effective_gid, effective_uid,
+        ensure_empty_process_group, prepare_isolated_child, send_job_signal,
+        validate_no_inherited_fds, validate_trusted_path_acl,
     };
     use std::{
         fs::{File, Metadata, OpenOptions},
         io::{self, Read, Seek, SeekFrom, Write},
         os::{
             fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
-            unix::{fs::OpenOptionsExt, fs::PermissionsExt, process::CommandExt},
+            unix::{
+                fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+                process::CommandExt,
+            },
         },
         process::{Command, ExitStatus, Stdio},
         sync::{
@@ -950,12 +1095,7 @@ mod macos {
             new: *mut std::ffi::c_void,
             new_length: usize,
         ) -> i32;
-        fn waitid(
-            id_type: i32,
-            id: u32,
-            information: *mut std::ffi::c_void,
-            options: i32,
-        ) -> i32;
+        fn waitid(id_type: i32, id: u32, information: *mut std::ffi::c_void, options: i32) -> i32;
     }
 
     pub(super) fn validate_root_launch_identity() -> Result<()> {
@@ -1013,9 +1153,7 @@ mod macos {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
         {
-            return Err(ControllerError::policy(
-                "macOS build identity is malformed",
-            ));
+            return Err(ControllerError::policy("macOS build identity is malformed"));
         }
         Ok(build)
     }
@@ -1107,9 +1245,7 @@ mod macos {
             ));
         }
         if status == 0 {
-            return Err(ControllerError::policy(
-                "sealed path has an extended ACL",
-            ));
+            return Err(ControllerError::policy("sealed path has an extended ACL"));
         }
         Ok(())
     }
@@ -1326,9 +1462,9 @@ mod macos {
                         "Python runtime regular file has unsafe links or size",
                     ));
                 }
-                total_bytes = total_bytes
-                    .checked_add(metadata.size())
-                    .ok_or_else(|| ControllerError::policy("Python runtime byte count overflows"))?;
+                total_bytes = total_bytes.checked_add(metadata.size()).ok_or_else(|| {
+                    ControllerError::policy("Python runtime byte count overflows")
+                })?;
                 if total_bytes > MAX_RUNTIME_TOTAL_BYTES {
                     return Err(ControllerError::policy(
                         "Python runtime exceeds its total-byte bound",
@@ -1368,9 +1504,10 @@ mod macos {
                             "Python runtime Mach-O image exceeds its bound",
                         ));
                     }
-                    let mut bytes = Vec::with_capacity(usize::try_from(metadata.size()).map_err(
-                        |_| ControllerError::policy("Mach-O image size is invalid"),
-                    )?);
+                    let mut bytes =
+                        Vec::with_capacity(usize::try_from(metadata.size()).map_err(|_| {
+                            ControllerError::policy("Mach-O image size is invalid")
+                        })?);
                     let mut pinned = pinned;
                     pinned
                         .file
@@ -1733,8 +1870,8 @@ mod macos {
 
 #[cfg(target_os = "macos")]
 use macos::{
-    authenticate_runtime, high_descriptor, observed_macos_build, pin_regular, publish_report,
-    receipt_descriptor, require_macos_tcb, require_root_custody, run_captured, validate_root_launch_identity,
+    authenticate_runtime, high_descriptor, pin_regular, publish_report, receipt_descriptor,
+    require_macos_tcb, require_root_custody, run_captured, validate_root_launch_identity,
     validate_runtime,
 };
 
@@ -1743,7 +1880,12 @@ fn launch_readiness_macos(launch: ReadinessLaunch) -> Result<u8> {
     use std::{io::Write, os::fd::AsRawFd, process::Command};
 
     validate_root_launch_identity()?;
-    validate_readiness_environment()?;
+    let controller_path = std::env::current_exe()
+        .and_then(fs::canonicalize)
+        .map_err(|_| ControllerError::policy("controller executable identity is unavailable"))?;
+    let controller_sha256 = super::sha256_file(&controller_path)?;
+    let readiness_environment =
+        validate_readiness_environment(&launch, &controller_path, controller_sha256)?;
     let os_tcb_sha256 = require_macos_tcb(&launch.common.expected_macos_build)?;
     require_root_custody(&launch.gate_source, false)?;
     if launch.gate_snapshot.parent().and_then(Path::parent)
@@ -1775,6 +1917,8 @@ fn launch_readiness_macos(launch: ReadinessLaunch) -> Result<u8> {
         .arg("/dev/fd/10")
         .arg("promotion")
         .current_dir("/")
+        .env_clear()
+        .envs(readiness_environment)
         .env("KAGEMUSHA_PRODUCTION_READINESS_GATE_LAUNCH_FD", "8")
         .env("KAGEMUSHA_PRODUCTION_READINESS_GATE_EXECUTION_FD", "10")
         .env(
@@ -2030,33 +2174,79 @@ fn validate_builder_environment() -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn validate_readiness_environment() -> Result<()> {
-    for (name, value) in std::env::vars_os() {
-        let name = name
-            .to_str()
-            .ok_or_else(|| ControllerError::policy("readiness environment name is not UTF-8"))?;
-        if (!matches!(name, "LANG" | "LC_ALL" | "PATH" | "TMPDIR")
-            && !name.starts_with("KAGEMUSHA_"))
-            || value.as_encoded_bytes().contains(&0)
-        {
-            return Err(ControllerError::policy(format!(
-                "readiness launch environment contains unsupported variable {name}"
-            )));
-        }
+fn validate_readiness_environment(
+    launch: &ReadinessLaunch,
+    controller_path: &Path,
+    controller_sha256: [u8; 32],
+) -> Result<BTreeMap<OsString, OsString>> {
+    let mut environment = validate_exact_environment(
+        std::env::vars_os().collect(),
+        READINESS_EXTERNAL_ENVIRONMENT_NAMES,
+        "readiness launch environment",
+    )?;
+    let gate_sha256 = hex(&launch.gate_sha256);
+    let python_path = launch.common.runtime_root.join(PYTHON_RELATIVE);
+    let python_sha256 = hex(&launch.common.python_sha256);
+    let runtime_tree_sha256 = hex(&launch.common.runtime_tree_sha256);
+    let controller_sha256 = hex(&controller_sha256);
+    require_environment_value(
+        &environment,
+        "KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH",
+        launch.gate_source.as_os_str(),
+        "readiness launch environment",
+    )?;
+    require_environment_value(
+        &environment,
+        "KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256",
+        OsStr::new(gate_sha256.as_str()),
+        "readiness launch environment",
+    )?;
+    require_environment_value(
+        &environment,
+        "KAGEMUSHA_PRODUCTION_READINESS_PYTHON",
+        python_path.as_os_str(),
+        "readiness launch environment",
+    )?;
+    require_environment_value(
+        &environment,
+        "KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256",
+        OsStr::new(python_sha256.as_str()),
+        "readiness launch environment",
+    )?;
+    require_environment_value(
+        &environment,
+        "KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT",
+        launch.common.runtime_root.as_os_str(),
+        "readiness launch environment",
+    )?;
+    require_environment_value(
+        &environment,
+        "KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256",
+        OsStr::new(runtime_tree_sha256.as_str()),
+        "readiness launch environment",
+    )?;
+    require_environment_value(
+        &environment,
+        "KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD",
+        OsStr::new(launch.common.expected_macos_build.as_str()),
+        "readiness launch environment",
+    )?;
+    require_environment_value(
+        &environment,
+        "KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN",
+        controller_path.as_os_str(),
+        "readiness launch environment",
+    )?;
+    require_environment_value(
+        &environment,
+        "KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256",
+        OsStr::new(controller_sha256.as_str()),
+        "readiness launch environment",
+    )?;
+    for name in READINESS_CALLER_ONLY_ENVIRONMENT_NAMES {
+        environment.remove(OsStr::new(*name));
     }
-    for (name, value) in [
-        ("LANG", "C"),
-        ("LC_ALL", "C"),
-        ("PATH", "/usr/bin:/bin"),
-        ("TMPDIR", "/private/var/tmp"),
-    ] {
-        if std::env::var_os(name).as_deref() != Some(OsStr::new(value)) {
-            return Err(ControllerError::policy(format!(
-                "readiness launch environment {name} is not exact"
-            )));
-        }
-    }
-    Ok(())
+    Ok(environment)
 }
 
 #[cfg(target_os = "macos")]
@@ -2127,8 +2317,18 @@ mod tests {
             ("bin/python3".to_owned(), python),
             ("lib/libpython.dylib".to_owned(), library),
         ]);
-        validate_macho_closure(Path::new("/sealed/runtime"), &images)
-            .expect("closed dependencies");
+        validate_macho_closure(Path::new("/sealed/runtime"), &images).expect("closed dependencies");
+    }
+
+    #[test]
+    fn loader_token_suffix_requires_one_separator() {
+        assert_eq!(loader_token_suffix("").expect("empty token suffix"), "");
+        assert_eq!(
+            loader_token_suffix("/../lib").expect("relative token suffix"),
+            "../lib"
+        );
+        assert!(loader_token_suffix("lib").is_err());
+        assert!(loader_token_suffix("//lib").is_err());
     }
 
     #[test]
@@ -2164,5 +2364,85 @@ mod tests {
         validate_builder_arguments(&arguments).expect("exact arguments");
         arguments.swap(0, 2);
         assert!(validate_builder_arguments(&arguments).is_err());
+    }
+
+    fn exact_readiness_environment_entries() -> Vec<(OsString, OsString)> {
+        READINESS_BASE_ENVIRONMENT
+            .iter()
+            .map(|(name, value)| (OsString::from(*name), OsString::from(*value)))
+            .chain(
+                READINESS_EXTERNAL_ENVIRONMENT_NAMES
+                    .iter()
+                    .map(|name| (OsString::from(*name), OsString::from("authenticated-value"))),
+            )
+            .collect()
+    }
+
+    #[test]
+    fn readiness_environment_rejects_unknown_kagemusha_variable() {
+        let exact = exact_readiness_environment_entries();
+        validate_exact_environment(
+            exact.clone(),
+            READINESS_EXTERNAL_ENVIRONMENT_NAMES,
+            "test readiness environment",
+        )
+        .expect("exact inventory");
+
+        let mut hostile = exact;
+        hostile.push((
+            OsString::from("KAGEMUSHA_HOSTILE_PYTHONSTARTUP"),
+            OsString::from("/tmp/hostile.py"),
+        ));
+        let error = validate_exact_environment(
+            hostile,
+            READINESS_EXTERNAL_ENVIRONMENT_NAMES,
+            "test readiness environment",
+        )
+        .expect_err("unknown Kagemusha variable must reject");
+        assert!(error.message.contains("inventory is not exact"));
+    }
+
+    #[test]
+    fn readiness_environment_rejects_missing_and_duplicate_variables() {
+        let mut missing = exact_readiness_environment_entries();
+        missing.retain(|(name, _)| name.as_os_str() != OsStr::new("KAGEMUSHA_V4_ARTIFACT_ROOT"));
+        assert!(
+            validate_exact_environment(
+                missing,
+                READINESS_EXTERNAL_ENVIRONMENT_NAMES,
+                "test readiness environment",
+            )
+            .is_err()
+        );
+
+        let mut duplicate = exact_readiness_environment_entries();
+        duplicate.push((OsString::from("LANG"), OsString::from("C")));
+        let error = validate_exact_environment(
+            duplicate,
+            READINESS_EXTERNAL_ENVIRONMENT_NAMES,
+            "test readiness environment",
+        )
+        .expect_err("duplicate environment entry must reject");
+        assert!(error.message.contains("duplicate variable LANG"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn captured_job_reaps_descendant_after_successful_leader_exit() {
+        use std::process::Command;
+
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("(trap '' TERM; sleep 30) & exit 0")
+            .env_clear()
+            .env("LANG", "C")
+            .env("LC_ALL", "C")
+            .env("PATH", "/usr/bin:/bin");
+        let captured =
+            macos::run_captured(command, Vec::new(), 5, 4096, 4096).expect("descendant cleanup");
+        assert!(captured.status.success());
+        assert!(captured.stdout.is_empty());
+        assert!(captured.stderr.is_empty());
     }
 }

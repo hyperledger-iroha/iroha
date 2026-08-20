@@ -25734,11 +25734,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         ]
         let requiredFields: Set<String> = [
             "domain", "authority", "creation_time_ms", "instructions",
-<<<<<<< HEAD
-            "time_to_live_ms", "fee_payment", "metadata", "attachments",
-=======
-            "time_to_live_ms", "fee_payment", "admission_intent", "metadata",
->>>>>>> origin/optimizations
+            "time_to_live_ms", "fee_payment", "admission_intent", "metadata", "attachments",
         ]
         guard Set(unsignedPayload.keys).isSubset(of: allowedFields),
               requiredFields.isSubset(of: Set(unsignedPayload.keys)) else {

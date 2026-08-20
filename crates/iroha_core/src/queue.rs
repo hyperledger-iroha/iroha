@@ -3851,15 +3851,6 @@ impl fmt::Debug for GlobalQueueSelectionLease {
     }
 }
 impl GlobalQueueSelectionLease {
-<<<<<<< HEAD
-    /// Release every snapshot hash not present in the exact assembled candidate.
-    ///
-    /// Candidate construction must fence the whole bounded snapshot while it resolves routing and
-    /// payload limits, but retaining rejected/deferred hashes until consensus decides would
-    /// unnecessarily block autonomous progress. Any ownership drift is a process-lifetime
-    /// selection fault: continuing could let the ordinary and autonomous paths both own a hash.
-    pub(crate) fn retain_only(&mut self, retained: &[EntrypointHash]) -> bool {
-=======
     fn empty(queue: &Arc<Queue>) -> Self {
         Self {
             queue: Arc::downgrade(queue),
@@ -3867,9 +3858,13 @@ impl GlobalQueueSelectionLease {
             hashes: Vec::new(),
         }
     }
-    /// Release snapshot hashes absent from the exact candidate; ownership drift latches a fault.
-    pub(crate) fn retain_only(&mut self, retained: &[SignedTxHash]) -> bool {
->>>>>>> origin/optimizations
+    /// Release every snapshot hash not present in the exact assembled candidate.
+    ///
+    /// Candidate construction must fence the whole bounded snapshot while it resolves routing and
+    /// payload limits, but retaining rejected/deferred hashes until consensus decides would
+    /// unnecessarily block autonomous progress. Any ownership drift is a process-lifetime
+    /// selection fault: continuing could let the ordinary and autonomous paths both own a hash.
+    pub(crate) fn retain_only(&mut self, retained: &[EntrypointHash]) -> bool {
         if self.owner == 0 {
             return retained.is_empty();
         }
@@ -12925,9 +12920,10 @@ impl Queue {
             backpressure_telemetry,
         );
         for entry in &mut batch {
-            entry.queue_plan_admission = match self
-                .global_admission_registry_match_for_hash(entry.tx.hash(), &state_view)
-            {
+            entry.queue_plan_admission = match self.global_admission_registry_match_for_hash(
+                entry.tx.hash_as_entrypoint(),
+                &state_view,
+            ) {
                 Ok(None) => QueuePlanGossipAdmission::Ordinary,
                 Ok(Some((
                     binding,
@@ -13982,7 +13978,7 @@ impl Queue {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
-        let tx_hash = tx.hash();
+        let tx_hash = tx.hash_as_entrypoint();
         if state_view.transactions.get(&tx_hash).is_some() {
             return Err(Failure {
                 tx: tx.into(),
@@ -14101,16 +14097,6 @@ impl Queue {
         let expected_admission_context = expected_admission_binding
             .map(|binding| &binding.admission_context)
             .or(expected_admission_context);
-<<<<<<< HEAD
-        let tx_hash = tx.hash_as_entrypoint();
-        if state_view.transactions.get(&tx_hash).is_some() {
-            return Err(Failure {
-                tx: tx.into(),
-                err: Error::InBlockchain,
-            });
-        }
-=======
->>>>>>> origin/optimizations
         if plan_journal_mode == PlanJournalAdmissionMode::RequiredDurableClaim {
             let Some(expected_admission_context) = expected_admission_context else {
                 return Err(Failure {
@@ -15822,7 +15808,7 @@ impl Queue {
         state: &State,
     ) -> Result<(), Failure> {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
-        let signed_transaction_hash = tx.hash();
+        let signed_transaction_hash = crate::tx::exact_signed_transaction_hash(tx.entrypoint());
         let hash = tx.hash_as_entrypoint();
         if state.has_committed_entrypoint(hash) {
             return Err(Failure {
@@ -15927,16 +15913,18 @@ impl Queue {
         // Consensus requeue batches publish newly restored and already-resident hashes together
         // after the full ownership-transfer pass. Keeping gossip out of this primitive prevents
         // a successfully restored hash from being enqueued twice.
-        let _ = self.events_sender.send(
-            TransactionEvent {
-                hash: signed_transaction_hash,
-                block_height: None,
-                lane_id,
-                dataspace_id,
-                status: TransactionStatus::Queued,
-            }
-            .into(),
-        );
+        if let Some(hash) = signed_transaction_hash {
+            let _ = self.events_sender.send(
+                TransactionEvent {
+                    hash,
+                    block_height: None,
+                    lane_id,
+                    dataspace_id,
+                    status: TransactionStatus::Queued,
+                }
+                .into(),
+            );
+        }
         trace!(
             lane_id = %lane_id,
             dataspace_id = %dataspace_id,
@@ -16041,7 +16029,7 @@ impl Queue {
     /// Reconcile a popped admission; `select_exact` distinguishes selection from TTL retention.
     fn reconcile_popped_global_admission(
         &self,
-        hash: SignedTxHash,
+        hash: EntrypointHash,
         state_view: &StateView,
         select_exact: bool,
         telemetry: Option<&StateTelemetry>,
@@ -16700,16 +16688,16 @@ impl Queue {
         }
         expired_transactions
             .into_iter()
-            .map(|expired| {
-                let hash = expired.tx.as_ref().hash();
+            .filter_map(|expired| {
+                let hash = crate::tx::exact_signed_transaction_hash(expired.tx.entrypoint())?;
                 let routing = expired.routing;
-                TransactionEvent {
+                Some(TransactionEvent {
                     hash,
                     block_height: None,
                     lane_id: routing.lane_id,
                     dataspace_id: routing.dataspace_id,
                     status: TransactionStatus::Expired,
-                }
+                })
             })
             .for_each(|e| {
                 let _ = self.events_sender.send(e.into());
@@ -18519,7 +18507,11 @@ impl Queue {
                         } else {
                             self.removed_hashes.remove(&hash);
                         }
-                        expired_events.push((guard.tx.hash(), guard.routing));
+                        if let Some(hash) =
+                            crate::tx::exact_signed_transaction_hash(guard.tx.entrypoint())
+                        {
+                            expired_events.push((hash, guard.routing));
+                        }
                         report.expired = report.expired.saturating_add(1);
                     }
                     TransactionGuardReturnPlan::AlreadyQueued { .. } => {
@@ -26718,7 +26710,6 @@ pub mod tests {
         assert!(!replay_queue.txs.contains_key(&hash));
     }
     #[test]
-<<<<<<< HEAD
     fn globally_bound_guard_drop_restores_exact_fifo_with_absent_registry() {
         let fixture = globally_bound_guard_fixture();
         let hash = fixture.transaction.hash_as_entrypoint();
@@ -26741,8 +26732,6 @@ pub mod tests {
         fixture.assert_restored_fifo_owner_with_order(&[hash, follower_hash]);
     }
     #[test]
-=======
->>>>>>> origin/optimizations
     fn globally_bound_guard_drop_restores_exact_fifo_with_exact_registry() {
         let fixture = globally_bound_guard_fixture();
         let hash = fixture.transaction.hash_as_entrypoint();

@@ -769,9 +769,9 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         .split("pub(super) fn complete_durable_validate_dispatch(")
         .nth(1)
         .expect("concrete admission has one completion entrypoint")
-        .split("/// Atomically admit and register one exact adapter effect.")
+        .split("/// Prepare one complete signed effect for mandatory replay-bound admission.")
         .next()
-        .expect("generic admission follows completion entrypoint");
+        .expect("prepared admission boundary follows completion entrypoint");
     for required in [
         "prepare_executed_durable_validate_completion(dispatch)",
         "waiting_durable_validate_record_is_exact",
@@ -1233,7 +1233,7 @@ fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallib
         .split_once("match self.services.take_next_lifecycle_completion()")
         .expect("the Completion turn uses the unified physical-head classifier")
         .1
-        .split_once("let selected = match self.owner.classify_completion_ready_work()")
+        .split_once("let selected = match self.owner.classify_completion_ready_work(fence)")
         .expect("completion draining precedes fresh Ready-work planning")
         .0;
     for required in [

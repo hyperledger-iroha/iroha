@@ -5,7 +5,7 @@ The command is intentionally narrow: it accepts the signed Linux/aarch64
 rollout archive transferred between the release jobs, verifies its detached
 authority with the checksum-pinned native verifier, and only then inspects the
 tar stream.  It publishes a fresh owner-private directory containing the exact
-four privacy bootstrap inputs plus a canonical extraction manifest.
+five reviewed public inputs plus a canonical extraction manifest.
 """
 
 from __future__ import annotations
@@ -82,6 +82,12 @@ PRIVACY_INPUTS = {
         "rollout_path": "provenance/privacy-bootstrap/genesis.json",
         "operator_copy": "configs/soranexus/taira/genesis.json",
         "max_bytes": 64 * 1024 * 1024,
+    },
+    "nevo-reset.review.json": {
+        "manifest_key": "nevo_review",
+        "rollout_path": "provenance/privacy-bootstrap/nevo-reset.review.json",
+        "operator_copy": None,
+        "max_bytes": 4 * 1024 * 1024,
     },
     "bootle_lantern_broker_public.json": {
         "manifest_key": "broker_public_export",
@@ -312,6 +318,7 @@ def _validated_privacy_rows(
         "peer_1_config",
         "genesis",
         "broker_public_export",
+        "nevo_review",
     }:
         _fail("rollout privacy release binding fields are not exact")
     if (
@@ -337,6 +344,11 @@ def _validated_privacy_rows(
             expected_fields |= {"operator_copy", "designated_validator"}
         elif manifest_key == "genesis":
             expected_fields.add("operator_copy")
+        elif manifest_key == "nevo_review":
+            expected_fields |= {
+                "binds_genesis_sha256",
+                "binds_onboarding_token_hashes",
+            }
         else:
             expected_fields.add("bound_by_plan_sha256")
         if set(row) != expected_fields:
@@ -354,6 +366,11 @@ def _validated_privacy_rows(
             row.get("bound_by_plan_sha256") is not True
         ):
             _fail("rollout broker export is not bound by the privacy plan")
+        if manifest_key == "nevo_review" and (
+            row.get("binds_genesis_sha256") is not True
+            or row.get("binds_onboarding_token_hashes") is not True
+        ):
+            _fail("rollout NEVO review does not bind genesis and onboarding hashes")
         digest = _sha256(row.get("sha256"), f"{manifest_key} digest")
         payload = extracted[expected_path]
         actual_digest = hashlib.sha256(payload).hexdigest()
@@ -375,7 +392,7 @@ def extract_privacy_release(
     *,
     source: admission.SourceIdentity,
 ) -> tuple[dict[str, bytes], bytes, dict[str, dict[str, object]]]:
-    """Inspect the authenticated tar stream and return its four reviewed inputs."""
+    """Inspect the authenticated tar stream and return its five reviewed inputs."""
 
     prefix = archive_path.name.removesuffix(".tar.gz")
     wanted_bounds = {ROLLOUT_MANIFEST_PATH: MAX_ROLLOUT_MANIFEST_BYTES}

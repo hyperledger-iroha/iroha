@@ -1,6 +1,6 @@
 #[cfg(feature = "bls")]
 #[test]
-fn durable_store_prepare_seal_and_drop_preserve_the_closed_row() {
+fn durable_store_prepare_and_drop_preserve_the_closed_row() {
     let DurableStoreFixture {
         mut registry,
         verified,
@@ -18,11 +18,6 @@ fn durable_store_prepare_seal_and_drop_preserve_the_closed_row() {
     else {
         unreachable!("durable Store fixture retains its Store effect")
     };
-    let validate_effect = AdapterEffect::ValidateBody {
-        tag,
-        round,
-        subject,
-    };
     let before = format!("{registry:?}");
 
     let prepared = registry
@@ -36,31 +31,7 @@ fn durable_store_prepare_seal_and_drop_preserve_the_closed_row() {
         expected_manifest_hash
     );
     assert_eq!(prepared.expected_manifest_hash(), expected_manifest_hash);
-    let sealed = prepared
-        .seal_validate_successor(&validate_effect)
-        .expect("seal exact ordinal-free Validate successor");
-    assert_eq!(sealed._store_address, address);
-    assert_eq!(sealed._validate_effect, validate_effect);
-    assert!(
-        sealed
-            ._validate_pending
-            .exactly_binds_adapter_effect(&sealed._validate_effect)
-    );
-    assert_eq!(
-        sealed._validate_digest,
-        digest_from_hash(sealed._validate_pending.exact_effect_identity())
-    );
-    assert_eq!(
-        super::super::CausalRoot::new(digest_from_hash(
-            sealed._validate_pending.causal_lifecycle_key()
-        )),
-        lease.owner().causal_root()
-    );
-    assert_eq!(
-        sealed._durable_body.manifest_hash(),
-        sealed._expected_manifest_hash
-    );
-    drop(sealed);
+    drop(prepared);
 
     assert_eq!(format!("{registry:?}"), before);
     assert!(registry.exactly_contains(address, &effect));
@@ -82,85 +53,6 @@ fn durable_store_prepare_seal_and_drop_preserve_the_closed_row() {
         .expect("remove disposable closed Store only for into-pair rejection test");
     let unwind = catch_unwind(AssertUnwindSafe(|| closed.into_pair()));
     assert!(unwind.is_err(), "closed Store must not expose a raw pair");
-}
-
-#[cfg(feature = "bls")]
-#[test]
-fn durable_store_publication_is_exact_ordinal_one_shot_and_failure_atomic() {
-    let DurableStoreFixture {
-        mut registry,
-        verified,
-        address: store_address,
-        lease,
-        slot,
-        effect,
-        ..
-    } = durable_store_fixture(0x45);
-    let AdapterEffect::StoreBody {
-        tag,
-        round,
-        subject,
-    } = effect.clone()
-    else {
-        unreachable!("durable Store fixture retains its Store effect")
-    };
-    let validate_effect = AdapterEffect::ValidateBody {
-        tag,
-        round,
-        subject,
-    };
-    let validate_slot =
-        PhysicalSlotId::for_capacity(LifecycleWorkClass::Validate.capacity_class(), 0);
-    let invalid_same_ordinal =
-        ConcreteWorkAddress::new(lease.owner(), lease.ordinal(), validate_slot)
-            .expect("same-ordinal address is structurally valid but not a successor");
-    let before = format!("{registry:?}");
-    let prepared = registry
-        .prepare_durable_store_execution(&lease, slot, &verified)
-        .expect("prepare exact Store before ordinal rejection");
-    let successor = prepared
-        .seal_validate_successor(&validate_effect)
-        .expect("seal exact Validate successor before ordinal rejection");
-    let rejected = catch_unwind(AssertUnwindSafe(|| {
-        successor.commit_after_publication(invalid_same_ordinal);
-    }));
-    assert!(
-        rejected.is_err(),
-        "a successor cannot reuse its parent ordinal"
-    );
-    assert_eq!(format!("{registry:?}"), before);
-    assert!(registry.exactly_contains(store_address, &effect));
-
-    let validate_ordinal = lease
-        .ordinal()
-        .checked_add(1)
-        .expect("fixture ordinal has a successor");
-    let validate_address = ConcreteWorkAddress::new(lease.owner(), validate_ordinal, validate_slot)
-        .expect("exact Validate successor address");
-    let prepared = registry
-        .prepare_durable_store_execution(&lease, slot, &verified)
-        .expect("failure-atomic rejection left the Store parent executable");
-    prepared
-        .seal_validate_successor(&validate_effect)
-        .expect("seal exact Validate successor")
-        .commit_after_publication(validate_address);
-
-    assert_eq!(registry.len(), 1);
-    assert!(!registry.entries.contains_key(&store_address));
-    let installed = registry
-        .entries
-        .get(&validate_address)
-        .expect("publication installs one exact Validate child");
-    assert!(installed.validates_at(validate_address));
-    assert_eq!(installed.effect(), &validate_effect);
-    assert!(matches!(
-        &installed.kind,
-        ConcreteLifecycleWorkKind::DurableValidateBody(_)
-    ));
-    assert!(matches!(
-        registry.prepare_durable_store_execution(&lease, slot, &verified),
-        Err(DurableStoreExecutionError::Registry(RegistryError::Missing))
-    ));
 }
 
 #[cfg(feature = "bls")]
@@ -274,43 +166,15 @@ fn durable_store_prepare_rejects_wrong_lease_projection_and_context_without_muta
 
 #[cfg(feature = "bls")]
 #[test]
-fn durable_store_seal_rejects_wrong_kind_or_tag_and_wrong_row_kind() {
+fn durable_store_prepare_rejects_wrong_row_kind() {
     let DurableStoreFixture {
         mut registry,
         verified,
         address,
         lease,
         slot,
-        effect,
         ..
     } = durable_store_fixture(0x61);
-    let before = format!("{registry:?}");
-
-    let prepared = registry
-        .prepare_durable_store_execution(&lease, slot, &verified)
-        .expect("prepare Store before wrong-kind successor");
-    assert!(matches!(
-        prepared.seal_validate_successor(&effect),
-        Err(DurableStoreExecutionError::InvalidValidateSuccessor)
-    ));
-    assert_eq!(format!("{registry:?}"), before);
-
-    let AdapterEffect::StoreBody { round, subject, .. } = effect.clone() else {
-        unreachable!("durable Store fixture retains its Store effect")
-    };
-    let wrong_tag_validate = AdapterEffect::ValidateBody {
-        tag: EventTag::new(round.height, round.view, Generation::new(999)),
-        round,
-        subject,
-    };
-    let prepared = registry
-        .prepare_durable_store_execution(&lease, slot, &verified)
-        .expect("prepare Store before wrong-tag successor");
-    assert!(matches!(
-        prepared.seal_validate_successor(&wrong_tag_validate),
-        Err(DurableStoreExecutionError::InvalidValidateSuccessor)
-    ));
-    assert_eq!(format!("{registry:?}"), before);
 
     let closed = registry
         .entries
@@ -831,11 +695,13 @@ fn live_wal_apply_join_rejects_foreign_receipt_and_root_before_exact_retry() {
             .expect("retained Validate projects exact Apply pending");
         let foreign_owner = bind_adapter_effect_batch_ownership(
             core::slice::from_ref(&validate.effect),
-            vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
-                *tag,
-                9_700,
-                b"foreign live-WAL Validate owner",
-            )],
+            vec![
+                RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                    *tag,
+                    9_700,
+                    b"foreign live-WAL Validate owner",
+                ),
+            ],
         )
         .expect("bind same effect under foreign causal root")
         .pop()

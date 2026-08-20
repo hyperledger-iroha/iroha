@@ -1183,11 +1183,13 @@ required|replay|authority_free_admission_projection(|installed-body replay proje
 required|sealed_projection|ConcreteWorkAddress::new(lease.owner(), lease.ordinal(), slot)|sealed body successor projection omitted {required}
 required|sealed_projection|work.validates_at(address)|sealed body successor projection omitted {required}
 required|sealed_projection|work.digest != digest|sealed body successor projection omitted {required}
-required|sealed_projection|completion.address != self._completion_address|sealed body successor projection omitted {required}
-required|sealed_projection|store.address != self._store_address|sealed body successor projection omitted {required}
-required|sealed_projection|self._durable_body.manifest_hash() != self._expected_manifest_hash|sealed body successor projection omitted {required}
-required|sealed_projection|self._store_digest|sealed body successor projection omitted {required}
-required|sealed_projection|self._validate_digest|sealed body successor projection omitted {required}
+required|sealed_projection|completion.address != self.completion_address|sealed body successor projection omitted {required}
+required|sealed_projection|store.address != self.store_address|sealed body successor projection omitted {required}
+required|sealed_projection|self.durable_body.manifest_hash() != self.expected_manifest_hash|sealed body successor projection omitted {required}
+required|sealed_projection|self.adapter.store_effect() != &self.store_effect|sealed body successor projection omitted {required}
+required|sealed_projection|self.adapter.validate_effect() != &self.validate_effect|sealed body successor projection omitted {required}
+required|sealed_projection|self.store_digest|sealed body successor projection omitted {required}
+required|sealed_projection|self.validate_digest|sealed body successor projection omitted {required}
 required|sealed_projection|project_sealed_store_successor_candidate|sealed body successor projection omitted {required}
 required|sealed_projection|project_sealed_validate_successor_candidate|sealed body successor projection omitted {required}
 required|sealed_projection|SealedBodySuccessorProjectionPermit::new()|sealed body successor projection omitted {required}
@@ -1196,23 +1198,26 @@ count|sealed_projection|pub(super) fn project_for_body_transition(|2|sealed body
 forbidden|sealed_projection|projection::admission_request(|sealed body successor projection acquired {forbidden}
 forbidden|sealed_projection|candidate.payload =|sealed body successor projection acquired {forbidden}
 forbidden|sealed_projection|fn commit(|sealed body successor projection acquired {forbidden}
-forbidden|sealed_projection|.insert(|sealed body successor projection acquired {forbidden}
-forbidden|sealed_projection|.remove(|sealed body successor projection acquired {forbidden}
+required|sealed_projection|registry.entries.insert(child_address, child)|sealed body successor publication omitted {required}
+required|sealed_projection|.remove(&completion_address)|sealed Fetch successor publication omitted {required}
+required|sealed_projection|.remove(&store_address)|sealed Store successor publication omitted {required}
+required|sealed_projection|pub(super) fn commit_after_publication(|sealed body successor publication omitted {required}
 forbidden|sealed_projection|for_test|sealed body successor projection acquired {forbidden}
 end
 case|certified_fetch_execution_surface_is_borrow_bound_and_commit_free
 region|execution|registry|after|impl<'a> PreparedCertifiedFetchExecution<'a>|before|#[allow(dead_code)]\nimpl<'a> PreparedDurableStoreExecution<'a>
-region|successor|registry|after|pub(super) struct PreparedCertifiedFetchStoreSuccessor<'a>|before|/// Closed recovered-WAL Fetch-to-Store registry/adapter successor.
+region|successor|registry_recovery|after|pub(super) struct PreparedCertifiedFetchStoreSuccessor<'registry, 'adapter> {|before|/// Closed recovered-WAL Fetch-to-Store registry/adapter successor.
 required|execution|pub(super) fn adapter_preview_inputs|certified Fetch execution lost adapter preview inputs
 required|execution|pub(super) fn durable_body_receipt|certified Fetch execution lost durable body receipt
 required|execution|pub(super) fn seal_store_successor|certified Fetch execution lost sealed Store successor
 forbidden|execution|fn commit(|the inert execution tranche must not mutate or publish its parent/child cut
 forbidden|execution|for_test|the execution token must not acquire a raw test mint
-required|successor|&'a mut ConcreteLifecycleWorkRegistry|certified Fetch Store successor lost registry borrow
-required|successor|_store_effect: AdapterEffect|certified Fetch Store successor lost Store effect
-required|successor|PendingRuntimeEffectBinding|certified Fetch Store successor lost pending binding
-required|successor|DurableBodyReceipt|certified Fetch Store successor lost durable receipt
-required|successor|_expected_manifest_hash|certified Fetch Store successor lost manifest identity
+required|successor|registry: &'registry mut ConcreteLifecycleWorkRegistry|certified Fetch Store successor lost registry borrow
+required|successor|store_effect: AdapterEffect|certified Fetch Store successor lost Store effect
+required|successor|store_pending: PendingRuntimeEffectBinding|certified Fetch Store successor lost pending binding
+required|successor|durable_body: DurableBodyReceipt|certified Fetch Store successor lost durable receipt
+required|successor|expected_manifest_hash: HashOf<wire::PayloadManifest>|certified Fetch Store successor lost manifest identity
+required|successor|adapter: crate::sumeragi::v2::PreparedCertifiedFetchStoreAdapterV1<'adapter>|certified Fetch Store successor lost its sealed adapter preview
 forbidden|successor|derive(Clone|certified Fetch Store successor must remain move-only
 end
 case|durable_store_execution_surface_is_closed_borrow_bound_and_inert
@@ -1221,7 +1226,7 @@ region|carrier|registry|after|struct DurableStoreBody {|before|impl DurableStore
 region|validation|registry|after|impl DurableStoreBody {|before|struct DurableValidateBody
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_store_execution(|before|pub(super) fn prepare_durable_validate_execution(
 region|execution|registry_recovery_impl|after|impl<'a> PreparedDurableStoreExecution<'a>|end|-
-region|validate_token|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'a>|before|pub(super) struct PreparedCertifiedFetchStoreSuccessor<'a>
+region|validate_token|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|/// Move-only Store projection sealed under its closed Fetch parent
 region|fetch_execution|registry_recovery_impl|after|impl<'a> PreparedCertifiedFetchExecution<'a>|before|impl<'a> PreparedDurableStoreExecution<'a>
 region|callers|selector|begin|-|end|-
 region|callers|effects|begin|-|end|-
@@ -1265,15 +1270,16 @@ forbidden|execution|.insert(|durable Store token acquired forbidden authority: {
 forbidden|execution|.remove(|durable Store token acquired forbidden authority: {forbidden}
 forbidden|execution|into_parts|durable Store token acquired forbidden authority: {forbidden}
 forbidden|execution|for_test|durable Store token acquired forbidden authority: {forbidden}
-required|validate_token|&'a mut ConcreteLifecycleWorkRegistry|Validate successor lost exclusive registry borrow
-required|validate_token|_validate_effect: AdapterEffect|Validate successor lost Validate effect
-required|validate_token|_validate_pending: PendingRuntimeEffectBinding|Validate successor lost pending binding
-required|validate_token|_durable_body: DurableBodyReceipt|Validate successor lost durable receipt
-required|validate_token|_expected_manifest_hash|Validate successor lost manifest identity
+required|validate_token|registry: &'registry mut ConcreteLifecycleWorkRegistry|Validate successor lost exclusive registry borrow
+required|validate_token|validate_effect: AdapterEffect|Validate successor lost Validate effect
+required|validate_token|validate_pending: PendingRuntimeEffectBinding|Validate successor lost pending binding
+required|validate_token|durable_body: DurableBodyReceipt|Validate successor lost durable receipt
+required|validate_token|expected_manifest_hash: HashOf<wire::PayloadManifest>|Validate successor lost manifest identity
+required|validate_token|adapter: crate::sumeragi::v2::PreparedDurableStoreValidateAdapterV1<'adapter>|Validate successor lost its sealed adapter preview
 forbidden|validate_token|derive(Clone|Validate successor must remain move-only
 required|fetch_execution|let Some(ready_projection) = completion.replay_evidence.project_durable_ready_fetch(|parent manifest authority lost authenticated Ready projection
 required|fetch_execution|let expected_manifest_hash = ready_projection.expected_manifest_hash();|parent manifest authority lost its authenticated projection transfer
-required|fetch_execution|_expected_manifest_hash: expected_manifest_hash|Store successor lost transferred parent manifest authority
+required|fetch_execution|expected_manifest_hash,|Store successor lost transferred parent manifest authority
 forbidden|fetch_execution|durable_body.manifest_hash()|parent manifest authority must not be re-read from the body receipt
 count|production|fn prepare_durable_store_execution(|1|the inert Store preflight must have no production caller
 forbidden|callers|prepare_durable_store_execution|the inert Store preflight must remain unwired outside the registry
@@ -1288,7 +1294,7 @@ region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_va
 region|execution_impl|registry_recovery|after|impl<'a> PreparedDurableValidateExecution<'a>|before|impl<'a> PreparedValidatedBodyCompletion<'a>
 region|completion|registry_recovery|after|pub(super) struct PreparedValidatedBodyCompletion<'a>|before|pub(super) struct PreparedLiveWalReplayPreAdmission<'a>
 region|completion_impl|registry_recovery|after|impl<'a> PreparedValidatedBodyCompletion<'a>|end|-
-region|validate_successor|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'a>|before|pub(super) struct PreparedCertifiedFetchStoreSuccessor<'a>
+region|validate_successor|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|/// Move-only Store projection sealed under its closed Fetch parent
 region|callers|selector|begin|-|end|-
 region|callers|coordinator|begin|-|end|-
 region|callers|effects|begin|-|end|-
@@ -1314,7 +1320,7 @@ forbidden|validation|fn new(|durable Validate carrier acquired a raw authority s
 forbidden|validation|for_test|durable Validate carrier acquired a raw authority seam: {forbidden}
 forbidden|validation|derive(Clone|durable Validate carrier acquired a raw authority seam: {forbidden}
 forbidden|validation|fn commit(|durable Validate carrier acquired a raw authority seam: {forbidden}
-count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|4|Validate carrier must remain exhaustive in validation, address, causal-root, and effect-borrow paths
+count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|6|Validate carrier must remain exhaustive in validation, address, causal-root, effect-borrow, pending-adapter, and closed-carrier paths
 count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalSign|4|recovered Sign must remain exhaustive in validation, address, causal-root, and effect-borrow paths
 count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch|4|recovered Decision Fetch must remain exhaustive in validation, address, causal-root, and typed-effect rejection paths
 required|common_work|let ConcreteLifecycleWorkKind::PendingAdapter {|generic adapter recovery must reject every closed carrier through exhaustive destructuring
@@ -1397,13 +1403,14 @@ forbidden|completion_impl|.insert(|validated completion acquired forbidden autho
 forbidden|completion_impl|.remove(|validated completion acquired forbidden authority: {forbidden}
 forbidden|completion_impl|into_parts|validated completion acquired forbidden authority: {forbidden}
 forbidden|completion_impl|for_test|validated completion acquired forbidden authority: {forbidden}
-required|validate_successor|&'a mut ConcreteLifecycleWorkRegistry|Store-to-Validate lineage token omitted {required}
-required|validate_successor|_store_address: ConcreteWorkAddress|Store-to-Validate lineage token omitted {required}
-required|validate_successor|_validate_effect: AdapterEffect|Store-to-Validate lineage token omitted {required}
-required|validate_successor|_validate_digest: LifecycleDigest|Store-to-Validate lineage token omitted {required}
-required|validate_successor|_validate_pending: PendingRuntimeEffectBinding|Store-to-Validate lineage token omitted {required}
-required|validate_successor|_durable_body: DurableBodyReceipt|Store-to-Validate lineage token omitted {required}
-required|validate_successor|_expected_manifest_hash: HashOf<wire::PayloadManifest>|Store-to-Validate lineage token omitted {required}
+required|validate_successor|registry: &'registry mut ConcreteLifecycleWorkRegistry|Store-to-Validate lineage token omitted {required}
+required|validate_successor|store_address: ConcreteWorkAddress|Store-to-Validate lineage token omitted {required}
+required|validate_successor|validate_effect: AdapterEffect|Store-to-Validate lineage token omitted {required}
+required|validate_successor|validate_digest: LifecycleDigest|Store-to-Validate lineage token omitted {required}
+required|validate_successor|validate_pending: PendingRuntimeEffectBinding|Store-to-Validate lineage token omitted {required}
+required|validate_successor|durable_body: DurableBodyReceipt|Store-to-Validate lineage token omitted {required}
+required|validate_successor|expected_manifest_hash: HashOf<wire::PayloadManifest>|Store-to-Validate lineage token omitted {required}
+required|validate_successor|adapter: crate::sumeragi::v2::PreparedDurableStoreValidateAdapterV1<'adapter>|Store-to-Validate lineage token omitted {required}
 forbidden|validate_successor|derive(Clone|Store-to-Validate lineage token must remain move-only
 count|production|prepare_durable_validate_execution(|1|the inert Validate preflight must have no production caller
 forbidden|callers|prepare_durable_validate_execution|the inert Validate preflight must remain unwired outside the registry

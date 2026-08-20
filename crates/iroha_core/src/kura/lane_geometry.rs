@@ -6339,7 +6339,6 @@ impl Kura {
                         "lane retirement native AMX context has no signed source transaction",
                     )
                 })?;
-                let source_id = signed_transaction.hash();
                 let network_id = signed_transaction.network_id().ok_or_else(|| {
                     self.geometry_error(
                         ErrorKind::InvalidData,
@@ -6347,10 +6346,13 @@ impl Kura {
                     )
                 })?;
                 let network_id = *network_id;
+                let source_id = crate::block::native_amx_source_id_from_entrypoint_hash(
+                    context.entrypoint_hash,
+                );
                 if !crate::native_amx::receipt_shape_matches_coordinator_payload(
                     context.native_amx_receipt.as_ref(),
                     &plan,
-                    source_id.as_ref(),
+                    &source_id,
                     expected_hash,
                     network_id,
                     proposal,

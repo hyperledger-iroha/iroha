@@ -1524,21 +1524,6 @@ mod tests {
         assert!(decode_document(null).is_err());
     }
     #[test]
-<<<<<<< HEAD
-    fn source_schema_requires_nullable_fee_gas_limit() {
-        let mut missing = source_document();
-        first_payload(&mut missing)
-            .get_mut("fee_payment")
-            .expect("fee payment")
-            .as_object_mut()
-            .expect("fee-payment object")
-            .get_mut("value")
-            .expect("fee-payment value")
-            .as_object_mut()
-            .expect("fee-payment value object")
-            .remove("gas_limit");
-        assert!(decode_document(missing).is_err());
-=======
     fn source_schema_requires_queue_plan_synced_admission_intent() {
         let mut missing = source_document();
         first_payload(&mut missing).remove("admission_intent");
@@ -1560,7 +1545,22 @@ mod tests {
             payload.to_builder().err().as_deref(),
             Some("Swift public parity fixtures require QueuePlanSynced admission intent")
         );
->>>>>>> origin/optimizations
+    }
+
+    #[test]
+    fn source_schema_requires_nullable_fee_gas_limit() {
+        let mut missing = source_document();
+        first_payload(&mut missing)
+            .get_mut("fee_payment")
+            .expect("fee payment")
+            .as_object_mut()
+            .expect("fee-payment object")
+            .get_mut("value")
+            .expect("fee-payment value")
+            .as_object_mut()
+            .expect("fee-payment value object")
+            .remove("gas_limit");
+        assert!(decode_document(missing).is_err());
     }
     #[test]
     fn source_executable_and_instruction_schemas_are_closed() {

@@ -31,8 +31,7 @@ use iroha_config::{
             Kura as KuraConfig, LaneConfig as RuntimeLaneConfig, Nexus, Queue as QueueConfig,
         },
         defaults::kura::{
-            BLOCKS_IN_MEMORY, FSYNC_INTERVAL, LANE_HISTORY_RETENTION,
-            MERGE_LEDGER_CACHE_CAPACITY,
+            BLOCKS_IN_MEMORY, FSYNC_INTERVAL, LANE_HISTORY_RETENTION, MERGE_LEDGER_CACHE_CAPACITY,
         },
     },
 };
@@ -500,7 +499,6 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     )
     .expect("construct lifecycle State");
     let nexus = Nexus {
-
         lane_catalog: lifecycle_lane_catalog(),
         ..Nexus::default()
     };
@@ -709,7 +707,6 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         .validate()
         .expect("interruption context must be structurally valid");
     let nexus = Nexus {
-
         lane_catalog: lifecycle_lane_catalog(),
         ..Nexus::default()
     };

@@ -1514,7 +1514,6 @@ def _require_u64(value: Any, context: str) -> int:
 
 
 
-
 @dataclass(frozen=True)
 class ExplorerAccountQr:
     """QR metadata returned by ``GET /v1/explorer/accounts/{account_id}/qr``."""
@@ -4947,7 +4946,6 @@ class SubscriptionPlanListPage:
 
 
 
-
 @dataclass(frozen=True)
 class SubscriptionListItem:
     """Subscription record returned by list/get endpoints."""
@@ -5006,7 +5004,6 @@ class SubscriptionListPage:
             raise RuntimeError("subscription list `total` must be numeric") from exc
         items = [SubscriptionListItem.from_payload(entry) for entry in items_value]
         return cls(items=items, total=total)
-
 
 
 

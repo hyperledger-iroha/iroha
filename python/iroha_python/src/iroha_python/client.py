@@ -646,13 +646,9 @@ def _normalize_zk_verifying_key_transaction_draft(
         "transaction_payload_b64",
         "signing_message_b64",
     }
-    unsupported_fields = sorted(
-        str(key) for key in record if key not in allowed_fields
-    )
+    unsupported_fields = sorted(str(key) for key in record if key not in allowed_fields)
     if unsupported_fields:
-        raise ValueError(
-            f"{context} contains unsupported fields: {', '.join(unsupported_fields)}"
-    )
+        raise ValueError(f"{context} contains unsupported fields: {', '.join(unsupported_fields)}")
     if record.get("submitted") is not False:
         raise ValueError(f"{context}.submitted must be false")
     transaction_payload_b64, transaction_payload = (
@@ -823,9 +819,7 @@ def _decode_zk_verifying_key_draft_base64(
     if not decoded or base64.b64encode(decoded).decode("ascii") != value:
         raise ValueError(f"{context} must be canonical padded base64")
     if max_bytes is not None and len(decoded) > max_bytes:
-        raise ValueError(
-            f"{context} exceeds the {max_bytes}-byte {limit_label} limit"
-        )
+        raise ValueError(f"{context} exceeds the {max_bytes}-byte {limit_label} limit")
     if exact_bytes is not None and len(decoded) != exact_bytes:
         raise ValueError(f"{context} must decode to exactly {exact_bytes} bytes")
     return value, decoded
@@ -2850,9 +2844,7 @@ def _reject_governance_private_key_fields(
                     f"{path} does not accept private-key fields ({', '.join(fields)}); "
                     "sign the returned transaction draft locally"
                 )
-            pending.extend(
-                (nested, f"{path}.{key}") for key, nested in candidate.items()
-            )
+            pending.extend((nested, f"{path}.{key}") for key, nested in candidate.items())
         elif isinstance(candidate, (list, tuple)):
             identity = id(candidate)
             if identity in visited:
@@ -3148,9 +3140,7 @@ def _normalize_governance_parliament_ballot_payload(
     if record.get("body") not in _GOVERNANCE_PARLIAMENT_BODIES:
         raise ValueError(f"{context}.body must name a canonical Parliament body")
     if record.get("decision") not in _GOVERNANCE_PARLIAMENT_DECISIONS:
-        raise ValueError(
-            f"{context}.decision must be approve, reject, or abstain"
-        )
+        raise ValueError(f"{context}.decision must be approve, reject, or abstain")
     return record
 
 
@@ -11813,9 +11803,7 @@ def _normalize_contract_call_metadata(
         ):
             raise ValueError(f"{context} key {raw_key!r} is reserved")
         try:
-            normalized[raw_key] = json.loads(
-                json.dumps(raw_value, allow_nan=False)
-            )
+            normalized[raw_key] = json.loads(json.dumps(raw_value, allow_nan=False))
         except (TypeError, ValueError) as error:
             raise TypeError(f"{context}[{raw_key!r}] must be strict JSON") from error
     return normalized

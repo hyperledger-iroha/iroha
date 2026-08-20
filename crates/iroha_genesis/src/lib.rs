@@ -801,6 +801,7 @@ pub mod genesis_instructions_json {
             ActivatePublicLaneValidator, CustomInstruction, Grant, GrantBox, InstructionBox, Mint,
             MintBox, Register, RegisterPublicLaneValidator, SetAssetDefinitionAlias, SetParameter,
             Transfer, TransferBox,
+            alias_setup::EnsureAlias,
             governance::RegisterCitizen,
             nexus::{
                 ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
@@ -907,6 +908,7 @@ pub mod genesis_instructions_json {
                             "SetAssetDefinitionAlias" => {
                                 try_decode_set_asset_definition_alias(inner.clone())?
                             }
+                            "EnsureAlias" => try_decode_ensure_alias(inner.clone())?,
                             "Custom" => try_decode_custom(inner.clone())?,
                             "RegisterCitizen" => try_decode_register_citizen(inner.clone())?,
                             "RegisterPublicLaneValidator" => {
@@ -1222,6 +1224,17 @@ pub mod genesis_instructions_json {
             None => SetAssetDefinitionAlias::clear(asset_definition_id),
         };
         Ok(Some(InstructionBox::from(instruction)))
+    }
+    fn try_decode_ensure_alias(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
+        let fields = object_fields(inner, "EnsureAlias")?;
+        ensure_only_keys(&fields, &["intent", "acquisition", "quote_guard"])?;
+        for required in ["intent", "acquisition", "quote_guard"] {
+            if !fields.contains_key(required) {
+                return Err(json::Error::missing_field(required));
+            }
+        }
+        let ensure: EnsureAlias = norito::json::value::from_value(Value::Object(fields))?;
+        Ok(Some(InstructionBox::from(ensure)))
     }
     fn try_decode_custom(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let mut fields = match inner {
@@ -1683,6 +1696,12 @@ pub mod genesis_instructions_json {
             outer.insert("SetAssetDefinitionAlias".to_string(), Value::Object(fields));
             return Some(Value::Object(outer));
         }
+        if let Some(ensure) = instruction.as_any().downcast_ref::<EnsureAlias>() {
+            let fields = norito::json::value::to_value(ensure).ok()?;
+            let mut outer = Map::new();
+            outer.insert("EnsureAlias".to_string(), fields);
+            return Some(Value::Object(outer));
+        }
         if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>() {
             let payload = norito::json::parse_value(custom.payload().get()).ok()?;
             let mut inner = Map::new();
@@ -1896,10 +1915,15 @@ pub mod genesis_instructions_json {
         use super::*;
         #[allow(unused_imports)]
         use iroha_data_model::{
+            alias_setup::{
+                AliasDataSpaceIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
+                ResolvedDataSpaceV1,
+            },
             asset::AssetDefinitionAlias,
             domain::Domain,
             isi::{
                 GrantBox, Log, MintBox, RegisterBox, SetParameter, TransferBox,
+                alias_setup::EnsureAlias,
                 governance::RegisterCitizen,
                 nexus::{
                     ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
@@ -1929,6 +1953,7 @@ pub mod genesis_instructions_json {
         };
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
+        use norito::json::Map;
         use std::{collections::BTreeSet, num::NonZeroU64, path::PathBuf};
         #[test]
         fn instructions_to_value_keeps_structure() {
@@ -2036,6 +2061,68 @@ pub mod genesis_instructions_json {
                     .downcast_ref::<ActivateFeeSponsorProgramRevision>()
                     .is_some()
             );
+        }
+        #[test]
+        fn ensure_alias_uses_strict_structured_genesis_json() {
+            let payment_asset = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("assets", "universal").expect("asset domain"),
+                "xor".parse().expect("asset name"),
+            );
+            let ensure = EnsureAlias::new(
+                AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                    dataspace: ResolvedDataSpaceV1::new(
+                        "dpn".parse().expect("dataspace alias"),
+                        DataSpaceId::new(10),
+                    ),
+                    owner: ALICE_ID.clone(),
+                }),
+                AliasLeaseAcquisitionV1::new(1, None),
+                AliasQuoteGuardV1 {
+                    expected_policy_version: 2,
+                    expected_payment_asset: payment_asset,
+                    max_amount: Quantity::from(1_u64),
+                    valid_until_ms: u64::MAX,
+                },
+            );
+            let instruction = InstructionBox::from(ensure.clone());
+            let encoded = instructions_to_value(std::slice::from_ref(&instruction));
+            let encoded_ensure = encoded
+                .as_array()
+                .and_then(|array| array.first())
+                .and_then(|value| value.get("EnsureAlias"))
+                .cloned()
+                .expect("structured EnsureAlias object");
+            let decoded = from_value(&encoded).expect("decode structured EnsureAlias");
+            assert_eq!(
+                decoded[0].as_any().downcast_ref::<EnsureAlias>(),
+                Some(&ensure)
+            );
+
+            let Value::Object(mut extra_fields) = encoded_ensure.clone() else {
+                panic!("EnsureAlias fields must be an object");
+            };
+            extra_fields.insert("unexpected".to_owned(), Value::Null);
+            let mut extra_outer = Map::new();
+            extra_outer.insert("EnsureAlias".to_owned(), Value::Object(extra_fields));
+            let error = from_value(&Value::Array(vec![Value::Object(extra_outer)]))
+                .expect_err("unknown EnsureAlias fields must be rejected");
+            assert!(error.to_string().contains("unexpected"), "{error}");
+
+            let Value::Object(mut unknown_kind_fields) = encoded_ensure else {
+                panic!("EnsureAlias fields must be an object");
+            };
+            let Value::Object(mut intent) = unknown_kind_fields
+                .remove("intent")
+                .expect("EnsureAlias intent")
+            else {
+                panic!("EnsureAlias intent must be an object");
+            };
+            intent.insert("kind".to_owned(), Value::String("unknown".to_owned()));
+            unknown_kind_fields.insert("intent".to_owned(), Value::Object(intent));
+            let mut unknown_kind_outer = Map::new();
+            unknown_kind_outer.insert("EnsureAlias".to_owned(), Value::Object(unknown_kind_fields));
+            from_value(&Value::Array(vec![Value::Object(unknown_kind_outer)]))
+                .expect_err("unknown EnsureAlias intent kinds must be rejected");
         }
         #[test]
         fn register_citizen_uses_structured_genesis_json() {

@@ -6,6 +6,7 @@
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
+    asset::id::AssetDefinitionId,
     block::BlockHeader,
     nexus::{DataSpaceId, LaneId, UniversalAccountId},
 };
@@ -345,13 +346,14 @@ pub struct AxtFastpqBinding {
     /// Business-effect bindings that maintained contracts compare on-ledger.
     #[norito(required)]
     pub effect_binding: Option<AxtEffectBinding>,
-    /// Canonical sorted commitments to remote-spend intents, when this proof
-    /// authorizes [`RemoteSpendIntent`] execution through asset handles.
+    /// Canonical sorted commitments linking this proof's exact transfer
+    /// statements to independently authenticated [`RemoteSpendIntent`] handles.
     ///
     /// Generic proofs that are not consumed by `USE_ASSET_HANDLE` leave this
-    /// empty. Handle-bound proofs must include every exact descriptor, asset
-    /// dataspace, operation, accounts, and effective amount tuple that may use
-    /// the proof. Duplicates, non-canonical ordering, and sets larger than
+    /// empty. Handle-bound proofs must include every exact replay identity,
+    /// descriptor, asset, dataspace, operation, accounts, and effective amount
+    /// tuple that may use the proof. The proof does not itself grant authority.
+    /// Duplicates, non-canonical ordering, and sets larger than
     /// [`MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1`] are rejected.
     pub remote_spend_intent_commitments: Vec<[u8; 32]>,
 }
@@ -750,6 +752,8 @@ pub fn next_axt_handle_sub_nonce(
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SpendOp {
+    /// Exact asset definition authorized by the handle and proven by FASTPQ.
+    pub asset_definition_id: AssetDefinitionId,
     /// Operation kind (e.g., "transfer").
     pub kind: String,
     /// Origin account id in canonical I105 form.
@@ -770,42 +774,81 @@ pub struct RemoteSpendIntent {
     /// Operation payload.
     pub op: SpendOp,
 }
-#[derive(Encode)]
-struct RemoteSpendIntentCommitmentV1 {
-    descriptor_binding: AxtBinding,
-    asset_dsid: DataSpaceId,
-    kind: String,
-    from: String,
-    to: String,
-    effective_amount: Quantity,
+/// Canonical claim binding one proof-resolved remote spend to one authenticated handle use.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct AxtRemoteSpendClaimV1 {
+    /// Exact authenticated handle use that is allowed to consume this claim.
+    ///
+    /// Including the replay identity prevents a proof for one handle from
+    /// authorizing a different handle with otherwise identical transfer data.
+    pub handle_replay_key: AxtHandleReplayKey,
+    /// Exact asset definition transferred by the proof transcript.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Exact operation kind. V1 FASTPQ transcript linkage accepts only `transfer`.
+    pub kind: String,
+    /// Canonical I105 source account.
+    pub from: String,
+    /// Canonical I105 destination account.
+    pub to: String,
+    /// Effective clear or proof-resolved amount.
+    pub effective_amount: Quantity,
+}
+impl AxtRemoteSpendClaimV1 {
+    /// Construct the canonical preimage committed for one remote spend.
+    #[must_use]
+    pub fn new(
+        handle_replay_key: AxtHandleReplayKey,
+        asset_definition_id: AssetDefinitionId,
+        kind: impl Into<String>,
+        from: impl Into<String>,
+        to: impl Into<String>,
+        effective_amount: Quantity,
+    ) -> Self {
+        Self {
+            handle_replay_key,
+            asset_definition_id,
+            kind: kind.into(),
+            from: from.into(),
+            to: to.into(),
+            effective_amount,
+        }
+    }
 }
 /// Compute the canonical V1 commitment that binds a FASTPQ proof to one remote spend.
 ///
-/// The commitment covers the descriptor binding, authenticated asset dataspace,
-/// exact operation kind and canonical account strings, plus the effective amount
-/// after cleartext/proof reconciliation. The domain separator and canonical
-/// framed Norito statement encoding make the commitment deterministic and
-/// distinct from other AXT and FASTPQ digests.
+/// The commitment covers the exact authenticated handle replay identity, asset
+/// definition, operation kind, canonical accounts, and effective amount. The
+/// handle identity includes its descriptor binding, asset dataspace, era,
+/// sub-nonce, and target lane, so a proof cannot be replayed for another handle.
+/// The domain separator and canonical framed Norito statement encoding make
+/// the commitment deterministic and distinct from other AXT and FASTPQ digests.
 #[must_use]
 pub fn compute_remote_spend_intent_commitment_v1(
-    descriptor_binding: AxtBinding,
-    asset_dsid: DataSpaceId,
+    handle_replay_key: AxtHandleReplayKey,
+    asset_definition_id: &AssetDefinitionId,
     kind: &str,
     from: &str,
     to: &str,
     effective_amount: &Quantity,
 ) -> [u8; 32] {
-    let statement = RemoteSpendIntentCommitmentV1 {
-        descriptor_binding,
-        asset_dsid,
-        kind: kind.to_owned(),
-        from: from.to_owned(),
-        to: to.to_owned(),
-        effective_amount: effective_amount.clone(),
-    };
+    let statement = AxtRemoteSpendClaimV1::new(
+        handle_replay_key,
+        asset_definition_id.clone(),
+        kind,
+        from,
+        to,
+        effective_amount.clone(),
+    );
+    compute_remote_spend_claim_commitment_v1(&statement)
+}
+/// Compute the canonical V1 commitment for an already materialized remote-spend claim.
+#[must_use]
+pub fn compute_remote_spend_claim_commitment_v1(statement: &AxtRemoteSpendClaimV1) -> [u8; 32] {
     let mut payload = b"iroha:axt:remote-spend-intent:v1\0".to_vec();
     payload.extend_from_slice(
-        &norito::encode_canonical(&statement)
+        &norito::encode_canonical(statement)
             .expect("fixed remote-spend commitment statement must encode canonically"),
     );
     Hash::new(payload).into()
@@ -1398,6 +1441,7 @@ fn validate_write_paths(dsid: DataSpaceId, paths: &[String]) -> Result<(), AxtVa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::DomainId;
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::{decode_from_bytes, to_bytes};
     fn sample_descriptor(dsid: DataSpaceId) -> AxtDescriptor {
@@ -1414,6 +1458,12 @@ mod tests {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             seed,
         )))
+    }
+    fn test_asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("domain"),
+            "rose".parse().expect("asset name"),
+        )
     }
     fn issuer_context(network_id: NetworkId, asset_dsid: DataSpaceId) -> AxtHandleIssuerContextV1 {
         AxtHandleIssuerContextV1 {
@@ -1486,22 +1536,31 @@ mod tests {
     }
     #[test]
     fn remote_spend_intent_commitment_binds_every_runtime_field() {
-        let descriptor_binding = AxtBinding::new([0xA5; 32]);
         let dsid = DataSpaceId::new(7);
+        let replay_key = AxtHandleReplayKey::from_parts(dsid, [0xA5; 32], 11, 12, LaneId::new(3));
         let amount = Quantity::from(5_u64);
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("domain"),
+            "rose".parse().expect("asset name"),
+        );
         let expected = compute_remote_spend_intent_commitment_v1(
-            descriptor_binding,
-            dsid,
+            replay_key,
+            &asset_definition,
             "transfer",
             "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
             &amount,
         );
         assert_eq!(
+            hex::encode(expected),
+            "8423fc8853ebe4aaaf7801ec2a886ee4fa7dc8fb5b7894add02f2a3bcc1ffd05",
+            "V1 remote-spend commitment wire preimage changed"
+        );
+        assert_eq!(
             expected,
             compute_remote_spend_intent_commitment_v1(
-                descriptor_binding,
-                dsid,
+                replay_key,
+                &asset_definition,
                 "transfer",
                 "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
@@ -1510,48 +1569,89 @@ mod tests {
         );
         let mutations = [
             compute_remote_spend_intent_commitment_v1(
-                AxtBinding::new([0xA4; 32]),
-                dsid,
+                AxtHandleReplayKey::from_parts(dsid, [0xA4; 32], 11, 12, LaneId::new(3)),
+                &asset_definition,
                 "transfer",
                 "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
                 &amount,
             ),
             compute_remote_spend_intent_commitment_v1(
-                descriptor_binding,
-                DataSpaceId::new(8),
+                AxtHandleReplayKey::from_parts(
+                    DataSpaceId::new(8),
+                    [0xA5; 32],
+                    11,
+                    12,
+                    LaneId::new(3),
+                ),
+                &asset_definition,
                 "transfer",
                 "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
                 &amount,
             ),
             compute_remote_spend_intent_commitment_v1(
-                descriptor_binding,
-                dsid,
+                AxtHandleReplayKey::from_parts(dsid, [0xA5; 32], 10, 12, LaneId::new(3)),
+                &asset_definition,
+                "transfer",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                &amount,
+            ),
+            compute_remote_spend_intent_commitment_v1(
+                AxtHandleReplayKey::from_parts(dsid, [0xA5; 32], 11, 13, LaneId::new(3)),
+                &asset_definition,
+                "transfer",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                &amount,
+            ),
+            compute_remote_spend_intent_commitment_v1(
+                AxtHandleReplayKey::from_parts(dsid, [0xA5; 32], 11, 12, LaneId::new(4)),
+                &asset_definition,
+                "transfer",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                &amount,
+            ),
+            compute_remote_spend_intent_commitment_v1(
+                replay_key,
+                &AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("axt", "universal").expect("domain"),
+                    "iris".parse().expect("asset name"),
+                ),
+                "transfer",
+                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+                &amount,
+            ),
+            compute_remote_spend_intent_commitment_v1(
+                replay_key,
+                &asset_definition,
                 "mint",
                 "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
                 &amount,
             ),
             compute_remote_spend_intent_commitment_v1(
-                descriptor_binding,
-                dsid,
+                replay_key,
+                &asset_definition,
                 "transfer",
                 "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
                 "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
                 &amount,
             ),
             compute_remote_spend_intent_commitment_v1(
-                descriptor_binding,
-                dsid,
+                replay_key,
+                &asset_definition,
                 "transfer",
                 "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 &amount,
             ),
             compute_remote_spend_intent_commitment_v1(
-                descriptor_binding,
-                dsid,
+                replay_key,
+                &asset_definition,
                 "transfer",
                 "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
@@ -1562,6 +1662,43 @@ mod tests {
             mutations
                 .into_iter()
                 .all(|commitment| commitment != expected)
+        );
+    }
+    #[test]
+    fn remote_spend_claim_roundtrips_and_matches_component_commitment() {
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("domain"),
+            "rose".parse().expect("asset name"),
+        );
+        let replay_key = AxtHandleReplayKey::from_parts(
+            DataSpaceId::new(7),
+            [0xA5; 32],
+            11,
+            12,
+            LaneId::new(3),
+        );
+        let claim = AxtRemoteSpendClaimV1::new(
+            replay_key,
+            asset_definition,
+            "transfer",
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+            Quantity::from(5_u64),
+        );
+        let encoded = to_bytes(&claim).expect("encode remote-spend claim");
+        let decoded: AxtRemoteSpendClaimV1 =
+            decode_from_bytes(&encoded).expect("decode remote-spend claim");
+        assert_eq!(decoded, claim);
+        assert_eq!(
+            compute_remote_spend_claim_commitment_v1(&claim),
+            compute_remote_spend_intent_commitment_v1(
+                claim.handle_replay_key,
+                &claim.asset_definition_id,
+                &claim.kind,
+                &claim.from,
+                &claim.to,
+                &claim.effective_amount,
+            )
         );
     }
     #[test]
@@ -1969,6 +2106,7 @@ mod tests {
         );
 
         let op = SpendOp {
+            asset_definition_id: test_asset_definition_id(),
             kind: "transfer".to_owned(),
             from: draft.subject.account.clone(),
             to: draft.subject.account.clone(),
@@ -2306,6 +2444,7 @@ mod tests {
                 intent: RemoteSpendIntent {
                     asset_dsid: dsid,
                     op: SpendOp {
+                        asset_definition_id: test_asset_definition_id(),
                         kind: "transfer".into(),
                         from: alice_account,
                         to: merchant_account,

@@ -256,9 +256,9 @@ def _production_liveness_release_inventory_errors(
         ("openapi", 7),
         ("python", 63),
         ("javascript", 61),
-        ("swift", 4),
-        ("kotlin", 6),
-        ("java", 5),
+        ("swift", 5),
+        ("kotlin", 7),
+        ("java", 6),
     )
     def indented_shell_array(name: str) -> list[str]:
         matches = re.findall(
@@ -382,18 +382,18 @@ def _production_liveness_release_inventory_errors(
                 branch = runtime_case.split(branch_marker, 1)[1].split(
                     "\n    ;;", 1
                 )[0]
-                matches = re.findall(
-                    r"^    observed_test_count=([0-9]+)$",
-                    branch,
-                    flags=re.MULTILINE,
+                expected_assignment = (
+                    "    observed_test_count=$((6 + 1))"
+                    if surface == "kotlin"
+                    else f"    observed_test_count={_expected_count}"
                 )
-                if len(matches) != 1:
+                if branch.splitlines().count(expected_assignment) != 1:
                     errors.append(
                         f"{grouped_harness_path}: grouped Native AMX SDK harness "
                         f"branch {surface!r} must assign one exact test count"
                     )
                     continue
-                harness_grouped_sdk_suites.append((surface, int(matches[0])))
+                harness_grouped_sdk_suites.append((surface, _expected_count))
     if tuple(harness_grouped_sdk_suites) != canonical_grouped_sdk_suites:
         errors.append(
             f"{grouped_harness_path}: grouped Native AMX SDK harness suite inventory "
@@ -862,8 +862,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 446:
-        errors.append("internal release-regression seal must contain exactly 446 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 445:
+        errors.append("internal release-regression seal must contain exactly 445 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1429,11 +1429,7 @@ def _production_liveness_release_inventory_errors(
     if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
         errors.append(
             f"{release_path}: production liveness modules must equal the reviewed "
-<<<<<<< HEAD
-            f"ordered forty-three-module inventory; found {modules}"
-=======
             f"ordered 43-module inventory; found {modules}"
->>>>>>> origin/optimizations
         )
     inventory_rows = ["module\ttest"]
     inventory_has_exact_modules = True
@@ -1465,11 +1461,7 @@ def _production_liveness_release_inventory_errors(
     if leg_ids != expected_leg_ids or len(set(leg_ids)) != len(leg_ids):
         errors.append(
             f"{release_path}: production module leg IDs must equal the reviewed "
-<<<<<<< HEAD
-            f"forty-three-entry inventory; found {leg_ids}"
-=======
             f"43-entry inventory; found {leg_ids}"
->>>>>>> origin/optimizations
         )
     for _, module, expected_count in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS:
         observed_count = sum(
@@ -2180,33 +2172,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-<<<<<<< HEAD
-            "current\ninventory to 860 tests across 43 modules.\n"
-=======
-            "current\ninventory to 865 tests across 43 modules.\n"
->>>>>>> origin/optimizations
+            "current\ninventory to 864 tests across 43 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-<<<<<<< HEAD
-            "current 860-test, 43-module inventory. The complete source-sealed\n"
-=======
-            "current 865-test, 43-module inventory. The complete source-sealed\n"
->>>>>>> origin/optimizations
+            "current 864-test, 43-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-<<<<<<< HEAD
-            "current\nsource-bound inventory to 860 exact tests across 43 modules and "
-=======
-            "current\nsource-bound inventory to 865 exact tests across 43 modules and "
->>>>>>> origin/optimizations
+            "current\nsource-bound inventory to 864 exact tests across 43 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
@@ -2221,7 +2201,7 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
             "contain exactly "
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} unique required\n"
-            "tests: 324 core, 143 queue-journal, 13 configuration, eight data-model,\n"
+            "tests: 316 core, 143 queue-journal, 13 configuration, eight data-model,\n"
             "39 Torii, one Torii-shared, and two integration.",
             "both require that exact\n"
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row shape",

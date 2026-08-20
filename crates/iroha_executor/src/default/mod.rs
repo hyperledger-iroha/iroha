@@ -2782,7 +2782,12 @@ pub mod domain {
             AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(permission) => {
                 &permission.domain == domain_id
             }
-            AnyPermission::CanManageFeeSponsorProgram(_)
+            AnyPermission::DpnAdmin(_)
+            | AnyPermission::DpnUser(_)
+            | AnyPermission::DpnInori(_)
+            | AnyPermission::DpnSettlement(_)
+            | AnyPermission::DpnEprGuard(_)
+            | AnyPermission::CanManageFeeSponsorProgram(_)
             | AnyPermission::CanEnrollFeeSponsorProgram(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
@@ -3041,7 +3046,12 @@ pub mod account {
             }
             AnyPermission::CanSetAssetHoldingLimit(permission) => permission.account == *account_id,
             AnyPermission::CanRegisterTrigger(permission) => permission.authority == *account_id,
-            AnyPermission::CanUnregisterTrigger(_)
+            AnyPermission::DpnAdmin(_)
+            | AnyPermission::DpnUser(_)
+            | AnyPermission::DpnInori(_)
+            | AnyPermission::DpnSettlement(_)
+            | AnyPermission::DpnEprGuard(_)
+            | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
@@ -3344,7 +3354,12 @@ pub mod asset_definition {
                 iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Domain(_)
                 | iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Dataspace(_) => false,
             },
-            AnyPermission::CanUnregisterAccount(_)
+            AnyPermission::DpnAdmin(_)
+            | AnyPermission::DpnUser(_)
+            | AnyPermission::DpnInori(_)
+            | AnyPermission::DpnSettlement(_)
+            | AnyPermission::DpnEprGuard(_)
+            | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
             | AnyPermission::CanResolveAccountAlias(_)
@@ -3979,8 +3994,7 @@ pub mod asset {
         #[test]
         fn visit_instruction_dispatches_repo_instruction_box() {
             let (mut executor, _) = StubExecutor::new(1);
-            let domain: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("valid domain");
+            let domain: DomainId = DomainId::try_new("fixture", "universal").expect("valid domain");
             let counterparty_keypair = fixture_key_pair(9);
             let counterparty = AccountId::new(counterparty_keypair.public_key().clone());
             let cash_def = AssetDefinitionId::derive_from_components(
@@ -4291,6 +4305,14 @@ pub mod role {
             let any_permission = AnyPermission::try_from(permission).map_err(|_| {
                 ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
             })?;
+            if matches!(operation, RoleDelegationOperation::Grant)
+                && any_permission.is_dpn_application_permission()
+            {
+                return Err(ValidationFail::NotPermitted(
+                    "NEVO DPN permissions must be granted directly to exact accounts, never through roles"
+                        .to_owned(),
+                ));
+            }
             match operation {
                 RoleDelegationOperation::Grant => {
                     crate::permission::ValidateGrantRevoke::validate_grant(
@@ -4396,6 +4418,12 @@ pub mod role {
             let any_permission = AnyPermission::try_from(permission).map_err(|_| {
                 ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
             })?;
+            if any_permission.is_dpn_application_permission() {
+                return Err(ValidationFail::NotPermitted(
+                    "NEVO DPN permissions must be granted directly to exact accounts, never embedded in roles"
+                        .to_owned(),
+                ));
+            }
             if !context.curr_block.is_genesis() {
                 crate::permission::ValidateGrantRevoke::validate_grant(
                     &any_permission,
@@ -4477,6 +4505,14 @@ pub mod role {
         executor: &mut V,
         isi: &Grant<Permission, Role>,
     ) {
+        if AnyPermission::try_from(isi.object())
+            .is_ok_and(|permission| permission.is_dpn_application_permission())
+        {
+            deny!(
+                executor,
+                "NEVO DPN permissions must be granted directly to exact accounts, never to roles"
+            );
+        }
         impl_execute_grant_revoke_role_permission!(executor, isi, validate_grant, Grant<Permission, Role>);
     }
     /// Revokes a permission from a role once the caller passes the permission gate.
@@ -4688,7 +4724,12 @@ pub mod trigger {
             AnyPermission::CanModifyTriggerMetadata(permission) => {
                 &permission.trigger == trigger_id
             }
-            AnyPermission::CanRegisterTrigger(_)
+            AnyPermission::DpnAdmin(_)
+            | AnyPermission::DpnUser(_)
+            | AnyPermission::DpnInori(_)
+            | AnyPermission::DpnSettlement(_)
+            | AnyPermission::DpnEprGuard(_)
+            | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
@@ -6092,6 +6133,7 @@ pub mod permission {
     }
 }
 include!("governed_offline_permission_tests.rs");
+include!("dpn_permission_tests.rs");
 /// Permission-checked visitor for executor upgrade instructions.
 pub mod executor {
     use super::*;

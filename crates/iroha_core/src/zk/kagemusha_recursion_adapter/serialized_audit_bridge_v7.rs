@@ -40,17 +40,10 @@ struct KagemushaSerializedPublicLayoutV7 {
     instance_column_cells: usize,
 }
 
-const fn kagemusha_serialized_bootstrap_exposes_v7(index: usize) -> bool {
-    // Bootstrap remains a real V7 statement rather than an anonymous zero
-    // proof.  Its type/count/statement, result-state binding, manifest/VKs,
-    // current pair join, and ancestry are public.  Operation inputs, parent
-    // state commitments, carried accumulator, and the live bit retain the
-    // canonical bootstrap zero convention.
-    index <= KAGEMUSHA_COMPACT_STATEMENT_DIGEST_OFFSET_V5 + 1
-        || (index >= KAGEMUSHA_COMPACT_RESULT_STATE_COMMITMENT_OFFSET_V5
-            && index < KAGEMUSHA_SERIALIZED_COMMON_HEADER_CELLS_V7)
-        || (index >= KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
-            && index < KAGEMUSHA_SERIALIZED_LIVE_SELECTOR_OFFSET_V7)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KagemushaSerializedPublicModeV7 {
+    Live,
+    NullParent,
 }
 
 impl KagemushaSerializedPublicLayoutV7 {
@@ -103,7 +96,7 @@ fn assign_kagemusha_serialized_public_mode_v7<F>(
     builder: &mut halo2_base::gates::circuit::builder::BaseCircuitBuilder<F>,
     semantic_values: Vec<F>,
     layout: KagemushaSerializedPublicLayoutV7,
-    mode: KagemushaStepPublicModeV4,
+    mode: KagemushaSerializedPublicModeV7,
 ) -> Result<Vec<halo2_base::AssignedValue<F>>, String>
 where
     F: super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditFieldV7
@@ -117,15 +110,16 @@ where
     if semantic_values.len() != layout.instance_column_cells {
         return Err("Kagemusha V7 semantic public column has the wrong length".to_owned());
     }
-    let mut exposed_values = semantic_values.clone();
-    if mode == KagemushaStepPublicModeV4::Bootstrap {
-        for (index, value) in exposed_values.iter_mut().enumerate() {
-            if !kagemusha_serialized_bootstrap_exposes_v7(index) {
-                *value = F::ZERO;
-            }
+    // Mode chooses witness values only.  Both modes execute the identical
+    // constraint graph and therefore share one final VK: a live proof exposes
+    // all 70 semantic cells, while the dedicated absent-slot carrier exposes
+    // the literal all-zero column required by parent induction.
+    let exposed_values = match mode {
+        KagemushaSerializedPublicModeV7::Live => semantic_values.clone(),
+        KagemushaSerializedPublicModeV7::NullParent => {
+            vec![F::ZERO; layout.instance_column_cells]
         }
-        exposed_values[layout.live_selector_offset] = F::ZERO;
-    }
+    };
     let exposed = builder.main(0).assign_witnesses(exposed_values);
     let semantic = builder.main(0).assign_witnesses(semantic_values);
     builder.assigned_instances = vec![exposed.clone()];
@@ -160,18 +154,11 @@ where
     range.gate().assert_bit(ctx, live);
     let not_live = range.gate().not(ctx, live);
     for index in 0..layout.instance_column_cells {
-        if kagemusha_serialized_bootstrap_exposes_v7(index) {
-            ctx.constrain_equal(&exposed[index], &semantic[index]);
-        } else {
-            let bootstrap_value =
-                range
-                    .gate()
-                    .mul(ctx, Existing(not_live), Existing(exposed[index]));
-            range
-                .gate()
-                .assert_is_const(ctx, &bootstrap_value, &F::ZERO);
-            constrain_equal_if_v4(ctx, &range, live, exposed[index], semantic[index]);
-        }
+        let null_value = range
+            .gate()
+            .mul(ctx, Existing(not_live), Existing(exposed[index]));
+        range.gate().assert_is_const(ctx, &null_value, &F::ZERO);
+        constrain_equal_if_v4(ctx, &range, live, exposed[index], semantic[index]);
     }
     Ok(semantic)
 }
@@ -557,7 +544,65 @@ impl halo2_proofs::plonk::Circuit<Fq> for KagemushaStepEpCircuitV7 {
     }
 }
 
+fn kagemusha_serialized_generation_peak_bound_v7(
+    params: &KagemushaStepCircuitParamsV7,
+) -> Result<u64, String> {
+    params.validate()?;
+    kagemusha_serialized_generation_peak_bound_from_base_v7(&params.base)
+}
+
+fn kagemusha_serialized_generation_peak_bound_from_base_v7(
+    base: &KagemushaStepCircuitParamsV4,
+) -> Result<u64, String> {
+    validate_kagemusha_circuit_params_v4(base)?;
+    let base_bound = estimate_kagemusha_generation_peak_bytes_v4(base, base)?;
+    let domain_rows = 1_u64
+        .checked_shl(base.k)
+        .ok_or_else(|| "Kagemusha V7 generation domain-row bound overflowed".to_owned())?;
+    // The Base graph widths are unchanged.  Relative to V5, the sole custom
+    // column adds one physical advice column and one copy-permutation
+    // polynomial; it adds no selector, fixed column, or virtual Base slot.
+    let polynomial_delta = checked_kagemusha_generation_product_v4(
+        &[
+            domain_rows,
+            KAGEMUSHA_GENERATION_FIELD_BYTES_V4,
+            KAGEMUSHA_GENERATION_LIVE_COLUMN_COPIES_V4,
+        ],
+        "serialized V7 polynomial delta",
+    )?;
+    let keygen_delta = checked_kagemusha_generation_product_v4(
+        &[
+            KAGEMUSHA_GENERATION_PERMUTATION_ASSEMBLY_COPIES_V5,
+            domain_rows,
+            KAGEMUSHA_GENERATION_PERMUTATION_CELL_BYTES_V5,
+        ],
+        "serialized V7 keygen delta",
+    )?;
+    let physical_advice_delta = checked_kagemusha_generation_product_v4(
+        &[
+            domain_rows,
+            KAGEMUSHA_GENERATION_PHYSICAL_COLUMN_CELL_BYTES_V5,
+        ],
+        "serialized V7 physical-advice delta",
+    )?;
+    let processed_key_delta = checked_kagemusha_generation_product_v4(
+        &[
+            KAGEMUSHA_GENERATION_PROCESSED_KEY_POLYNOMIAL_COPIES_V5,
+            domain_rows,
+            KAGEMUSHA_GENERATION_FIELD_BYTES_V4,
+        ],
+        "serialized V7 processed-key delta",
+    )?;
+    let prover_delta = physical_advice_delta
+        .checked_add(processed_key_delta)
+        .ok_or_else(|| "Kagemusha V7 prover delta overflowed".to_owned())?;
+    base_bound
+        .checked_add(polynomial_delta.max(keygen_delta).max(prover_delta))
+        .ok_or_else(|| "Kagemusha V7 generation peak bound overflowed".to_owned())
+}
+
 include!("serialized_audit_builder_v7.rs");
+include!("serialized_audit_release_proof_v7.rs");
 
 #[cfg(test)]
 mod kagemusha_serialized_bridge_v7_tests {
@@ -619,6 +664,76 @@ mod kagemusha_serialized_bridge_v7_tests {
         }
     }
 
+    #[allow(clippy::type_complexity)]
+    fn atomic_envelope_fixture() -> (
+        super::super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<Vec<Fp>>,
+        Vec<Vec<Fq>>,
+    ) {
+        use super::super::kagemusha_serialized_audit_v7::{
+            KagemushaSerializedAuditPublicJoinV7, kagemusha_serialized_bytes_to_chunks_v7,
+            kagemusha_serialized_digest_word_chunks_v7,
+        };
+
+        let manifest = k17_geometry_manifest();
+        let eq = (EqAffine::generator() * Fp::from(3)).to_affine().to_bytes();
+        let ep = (EpAffine::generator() * Fq::from(5)).to_affine().to_bytes();
+        let join = KagemushaSerializedAuditPublicJoinV7 {
+            step_eq_commitment: kagemusha_serialized_bytes_to_chunks_v7(
+                eq.as_ref().try_into().expect("Eq point encoding"),
+            ),
+            step_ep_commitment: kagemusha_serialized_bytes_to_chunks_v7(
+                ep.as_ref().try_into().expect("Ep point encoding"),
+            ),
+            challenge: [2, 0],
+            eq_evaluation: [7, 0],
+            ep_evaluation: [11, 0],
+        };
+        let mut cells = [0_u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7];
+        cells[KAGEMUSHA_COMPACT_PROFILE_OFFSET_V5] =
+            u128::from(KAGEMUSHA_SERIALIZED_PROFILE_VERSION_V7);
+        cells[KAGEMUSHA_COMPACT_PROOF_STEP_COUNT_OFFSET_V5] = 1;
+        cells[KAGEMUSHA_COMPACT_STATEMENT_DIGEST_OFFSET_V5
+            ..KAGEMUSHA_COMPACT_STATEMENT_DIGEST_OFFSET_V5 + 2]
+            .copy_from_slice(&kagemusha_serialized_bytes_to_chunks_v7([0x42; 32]));
+        cells[KAGEMUSHA_COMPACT_MANIFEST_SHA256_OFFSET_V5
+            ..KAGEMUSHA_COMPACT_MANIFEST_SHA256_OFFSET_V5 + 2]
+            .copy_from_slice(&kagemusha_serialized_bytes_to_chunks_v7(
+                manifest.sha256().expect("valid fixture manifest"),
+            ));
+        cells[KAGEMUSHA_COMPACT_STEP_EQ_PROTOCOL_SHA256_OFFSET_V5
+            ..KAGEMUSHA_COMPACT_STEP_EQ_PROTOCOL_SHA256_OFFSET_V5 + 2]
+            .copy_from_slice(&kagemusha_serialized_digest_word_chunks_v7(
+                manifest.step_eq_vk_sha256,
+            ));
+        cells[KAGEMUSHA_COMPACT_STEP_EP_PROTOCOL_SHA256_OFFSET_V5
+            ..KAGEMUSHA_COMPACT_STEP_EP_PROTOCOL_SHA256_OFFSET_V5 + 2]
+            .copy_from_slice(&kagemusha_serialized_digest_word_chunks_v7(
+                manifest.step_ep_vk_sha256,
+            ));
+        cells[KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
+            ..KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
+                + KAGEMUSHA_SERIALIZED_CURRENT_JOIN_CELLS_V7]
+            .copy_from_slice(&join.cells());
+        cells[KAGEMUSHA_SERIALIZED_PARENT_DIGEST_OFFSET_V7
+            ..KAGEMUSHA_SERIALIZED_PARENT_DIGEST_OFFSET_V7
+                + KAGEMUSHA_SERIALIZED_PARENT_DIGEST_CELLS_V7]
+            .copy_from_slice(&[71, 73]);
+        cells[KAGEMUSHA_SERIALIZED_LIVE_SELECTOR_OFFSET_V7] = 1;
+        let eq_instances = vec![cells.into_iter().map(Fp::from_u128).collect()];
+        let ep_instances = vec![cells.into_iter().map(Fq::from_u128).collect()];
+        let proof_bytes = manifest.step_eq_proof_bytes as usize;
+        (
+            manifest,
+            vec![0; proof_bytes],
+            vec![0; proof_bytes],
+            eq_instances,
+            ep_instances,
+        )
+    }
+
     fn assert_k17_serialized_geometry<F: ff::Field>(
         constraints: &halo2_proofs::plonk::ConstraintSystem<F>,
         serialized_column: usize,
@@ -665,6 +780,39 @@ mod kagemusha_serialized_bridge_v7_tests {
                 .expect("bounded serialized V7 proving-key size")
                 <= KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5
         );
+        assert_eq!(
+            processed
+                .verifier_key_bytes("serialized V7")
+                .expect("exact serialized V7 verifier-key size"),
+            20_394
+        );
+        assert_eq!(
+            kagemusha_params_encoded_bytes_v4::<EqAffine>(
+                KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
+                "serialized V7 Eq",
+            )
+            .expect("exact serialized V7 parameter size"),
+            8_388_676
+        );
+        assert!(
+            kagemusha_params_encoded_bytes_v4::<EqAffine>(
+                KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
+                "serialized V7 Eq",
+            )
+            .expect("bounded serialized V7 parameter size")
+                <= KAGEMUSHA_COMPACT_PARAMS_IPA_MAX_BYTES_V5
+        );
+        let raw_pair_bytes = 2_u64
+            * u64::from(
+                super::super::kagemusha_serialized_audit_v7::SERIALIZED_EXPECTED_STEP_PROOF_BYTES_V7,
+            );
+        assert_eq!(raw_pair_bytes, 186_368);
+        assert!(
+            raw_pair_bytes
+                <= u64::from(
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+                )
+        );
     }
 
     #[test]
@@ -678,6 +826,76 @@ mod kagemusha_serialized_bridge_v7_tests {
         assert_eq!(base.parent_eq_deferred_offset, 57);
         assert_eq!(base.parent_ep_deferred_offset, 61);
         assert_eq!(base.live_selector_offset, 65);
+    }
+
+    #[test]
+    fn typed_instance_column_recaptures_all_seventy_live_cells_in_both_fields() {
+        use super::super::kagemusha_serialized_audit_v7::{
+            KagemushaSerializedAuditPublicJoinV7, kagemusha_serialized_bytes_to_chunks_v7,
+        };
+
+        let params = k17_geometry_params();
+        let calibration = kagemusha_generation_calibration_v4([0x22; 32], [0x33; 32])
+            .expect("satisfying initialization calibration");
+        let eq = (EqAffine::generator() * Fp::from(3)).to_affine().to_bytes();
+        let ep = (EpAffine::generator() * Fq::from(5)).to_affine().to_bytes();
+        let join = KagemushaSerializedAuditPublicJoinV7 {
+            step_eq_commitment: kagemusha_serialized_bytes_to_chunks_v7(
+                eq.as_ref().try_into().expect("Eq point encoding"),
+            ),
+            step_ep_commitment: kagemusha_serialized_bytes_to_chunks_v7(
+                ep.as_ref().try_into().expect("Ep point encoding"),
+            ),
+            challenge: [2, 0],
+            eq_evaluation: [7, 0],
+            ep_evaluation: [11, 0],
+        };
+        let parent_slots_digest = [71, 73];
+        let public = KagemushaSerializedPublicInputsV7 {
+            core: &calibration.public_inputs,
+            current_join: join,
+            parent_slots_digest,
+        };
+        let eq_cells = public
+            .instance_column::<Fp>(1, &params.base, KagemushaPastaCycleParityV1::StepEq)
+            .expect("typed Eq column");
+        let ep_cells = public
+            .instance_column::<Fq>(1, &params.base, KagemushaPastaCycleParityV1::StepEp)
+            .expect("typed Ep column");
+        let to_u128 = |cells: &[Fp]| {
+            cells
+                .iter()
+                .map(|value| {
+                    u128::try_from(halo2_base::utils::fe_to_biguint(value))
+                        .expect("V7 public cell fits u128")
+                })
+                .collect::<Vec<_>>()
+        };
+        let eq_u128 = to_u128(&eq_cells);
+        let ep_u128 = ep_cells
+            .iter()
+            .map(|value| {
+                u128::try_from(halo2_base::utils::fe_to_biguint(value))
+                    .expect("V7 public cell fits u128")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(eq_u128.len(), KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7);
+        assert_eq!(eq_u128, ep_u128);
+        assert_eq!(
+            eq_u128[KAGEMUSHA_COMPACT_PROFILE_OFFSET_V5],
+            u128::from(KAGEMUSHA_SERIALIZED_PROFILE_VERSION_V7)
+        );
+        assert_eq!(
+            &eq_u128[KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
+                ..KAGEMUSHA_SERIALIZED_PARENT_DIGEST_OFFSET_V7],
+            &join.cells()
+        );
+        assert_eq!(
+            &eq_u128[KAGEMUSHA_SERIALIZED_PARENT_DIGEST_OFFSET_V7
+                ..KAGEMUSHA_SERIALIZED_LIVE_SELECTOR_OFFSET_V7],
+            &parent_slots_digest
+        );
+        assert_eq!(eq_u128[KAGEMUSHA_SERIALIZED_LIVE_SELECTOR_OFFSET_V7], 1);
     }
 
     #[test]
@@ -746,17 +964,130 @@ mod kagemusha_serialized_bridge_v7_tests {
     }
 
     #[test]
-    fn bootstrap_keeps_the_authenticated_v7_pair_context_public() {
-        let exposed = (0..KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7)
-            .filter(|index| kagemusha_serialized_bootstrap_exposes_v7(*index))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            exposed,
-            (0..=4).chain(11..=18).chain(57..=68).collect::<Vec<_>>()
+    fn null_parent_mode_is_distinct_from_the_live_base_pair() {
+        assert_ne!(
+            KagemushaSerializedPublicModeV7::Live,
+            KagemushaSerializedPublicModeV7::NullParent
         );
-        assert!(!kagemusha_serialized_bootstrap_exposes_v7(
-            KAGEMUSHA_SERIALIZED_LIVE_SELECTOR_OFFSET_V7
+    }
+
+    #[test]
+    #[ignore = "non-shipping k17 proof generation requires the guarded 56-GiB release lane"]
+    fn genuine_four_node_serialized_v7_release_proof_remains_gate_blocked() {
+        assert!(!KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7);
+        let measurement = execute_kagemusha_serialized_release_proof_v7()
+            .expect("complete genuine V7 release proof");
+        eprintln!("Kagemusha V7 exact non-shipping release proof: {measurement:#?}");
+        assert_eq!(
+            measurement.params_bytes,
+            [KAGEMUSHA_SERIALIZED_PARAMS_BYTES_V7; 2]
+        );
+        assert_eq!(
+            measurement.verifying_key_bytes,
+            [KAGEMUSHA_SERIALIZED_VERIFYING_KEY_BYTES_V7; 2]
+        );
+        assert_eq!(
+            measurement.proving_key_bytes,
+            [KAGEMUSHA_SERIALIZED_PROVING_KEY_BYTES_V7; 2]
+        );
+        assert!(
+            measurement
+                .proving_key_sha256
+                .iter()
+                .all(|sha256| *sha256 != [0; 32])
+        );
+        assert_eq!(
+            measurement.conservative_peak_bytes,
+            KAGEMUSHA_SERIALIZED_REVIEWED_PEAK_BYTES_V7
+        );
+        assert!(measurement.conservative_peak_bytes <= measurement.active_memory_limit_bytes);
+        assert!(
+            measurement.active_memory_limit_bytes
+                <= KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5
+        );
+        assert_eq!(measurement.mutation_rejections, 40);
+        assert_eq!(
+            measurement.terminal_ipa_decisions,
+            KAGEMUSHA_SERIALIZED_REQUIRED_TERMINAL_IPA_DECISIONS_V7
+        );
+        assert_ne!(measurement.null_carrier_sha256, [0; 32]);
+        assert!(measurement.null_carrier_bytes > KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7);
+        assert!(
+            measurement.null_carrier_bytes
+                <= usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,)
+                    .expect("V7 absolute carrier cap fits usize")
+        );
+        assert_eq!(measurement.cases.len(), 4);
+        assert_eq!(measurement.cases[0].label, "initialization");
+        assert_eq!(measurement.cases[3].label, "two-parent-merge");
+        let mut sibling_labels = [measurement.cases[1].label, measurement.cases[2].label];
+        sibling_labels.sort_unstable();
+        assert_eq!(sibling_labels, ["change-child", "recipient-child"]);
+        assert_eq!(
+            measurement
+                .cases
+                .iter()
+                .map(|case| (case.proof_step_count, case.parent_count))
+                .collect::<Vec<_>>(),
+            vec![(1, 0), (2, 1), (2, 1), (3, 2)]
+        );
+        assert!(measurement.cases.iter().all(|case| {
+            case.step_eq_proof_bytes == KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7
+                && case.step_ep_proof_bytes == KAGEMUSHA_SERIALIZED_STEP_PROOF_BYTES_V7
+                && case.raw_proof_pair_bytes == KAGEMUSHA_SERIALIZED_RAW_PROOF_PAIR_BYTES_V7
+                && case.canonical_carrier_bytes > case.raw_proof_pair_bytes
+                && case.canonical_carrier_bytes
+                    <= usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4)
+                        .expect("V7 absolute carrier cap fits usize")
+                && case.canonical_carrier_sha256 != [0; 32]
+                && case.public_cells == KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7
+                && case.eq_coefficients == 10_111
+                && case.ep_coefficients == 10_111
+        }));
+        assert_eq!(
+            measurement.maximum_canonical_carrier_bytes,
+            measurement
+                .cases
+                .iter()
+                .map(|case| case.canonical_carrier_bytes)
+                .max()
+                .expect("four carrier measurements")
+                .max(measurement.null_carrier_bytes)
+        );
+        assert!(
+            measurement.cases[0].canonical_carrier_bytes
+                < measurement.cases[1].canonical_carrier_bytes
+        );
+        assert!(measurement.cases[1..].iter().all(
+            |case| case.canonical_carrier_bytes == measurement.cases[1].canonical_carrier_bytes
         ));
+        assert!(
+            measurement.null_carrier_bytes > measurement.cases[1].canonical_carrier_bytes,
+            "NullParent carries two additional fixed branch-fold transcripts"
+        );
+        assert_eq!(
+            measurement.canonical_carriers_fit_current_release_max,
+            u32::try_from(measurement.maximum_canonical_carrier_bytes).is_ok_and(|bytes| {
+                bytes <= KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
+            })
+        );
+        assert!(
+            !measurement.canonical_carriers_fit_current_release_max,
+            "the complete NullParent carrier cannot be mislabeled as the 186,368-byte raw sum"
+        );
+        for (index, case) in measurement.cases.iter().enumerate() {
+            assert_ne!(
+                case.canonical_carrier_sha256,
+                measurement.null_carrier_sha256
+            );
+            assert!(
+                measurement.cases[..index]
+                    .iter()
+                    .all(|prior| prior.canonical_carrier_sha256 != case.canonical_carrier_sha256)
+            );
+        }
+        assert!(!KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7);
+        assert!(require_kagemusha_serialized_bridge_release_review_v7().is_err());
     }
 
     #[test]
@@ -794,6 +1125,128 @@ mod kagemusha_serialized_bridge_v7_tests {
     }
 
     #[test]
+    fn atomic_envelope_rejects_shape_identity_and_shared_cell_mutations() {
+        let (manifest, eq_proof, ep_proof, eq_instances, ep_instances) = atomic_envelope_fixture();
+        let proof_bound = manifest.step_eq_proof_bytes as usize;
+        let pair_bound =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+                as usize;
+        validate_kagemusha_serialized_atomic_envelope_v7(
+            &manifest,
+            &eq_proof,
+            &ep_proof,
+            &eq_instances,
+            &ep_instances,
+            proof_bound,
+            pair_bound,
+        )
+        .expect("valid atomic envelope");
+
+        let mut short_eq = eq_proof.clone();
+        short_eq.pop();
+        assert!(
+            validate_kagemusha_serialized_atomic_envelope_v7(
+                &manifest,
+                &short_eq,
+                &ep_proof,
+                &eq_instances,
+                &ep_instances,
+                proof_bound,
+                pair_bound,
+            )
+            .is_err()
+        );
+        for (proof_limit, pair_limit) in [
+            (proof_bound - 1, pair_bound),
+            (proof_bound, eq_proof.len() + ep_proof.len() - 1),
+            (proof_bound, pair_bound + 1),
+        ] {
+            assert!(
+                validate_kagemusha_serialized_atomic_envelope_v7(
+                    &manifest,
+                    &eq_proof,
+                    &ep_proof,
+                    &eq_instances,
+                    &ep_instances,
+                    proof_limit,
+                    pair_limit,
+                )
+                .is_err()
+            );
+        }
+
+        let mut wrong_shape = eq_instances.clone();
+        wrong_shape[0].pop();
+        assert!(
+            validate_kagemusha_serialized_atomic_envelope_v7(
+                &manifest,
+                &eq_proof,
+                &ep_proof,
+                &wrong_shape,
+                &ep_instances,
+                proof_bound,
+                pair_bound,
+            )
+            .is_err()
+        );
+
+        let assert_cell_mutation_fails = |index: usize, mutate_both: bool| {
+            let mut changed_eq = eq_instances.clone();
+            let mut changed_ep = ep_instances.clone();
+            changed_eq[0][index] += Fp::ONE;
+            if mutate_both {
+                changed_ep[0][index] += Fq::ONE;
+            }
+            assert!(
+                validate_kagemusha_serialized_atomic_envelope_v7(
+                    &manifest,
+                    &eq_proof,
+                    &ep_proof,
+                    &changed_eq,
+                    &changed_ep,
+                    proof_bound,
+                    pair_bound,
+                )
+                .is_err(),
+                "cell {index} mutation must fail"
+            );
+        };
+        assert_cell_mutation_fails(KAGEMUSHA_COMPACT_OPERATION_COMMITMENT_OFFSET_V5, false);
+        for index in KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
+            ..KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7
+        {
+            assert_cell_mutation_fails(index, false);
+        }
+        for index in [
+            KAGEMUSHA_COMPACT_PROFILE_OFFSET_V5,
+            KAGEMUSHA_COMPACT_MANIFEST_SHA256_OFFSET_V5,
+            KAGEMUSHA_COMPACT_STEP_EQ_PROTOCOL_SHA256_OFFSET_V5,
+            KAGEMUSHA_COMPACT_STEP_EP_PROTOCOL_SHA256_OFFSET_V5,
+        ] {
+            assert_cell_mutation_fails(index, true);
+        }
+
+        let mut bad_join = eq_instances.clone();
+        let mut bad_join_ep = ep_instances.clone();
+        bad_join[0][KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7] = Fp::ZERO;
+        bad_join[0][KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7 + 1] = Fp::ZERO;
+        bad_join_ep[0][KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7] = Fq::ZERO;
+        bad_join_ep[0][KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7 + 1] = Fq::ZERO;
+        assert!(
+            validate_kagemusha_serialized_atomic_envelope_v7(
+                &manifest,
+                &eq_proof,
+                &ep_proof,
+                &bad_join,
+                &bad_join_ep,
+                proof_bound,
+                pair_bound,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn release_gate_remains_closed() {
         assert!(require_kagemusha_serialized_bridge_release_review_v7().is_err());
     }
@@ -804,6 +1257,8 @@ mod kagemusha_serialized_bridge_v7_tests {
         assert_eq!(params.base.num_advice_per_phase, [220]);
         assert_eq!(params.base.num_lookup_advice_per_phase, [25, 0, 0]);
         assert_eq!(params.base.public_input_limbs, 66);
+        assert_eq!(10 + 10_111 + 2 * 10_111, 30_343);
+        assert!(30_343 <= kagemusha_usable_rows_v4(&params.base).expect("k17 usable rows"));
         params.validate().expect("valid typed V7 geometry");
 
         let mut step_eq = halo2_proofs::plonk::ConstraintSystem::<Fp>::default();
@@ -817,5 +1272,9 @@ mod kagemusha_serialized_bridge_v7_tests {
             format!("{:?}", step_eq.pinned()),
             format!("{:?}", step_ep.pinned())
         );
+        let peak = kagemusha_serialized_generation_peak_bound_v7(&params)
+            .expect("checked serialized V7 peak bound");
+        assert_eq!(peak, 53_126_388_928);
+        assert!(peak <= KAGEMUSHA_GENERATION_MAX_ESTIMATED_BYTES_V4);
     }
 }

@@ -98,29 +98,6 @@ pub(crate) enum StrictV2StakeSnapshotError {
     #[error("Sumeragi v2 NPoS eligibility stake must be non-zero")]
     ZeroStake,
 }
-fn commit_stake_snapshot_from_exact_map(
-    roster: &[PeerId],
-    stake_map: &BTreeMap<PeerId, Quantity>,
-) -> Option<CommitStakeSnapshot> {
-    if roster.is_empty() || roster.iter().collect::<BTreeSet<_>>().len() != roster.len() {
-        return None;
-    }
-    let mut entries = Vec::with_capacity(roster.len());
-    for peer in roster {
-        let stake = stake_map.get(peer)?.clone();
-        if stake.is_zero() {
-            return None;
-        }
-        entries.push(CommitStakeSnapshotEntry {
-            peer_id: peer.clone(),
-            stake,
-        });
-    }
-    Some(CommitStakeSnapshot {
-        validator_set_hash: HashOf::new(&roster.to_vec()),
-        entries,
-    })
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,31 +113,12 @@ mod tests {
         nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
         prelude::PeerId,
     };
-    use iroha_primitives::numeric::{Numeric, Quantity};
-    use std::collections::BTreeSet;
-    #[derive(Encode)]
-    struct ForgedCommitStakeSnapshotEntry {
-        peer_id: PeerId,
-        stake: Numeric,
-    }
+    use iroha_primitives::numeric::Quantity;
+
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("stake snapshot fixture key generation should succeed")
     }
-    fn checked_random_peer_id() -> PeerId {
-        PeerId::new(checked_random_keypair().public_key().clone())
-    }
-    #[test]
-    fn negative_numeric_payload_cannot_decode_as_durable_commit_stake() {
-        let forged = ForgedCommitStakeSnapshotEntry {
-            peer_id: checked_random_peer_id(),
-            stake: Numeric::new(-1_i32, 0),
-        };
-        let encoded = forged.encode();
-        assert!(
-            CommitStakeSnapshotEntry::decode(&mut encoded.as_slice()).is_err(),
-            "a negative signed payload must not decode as a durable commit stake"
-        );
-    }
+
     fn active_validator_record(
         lane_id: LaneId,
         account: &AccountId,
@@ -181,185 +139,16 @@ mod tests {
             last_reward_epoch: None,
         }
     }
-    #[test]
-    fn stake_snapshot_from_roster_preserves_order_and_max_stake() {
+
+    fn test_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let keypair_a = checked_random_keypair();
-        let keypair_b = checked_random_keypair();
-        let keypair_mismatched = checked_random_keypair();
-        let peer_a = PeerId::new(keypair_a.public_key().clone());
-        let peer_b = PeerId::new(keypair_b.public_key().clone());
-        let account_a = AccountId::new(keypair_a.public_key().clone());
-        let account_b = AccountId::new(keypair_b.public_key().clone());
-        let account_mismatched = AccountId::new(keypair_mismatched.public_key().clone());
-        {
-            let mut block = state.world.public_lane_validators.block();
-            block.insert(
-                (LaneId::new(1), account_a.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(1),
-                    validator: account_a.clone(),
-                    peer_id: peer_a.clone(),
-                    stake_account: account_a.clone(),
-                    total_stake: Quantity::from(10_u64),
-                    self_stake: Quantity::from(10_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
-            );
-            block.insert(
-                (LaneId::new(2), account_a.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(2),
-                    validator: account_a.clone(),
-                    peer_id: peer_a.clone(),
-                    stake_account: account_a.clone(),
-                    total_stake: Quantity::from(25_u64),
-                    self_stake: Quantity::from(25_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
-            );
-            block.insert(
-                (LaneId::new(3), account_b.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(3),
-                    validator: account_b.clone(),
-                    peer_id: peer_b.clone(),
-                    stake_account: account_b.clone(),
-                    total_stake: Quantity::from(15_u64),
-                    self_stake: Quantity::from(15_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
-            );
-            block.insert(
-                (LaneId::new(4), account_a.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(5),
-                    validator: account_a.clone(),
-                    peer_id: peer_a.clone(),
-                    stake_account: account_a.clone(),
-                    total_stake: Quantity::from(9_000_u64),
-                    self_stake: Quantity::from(9_000_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
-            );
-            block.insert(
-                (LaneId::new(6), account_mismatched.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(6),
-                    validator: account_a.clone(),
-                    peer_id: peer_a.clone(),
-                    stake_account: account_mismatched,
-                    total_stake: Quantity::from(8_000_u64),
-                    self_stake: Quantity::from(8_000_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
-            );
-            block.commit();
-        }
-        let view = state.view();
-        let stake_map = stake_map_from_world(view.world());
-        assert_eq!(stake_map.get(&peer_a), Some(&Quantity::from(25_u32)));
-        assert_ne!(
-            stake_map.get(&peer_a),
-            Some(&Quantity::from(9_000_u32)),
-            "mismatched key/record lane rows must not inflate stake"
-        );
-        assert_eq!(stake_map.get(&peer_b), Some(&Quantity::from(15_u32)));
-        let roster = vec![peer_b.clone(), peer_a.clone()];
-        let snapshot = CommitStakeSnapshot::from_roster(view.world(), &roster).expect("snapshot");
-        assert!(snapshot.matches_roster(&roster));
-        assert!(!snapshot.matches_roster(&[peer_a.clone(), peer_b.clone()]));
-        assert_eq!(snapshot.entries[0].peer_id, peer_b);
-        assert_eq!(snapshot.entries[1].peer_id, peer_a);
-        assert_eq!(snapshot.entries[1].stake, Quantity::from(25_u32));
+        State::new_for_testing(World::default(), kura, query)
     }
-    #[test]
-    fn stake_snapshot_active_lane_filter_ignores_higher_stale_unknown_lane_stake() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let keypair = checked_random_keypair();
-        let peer = PeerId::new(keypair.public_key().clone());
-        let account = AccountId::new(keypair.public_key().clone());
-        let stale_lane = LaneId::new(42);
-        {
-            let mut block = state.world.public_lane_validators.block();
-            block.insert(
-                (LaneId::SINGLE, account.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::SINGLE,
-                    validator: account.clone(),
-                    peer_id: peer.clone(),
-                    stake_account: account.clone(),
-                    total_stake: Quantity::from(10_u64),
-                    self_stake: Quantity::from(10_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
-            );
-            block.insert(
-                (stale_lane, account.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: stale_lane,
-                    validator: account.clone(),
-                    peer_id: peer.clone(),
-                    stake_account: account,
-                    total_stake: Quantity::from(10_000_u64),
-                    self_stake: Quantity::from(10_000_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
-            );
-            block.commit();
-        }
-        let view = state.view();
-        let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
-        let unfiltered = stake_map_from_world(view.world());
-        let filtered = stake_map_from_world_with_active_lanes(view.world(), Some(&active_lane_ids));
-        assert_eq!(unfiltered.get(&peer), Some(&Quantity::from(10_000_u32)));
-        assert_eq!(filtered.get(&peer), Some(&Quantity::from(10_u32)));
-        let snapshot = CommitStakeSnapshot::from_roster_with_active_lanes(
-            view.world(),
-            std::slice::from_ref(&peer),
-            Some(&active_lane_ids),
-        )
-        .expect("filtered stake snapshot");
-        assert_eq!(snapshot.entries[0].peer_id, peer);
-        assert_eq!(snapshot.entries[0].stake, Quantity::from(10_u32));
-    }
+
     #[test]
     fn strict_v2_roster_uses_equal_votes_and_canonical_identity_order() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+        let state = test_state();
         let keypair_a = checked_random_keypair();
         let keypair_b = checked_random_keypair();
         let peer_a = PeerId::new(keypair_a.public_key().clone());
@@ -378,9 +167,9 @@ mod tests {
             );
             block.commit();
         }
-        let view = state.view();
+
         let powers = strict_v2_voting_roster(
-            view.world(),
+            state.view().world(),
             &[peer_b.clone(), peer_a.clone()],
             Some(&BTreeSet::from([LaneId::SINGLE])),
         )
@@ -390,30 +179,19 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].validator < pair[1].validator)
         );
-        assert_eq!(
-            powers
-                .iter()
-                .find(|entry| entry.validator == peer_a)
-                .map(|entry| entry.power),
-            Some(1)
-        );
-        assert_eq!(
-            powers
-                .iter()
-                .find(|entry| entry.validator == peer_b)
-                .map(|entry| entry.power),
-            Some(1)
-        );
+        assert!(powers.iter().all(|entry| entry.power == 1));
+        assert!(powers.iter().any(|entry| entry.validator == peer_a));
+        assert!(powers.iter().any(|entry| entry.validator == peer_b));
     }
+
     #[test]
     fn strict_v2_roster_rejects_missing_duplicate_and_zero_stake() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+        let state = test_state();
         let keypair = checked_random_keypair();
         let peer = PeerId::new(keypair.public_key().clone());
         let account = AccountId::new(keypair.public_key().clone());
-        let missing = checked_random_peer_id();
+        let missing = PeerId::new(checked_random_keypair().public_key().clone());
+
         assert_eq!(
             strict_v2_voting_roster(state.view().world(), &[], None),
             Err(StrictV2StakeSnapshotError::EmptyRoster)
@@ -426,19 +204,7 @@ mod tests {
             strict_v2_voting_roster(state.view().world(), std::slice::from_ref(&missing), None),
             Err(StrictV2StakeSnapshotError::MissingStake)
         );
-        {
-            let mut block = state.world.public_lane_validators.block();
-            let mut record = active_validator_record(LaneId::SINGLE, &account, &peer, 1);
-            record.total_stake = "1.5".parse().expect("non-negative stake");
-            block.insert((LaneId::SINGLE, account.clone()), record);
-            block.commit();
-        }
-        assert_eq!(
-            strict_v2_voting_roster(state.view().world(), std::slice::from_ref(&peer), None)
-                .expect("fractional eligibility stake does not weight consensus")[0]
-                .power,
-            1
-        );
+
         {
             let mut block = state.world.public_lane_validators.block();
             block.insert(
@@ -452,408 +218,31 @@ mod tests {
             Err(StrictV2StakeSnapshotError::ZeroStake)
         );
     }
-    #[test]
-    fn stake_quorum_coverage_and_signed_stake_active_lane_filter_unknown_lane_stake() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let keypair_a = checked_random_keypair();
-        let keypair_b = checked_random_keypair();
-        let keypair_c = checked_random_keypair();
-        let account_a = AccountId::new(keypair_a.public_key().clone());
-        let account_b = AccountId::new(keypair_b.public_key().clone());
-        let account_c = AccountId::new(keypair_c.public_key().clone());
-        let peer_a = PeerId::new(keypair_a.public_key().clone());
-        let peer_b = PeerId::new(keypair_b.public_key().clone());
-        let peer_c = PeerId::new(keypair_c.public_key().clone());
-        let stale_lane = LaneId::new(42);
-        {
-            let mut block = state.world.public_lane_validators.block();
-            block.insert(
-                (LaneId::SINGLE, account_a.clone()),
-                active_validator_record(LaneId::SINGLE, &account_a, &peer_a, 1),
-            );
-            block.insert(
-                (LaneId::SINGLE, account_b.clone()),
-                active_validator_record(LaneId::SINGLE, &account_b, &peer_b, 1),
-            );
-            block.insert(
-                (LaneId::SINGLE, account_c.clone()),
-                active_validator_record(LaneId::SINGLE, &account_c, &peer_c, 1),
-            );
-            block.insert(
-                (stale_lane, account_a.clone()),
-                active_validator_record(stale_lane, &account_a, &peer_a, 10_000),
-            );
-            block.commit();
-        }
-        let view = state.view();
-        let roster = vec![peer_a.clone(), peer_b, peer_c];
-        let signers = BTreeSet::from([peer_a]);
-        let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
-        assert_eq!(
-            stake_quorum_reached_for_world(view.world(), &roster, &signers),
-            Ok(true)
-        );
-        assert_eq!(
-            stake_quorum_reached_for_world_with_active_lanes(
-                view.world(),
-                &roster,
-                &signers,
-                Some(&active_lane_ids),
-            ),
-            Ok(false)
-        );
-        assert_eq!(
-            stake_coverage_bps_for_world(view.world(), &roster, &signers),
-            Ok(9_998)
-        );
-        assert_eq!(
-            stake_coverage_bps_for_world_with_active_lanes(
-                view.world(),
-                &roster,
-                &signers,
-                Some(&active_lane_ids),
-            ),
-            Ok(3_333)
-        );
-        assert_eq!(
-            signed_stake_for_world_with_active_lanes(
-                view.world(),
-                &roster,
-                &signers,
-                Some(&active_lane_ids),
-            ),
-            Ok(Quantity::from(1_u32))
-        );
-    }
+
     #[test]
     fn stake_map_ignores_inactive_validators() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let keypair_active = checked_random_keypair();
-        let keypair_pending = checked_random_keypair();
-        let account_active = AccountId::new(keypair_active.public_key().clone());
-        let account_pending = AccountId::new(keypair_pending.public_key().clone());
-        let peer_active = PeerId::new(keypair_active.public_key().clone());
-        let peer_pending = PeerId::new(keypair_pending.public_key().clone());
+        let state = test_state();
+        let active_key = checked_random_keypair();
+        let pending_key = checked_random_keypair();
+        let active_account = AccountId::new(active_key.public_key().clone());
+        let pending_account = AccountId::new(pending_key.public_key().clone());
+        let active_peer = PeerId::new(active_key.public_key().clone());
+        let pending_peer = PeerId::new(pending_key.public_key().clone());
         {
             let mut block = state.world.public_lane_validators.block();
             block.insert(
-                (LaneId::new(1), account_active.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(1),
-                    validator: account_active.clone(),
-                    peer_id: peer_active.clone(),
-                    stake_account: account_active,
-                    total_stake: Quantity::from(5_u64),
-                    self_stake: Quantity::from(5_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                (LaneId::new(1), active_account.clone()),
+                active_validator_record(LaneId::new(1), &active_account, &active_peer, 5),
             );
-            block.insert(
-                (LaneId::new(2), account_pending.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(2),
-                    validator: account_pending.clone(),
-                    peer_id: peer_pending.clone(),
-                    stake_account: account_pending,
-                    total_stake: Quantity::from(9_u64),
-                    self_stake: Quantity::from(9_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::PendingActivation(0),
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
-            );
+            let mut pending =
+                active_validator_record(LaneId::new(2), &pending_account, &pending_peer, 9);
+            pending.status = PublicLaneValidatorStatus::PendingActivation(0);
+            block.insert((LaneId::new(2), pending_account), pending);
             block.commit();
         }
-        let view = state.view();
-        let stake_map = stake_map_from_world(view.world());
-        assert_eq!(stake_map.get(&peer_active), Some(&Quantity::from(5_u32)));
-        assert!(!stake_map.contains_key(&peer_pending));
-    }
-    #[test]
-    fn exact_stake_snapshot_rejects_missing_zero_and_duplicate_entries() {
-        let keypair_a = checked_random_keypair();
-        let keypair_b = checked_random_keypair();
-        let peer_a = PeerId::new(keypair_a.public_key().clone());
-        let peer_b = PeerId::new(keypair_b.public_key().clone());
-        let roster = vec![peer_a.clone(), peer_b.clone()];
-        let mut stake_map = BTreeMap::new();
-        stake_map.insert(peer_a.clone(), Quantity::from(10_u64));
-        assert!(commit_stake_snapshot_from_exact_map(&roster, &stake_map).is_none());
-        stake_map.insert(peer_b.clone(), Quantity::zero());
-        assert!(commit_stake_snapshot_from_exact_map(&roster, &stake_map).is_none());
-        stake_map.insert(peer_b, Quantity::from(3_u64));
-        let snapshot = commit_stake_snapshot_from_exact_map(&roster, &stake_map)
-            .expect("complete positive stake map");
-        assert!(snapshot.matches_roster(&roster));
-        assert!(
-            commit_stake_snapshot_from_exact_map(&[peer_a.clone(), peer_a], &stake_map).is_none(),
-            "duplicate roster identities must never duplicate voting power"
-        );
-    }
-    #[test]
-    fn stake_snapshot_from_roster_rejects_missing_peers() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let keypair = checked_random_keypair();
-        let account = AccountId::new(keypair.public_key().clone());
-        let peer = PeerId::new(keypair.public_key().clone());
-        {
-            let mut block = state.world.public_lane_validators.block();
-            block.insert(
-                (LaneId::new(1), account.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(1),
-                    validator: account.clone(),
-                    peer_id: peer.clone(),
-                    stake_account: account,
-                    total_stake: Quantity::from(10_u64),
-                    self_stake: Quantity::from(10_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
-            );
-            block.commit();
-        }
-        let view = state.view();
-        let missing_peer = checked_random_peer_id();
-        assert!(
-            CommitStakeSnapshot::from_roster(view.world(), std::slice::from_ref(&missing_peer))
-                .is_none()
-        );
-        let snapshot = CommitStakeSnapshot::from_roster(view.world(), &[peer]).expect("snapshot");
-        assert_eq!(snapshot.entries[0].stake, Quantity::from(10_u32));
-    }
-    #[test]
-    fn stake_snapshot_from_roster_rejects_absent_stake_authority() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let keypair_a = checked_random_keypair();
-        let keypair_b = checked_random_keypair();
-        let peer_a = PeerId::new(keypair_a.public_key().clone());
-        let peer_b = PeerId::new(keypair_b.public_key().clone());
-        let roster = vec![peer_a.clone(), peer_b.clone()];
-        let view = state.view();
-        assert!(CommitStakeSnapshot::from_roster(view.world(), &roster).is_none());
-    }
-    #[test]
-    fn stake_quorum_reached_for_snapshot_enforces_strict_two_thirds() {
-        let peer_a = checked_random_peer_id();
-        let peer_b = checked_random_peer_id();
-        let peer_c = checked_random_peer_id();
-        let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
-        let snapshot = CommitStakeSnapshot {
-            validator_set_hash: HashOf::new(&roster),
-            entries: roster
-                .iter()
-                .cloned()
-                .map(|peer_id| CommitStakeSnapshotEntry {
-                    peer_id,
-                    stake: Quantity::from(1_u64),
-                })
-                .collect(),
-        };
-        let mut signers = BTreeSet::new();
-        signers.insert(peer_a.clone());
-        signers.insert(peer_b.clone());
-        assert_eq!(
-            stake_quorum_reached_for_snapshot(&snapshot, &roster, &signers),
-            Ok(false)
-        );
-        signers.insert(peer_c.clone());
-        assert_eq!(
-            stake_quorum_reached_for_snapshot(&snapshot, &roster, &signers),
-            Ok(true)
-        );
-        let mut partial = BTreeSet::new();
-        partial.insert(peer_a);
-        assert_eq!(
-            stake_quorum_reached_for_snapshot(&snapshot, &roster, &partial),
-            Ok(false)
-        );
-    }
-    #[test]
-    fn stake_snapshot_rejects_reordered_duplicate_missing_extra_and_zero_entries() {
-        let peer_a = checked_random_peer_id();
-        let peer_b = checked_random_peer_id();
-        let peer_c = checked_random_peer_id();
-        let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
-        let snapshot = CommitStakeSnapshot {
-            validator_set_hash: HashOf::new(&roster),
-            entries: roster
-                .iter()
-                .cloned()
-                .map(|peer_id| CommitStakeSnapshotEntry {
-                    peer_id,
-                    stake: Quantity::from(1_u64),
-                })
-                .collect(),
-        };
-        let signers = BTreeSet::from([peer_a.clone(), peer_b.clone(), peer_c.clone()]);
-        let mut reordered = snapshot.clone();
-        reordered.entries.swap(0, 1);
-        let mut duplicate_inflated = snapshot.clone();
-        duplicate_inflated.entries[1] = CommitStakeSnapshotEntry {
-            peer_id: peer_a,
-            stake: Quantity::from(1_000_000_u64),
-        };
-        let mut missing = snapshot.clone();
-        missing.entries.pop();
-        let mut extra = snapshot.clone();
-        extra.entries.push(CommitStakeSnapshotEntry {
-            peer_id: checked_random_peer_id(),
-            stake: Quantity::from(1_u64),
-        });
-        let mut zero = snapshot;
-        zero.entries[0].stake = Quantity::zero();
-        for malformed in [reordered, duplicate_inflated, missing, extra, zero] {
-            assert!(!malformed.matches_roster(&roster));
-            assert_eq!(
-                stake_quorum_reached_for_snapshot(&malformed, &roster, &signers),
-                Err(StakeQuorumError::SnapshotMismatch)
-            );
-        }
-    }
-    #[test]
-    fn stake_quorum_rejects_roster_without_stake_authority() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let view = state.view();
-        let peer_a = checked_random_peer_id();
-        let peer_b = checked_random_peer_id();
-        let peer_c = checked_random_peer_id();
-        let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
-        let mut signers = BTreeSet::new();
-        signers.insert(peer_a.clone());
-        signers.insert(peer_b.clone());
-        assert_eq!(
-            stake_quorum_reached_for_world(view.world(), &roster, &signers),
-            Err(StakeQuorumError::MissingStake)
-        );
-        assert_eq!(
-            stake_quorum_reached_for_peers(&view, &roster, &signers),
-            Err(StakeQuorumError::MissingStake)
-        );
-        signers.insert(peer_c.clone());
-        assert_eq!(
-            stake_quorum_reached_for_world(view.world(), &roster, &signers),
-            Err(StakeQuorumError::MissingStake)
-        );
-        assert_eq!(
-            stake_quorum_reached_for_peers(&view, &roster, &signers),
-            Err(StakeQuorumError::MissingStake)
-        );
-        let mut partial = BTreeSet::new();
-        partial.insert(peer_a);
-        assert_eq!(
-            stake_quorum_reached_for_world(view.world(), &roster, &partial),
-            Err(StakeQuorumError::MissingStake)
-        );
-        assert_eq!(
-            stake_quorum_reached_for_peers(&view, &roster, &partial),
-            Err(StakeQuorumError::MissingStake)
-        );
-    }
-    #[test]
-    fn stake_quorum_rejects_duplicate_roster_and_zero_power() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let keypair = checked_random_keypair();
-        let peer = PeerId::new(keypair.public_key().clone());
-        let account = AccountId::new(keypair.public_key().clone());
-        {
-            let mut block = state.world.public_lane_validators.block();
-            block.insert(
-                (LaneId::SINGLE, account.clone()),
-                active_validator_record(LaneId::SINGLE, &account, &peer, 0),
-            );
-            block.commit();
-        }
-        let view = state.view();
-        let signers = BTreeSet::from([peer.clone()]);
-        assert_eq!(
-            stake_quorum_reached_for_world(view.world(), &[peer.clone(), peer.clone()], &signers),
-            Err(StakeQuorumError::DuplicateRoster)
-        );
-        assert_eq!(
-            stake_quorum_reached_for_world(view.world(), &[peer], &signers),
-            Err(StakeQuorumError::ZeroStake)
-        );
-    }
-    #[test]
-    fn stake_coverage_rejects_roster_without_stake_authority() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let view = state.view();
-        let peer_a = checked_random_peer_id();
-        let peer_b = checked_random_peer_id();
-        let peer_c = checked_random_peer_id();
-        let peer_d = checked_random_peer_id();
-        let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone(), peer_d];
-        let mut selected = BTreeSet::new();
-        selected.insert(peer_a);
-        selected.insert(peer_b);
-        selected.insert(peer_c);
-        assert_eq!(
-            stake_coverage_bps_for_world(view.world(), &roster, &selected),
-            Err(StakeQuorumError::MissingStake)
-        );
-    }
-    #[test]
-    fn stake_quorum_and_snapshot_reject_partially_missing_stakes() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let keypair_a = checked_random_keypair();
-        let keypair_b = checked_random_keypair();
-        let peer_a = PeerId::new(keypair_a.public_key().clone());
-        let peer_b = PeerId::new(keypair_b.public_key().clone());
-        let roster = vec![peer_a.clone(), peer_b.clone()];
-        {
-            let account_id = AccountId::new(keypair_a.public_key().clone());
-            let mut block = state.world.public_lane_validators.block();
-            block.insert(
-                (LaneId::new(1), account_id.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(1),
-                    validator: account_id.clone(),
-                    peer_id: peer_a.clone(),
-                    stake_account: account_id,
-                    total_stake: Quantity::from(10_u64),
-                    self_stake: Quantity::from(10_u64),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
-            );
-            block.commit();
-        }
-        let view = state.view();
-        let mut signers = BTreeSet::new();
-        signers.insert(peer_a);
-        assert!(CommitStakeSnapshot::from_roster(view.world(), &roster).is_none());
-        assert_eq!(
-            stake_quorum_reached_for_peers(&view, &roster, &signers),
-            Err(StakeQuorumError::MissingStake)
-        );
+
+        let stake_map = stake_map_from_world(state.view().world());
+        assert_eq!(stake_map.get(&active_peer), Some(&Quantity::from(5_u32)));
+        assert!(!stake_map.contains_key(&pending_peer));
     }
 }

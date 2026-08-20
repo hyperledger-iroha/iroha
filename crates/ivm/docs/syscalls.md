@@ -426,6 +426,14 @@ hosts reject any mismatch, including `None`/`Some` relabelling. The complete
 canonical metadata map is committed as eight raw Blake2b-256 `u32` trace limbs.
 This is a first-release hard cut: proofs produced without the required metadata
 or with the retired single-field metadata projection must be regenerated.
+`RemoteSpendIntent.op` also carries the exact `AssetDefinitionId` and V1 accepts
+only the canonical `transfer` operation. Every handle use must consume one
+proof-bound claim containing that handle's replay identity, asset, canonical
+accounts, and effective amount, matched one-for-one to a concrete FASTPQ
+transfer transcript. The `authorization` and `compliance` labels select an
+opaque-effect profile and do not themselves prove authority; such proofs cannot
+authorize a remote spend. Pre-change handles, claims, proofs, and JSON fixtures
+must be regenerated together.
 
 Native asset escrow
 - 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&Quantity`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.

@@ -183,6 +183,78 @@ fn completion_sources_alternate_under_simultaneous_bursts() {
     drop(service.io.take());
 }
 #[test]
+fn completion_fifo_drains_in_physical_order_without_timeout_prefix_mode() {
+    let (mut service, _) = fixture();
+    let (command_tx, _command_rx, admission) = test_io_command_channel(2);
+    let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+    let timeout_ordinal = 50_u128;
+    let timeout_work_id = EffectWorkId::for_test(50);
+    let successor_work_id = EffectWorkId::for_test(51);
+    for (work_id, ordinal) in [
+        (timeout_work_id, timeout_ordinal),
+        (successor_work_id, timeout_ordinal + 1),
+    ] {
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &completion_tx,
+            &admission,
+            V2IoCompletion::Signature {
+                work_id,
+                signature: vec![u8::try_from(ordinal).expect("small ordinal")],
+                outbound_payload: None,
+            },
+            Some(ordinal),
+        )
+        .expect("retain exact timeout-boundary completion");
+    }
+    service.io = Some(V2IoHandle {
+        command_tx,
+        completion_rx,
+        join: None,
+        allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+        admission,
+    });
+    assert!(matches!(
+        service.take_next_completion(true),
+        IoCompletionTake {
+            completion: Some(PendingServiceCompletion::Io {
+                completion: V2IoCompletion::Signature { work_id, .. },
+                ownership_position: 0,
+            }),
+            retained_runtime: false,
+        } if work_id == timeout_work_id
+    ));
+    service
+        .io
+        .as_ref()
+        .expect("attached completion corridor")
+        .admission
+        .acknowledge_completion_at(0);
+    assert!(matches!(
+        service.take_next_completion(true),
+        IoCompletionTake {
+            completion: Some(PendingServiceCompletion::Io {
+                completion: V2IoCompletion::Signature { work_id, .. },
+                ownership_position: 0,
+            }),
+            retained_runtime: false,
+        } if work_id == successor_work_id
+    ));
+    service
+        .io
+        .as_ref()
+        .expect("attached completion corridor")
+        .admission
+        .acknowledge_completion_at(0);
+    assert!(matches!(
+        service.take_next_completion(true),
+        IoCompletionTake {
+            completion: None,
+            retained_runtime: false,
+        }
+    ));
+    drop(service.io.take());
+}
+#[test]
 fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
     let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
     let channel_capacity = admission.capacity();
@@ -1008,17 +1080,14 @@ fn certified_completion_retires_exact_live_or_reconstructed_owner() {
     assert!(service.local_completions.is_empty());
     assert!(!service.output_guard.restart_required());
     drop(foreign_permit);
-    let output_guard = Arc::clone(&service.output_guard);
+    let output_guard = service.lifecycle_output_guard();
     let prepared = service
         .prepare_certified_body_fetch_owner_removal(&live_task)
         .expect("certified response preflights the live owner");
     let operation = output_guard
         .begin_fail_stop_operation()
-        .expect("live output admits certified owner retirement");
-    assert_eq!(
-        prepared.commit(operation.permit()),
-        CertifiedBodyFetchCompletionDisposition::Completed
-    );
+        .expect("open the live-owner removal boundary");
+    prepared.commit(operation.permit());
     operation.complete();
     assert!(service.fetches.is_empty());
     assert!(service.fetch_by_manifest.is_empty());
@@ -1041,17 +1110,14 @@ fn certified_completion_retires_exact_live_or_reconstructed_owner() {
     service
         .enqueue_body_fetch(queued_task.clone())
         .expect("queued reconstruction accepts certified upgrade");
-    let output_guard = Arc::clone(&service.output_guard);
+    let output_guard = service.lifecycle_output_guard();
     let prepared = service
         .prepare_certified_body_fetch_owner_removal(&queued_task)
-        .expect("certified response preflights the queued reconstruction");
+        .expect("certified response preflights queued reconstruction");
     let operation = output_guard
         .begin_fail_stop_operation()
-        .expect("live output admits reconstructed owner retirement");
-    assert_eq!(
-        prepared.commit(operation.permit()),
-        CertifiedBodyFetchCompletionDisposition::Completed
-    );
+        .expect("open the queued-owner removal boundary");
+    prepared.commit(operation.permit());
     operation.complete();
     assert!(service.local_completions.is_empty());
     assert!(!service.output_guard.restart_required());

@@ -956,11 +956,7 @@ fn proposal_reconstruction_rejects_noncanonical_manifest_without_fail_close() {
     assert!(!executor.status().fail_closed);
 }
 #[test]
-<<<<<<< HEAD
 fn certified_body_response_carrier_swap_is_rejected_before_fetch_mutation() {
-=======
-fn certified_response_is_bound_to_exact_request_and_consumed_once() {
->>>>>>> origin/optimizations
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
@@ -979,7 +975,6 @@ fn certified_response_is_bound_to_exact_request_and_consumed_once() {
             &mut services,
         )
         .expect("certified fetch");
-<<<<<<< HEAD
     let task = services.fetch_tasks[0].clone();
     let response = signed_certified_response(
         &fixture,
@@ -1009,254 +1004,6 @@ fn certified_response_is_bound_to_exact_request_and_consumed_once() {
     assert_eq!(executor.pending_fetches, pending_before);
     assert_eq!(executor.certified_work, certified_before);
     assert_eq!(executor.outstanding_requests.hashes(), outstanding_before);
-=======
-    let work_id = services.fetch_tasks[0].id();
-    let request = services.fetch_tasks[0]
-        .certified_request()
-        .expect("signed request")
-        .clone();
-    let mut response = wire::CertifiedBodyResponse {
-        request_hash: HashOf::new(&request),
-        manifest: fixture.manifest.clone(),
-        body: fixture.body.clone(),
-        responder: 0,
-        signature: Vec::new(),
-    };
-    response.signature = Signature::new(
-        fixture.validator_keys[0].private_key(),
-        &response.signature_preimage(),
-    )
-    .payload()
-    .to_vec();
-    let responder = fixture.context.roster[0].validator.clone();
-    assert_eq!(
-        executor
-            .accept_certified_body_response(response.clone(), &responder, &mut services)
-            .expect("authenticated certified response"),
-        CompletionDisposition::Accepted
-    );
-    assert!(executor.pending_fetches.is_empty());
-    assert!(executor.certified_work.is_empty());
-    assert!(executor.outstanding_requests.is_empty());
-    assert_eq!(services.completed_certified_fetches, vec![work_id]);
-    assert!(matches!(
-        executor.accept_certified_body_response(response, &responder, &mut services,),
-        Err(EffectTransportError::Authentication(
-            V2TransportError::UnsolicitedResponse(_)
-        ))
-    ));
-}
-#[test]
-fn certified_manifest_mismatch_is_recoverable_in_both_authority_orders() {
-    for proposal_first in [true, false] {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = certified_sources(&fixture, &prepare);
-        if proposal_first {
-            executor
-                .consume_effects(
-                    vec![AdapterEffect::FetchBody {
-                        tag: tag(0),
-                        round: fixture.manifest.round,
-                        subject: fixture.manifest.subject,
-                        manifest: Some(fixture.manifest.clone()),
-                        certified_sources: Vec::new(),
-                        certificate: None,
-                    }],
-                    &mut services,
-                )
-                .expect("proposal starts body acquisition");
-        }
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: fixture.manifest.round,
-                    subject: fixture.manifest.subject,
-                    manifest: proposal_first.then(|| fixture.manifest.clone()),
-                    certified_sources: sources.clone(),
-                    certificate: Some(prepare.clone()),
-                }],
-                &mut services,
-            )
-            .expect("certificate adds body authority");
-        if !proposal_first {
-            executor
-                .consume_effects(
-                    vec![AdapterEffect::FetchBody {
-                        tag: tag(0),
-                        round: fixture.manifest.round,
-                        subject: fixture.manifest.subject,
-                        manifest: Some(fixture.manifest.clone()),
-                        certified_sources: sources,
-                        certificate: Some(prepare),
-                    }],
-                    &mut services,
-                )
-                .expect("proposal adds manifest authority");
-        }
-        let work_id = services.fetch_tasks[0].id();
-        let request = services
-            .fetch_tasks
-            .last()
-            .and_then(BodyFetchTask::certified_request)
-            .expect("signed certified request")
-            .clone();
-        let mut alternate_chunk = fixture.body.clone();
-        alternate_chunk[0] ^= 1;
-        let alternate_manifest = deliberately_conflicting_payload_manifest(
-            &fixture.context,
-            fixture.manifest.round,
-            fixture.manifest.subject,
-            &alternate_chunk,
-        );
-        assert_ne!(alternate_manifest, fixture.manifest);
-        let signed_response = |manifest: wire::PayloadManifest, responder: wire::ValidatorIndex| {
-            let mut response = wire::CertifiedBodyResponse {
-                request_hash: HashOf::new(&request),
-                manifest,
-                body: fixture.body.clone(),
-                responder,
-                signature: Vec::new(),
-            };
-            response.signature = Signature::new(
-                fixture.validator_keys[responder as usize].private_key(),
-                &response.signature_preimage(),
-            )
-            .payload()
-            .to_vec();
-            response
-        };
-        let mismatched = signed_response(alternate_manifest, 0);
-        mismatched
-            .validate_against(
-                &fixture.context,
-                &request,
-                &fixture.context.roster[0].validator,
-            )
-            .expect("alternate manifest passes request-level authentication");
-        assert!(matches!(
-            executor.accept_certified_body_response(
-                mismatched,
-                &fixture.context.roster[0].validator,
-                &mut services,
-            ),
-            Err(EffectTransportError::BodyMismatch(
-                "certified response manifest differs from proposal authority"
-            ))
-        ));
-        assert_eq!(executor.pending_fetches.len(), 1);
-        assert_eq!(executor.certified_work.len(), 1);
-        assert_eq!(executor.outstanding_requests.len(), 1);
-        assert!(
-            executor.outstanding_requests.response_claim_count() == 0,
-            "authenticated junk cannot acquire the physical response occurrence"
-        );
-        assert!(services.completed_certified_fetches.is_empty());
-        assert!(services.closed.is_empty());
-        assert!(!executor.status().fail_closed);
-        assert!(executor.runtime.completions.is_empty());
-        let correct = signed_response(fixture.manifest.clone(), 1);
-        assert_eq!(
-            executor
-                .accept_certified_body_response(
-                    correct,
-                    &fixture.context.roster[1].validator,
-                    &mut services,
-                )
-                .expect("another frozen-roster archive supplies the authoritative manifest"),
-            CompletionDisposition::Accepted
-        );
-        assert!(executor.pending_fetches.is_empty());
-        assert!(executor.certified_work.is_empty());
-        assert!(executor.outstanding_requests.is_empty());
-        assert_eq!(services.completed_certified_fetches, vec![work_id]);
-        assert!(matches!(
-            executor.runtime.completions.last(),
-            Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
-                if *completion_tag == tag(0) && manifest == &fixture.manifest
-        ));
-    }
-}
-#[test]
-fn certificate_first_response_rederives_manifest_before_proposal_authority() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    let sources = certified_sources(&fixture, &prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: None,
-                certified_sources: sources,
-                certificate: Some(prepare),
-            }],
-            &mut services,
-        )
-        .expect("certificate starts acquisition before proposal authority");
-    let work_id = services.fetch_tasks[0].id();
-    let request = services.fetch_tasks[0]
-        .certified_request()
-        .expect("signed certified request")
-        .clone();
-    let mut alternate_chunk = fixture.body.clone();
-    alternate_chunk[0] ^= 1;
-    let alternate_manifest = deliberately_conflicting_payload_manifest(
-        &fixture.context,
-        fixture.manifest.round,
-        fixture.manifest.subject,
-        &alternate_chunk,
-    );
-    let signed_response = |manifest: wire::PayloadManifest, responder: wire::ValidatorIndex| {
-        let mut response = wire::CertifiedBodyResponse {
-            request_hash: HashOf::new(&request),
-            manifest,
-            body: fixture.body.clone(),
-            responder,
-            signature: Vec::new(),
-        };
-        response.signature = Signature::new(
-            fixture.validator_keys[responder as usize].private_key(),
-            &response.signature_preimage(),
-        )
-        .payload()
-        .to_vec();
-        response
-    };
-    let mismatched = signed_response(alternate_manifest, 0);
-    mismatched
-        .validate_against(
-            &fixture.context,
-            &request,
-            &fixture.context.roster[0].validator,
-        )
-        .expect("alternate manifest passes request-level authentication");
-    assert!(matches!(
-        executor.accept_certified_body_response(
-            mismatched,
-            &fixture.context.roster[0].validator,
-            &mut services,
-        ),
-        Err(EffectTransportError::BodyMismatch(
-            "certified response manifest is not canonical for its body"
-        ))
-    ));
-    assert_eq!(executor.pending_fetches.len(), 1);
-    assert_eq!(executor.certified_work.len(), 1);
-    assert_eq!(executor.outstanding_requests.len(), 1);
-    assert!(
-        executor.outstanding_requests.response_claim_count() == 0,
-        "a noncanonical response cannot pin the physical response occurrence"
-    );
-    assert!(services.completed_certified_fetches.is_empty());
-    assert!(services.closed.is_empty());
->>>>>>> origin/optimizations
     assert!(!executor.status().fail_closed);
 }
 #[test]
@@ -1387,7 +1134,7 @@ fn certified_response_priority_probe_is_read_only_and_detects_revalidation_drift
             .prepare_authenticated_response_claim(&authenticated)
             .expect("prepare exact setup claim")
             .commit(),
-        CertifiedBodyResponseClaimDisposition::Acquired
+        super::super::v2_transport::CertifiedBodyResponseClaimDisposition::Acquired
     );
     assert_eq!(
         executor
@@ -1924,7 +1671,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         "an owner retaining its startup store cannot plan against an independent service",
     );
     let foreign_output_guard = ConsensusOutputGuard::isolated();
-    let planner_io = owner.bind_body_store_to_planner_io_for_test(
+    let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut production_services,
         Arc::clone(&foreign_output_guard),
         1,
@@ -1963,6 +1710,8 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         &mut production_services,
         Arc::clone(&fixture.executor.output_guard),
     );
+    V2EffectServices::enqueue_body_fetch(&mut production_services, task.clone())
+        .expect("install the exact certified-Fetch service owner for Phase B");
     planner_io.saturate_consensus_prefix(&production_services);
     let waiting_prepared = fixture
         .executor
@@ -2072,6 +1821,44 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         "an in-flight exact command must reject before advancing Fetch generation",
     );
     assert_eq!(planner_io.queued_certified_fetch_count(), 1);
+    assert!(!fixture.executor.output_guard.restart_required());
+    let queue_depth_before_completion = ingress.len();
+    planner_io.execute_one_certified_fetch(Arc::clone(&fixture.executor.output_guard));
+    let completion = match production_services
+        .take_next_lifecycle_completion()
+        .expect("the persisted Fetch retains its exact physical completion owner")
+    {
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::CertifiedFetch(completion) => {
+            completion
+        }
+        _ => panic!("the persisted ordinary Fetch must classify as CertifiedFetch"),
+    };
+    if owner
+        .complete_certified_fetch_for_test(
+            &mut fixture.executor,
+            &mut production_services,
+            &ingress,
+            completion,
+        )
+        .is_err()
+    {
+        panic!("Phase B must publish Ready and retire the exact physical response");
+    }
+    assert_eq!(
+        ingress.len(),
+        queue_depth_before_completion - 1,
+        "Phase B dequeues only the selected response occurrence",
+    );
+    assert!(matches!(
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+        (Some(LifecycleState::Ready), Some(1), None, false)
+    ));
+    assert!(matches!(
+        production_services
+            .take_next_lifecycle_completion()
+            .expect("the completion FIFO remains valid after exact acknowledgement"),
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::None
+    ));
     assert!(!fixture.executor.output_guard.restart_required());
     planner_io.detach(&mut production_services);
 }

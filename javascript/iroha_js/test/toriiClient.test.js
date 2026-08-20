@@ -6935,7 +6935,6 @@ test("SoraFS storage helpers reject unsupported option fields", async () => {
   }
 });
 
-
 test("DA and UAID helpers reject non-object options", async () => {
   const client = new ToriiClient(BASE_URL);
   await assert.rejects(
@@ -20078,7 +20077,6 @@ test("registerContractCode rejects forged branded manifest declarations before f
   assert.equal(called, false);
 });
 
-
 test("setContractAlias posts payload and returns response", async () => {
   let captured;
   const responsePayload = verifyingKeyDraftForPayload(Buffer.from([4, 5]), {
@@ -25178,7 +25176,6 @@ function createStreamedJsonResponse({ status, jsonData, headers = {} }) {
     headers,
   });
 }
-
 
 test("ToriiClient._normalizeUnsignedInteger enforces integer inputs", () => {
   assert.equal(ToriiClient._normalizeUnsignedInteger("42", "value"), 42);

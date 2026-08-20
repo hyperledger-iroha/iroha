@@ -2179,12 +2179,8 @@ mod tests {
         let block = genesis(Vec::new(), topology, vec![entry]);
         let mut saw_soracloud_permission = false;
         let mut saw_parliament_permission = false;
-<<<<<<< HEAD
-        for tx in block.0.external_transactions() {
-=======
         let mut saw_read_all_permission = false;
         for tx in block.0.transactions_vec() {
->>>>>>> origin/optimizations
             let Executable::Instructions(instrs) = tx.instructions() else {
                 continue;
             };

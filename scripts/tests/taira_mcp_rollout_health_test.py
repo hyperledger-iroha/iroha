@@ -379,7 +379,7 @@ def _healthy_lane_dataspace_topology() -> dict[str, object]:
 def _canonical_routing_rule_tuples() -> list[list[object]]:
     return [
         [3, 10, "account", "*@dpn"],
-        [4, 6647857470246403404, "account", "*@wonderland.is"],
+        [4, 6647857470246403404, "account", "*@is"],
         [5, 8477022798449861195, "account", "*@boi.is2"],
         [5, 8477022798449861195, "account", "*@leumi.is2"],
         [5, 8477022798449861195, "account", "*@hapoalim.is2"],
@@ -654,7 +654,7 @@ def test_canonical_config_topology_rejects_missing_extra_or_wrong_matcher(
 lane = 4
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
-account = "*@wonderland.is"
+account = "*@is"
 description = "Route the PoC authority to the private is dataspace"
 """
     assert external_poc_rule in canonical
@@ -665,12 +665,11 @@ description = "Route the PoC authority to the private is dataspace"
             external_poc_rule + "\n[nexus.fusion]\n",
             1,
         ),
-        # `wonderland` is a namespace bound to `is`; replacing the complete
-        # namespace-qualified matcher with the dataspace root conflates two
-        # independent topology layers and must fail closed.
+        # The external-PoC matcher is deliberately dataspace-root scoped;
+        # adding a namespace changes the reviewed route and must fail closed.
         "wrong-namespace-scope": canonical.replace(
-            'account = "*@wonderland.is"',
             'account = "*@is"',
+            'account = "*@external.is"',
             1,
         ),
     }
@@ -987,7 +986,7 @@ def test_effective_routing_policy_rejects_missing_or_drifted_live_status(
     assert isinstance(external_poc_rule, dict)
     matcher = external_poc_rule["matcher"]
     assert isinstance(matcher, dict)
-    matcher["account"] = "*@is"
+    matcher["account"] = "*@external.is"
 
     reordered = _healthy_physical_dataspace_status()
     rules = routing_rules(reordered)

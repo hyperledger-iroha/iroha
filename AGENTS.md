@@ -4,6 +4,8 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 
 ## Quickstart
 - Build workspace: `cargo build --workspace`
+- Fast focused loop: `scripts/cargo_fast.sh --stable-local-metadata --incremental -- check -p <crate> --lib`
+- Fast local optimized daemon: `scripts/cargo_fast.sh --stable-local-metadata -- build --profile local-release -p irohad --bin iroha3d`
 - Builds can take about 20 minutes; use a 20-minute timeout for build steps.
 - Test everything: `cargo test` or `cargo test --workspace` (note that this run typically takes several hours; plan accordingly)
 - Lint strictly: `cargo clippy --workspace --all-targets -- -D warnings`

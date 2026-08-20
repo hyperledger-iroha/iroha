@@ -26,6 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"]
 mod kagemusha_python_launcher;
 
 #[cfg(target_os = "macos")]

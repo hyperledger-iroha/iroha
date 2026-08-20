@@ -4334,8 +4334,9 @@ fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
     // that its own anchor commits to.
     state.remove("sumeragi_v2_bootstrap");
     // Commit topologies are consensus scheduling caches. Replay reconstructs
-    // them from Kura blocks and commit-roster journals rather than transaction
-    // execution, so they must not perturb committed ledger checkpoints.
+    // them from Kura blocks and their authenticated v2 finality artifacts
+    // rather than transaction execution, so they must not perturb committed
+    // ledger checkpoints.
     state.remove("commit_topology");
     state.remove("prev_commit_topology");
     let Some(world) = value.get_mut("world") else {

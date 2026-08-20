@@ -35,8 +35,7 @@ case "${1-}" in
 esac
 
 echo "Building canonical binaries (iroha, iroha3d, sorafs_governance_dag, external signer)..."
-cargo build "${profile_flag[@]}" -p irohad --no-default-features \
-  --features external-software-signer-bin --bin iroha3d --bin sorafs_governance_dag \
-  --bin sorafs_external_software_signer
-cargo build "${profile_flag[@]}" -p iroha_cli --no-default-features \
-  --features cli --bin iroha
+cargo build "${profile_flag[@]}" -p irohad -p iroha_cli --no-default-features \
+  --features irohad/external-software-signer-bin,iroha_cli/cli \
+  --bin iroha3d --bin sorafs_governance_dag \
+  --bin sorafs_external_software_signer --bin iroha

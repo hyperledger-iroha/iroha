@@ -786,6 +786,76 @@ pub mod settlement {
         }
     }
 }
+/// Unscoped NEVO DPN application-role permissions.
+///
+/// These marker permissions deliberately carry only the JSON `null` payload emitted by a unit
+/// struct. The default executor rejects every other payload shape and restricts their lifecycle
+/// to an existing [`DpnAdmin`] holder after genesis.
+pub mod dpn {
+    use super::*;
+    permission! {
+        /// NEVO DPN contract administrator authority.
+        #[derive(Copy)]
+        pub struct DpnAdmin;
+    }
+    permission! {
+        /// NEVO DPN application participant authority.
+        #[derive(Copy)]
+        pub struct DpnUser;
+    }
+    permission! {
+        /// NEVO DPN Inori workflow authority.
+        #[derive(Copy)]
+        pub struct DpnInori;
+    }
+    permission! {
+        /// NEVO DPN settlement signer authority.
+        #[derive(Copy)]
+        pub struct DpnSettlement;
+    }
+    permission! {
+        /// NEVO DPN EPR source-guard authority.
+        #[derive(Copy)]
+        pub struct DpnEprGuard;
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use iroha_data_model::permission::Permission as PermissionObject;
+
+        macro_rules! assert_null_marker_permission {
+            ($value:expr, $ty:ty, $name:literal) => {{
+                let permission = PermissionObject::from($value);
+                assert_eq!(permission.name().to_string(), $name);
+                assert_eq!(permission.payload().as_ref(), "null");
+                assert!(<$ty>::try_from(&permission).is_ok());
+
+                for malformed in ["{}", "[]", "true", "\"unexpected\""] {
+                    let malformed = PermissionObject::new(
+                        permission.name().to_owned(),
+                        Json::from_raw_json(malformed.to_owned())
+                            .expect("valid malformed-payload fixture"),
+                    );
+                    assert!(
+                        <$ty>::try_from(&malformed).is_err(),
+                        "{} must reject payload {malformed:?}",
+                        $name,
+                    );
+                }
+            }};
+        }
+
+        #[test]
+        fn dpn_permissions_are_exact_null_payload_markers() {
+            assert_null_marker_permission!(DpnAdmin, DpnAdmin, "DpnAdmin");
+            assert_null_marker_permission!(DpnUser, DpnUser, "DpnUser");
+            assert_null_marker_permission!(DpnInori, DpnInori, "DpnInori");
+            assert_null_marker_permission!(DpnSettlement, DpnSettlement, "DpnSettlement");
+            assert_null_marker_permission!(DpnEprGuard, DpnEprGuard, "DpnEprGuard");
+        }
+    }
+}
 /// Nexus / Space Directory permissions.
 pub mod nexus {
     use super::*;
@@ -1091,15 +1161,15 @@ mod tests {
     #[test]
     fn can_register_account_serializes_as_json_string_field() {
         let perm = CanRegisterAccount {
-            domain: DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            domain: DomainId::try_new("fixture", "universal").expect("valid domain"),
         };
         let json = norito::json::to_json(&perm).expect("serialize to JSON");
-        assert_eq!(json, "{\"domain\":\"wonderland.universal\"}");
+        assert_eq!(json, "{\"domain\":\"fixture.universal\"}");
         let value = norito::json::to_value(&perm).expect("serialize to JSON value");
         assert_eq!(
             value,
             norito::json!({
-                "domain": "wonderland.universal",
+                "domain": "fixture.universal",
             })
         );
     }

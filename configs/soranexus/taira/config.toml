@@ -154,9 +154,14 @@ additional_permissions = []
 fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
 
 [[torii.account_onboarding.credentials]]
-id = "REPLACE_WITH_TAIRA_ONBOARDING_CREDENTIAL_ID"
-scope = { dataspace = "REPLACE_WITH_TAIRA_ONBOARDING_SCOPE" }
-token_hash = "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
+id = "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID"
+scope = { dataspace = "is2" }
+token_hash = "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH"
+
+[[torii.account_onboarding.credentials]]
+id = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID"
+scope = { dataspace = "dpn" }
+token_hash = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH"
 
 [torii.faucet]
 enabled = true
@@ -172,7 +177,9 @@ pow_max_anchor_age_blocks = 256
 pow_adaptive_lookback_blocks = 64
 pow_adaptive_claims_per_extra_bit = 0
 pow_adaptive_max_extra_bits = 0
-pow_vrf_seed_enabled = true
+# Fresh testnet generations have no finalized VRF epoch yet; keep the
+# anchor-hash+scrypt faucet usable from genesis.
+pow_vrf_seed_enabled = false
 
 [sorafs.storage]
 enabled = false
@@ -320,7 +327,7 @@ liquidity_profile = "tier1"
 volatility_class = "stable"
 
 [genesis]
-public_key = "ed0120CEF83A365F125EF1CB8F040290A4C5D23561A24CC4C6782AC07506C77003AF00"
+public_key = "ed0120403BA31890B09C40B7108A0AC1319D27C10FE5442027CF8333C5C3A09CBB0343"
 expected_hash_file = "/run/iroha/genesis.expected_hash"
 
 [streaming]
@@ -529,7 +536,7 @@ description = "Route DPN authorities to the DPN dataspace"
 lane = 4
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
-account = "*@wonderland.is"
+account = "*@is"
 description = "Route the PoC authority to the private is dataspace"
 
 [[nexus.routing_policy.rules]]

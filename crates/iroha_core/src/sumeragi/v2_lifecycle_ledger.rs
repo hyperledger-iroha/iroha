@@ -5,11 +5,15 @@
 //! from authenticated storage after restart and never appear in this format.
 use super::projection::{AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError};
 use super::replay_authority::{
-    AuthenticatedRecoveredDurableCertifiedFetchCensusV1,
-    AuthenticatedRecoveredDurableCertifiedFetchV1, CertifiedServeTerminalReplayAuthorityPairV1,
+    AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1,
+    AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1,
+    AuthenticatedRecoveredDurableCertifiedFetchV1,
+    AuthenticatedRecoveredDurableStandaloneValidateV1, CertifiedServeTerminalReplayAuthorityPairV1,
     LifecycleReplayAuthorityV1, RecoveredDecisionApplyCandidateLineageV1,
-    authenticate_recovered_durable_certified_fetch, recovered_decision_body_continuation_is_exact,
-    seal_recovered_durable_certified_fetch_census, signed_broadcast_continuation_is_exact,
+    authenticate_recovered_durable_certified_fetch,
+    authenticate_recovered_durable_standalone_validate,
+    recovered_decision_body_continuation_is_exact,
+    seal_recovered_durable_certified_body_pipeline_census, signed_broadcast_continuation_is_exact,
 };
 use super::schema::{
     DurableBodyFrameReference, DurableContinuation, DurableContinuationEdge,
@@ -820,28 +824,72 @@ impl DurableCertifiedFetchLedgerJoinPermit {
         }
     }
 }
-/// One-shot proof that the recovery projection contains every live durable
-/// Fetch row from one exact opened LedgerV1.
-pub(in crate::sumeragi::v2_lifecycle_coordinator) struct DurableCertifiedFetchLedgerCensusPermit {
-    _linearity: DurableCertifiedFetchLedgerCensusLinearity,
-    ledger_frame_identity: LifecycleDigest,
+/// One-shot proof that decoded standalone Validate replay data remains
+/// enclosed by its exact opened LedgerV1 row while joining the authenticated
+/// body-store frame.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct DurableStandaloneValidateLedgerJoinPermit {
+    _linearity: DurableStandaloneValidateLedgerJoinLinearity,
 }
-struct DurableCertifiedFetchLedgerCensusLinearity;
-impl Drop for DurableCertifiedFetchLedgerCensusLinearity {
+struct DurableStandaloneValidateLedgerJoinLinearity;
+impl Drop for DurableStandaloneValidateLedgerJoinLinearity {
     fn drop(&mut self) {}
 }
-impl DurableCertifiedFetchLedgerCensusPermit {
-    fn new(ledger: &LifecycleLedgerV1) -> Self {
+impl DurableStandaloneValidateLedgerJoinPermit {
+    fn new() -> Self {
         Self {
-            _linearity: DurableCertifiedFetchLedgerCensusLinearity,
-            ledger_frame_identity: ledger.frame_identity(),
+            _linearity: DurableStandaloneValidateLedgerJoinLinearity,
         }
     }
-    /// Consume the census permit into its exact canonical ledger-frame identity.
-    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn into_frame_identity(
+}
+/// One-shot proof that the recovery projection contains every live ordinary
+/// certified-body pipeline row selected from one exact opened LedgerV1.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct DurableCertifiedBodyPipelineLedgerCensusPermit
+{
+    _linearity: DurableCertifiedBodyPipelineLedgerCensusLinearity,
+    ledger_frame_identity: LifecycleDigest,
+    live_ordinals: BTreeSet<u128>,
+}
+struct DurableCertifiedBodyPipelineLedgerCensusLinearity;
+impl Drop for DurableCertifiedBodyPipelineLedgerCensusLinearity {
+    fn drop(&mut self) {}
+}
+impl DurableCertifiedBodyPipelineLedgerCensusPermit {
+    fn new(ledger: &LifecycleLedgerV1, live_ordinals: BTreeSet<u128>) -> Option<Self> {
+        if live_ordinals.iter().any(|ordinal| {
+            ledger
+                .records
+                .binary_search_by_key(ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| ledger.records.get(index))
+                .is_none_or(|record| {
+                    record.terminal() != Some(None)
+                        || !matches!(
+                            record.work_class(),
+                            Some(
+                                LifecycleWorkClass::Fetch
+                                    | LifecycleWorkClass::Store
+                                    | LifecycleWorkClass::Validate
+                            )
+                        )
+                        || !matches!(
+                            record.durable_payload(),
+                            Some(DurablePayloadReference::BodyFrame(_))
+                        )
+                })
+        }) {
+            return None;
+        }
+        Some(Self {
+            _linearity: DurableCertifiedBodyPipelineLedgerCensusLinearity,
+            ledger_frame_identity: ledger.frame_identity(),
+            live_ordinals,
+        })
+    }
+    /// Consume the census permit into its exact frame and selected live rows.
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn into_parts(
         self,
-    ) -> LifecycleDigest {
-        self.ledger_frame_identity
+    ) -> (LifecycleDigest, BTreeSet<u128>) {
+        (self.ledger_frame_identity, self.live_ordinals)
     }
 }
 /// Opaque LedgerV1 proof of the exact Validate parent named by a recovered WAL vote.
@@ -987,7 +1035,7 @@ impl LifecycleLedgerRecordV1 {
         )
     }
     /// Authenticate this row's source before opening its exact body-store frame.
-    fn authenticate_durable_certified_fetch<F>(
+    fn authenticate_durable_certified_fetch_origin<F>(
         &self,
         verified: &VerifiedHeightContext,
         authenticate_body: F,
@@ -1005,14 +1053,52 @@ impl LifecycleLedgerRecordV1 {
             return Ok(None);
         };
         let Some(()) = (self.work_class() == Some(LifecycleWorkClass::Fetch)
-            && self.terminal() == Some(None)
-            && self.continuation() == Some(DurableContinuation::None)
             && self.reconstruction_source() == self.owner().causal_root().digest())
         .then_some(()) else {
             return Ok(None);
         };
         authenticate_recovered_durable_certified_fetch(
             DurableCertifiedFetchLedgerJoinPermit::new(),
+            verified,
+            key,
+            self.owner(),
+            self.ordinal(),
+            stage,
+            self.reconstruction_source(),
+            payload,
+            &self.replay_authority,
+            authenticate_body,
+        )
+    }
+    /// Authenticate this standalone Validate row's exact LocalBody or signed
+    /// remote-Proposal source before opening its retained body-store frame.
+    fn authenticate_durable_standalone_validate_origin<F>(
+        &self,
+        verified: &VerifiedHeightContext,
+        authenticate_body: F,
+    ) -> Result<
+        Option<AuthenticatedRecoveredDurableStandaloneValidateV1>,
+        DurableBodyFrameRecoveryError,
+    >
+    where
+        F: FnOnce() -> Result<AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError>,
+    {
+        let Some(key) = self.key() else {
+            return Ok(None);
+        };
+        let Some(stage) = self.stage() else {
+            return Ok(None);
+        };
+        let Some(payload) = self.durable_payload() else {
+            return Ok(None);
+        };
+        let Some(()) = (self.work_class() == Some(LifecycleWorkClass::Validate)
+            && self.reconstruction_source() == self.owner().causal_root().digest())
+        .then_some(()) else {
+            return Ok(None);
+        };
+        authenticate_recovered_durable_standalone_validate(
+            DurableStandaloneValidateLedgerJoinPermit::new(),
             verified,
             key,
             self.owner(),
@@ -2320,7 +2406,7 @@ impl AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
         Ok(opened == self.ledger && predecessor_is_exact)
     }
 }
-/// Move-only storage recovery cut for every durable Ready-Fetch row.
+/// Move-only storage recovery cut for every ordinary durable body-pipeline row.
 ///
 /// The exact opened LedgerV1 frame, height context, body-store instance, and
 /// authenticated all-row census remain inseparable. There is deliberately no
@@ -2329,13 +2415,13 @@ impl AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
 /// installing the concrete registry in one boundary.
 #[must_use = "the exact storage recovery cut must enter the startup composite"]
 #[cfg_attr(not(test), allow(dead_code))]
-pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1
 {
     verified: VerifiedHeightContext,
     ledger_store: LifecycleLedgerStoreV1,
     ledger: LifecycleLedgerV1,
     body_store: V2BodyStore,
-    census: AuthenticatedRecoveredDurableCertifiedFetchCensusV1,
+    census: AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1,
 }
 /// Startup-fatal failure from the sole V1 lifecycle storage-owner transaction.
 ///
@@ -2354,19 +2440,19 @@ enum ProductionLifecycleStartupErrorKindV1 {
     InvalidStorageCut,
     #[error("production lifecycle capacity authority is invalid")]
     InvalidAuthority,
-    #[error("the lifecycle ledger changed after Ready-Fetch authentication")]
+    #[error("the lifecycle ledger changed after body-pipeline authentication")]
     LedgerFrameMismatch,
     #[error("lifecycle ledger open failed: {0}")]
     Ledger(#[source] LifecycleLedgerError),
-    #[error("durable Ready-Fetch authentication failed: {0}")]
-    Fetch(#[source] DurableCertifiedFetchRecoveryError),
+    #[error("durable body-pipeline authentication failed: {0}")]
+    BodyPipeline(#[source] DurableCertifiedBodyPipelineRecoveryError),
     #[error("Certified-Serve payload recovery changed before startup: {0}")]
     ServePayload(#[source] CertifiedServePayloadStoreError),
-    #[error("the complete Ready-Fetch census could not enter its startup phase")]
-    InvalidFetchCensus,
+    #[error("the complete body-pipeline census could not enter its startup phase")]
+    InvalidBodyPipelineCensus,
     #[error("lifecycle recovery assembly failed: {0}")]
     Recovery(#[source] LifecycleRecoveryAssemblyError),
-    #[error("the recovered Ready-Fetch census cannot enter an empty registry")]
+    #[error("the recovered body-pipeline census cannot enter an empty registry")]
     RegistryInstall,
     #[error("lifecycle coordinator open failed: {0}")]
     CoordinatorOpen(#[source] LifecycleOpenError),
@@ -2453,21 +2539,8 @@ impl ProductionRecoveredDecisionApplyStartupErrorV1 {
     }
 }
 #[cfg_attr(not(test), allow(dead_code))]
-impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
+impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
     fn is_exact(&self) -> bool {
-        let live_body_fetch_count = self
-            .ledger
-            .records
-            .iter()
-            .filter(|record| {
-                record.work_class() == Some(LifecycleWorkClass::Fetch)
-                    && record.terminal() == Some(None)
-                    && matches!(
-                        record.durable_payload(),
-                        Some(DurablePayloadReference::BodyFrame(_))
-                    )
-            })
-            .count();
         self.ledger.context() == projection::lifecycle_context(self.verified.context())
             && self.ledger_store.context == self.ledger.context()
             && self
@@ -2475,15 +2548,13 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
                 .load()
                 .is_ok_and(|opened| opened == self.ledger)
             && self.body_store.matches_context(self.verified.context())
-            && self
-                .census
-                .exactly_matches_opened_ledger(&self.ledger, live_body_fetch_count)
+            && self.census.exactly_matches_opened_ledger(&self.ledger)
     }
     /// Consume all durable storage authority into the sole production owner.
     ///
     /// Every context, frame, payload-store, census, and empty-registry check
     /// precedes terminal-outcome consumption. The logical recovery cut then
-    /// consumes every Fetch candidate; its concrete peers enter the fresh
+    /// consumes every ordinary body-pipeline candidate; its concrete peers enter the fresh
     /// registry before coordinator preparation. The exact registry/coordinator
     /// join is checked before either durable open publication occurs.
     // The lifecycle factory reaches this sole constructor only after its
@@ -2543,30 +2614,37 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
                 ProductionLifecycleStartupErrorKindV1::LedgerFrameMismatch,
             ));
         }
-        let fetches = census.into_startup(&ledger).ok_or_else(|| {
+        let body_pipeline = census.into_startup(&ledger).ok_or_else(|| {
             ProductionLifecycleStartupErrorV1::new(
-                ProductionLifecycleStartupErrorKindV1::InvalidFetchCensus,
+                ProductionLifecycleStartupErrorKindV1::InvalidBodyPipelineCensus,
             )
         })?;
+        let (body_pipeline, adapter_startup) = body_pipeline
+            .replay_adapter_startup(adapter_startup)
+            .map_err(|_| {
+                ProductionLifecycleStartupErrorV1::new(
+                    ProductionLifecycleStartupErrorKindV1::InvalidBodyPipelineCensus,
+                )
+            })?;
         let mut registry = LifecycleWorkRegistryHolder::empty();
-        if !fetches.preflights_empty_registry(registry.registry_mut()) {
+        if !body_pipeline.preflights_empty_registry(registry.registry_mut()) {
             return Err(ProductionLifecycleStartupErrorV1::new(
                 ProductionLifecycleStartupErrorKindV1::RegistryInstall,
             ));
         }
-        let (mut recovery, fetches) =
-            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_durable_fetch_startup(
+        let (mut recovery, body_pipeline) =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_body_pipeline_startup(
                 ledger,
                 serve_payloads,
                 &mut body_store,
-                fetches,
+                body_pipeline,
             )
             .map_err(|error| {
                 ProductionLifecycleStartupErrorV1::new(
                     ProductionLifecycleStartupErrorKindV1::Recovery(error),
                 )
             })?;
-        fetches
+        body_pipeline
             .install_into_empty_registry(registry.registry_mut())
             .map_err(|_| {
                 ProductionLifecycleStartupErrorV1::new(
@@ -2717,10 +2795,14 @@ impl ProductionLifecycleOwnerV1 {
                 )
             })?;
         let storage = ledger
-            .into_durable_certified_fetch_storage_recovery_cut(verified, ledger_store, body_store)
+            .into_durable_certified_body_pipeline_storage_recovery_cut(
+                verified,
+                ledger_store,
+                body_store,
+            )
             .map_err(|error| {
                 ProductionLifecycleStartupErrorV1::new(
-                    ProductionLifecycleStartupErrorKindV1::Fetch(error),
+                    ProductionLifecycleStartupErrorKindV1::BodyPipeline(error),
                 )
             })?;
         storage.open_production_owner(
@@ -2868,21 +2950,24 @@ impl ProductionLifecycleOwnerV1 {
                         "recovered control cold pair changed after adapter advance",
                     ));
                 }
-                let fetches = opened
-                    .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+                let body_pipeline = opened
+                    .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
                     .map_err(|_error| {
                         ProductionRecoveredWalControlStartupErrorV1::new(
-                            "recovered control cold pair Ready-Fetch census authentication failed",
+                            "recovered control cold pair body-pipeline census authentication failed",
                         )
                     })?;
-                let (recovery, fetches) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_control_broadcast_and_sign_and_durable_fetch_startup(
+                let (body_pipeline, adapter_startup) = body_pipeline
+                    .replay_adapter_startup(adapter_startup)
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                let (recovery, body_pipeline) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_control_broadcast_and_sign_and_body_pipeline_startup(
                     opened.clone(),
                     serve_payloads,
                     &mut body_store,
                     &projection,
                     &pair,
                     &combined,
-                    fetches,
+                    body_pipeline,
                 )
                 .map_err(|_error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(
@@ -2903,9 +2988,11 @@ impl ProductionLifecycleOwnerV1 {
                     .map_err(|error| {
                         ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
                     })?;
-                installed.install_fetches(fetches).map_err(|error| {
-                    ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
-                })?;
+                installed
+                    .install_body_pipeline(body_pipeline)
+                    .map_err(|error| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+                    })?;
                 let authority = authority::production_authority(
                     &verified,
                     config,
@@ -2961,20 +3048,23 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered control Broadcast changed after cold adapter replay",
                 ));
             }
-            let fetches = opened
-                .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+            let body_pipeline = opened
+                .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
                 .map_err(|_error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(
-                        "recovered control Broadcast Ready-Fetch census authentication failed",
+                        "recovered control Broadcast body-pipeline census authentication failed",
                     )
                 })?;
-            let (recovery, fetches) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup(
+            let (body_pipeline, adapter_startup) = body_pipeline
+                .replay_adapter_startup(adapter_startup)
+                .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+            let (recovery, body_pipeline) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_control_broadcast_and_body_pipeline_startup(
                 opened.clone(),
                 serve_payloads,
                 &mut body_store,
                 &projection,
                 &broadcast,
-                fetches,
+                body_pipeline,
             )
             .map_err(|_error| {
                 ProductionRecoveredWalControlStartupErrorV1::new(
@@ -2996,9 +3086,11 @@ impl ProductionLifecycleOwnerV1 {
                 .map_err(|error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
                 })?;
-            installed.install_fetches(fetches).map_err(|error| {
-                ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
-            })?;
+            installed
+                .install_body_pipeline(body_pipeline)
+                .map_err(|error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+                })?;
             let authority =
                 authority::production_authority(&verified, config, reply_route_source_capacity)
                     .ok_or_else(|| {
@@ -3123,20 +3215,23 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered control LedgerV1 reopen changed the exact row",
                 ));
             }
-            let fetches = repaired
-                .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+            let body_pipeline = repaired
+                .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
                 .map_err(|_error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(
-                        "recovered control Ready-Fetch census authentication failed",
+                        "recovered control body-pipeline census authentication failed",
                     )
                 })?;
-            let (recovery, fetches) =
-            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_control_sign_and_durable_fetch_startup(
+            let (body_pipeline, adapter_startup) = body_pipeline
+                .replay_adapter_startup(adapter_startup)
+                .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+            let (recovery, body_pipeline) =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_control_sign_and_body_pipeline_startup(
                 repaired.clone(),
                 serve_payloads,
                 &mut body_store,
                 &projection,
-                fetches,
+                body_pipeline,
             )
             .map_err(ProductionRecoveredWalControlStartupErrorV1::from_assembly)?;
             let mut registry = LifecycleWorkRegistryHolder::empty();
@@ -3146,9 +3241,11 @@ impl ProductionLifecycleOwnerV1 {
                 .map_err(|error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
                 })?;
-            installed.install_fetches(fetches).map_err(|error| {
-                ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
-            })?;
+            installed
+                .install_body_pipeline(body_pipeline)
+                .map_err(|error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+                })?;
             let authority =
                 authority::production_authority(&verified, config, reply_route_source_capacity)
                     .ok_or_else(|| {
@@ -3278,20 +3375,23 @@ impl ProductionLifecycleOwnerV1 {
                 "recovered Decision Fetch LedgerV1 reopen changed the exact row",
             ));
         }
-        let fetches = repaired
-            .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+        let body_pipeline = repaired
+            .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
             .map_err(|_error| {
                 ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
-                    "recovered Decision Fetch Ready-Fetch census authentication failed",
+                    "recovered Decision Fetch body-pipeline census authentication failed",
                 )
             })?;
-        let (recovery, fetches) =
-            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_decision_fetch_and_durable_fetch_startup(
+        let (body_pipeline, adapter_startup) = body_pipeline
+            .replay_adapter_startup(adapter_startup)
+            .map_err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new)?;
+        let (recovery, body_pipeline) =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_decision_fetch_and_body_pipeline_startup(
                 repaired.clone(),
                 serve_payloads,
                 &mut body_store,
                 &projection,
-                fetches,
+                body_pipeline,
             )
             .map_err(|_error| {
                 ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
@@ -3305,9 +3405,11 @@ impl ProductionLifecycleOwnerV1 {
             .map_err(|error| {
                 ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
             })?;
-        installed.install_fetches(fetches).map_err(|error| {
-            ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
-        })?;
+        installed
+            .install_body_pipeline(body_pipeline)
+            .map_err(|error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
+            })?;
         let authority = authority::production_authority(
             &verified,
             config,
@@ -3378,21 +3480,24 @@ impl ProductionLifecycleOwnerV1 {
                 "recovered Decision Store LedgerV1 reopen changed the exact prefix",
             ));
         }
-        let fetches = opened
-            .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+        let body_pipeline = opened
+            .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
             .map_err(|_error| {
                 ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
-                    "recovered Decision Store Ready-Fetch census authentication failed",
+                    "recovered Decision Store body-pipeline census authentication failed",
                 )
             })?;
-        let (recovery, fetches) = AuthenticatedLifecycleRecoveryCut::
-            assemble_storage_only_with_recovered_decision_store_and_durable_fetch_startup(
+        let (body_pipeline, adapter_startup) = body_pipeline
+            .replay_adapter_startup(adapter_startup)
+            .map_err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new)?;
+        let (recovery, body_pipeline) = AuthenticatedLifecycleRecoveryCut::
+            assemble_storage_only_with_recovered_decision_store_and_body_pipeline_startup(
                 opened.clone(),
                 serve_payloads,
                 &mut body_store,
                 &projection,
                 &store_projection,
-                fetches,
+                body_pipeline,
             )
             .map_err(|_error| {
                 ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
@@ -3412,9 +3517,11 @@ impl ProductionLifecycleOwnerV1 {
             .map_err(|error| {
                 ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
             })?;
-        installed.install_fetches(fetches).map_err(|error| {
-            ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
-        })?;
+        installed
+            .install_body_pipeline(body_pipeline)
+            .map_err(|error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
+            })?;
         let authority = authority::production_authority(
             &verified,
             config,
@@ -3449,7 +3556,7 @@ impl ProductionLifecycleOwnerV1 {
     /// The input is the sole closed result of the authenticated WAL Fetch,
     /// same-store validated body, and private reducer Store→Validate→Apply
     /// preview. The exact predecessor ledger remains on disk while the complete
-    /// four-row successor, Serve payloads, Ready-Fetch census, coordinator, and
+    /// four-row successor, Serve payloads, ordinary body census, coordinator, and
     /// dedicated Apply carrier are authenticated in memory. One exact-successor
     /// fsync then precedes only infallible ownership moves.
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -3499,19 +3606,19 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered Decision Apply four-row durable lineage is not exact",
                 )
             })?;
-        let fetches = successor
-            .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+        let body_pipeline = successor
+            .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
             .map_err(|_error| {
                 ProductionRecoveredDecisionApplyStartupErrorV1::new(
-                    "recovered Decision Apply Ready-Fetch census authentication failed",
+                    "recovered Decision Apply body-pipeline census authentication failed",
                 )
             })?;
-        let (recovery, fetches) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_decision_apply_and_durable_fetch_startup(
+        let (recovery, body_pipeline) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_decision_apply_and_body_pipeline_startup(
             successor.clone(),
             serve_payloads,
             &mut body_store,
             projection.as_ref(),
-            fetches,
+            body_pipeline,
         )
         .map_err(|_error| {
             ProductionRecoveredDecisionApplyStartupErrorV1::new(
@@ -3546,8 +3653,11 @@ impl ProductionLifecycleOwnerV1 {
             .registry_mut()
             .install_recovered_decision_apply(&verified, &successor, projection, effects)
             .map_err(|error| ProductionRecoveredDecisionApplyStartupErrorV1::new(error.reason()))?;
+        let (body_pipeline, adapter_startup) = body_pipeline
+            .replay_adapter_startup(adapter_startup)
+            .map_err(ProductionRecoveredDecisionApplyStartupErrorV1::new)?;
         installed
-            .install_fetches(fetches)
+            .install_body_pipeline(body_pipeline)
             .map_err(|error| ProductionRecoveredDecisionApplyStartupErrorV1::new(error.reason()))?;
         let (coordinator, recovery) = installed
             .open_with_prepared_successor(prepared, &mut payload_store, recovery)
@@ -3637,7 +3747,7 @@ impl ProductionLifecycleOwnerV1 {
         self.timeout_supersession_successor.is_some()
     }
 
-    pub(in crate::sumeragi) fn exact_recovered_fetch_join_for_test(&mut self) -> bool {
+    pub(in crate::sumeragi) fn exact_recovered_body_pipeline_join_for_test(&mut self) -> bool {
         if self.coordinator.active_context()
             != projection::lifecycle_context(self.verified.context())
         {
@@ -3716,6 +3826,23 @@ impl ProductionLifecycleOwnerV1 {
                     && !matches!(record.state, LifecycleState::Terminal(_))
             })
             .count()
+    }
+    fn live_body_pipeline_counts_for_test(&self) -> (usize, usize, usize) {
+        let count = |work_class| {
+            self.coordinator
+                .records
+                .values()
+                .filter(|record| {
+                    record.work_class == work_class
+                        && !matches!(record.state, LifecycleState::Terminal(_))
+                })
+                .count()
+        };
+        (
+            count(LifecycleWorkClass::Fetch),
+            count(LifecycleWorkClass::Store),
+            count(LifecycleWorkClass::Validate),
+        )
     }
     fn certified_serve_and_producer_carrier_counts_for_test(&mut self) -> (usize, usize) {
         self.registry
@@ -3920,37 +4047,37 @@ fn recovered_broadcast_and_next_sign_keys_are_exact(
         && broadcast_key.subject() == next_sign_key.subject()
 }
 include!("v2_lifecycle_ledger_operations.rs");
-/// Startup-fatal failure from the consuming LedgerV1/body-store Ready-Fetch join.
+/// Startup-fatal failure from the consuming LedgerV1/body-pipeline join.
 ///
 /// The failing call has consumed the opened ledger and body-store instances.
 /// Recovery must abort this startup attempt; this reason is diagnostic only and
 /// carries no retry, parts, or authority-recovery surface.
 #[derive(Debug, Error)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
-pub(super) enum DurableCertifiedFetchRecoveryError {
+pub(super) enum DurableCertifiedBodyPipelineRecoveryError {
     /// The opened ledger is not owned by the supplied authenticated height.
-    #[error("durable Certified Fetch ledger context is not the verified height context")]
+    #[error("durable certified-body ledger context is not the verified height context")]
     InvalidVerifiedContext,
     /// The consumed ledger store is foreign or no longer loads this frame.
-    #[error("durable Certified Fetch ledger store does not own the opened frame")]
+    #[error("durable certified-body ledger store does not own the opened frame")]
     InvalidLedgerStore,
     /// The opened body-store instance is not owned by the verified height.
-    #[error("durable Certified Fetch body store is not the verified height context")]
+    #[error("durable certified-body store is not the verified height context")]
     InvalidBodyStoreContext,
-    /// The selected row is not the live BodyFrame-backed Fetch shape.
-    #[error("durable Certified Fetch ledger row is not recoverable")]
+    /// The selected row is not an exact current-V1 body-pipeline shape.
+    #[error("durable certified-body ledger row is not recoverable")]
     InvalidLedgerRow,
     /// The exact body frame could not be authenticated in the opened store.
     #[error(transparent)]
     BodyFrame(#[from] DurableBodyFrameRecoveryError),
     /// The row replay family and authenticated body frame do not form one cut.
-    #[error("durable Certified Fetch replay join is inconsistent")]
+    #[error("durable certified-body replay join is inconsistent")]
     InvalidReplayJoin,
     /// Two live rows collide in owner, address, completion, or body identity.
-    #[error("durable Certified Fetch recovery census is ambiguous")]
+    #[error("durable certified-body recovery census is ambiguous")]
     AmbiguousCensus,
     /// The sealed census no longer matches all of its retained storage owners.
-    #[error("durable Certified Fetch storage recovery cut is inconsistent")]
+    #[error("durable certified-body storage recovery cut is inconsistent")]
     InvalidStorageCut,
 }
 /// Focused projection of one real authenticated WAL repair through LedgerV1.

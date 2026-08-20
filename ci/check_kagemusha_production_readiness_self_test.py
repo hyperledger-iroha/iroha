@@ -16,6 +16,53 @@ def expect_value_error(action: Callable[[], object], failure: str,
             raise
     else:
         errors.append(failure)
+native_binding_builder = b"reviewed native builder bytes"
+native_binding_launch = {
+    "builder_entrypoint_sha256": hashlib.sha256(native_binding_builder).hexdigest(),
+    "controller_sha256": "1" * 64,
+    "python_interpreter_sha256": "2" * 64,
+    "python_runtime_tree_sha256": "3" * 64,
+    "macos_build": "25A1",
+    "os_tcb_sha256": "4" * 64,
+}
+native_binding_report: dict[str, object] = {
+    "native_launch_attestation": native_binding_launch
+}
+try:
+    validate_native_build_launch_binding(
+        native_binding_report, "1" * 64, "2" * 64, "3" * 64, "25A1", "4" * 64
+    )
+    validate_native_builder_entrypoint_binding(
+        native_binding_report, native_binding_builder
+    )
+except ValueError as error:
+    errors.append(f"native build-launch binding control failed unexpectedly: {error}")
+for field, hostile in (
+    ("controller_sha256", "5" * 64),
+    ("python_interpreter_sha256", "5" * 64),
+    ("python_runtime_tree_sha256", "5" * 64),
+    ("macos_build", "25B2"),
+    ("os_tcb_sha256", "5" * 64),
+):
+    mutated_launch = dict(native_binding_launch)
+    mutated_launch[field] = hostile
+    mutated_report: dict[str, object] = {
+        "native_launch_attestation": mutated_launch
+    }
+    expect_value_error(
+        lambda report=mutated_report: validate_native_build_launch_binding(
+            report, "1" * 64, "2" * 64, "3" * 64, "25A1", "4" * 64
+        ),
+        f"self-test failed to reject native build-launch {field} substitution",
+        "differs from the authenticated readiness controller",
+    )
+expect_value_error(
+    lambda: validate_native_builder_entrypoint_binding(
+        native_binding_report, b"substituted native builder bytes"
+    ),
+    "self-test failed to reject native builder entrypoint substitution",
+    "differs from the reviewed signed source closure",
+)
 try:
     with tempfile.TemporaryDirectory(prefix='kagemusha-git-isolation-self-test-') as temporary:
         temporary_root = Path(temporary)

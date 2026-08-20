@@ -1500,6 +1500,91 @@ pub(super) struct AttestedReadyValidateDemand {
     slot: PhysicalSlotId,
     digest: LifecycleDigest,
     capacity_class: Option<CapacityClass>,
+    requires_io_dispatch: bool,
+}
+/// Immutable process-local key for one lifecycle-owned Validate dispatch.
+///
+/// The key is derived only from a registry-attested Ready row. It deliberately
+/// binds both logical identity and the exact installed physical carrier so the
+/// worker cannot accept a generic effect work id or a caller-selected owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct LifecycleValidateDispatchKeyV1 {
+    context: LifecycleDigest,
+    height: u64,
+    owner: OwnerId,
+    ordinal: u128,
+    slot: PhysicalSlotId,
+    digest: LifecycleDigest,
+}
+impl LifecycleValidateDispatchKeyV1 {
+    /// Reconstruct the immutable key stored by an authenticated Validate
+    /// sidecar registration. Registry and coordinator joins must still attest
+    /// every returned field before the key can regain execution authority.
+    pub(super) fn from_recovered_validate_registration(
+        context: LifecycleDigest,
+        height: u64,
+        owner: OwnerId,
+        ordinal: u128,
+        slot: PhysicalSlotId,
+        digest: LifecycleDigest,
+    ) -> Option<Self> {
+        let key = Self {
+            context,
+            height,
+            owner,
+            ordinal,
+            slot,
+            digest,
+        };
+        (ordinal != 0
+            && owner.first_admission_ordinal() != 0
+            && owner.first_admission_ordinal() <= ordinal
+            && slot.capacity_class() == Some(LifecycleWorkClass::Validate.capacity_class()))
+        .then_some(key)
+    }
+
+    /// Return whether this key is bound to the same immutable consensus round
+    /// context and height. The view remains part of the sealed request.
+    pub(super) fn matches_consensus_round(
+        self,
+        round: &iroha_data_model::block::consensus_v2::ConsensusRound,
+    ) -> bool {
+        self.height == round.height
+            && self.context.as_bytes() == round.context_id.0.as_ref()
+            && self.ordinal != 0
+            && self.owner.first_admission_ordinal() != 0
+            && self.owner.first_admission_ordinal() <= self.ordinal
+            && self.slot.capacity_class() == Some(LifecycleWorkClass::Validate.capacity_class())
+    }
+
+    /// Return whether this key belongs to the launched immutable height cut.
+    pub(in crate::sumeragi) fn matches_height_context(
+        self,
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+    ) -> bool {
+        self.height == context.height
+            && self.context.as_bytes() == context.id().0.as_ref()
+            && self.ordinal != 0
+            && self.owner.first_admission_ordinal() != 0
+            && self.owner.first_admission_ordinal() <= self.ordinal
+            && self.slot.capacity_class() == Some(LifecycleWorkClass::Validate.capacity_class())
+    }
+    /// Return the exact logical ordinal retained by command and completion ownership.
+    pub(in crate::sumeragi) const fn lifecycle_ordinal(self) -> u128 {
+        self.ordinal
+    }
+    /// Return the immutable owner bound by the attested Ready row.
+    pub(crate) const fn owner(self) -> OwnerId {
+        self.owner
+    }
+    /// Return the exact physical slot retained across execution.
+    pub(crate) const fn slot(self) -> PhysicalSlotId {
+        self.slot
+    }
+    /// Return the exact installed carrier digest retained across execution.
+    pub(crate) const fn digest(self) -> LifecycleDigest {
+        self.digest
+    }
 }
 impl AttestedReadyValidateDemand {
     /// Bind one opaque registry carrier seal to its exact Validate row.
@@ -1529,6 +1614,7 @@ impl AttestedReadyValidateDemand {
             capacity_class: seal
                 .requires_consensus_capacity()
                 .then_some(CapacityClass::Consensus),
+            requires_io_dispatch: seal.requires_io_dispatch(),
         })
     }
     /// Mint a raw carrier classification only for focused scheduler tests.
@@ -1550,6 +1636,7 @@ impl AttestedReadyValidateDemand {
             slot,
             digest,
             capacity_class: rejected.then_some(CapacityClass::Consensus),
+            requires_io_dispatch: false,
         })
     }
     fn matches_record(self, record: &LifecycleRecord) -> bool {
@@ -1568,19 +1655,19 @@ impl AttestedReadyValidateDemand {
     pub(super) const fn capacity_class(self) -> Option<CapacityClass> {
         self.capacity_class
     }
-}
-/// Closed authority family for one Ready Fetch row.
-pub(super) enum AttestedReadyFetchV1 {
-    /// Ordinary response persistence installed a durable Fetch completion.
-    Certified(super::work_registry::ReadyCertifiedFetchAttestationV1),
-    /// Recovered Decision WAL work retained its dedicated request authority.
-    Recovered(super::work_registry::ReadyRecoveredDecisionFetchAttestationV1),
-}
-impl AttestedReadyFetchV1 {
-    fn matches_ready_record(&self, record: &LifecycleRecord) -> bool {
-        match self {
-            Self::Certified(attestation) => attestation.matches_ready_record(record),
-            Self::Recovered(attestation) => attestation.matches_ready_record(record),
+    /// Return whether this carrier must first enter the bounded I/O service.
+    pub(super) const fn requires_io_dispatch(self) -> bool {
+        self.requires_io_dispatch
+    }
+    /// Derive the sole dedicated worker key for this registry-attested row.
+    pub(super) const fn dispatch_key(self) -> LifecycleValidateDispatchKeyV1 {
+        LifecycleValidateDispatchKeyV1 {
+            context: self.key.context(),
+            height: self.key.round().height(),
+            owner: self.owner,
+            ordinal: self.ordinal,
+            slot: self.slot,
+            digest: self.digest,
         }
     }
 }
@@ -1632,6 +1719,34 @@ impl SchedulerReadyInputs {
             .then_some(row)
     }
 
+    /// Join one ordinary certified Fetch or durable Store carrier to its
+    /// exact Ready or prospectively-woken coordinator row.
+    pub(super) fn from_authenticated_certified_body_pipeline(
+        _factory: &AuthenticatedSchedulerInputsFactory,
+        record: &LifecycleRecord,
+        attestation: super::work_registry::ReadyCertifiedBodyPipelineAttestationV1,
+        live_debts: [u64; 6],
+    ) -> Option<Self> {
+        let [mode, capacity, selector, lane, source, runner] = live_debts;
+        let row = Self {
+            owner: record.owner,
+            key: record.key,
+            validate_attestation: None,
+            producer_handoff_blocked: false,
+            output_capacity_class: None,
+            physical_capacity_available: true,
+            mode,
+            capacity,
+            selector,
+            lane,
+            source,
+            runner,
+        };
+        (attestation.matches_schedulable_record(record)
+            && row.identity_matches(record.ordinal, record))
+        .then_some(row)
+    }
+
     /// Join one exact coordinator row, optional sealed Validate carrier, and
     /// the six authenticated runtime debts into a production scheduler row.
     ///
@@ -1650,8 +1765,9 @@ impl SchedulerReadyInputs {
         recovered_sign_attestation: Option<
             super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
         >,
-        store_attestation: Option<super::work_registry::ReadyDurableStoreAttestationV1>,
-        fetch_attestation: Option<AttestedReadyFetchV1>,
+        recovered_fetch_attestation: Option<
+            super::work_registry::ReadyRecoveredDecisionFetchAttestationV1,
+        >,
         live_debts: [u64; 6],
     ) -> Option<Self> {
         let [mode, capacity, selector, lane, source, runner] = live_debts;
@@ -1680,14 +1796,12 @@ impl SchedulerReadyInputs {
             LifecycleWorkClass::Validate => {
                 recovered_apply_attestation.is_none()
                     && recovered_sign_attestation.is_none()
-                    && store_attestation.is_none()
-                    && fetch_attestation.is_none()
+                    && recovered_fetch_attestation.is_none()
             }
             LifecycleWorkClass::Apply => {
                 validate_attestation.is_none()
                     && recovered_sign_attestation.is_none()
-                    && store_attestation.is_none()
-                    && fetch_attestation.is_none()
+                    && recovered_fetch_attestation.is_none()
                     && recovered_apply_attestation
                         .as_ref()
                         .is_some_and(|attestation| attestation.matches_ready_record(record))
@@ -1697,8 +1811,7 @@ impl SchedulerReadyInputs {
             | LifecycleWorkClass::SignTimeout => {
                 validate_attestation.is_none()
                     && recovered_apply_attestation.is_none()
-                    && store_attestation.is_none()
-                    && fetch_attestation.is_none()
+                    && recovered_fetch_attestation.is_none()
                     && recovered_sign_attestation
                         .as_ref()
                         .is_some_and(|attestation| attestation.matches_ready_record(record))
@@ -1707,17 +1820,7 @@ impl SchedulerReadyInputs {
                 validate_attestation.is_none()
                     && recovered_apply_attestation.is_none()
                     && recovered_sign_attestation.is_none()
-                    && store_attestation.is_none()
-                    && fetch_attestation
-                        .as_ref()
-                        .is_some_and(|attestation| attestation.matches_ready_record(record))
-            }
-            LifecycleWorkClass::Store => {
-                validate_attestation.is_none()
-                    && recovered_apply_attestation.is_none()
-                    && recovered_sign_attestation.is_none()
-                    && fetch_attestation.is_none()
-                    && store_attestation
+                    && recovered_fetch_attestation
                         .as_ref()
                         .is_some_and(|attestation| attestation.matches_ready_record(record))
             }
@@ -1725,8 +1828,7 @@ impl SchedulerReadyInputs {
                 validate_attestation.is_none()
                     && recovered_apply_attestation.is_none()
                     && recovered_sign_attestation.is_none()
-                    && store_attestation.is_none()
-                    && fetch_attestation.is_none()
+                    && recovered_fetch_attestation.is_none()
             }
         };
         (carrier_matches && row.identity_matches(record.ordinal, record)).then_some(row)
@@ -1770,8 +1872,9 @@ impl SchedulerReadyInputs {
         recovered_sign_attestation: Option<
             super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
         >,
-        store_attestation: Option<super::work_registry::ReadyDurableStoreAttestationV1>,
-        fetch_attestation: Option<AttestedReadyFetchV1>,
+        recovered_fetch_attestation: Option<
+            super::work_registry::ReadyRecoveredDecisionFetchAttestationV1,
+        >,
         physical_capacity_available: bool,
         live_debts: [u64; 6],
     ) -> Option<Self> {
@@ -1781,8 +1884,7 @@ impl SchedulerReadyInputs {
             validate_attestation,
             recovered_apply_attestation,
             recovered_sign_attestation,
-            store_attestation,
-            fetch_attestation,
+            recovered_fetch_attestation,
             live_debts,
         )?;
         row.physical_capacity_available = physical_capacity_available;

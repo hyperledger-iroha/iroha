@@ -95,6 +95,8 @@ def _snapshot_args(source: Path, output: Path, forbidden: Path) -> list[str]:
 
 
 def test_controller_closures_are_exact_installed_operation_dependencies() -> None:
+    assert len(controller.LINUX_FILES) == len(set(controller.LINUX_FILES))
+    assert len(controller.MACOS_FILES) == len(set(controller.MACOS_FILES))
     assert "configs/soranexus/taira/prepare_taira_release_source.sh" not in (
         controller.LINUX_FILES + controller.MACOS_FILES
     )
@@ -155,6 +157,16 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
         assert controller._expected_executable_identity(
             role, "prepare-reset", authenticated_controller_flag
         ) == "runtime"
+    assert "--genesis-native-verifier" in controller.INPUT_PATH_FLAGS
+    assert "--genesis-native-verifier" in controller.TRUSTED_EXECUTABLE_FLAGS
+    assert controller.EXECUTABLE_DIGEST_FLAGS["--genesis-native-verifier"] == (
+        "--trusted-genesis-native-verifier-sha256"
+    )
+    assert "--operator-status-client" in controller.INPUT_PATH_FLAGS
+    assert "--operator-status-client" in controller.TRUSTED_EXECUTABLE_FLAGS
+    assert controller.EXECUTABLE_DIGEST_FLAGS["--operator-status-client"] == (
+        "--trusted-operator-status-client-sha256"
+    )
     assert "seal" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert "cleanup" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert controller.ROLE_OPERATIONS["linux-boi-qualification"] == (
@@ -1753,6 +1765,22 @@ def _prepare_reset_controller_case(
             "sha256": executable_sha256,
         },
         {
+            "digest_flag": "--trusted-genesis-native-verifier-sha256",
+            "flag": "--genesis-native-verifier",
+            "operation": "prepare-reset",
+            "path": str(executable),
+            "run_as": "runtime",
+            "sha256": executable_sha256,
+        },
+        {
+            "digest_flag": "--trusted-operator-status-client-sha256",
+            "flag": "--operator-status-client",
+            "operation": "prepare-reset",
+            "path": str(executable),
+            "run_as": "runtime",
+            "sha256": executable_sha256,
+        },
+        {
             "digest_flag": None,
             "flag": "--onboarding-token-hash-tool",
             "operation": "prepare-reset",
@@ -1770,6 +1798,10 @@ def _prepare_reset_controller_case(
         "--trusted-genesis-external-signer-sha256", executable_sha256,
         "--authenticated-tool-controller", str(controller_executable),
         "--trusted-authenticated-tool-controller-sha256", controller_sha256,
+        "--genesis-native-verifier", str(executable),
+        "--trusted-genesis-native-verifier-sha256", executable_sha256,
+        "--operator-status-client", str(executable),
+        "--trusted-operator-status-client-sha256", executable_sha256,
         "--onboarding-token-hash-tool", str(executable),
         "--irohad-sha256", "2" * 64,
         "--source-commit", "a" * 40,
@@ -1970,6 +2002,30 @@ def test_protected_prepare_reset_workflow_owns_all_authenticated_pins() -> None:
         "--trusted-authenticated-tool-controller-sha256 "
         '"$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"'
     ) == 2
+    for environment_name, flag, digest_flag in (
+        (
+            "TAIRA_GENESIS_NATIVE_VERIFIER",
+            "--genesis-native-verifier",
+            "--trusted-genesis-native-verifier-sha256",
+        ),
+        (
+            "TAIRA_OPERATOR_STATUS_CLIENT",
+            "--operator-status-client",
+            "--trusted-operator-status-client-sha256",
+        ),
+    ):
+        assert workflow.count(
+            f"{environment_name}_PATH: "
+            f"${{{{ vars.{environment_name}_PATH }}}}"
+        ) == 2
+        assert workflow.count(
+            f"{environment_name}_SHA256: "
+            f"${{{{ vars.{environment_name}_SHA256 }}}}"
+        ) == 2
+        assert workflow.count(f'{flag} "${environment_name}_PATH"') == 2
+        assert workflow.count(
+            f'{digest_flag} "${environment_name}_SHA256"'
+        ) == 2
     _assert_protected_prepare_reset_workflow_pins(workflow)
 
 

@@ -1605,7 +1605,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 530/530 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 522/522 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -1616,10 +1616,7 @@ release_gate_boundary "release-inventory:before" || exit $?
 bash ci/check_sumeragi_v2_multilane_release_inventory.sh
 release_gate_boundary "release-inventory:after-natural-completion" || exit $?
 source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"
-<<<<<<< HEAD
-=======
 
->>>>>>> origin/optimizations
 if [[ "$profile" == "--release" ]]; then
   export CARGO_TARGET_DIR="$IROHA_RELEASE_WORKSPACE_TARGET"
   require_external_cargo_target_dir "$repo_root"
@@ -1855,10 +1852,7 @@ if [[ "$profile" == "--release" ]]; then
     >"$corridor_summary"
 fi
 readonly corridor_enabled
-<<<<<<< HEAD
-=======
 
->>>>>>> origin/optimizations
 # Inventory and execute the production adapter/runtime ownership boundary before
 # the slower network and formal corridors. The pure reducer harness cannot
 # exercise worker cancellation, queued completion rebinding, or watchdog
@@ -2242,7 +2236,6 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks
   sumeragi::v2_effects::tests::recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks
   sumeragi::v2_effects::tests::owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work_nonfatal
-  sumeragi::v2_effects::tests::certified_body_response_carrier_swap_fails_closed_before_fetch_mutation
   sumeragi::v2_effects::tests::failed_view_cleanup_keeps_stale_fetch_and_requires_restart
   sumeragi::v2_effects::tests::view_cleanup_rejects_inconsistent_protected_request_before_lock_mutation
   sumeragi::v2_effects::tests::view_cleanup_second_cancellation_failure_commits_no_fetch_retirement
@@ -2730,7 +2723,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=865
+readonly expected_production_liveness_test_count=864
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2821,7 +2814,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 865-test liveness inventory above. The later
+# not belong to the canonical 864-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2969,8 +2962,6 @@ required_multilane_core_focus_tests=(
   kura::tests::bounded_pending_merge_hash_scan_filters_orders_and_reports_overflow
   kura::tests::complete_merge_retry_ignores_unrelated_pending_sidecar_capacity
   kura::tests::bounded_pending_merge_selection_skips_committed_prefix_without_underfill
-  kura::tests::canonical_prune_capacity_includes_large_commit_roster_generation
-  kura::tests::startup_prune_capacity_reuses_large_roster_admission_exactly
   kura::tests::active_prune_recovery_never_allocates_missing_retained_merge_carrier
   kura::tests::historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rejection
   kura::tests::historical_recovery_partial_batch_restart_completes_remaining_records
@@ -3012,12 +3003,6 @@ required_multilane_core_focus_tests=(
   kura::tests::deterministic_commit_marker_temp_recovers_or_rolls_back_exactly
   kura::tests::commit_marker_rejects_oversized_deterministic_temp
   kura::tests::commit_marker_rejects_symlinked_deterministic_temp
-  commit_roster_journal::tests::durable_pointer_temp_recovers_forward_after_restart
-  commit_roster_journal::tests::durable_generation_temp_without_pointer_rolls_back_after_restart
-  commit_roster_journal::tests::partial_deterministic_temps_roll_back_to_stable_pointer
-  commit_roster_journal::tests::load_rejects_oversized_and_unexpected_publication_artifacts
-  commit_roster_journal::tests::load_rejects_symlinked_deterministic_publication_temp
-  commit_roster_journal::tests::prune_projection_accounts_large_generation_and_pointer_peak_exactly
   kura::tests::kura_start_rejects_unbound_local_peer_identity
   kura::tests::eviction_requires_distinct_matching_replica_adverts
   kura::tests::deterministic_commit_qc_keepers_use_f_plus_one_and_pin_a_local_keeper
@@ -3373,7 +3358,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=530
+readonly expected_multilane_focus_test_count=522
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -3502,7 +3487,7 @@ done
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 530-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 522-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -3610,8 +3595,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 531 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 530 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 523 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 522 focused tests" >&2
     exit 1
   fi
 fi
@@ -3767,11 +3752,7 @@ production_liveness_leg_ids=(
   production-v2-lifecycle-recovery
   production-v2-lifecycle-coordinator
   production-v2-runner
-<<<<<<< HEAD
-  production-v2-runner-lifecycle-height-driver
-=======
   production-v2-lifecycle-height-driver
->>>>>>> origin/optimizations
   production-v2-worker
   production-v2-watchdog
   production-kagemusha-finality
@@ -4049,9 +4030,9 @@ if [[ "$profile" == "--release" ]]; then
     7
     63
     61
-    4
-    6
     5
+    7
+    6
   )
   for native_amx_grouped_parity_index in \
     "${!native_amx_grouped_parity_surfaces[@]}"; do

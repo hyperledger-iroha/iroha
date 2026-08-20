@@ -442,7 +442,9 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner() {
 #[must_use = "the exact test I/O fixture must remain alive with its service"]
 pub(in crate::sumeragi) struct LifecyclePlannerIoFixture {
     command_rx: V2IoCommandReceiver,
-    _body_store: V2BodyStore,
+    completion_tx: mpsc::SyncSender<V2IoCompletion>,
+    admission: Arc<V2IoAdmission>,
+    body_store: V2BodyStore,
 }
 impl LifecyclePlannerIoFixture {
     /// Count exact queued certified-Fetch persistence commands.
@@ -490,6 +492,34 @@ impl LifecyclePlannerIoFixture {
                 }
             }
         }
+    }
+    /// Execute one exact certified-Fetch persistence command through the same
+    /// ownership transitions as the production worker and publish its guarded
+    /// completion into the service's sole physical completion FIFO.
+    pub(in crate::sumeragi) fn execute_one_certified_fetch(
+        &mut self,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) {
+        let command = self
+            .command_rx
+            .try_recv()
+            .expect("one certified-Fetch persistence command remains queued");
+        let V2IoCommand::PersistCertifiedFetchBody(task) = command else {
+            panic!("expected the exact certified-Fetch persistence command")
+        };
+        let work_id = task.work_id();
+        let completion = task
+            .persist(&mut self.body_store)
+            .unwrap_or_else(|(error, _)| panic!("persist certified-Fetch body: {error}"));
+        self.command_rx.complete_work(work_id);
+        try_send_tracked_completion(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::CertifiedFetchBodyPersisted(
+                GuardedCertifiedFetchBodyPersistenceCompletion::new(completion, output_guard),
+            ),
+        )
+        .expect("publish one guarded certified-Fetch completion");
     }
     /// Replace only the manual service's output guard for identity tests.
     pub(in crate::sumeragi) fn install_output_guard_for_test(
@@ -575,7 +605,7 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
         class_capacity,
         Arc::clone(&admission),
     );
-    let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
+    let (completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
     services.context = context.clone();
     services.local_peer = local_peer;
     services.local_validator = Some(local_validator);
@@ -587,11 +617,13 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
         completion_rx,
         join: None,
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-        admission,
+        admission: Arc::clone(&admission),
     });
     LifecyclePlannerIoFixture {
         command_rx,
-        _body_store: body_store,
+        completion_tx,
+        admission,
+        body_store,
     }
 }
 /// Install the exact private signer matching the test service's local peer.
@@ -631,6 +663,7 @@ fn lifecycle_capacity_reservation_freezes_fifo_tail_and_rolls_back_under_lock() 
     else {
         panic!("consensus target must own its exact FIFO position");
     };
+    assert_eq!(reservation.predecessor_debt, 1);
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 2);
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
     let producer = std::thread::spawn(move || {
@@ -676,166 +709,6 @@ fn lifecycle_capacity_unfinished_reservation_closes_output_fail_stop() {
     drop(reservation);
     assert!(output_guard.restart_required());
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-}
-#[test]
-fn durable_validate_capacity_is_reserved_by_exact_address_before_dispatch() {
-    let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded Validate admission"));
-    let (sender, _receiver) =
-        v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
-    let key = LifecycleDurableValidateDispatchKeyV1::for_test(21, 0xA1);
-    let same_ordinal_foreign = LifecycleDurableValidateDispatchKeyV1::for_test(21, 0xA2);
-    sender.queue.lock().lifecycle_durable_validates.insert(
-        key,
-        V2IoTrackedLifecycleDurableValidateV1 {
-            state: V2IoWorkState::CompletionPending,
-        },
-    );
-
-    let output_guard = ConsensusOutputGuard::isolated();
-    let operation = output_guard
-        .begin_fail_stop_operation()
-        .expect("open exact-key Validate operation");
-    assert!(matches!(
-        sender
-            .queue
-            .capture_lifecycle_durable_validate_capacity(operation, key),
-        Err(LifecycleDurableValidateCapacityCaptureErrorV1::AlreadyDispatched)
-    ));
-
-    let operation = output_guard
-        .begin_fail_stop_operation()
-        .expect("open same-ordinal foreign Validate operation");
-    let LifecycleDurableValidateCapacityCaptureV1::Reserved(reservation) = sender
-        .queue
-        .capture_lifecycle_durable_validate_capacity(operation, same_ordinal_foreign)
-        .expect("a different full address may reserve independently")
-    else {
-        panic!("an empty Consensus position must be reserved");
-    };
-    assert_eq!(reservation.key, same_ordinal_foreign);
-    reservation.cancel_uncommitted();
-    assert!(!output_guard.restart_required());
-    assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-}
-#[test]
-fn durable_validate_capacity_backpressure_preserves_no_queue_owner() {
-    let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded Validate admission"));
-    let (sender, receiver) =
-        v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
-    sender
-        .try_send(V2IoCommand::Shutdown)
-        .expect("fill the sole Consensus position");
-    let key = LifecycleDurableValidateDispatchKeyV1::for_test(22, 0xA3);
-    let output_guard = ConsensusOutputGuard::isolated();
-    let operation = output_guard
-        .begin_fail_stop_operation()
-        .expect("open backpressured Validate operation");
-    assert!(matches!(
-        sender
-            .queue
-            .capture_lifecycle_durable_validate_capacity(operation, key)
-            .expect("capacity saturation is a typed nonterminal result"),
-        LifecycleDurableValidateCapacityCaptureV1::Unavailable
-    ));
-    assert!(
-        !sender
-            .queue
-            .lock()
-            .lifecycle_durable_validates
-            .contains_key(&key)
-    );
-    assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-    assert!(matches!(receiver.try_recv(), Ok(V2IoCommand::Shutdown)));
-
-    let operation = output_guard
-        .begin_fail_stop_operation()
-        .expect("open retried Validate operation");
-    let LifecycleDurableValidateCapacityCaptureV1::Reserved(reservation) = sender
-        .queue
-        .capture_lifecycle_durable_validate_capacity(operation, key)
-        .expect("released capacity permits an exact retry")
-    else {
-        panic!("released Consensus capacity must reserve");
-    };
-    reservation.cancel_uncommitted();
-    assert!(!output_guard.restart_required());
-}
-#[test]
-fn durable_validate_abandoned_reservation_and_disconnect_are_fail_closed() {
-    let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded Validate admission"));
-    let (sender, receiver) =
-        v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
-    let key = LifecycleDurableValidateDispatchKeyV1::for_test(23, 0xA4);
-    let output_guard = ConsensusOutputGuard::isolated();
-    let operation = output_guard
-        .begin_fail_stop_operation()
-        .expect("open abandoned Validate operation");
-    let LifecycleDurableValidateCapacityCaptureV1::Reserved(reservation) = sender
-        .queue
-        .capture_lifecycle_durable_validate_capacity(operation, key)
-        .expect("empty Validate queue reserves")
-    else {
-        panic!("empty Validate queue must reserve");
-    };
-    drop(reservation);
-    assert!(output_guard.restart_required());
-    assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-
-    receiver.queue.close_receiver();
-    let disconnected_guard = ConsensusOutputGuard::isolated();
-    let operation = disconnected_guard
-        .begin_fail_stop_operation()
-        .expect("open disconnected Validate operation");
-    assert!(matches!(
-        sender
-            .queue
-            .capture_lifecycle_durable_validate_capacity(operation, key),
-        Err(LifecycleDurableValidateCapacityCaptureErrorV1::Disconnected)
-    ));
-}
-#[test]
-fn durable_validate_completion_transfer_requires_exact_key_and_position() {
-    let admission = V2IoAdmission::new(2, 2).expect("bounded Validate completion admission");
-    let key = LifecycleDurableValidateDispatchKeyV1::for_test(24, 0xA5);
-    let same_ordinal_foreign = LifecycleDurableValidateDispatchKeyV1::for_test(24, 0xA6);
-    admission.retain_completion(
-        Instant::now(),
-        false,
-        Some(24),
-        None,
-        None,
-        None,
-        Some(same_ordinal_foreign),
-        None,
-    );
-    admission.retain_completion(
-        Instant::now(),
-        false,
-        Some(24),
-        None,
-        None,
-        None,
-        Some(key),
-        None,
-    );
-
-    assert!(
-        !admission.transfer_lifecycle_durable_validate_completion_at(key, 0),
-        "an equal ordinal cannot transfer a foreign address"
-    );
-    assert!(admission.transfer_lifecycle_durable_validate_completion_at(key, 1));
-    let remaining = admission
-        .completion_state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    assert_eq!(remaining.owned.len(), 1);
-    assert_eq!(
-        remaining
-            .owned
-            .front()
-            .and_then(|owner| owner.lifecycle_durable_validate),
-        Some(same_ordinal_foreign)
-    );
 }
 #[test]
 fn lifecycle_capacity_uses_hierarchical_class_and_release_generation() {
@@ -1035,16 +908,15 @@ fn lifecycle_capacity_rejects_repeat_fetch_while_work_is_completion_pending() {
 #[test]
 fn unconsumed_certified_fetch_persistence_closes_output() {
     let abandoned_output = ConsensusOutputGuard::isolated();
-    drop(CertifiedFetchBodyPersistenceDropGuard::new(
-        Arc::clone(&abandoned_output),
-        true,
-    ));
+    drop(CertifiedFetchBodyPersistenceDropGuard::new(Arc::clone(
+        &abandoned_output,
+    )));
     assert!(abandoned_output.restart_required());
     assert!(abandoned_output.acquire().is_none());
     let transferred_output = ConsensusOutputGuard::isolated();
     let mut transferred =
-        CertifiedFetchBodyPersistenceDropGuard::new(Arc::clone(&transferred_output), true);
-    transferred.disarm(false);
+        CertifiedFetchBodyPersistenceDropGuard::new(Arc::clone(&transferred_output));
+    transferred.disarm();
     drop(transferred);
     assert!(!transferred_output.restart_required());
     assert!(transferred_output.acquire().is_some());

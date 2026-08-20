@@ -30370,13 +30370,9 @@
           "instructions",
           "time_to_live_ms",
           "fee_payment",
-<<<<<<< HEAD
+          "admission_intent",
           "metadata",
           "attachments"
-=======
-          "admission_intent",
-          "metadata"
->>>>>>> origin/optimizations
         ],
         "type": "object"
       },

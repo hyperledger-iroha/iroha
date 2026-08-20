@@ -610,11 +610,7 @@ impl CommitQcTelemetryPublisher {
 pub struct StateTelemetry {
     metrics: Arc<Metrics>,
     enabled: Arc<AtomicBool>,
-<<<<<<< HEAD
-=======
     commit_qc_publisher: Arc<CommitQcTelemetryPublisher>,
-    nexus_enabled: Arc<AtomicBool>,
->>>>>>> origin/optimizations
     time_source: TimeSource,
     lane_metadata: Arc<StdRwLock<BTreeMap<u32, LaneMetadataSnapshot>>>,
     dataspace_metadata: Arc<StdRwLock<BTreeMap<u64, DataspaceMetadataSnapshot>>>,
@@ -652,11 +648,7 @@ impl StateTelemetry {
         let telemetry = Self {
             metrics,
             enabled: Arc::new(AtomicBool::new(enabled)),
-<<<<<<< HEAD
-=======
             commit_qc_publisher,
-            nexus_enabled: Arc::new(AtomicBool::new(true)),
->>>>>>> origin/optimizations
             time_source: TimeSource::new_system(),
             lane_metadata: Arc::new(StdRwLock::new(BTreeMap::new())),
             dataspace_metadata: Arc::new(StdRwLock::new(BTreeMap::new())),
@@ -2206,8 +2198,6 @@ impl StateTelemetry {
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
     }
-<<<<<<< HEAD
-=======
     /// Publish a Kura-authenticated durable v2 finality summary monotonically.
     pub(crate) fn record_durable_v2_finality_summary(
         &self,
@@ -2215,21 +2205,6 @@ impl StateTelemetry {
     ) {
         self.commit_qc_publisher.publish(summary);
     }
-    /// Whether Nexus lane/dataspace telemetry is allowed.
-    #[inline]
-    pub fn nexus_enabled(&self) -> bool {
-        self.nexus_enabled.load(Ordering::Relaxed)
-    }
-    /// Enable or disable Nexus lane/dataspace telemetry.
-    #[inline]
-    pub fn set_nexus_enabled(&self, enabled: bool) {
-        self.nexus_enabled.store(enabled, Ordering::Relaxed);
-        if !enabled {
-            self.reset_nexus_lane_metrics();
-            self.clear_nexus_cache_state();
-        }
-    }
->>>>>>> origin/optimizations
     /// Record the latest storage budget usage for a component.
     pub fn record_storage_budget_usage(&self, component: &'static str, used: u64, limit: u64) {
         if !self.is_enabled() {
@@ -8499,8 +8474,6 @@ mod tests {
         assert_eq!(metrics.torii_da_chunking_seconds.get_sample_count(), 1);
     }
     #[test]
-<<<<<<< HEAD
-=======
     fn state_telemetry_conversion_shares_durable_qc_publisher() {
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let state_telemetry = StateTelemetry::new(metrics, true);
@@ -8512,7 +8485,6 @@ mod tests {
         ));
     }
     #[test]
->>>>>>> origin/optimizations
     fn isi_metrics_record_when_enabled() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);

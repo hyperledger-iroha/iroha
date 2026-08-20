@@ -540,10 +540,7 @@ final class ToriiClientTests: XCTestCase {
             "instructions": .object([:]),
             "time_to_live_ms": .number(100_000),
             "fee_payment": feePayment,
-            "admission_intent": .object([
-                "intent": .string("ordinary"),
-                "value": .null,
-            ]),
+            "admission_intent": .object(["intent": .string("ordinary"), "value": .null]),
             "metadata": .object([:]),
             "attachments": .null,
         ]
@@ -15511,7 +15508,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(matcher["backend"] as? String, "halo2/ipa")
         XCTAssertEqual(matcher["hash_hex"] as? String, String(repeating: "a", count: 64))
     }
-
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetTimeStatusAsync() async throws {

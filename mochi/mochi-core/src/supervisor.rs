@@ -58,13 +58,21 @@ use std::{
 use tokio::runtime::Handle;
 use zeroize::{Zeroize as _, Zeroizing};
 mod generation_lifecycle;
+mod kagami_verify_parse;
 mod ownership;
 mod selected_storage;
+mod snapshot_label;
+use kagami_verify_parse::parse_kagami_verify_output;
 use ownership::SupervisorOwnershipLock;
 #[cfg(test)]
 use selected_storage::resolve_selected_peer_storage_paths_with_hook;
 use selected_storage::validate_selected_peer_storage_paths_under_lock;
 pub use selected_storage::{SelectedPeerStoragePaths, resolve_selected_peer_storage_paths};
+#[cfg(test)]
+use snapshot_label::SNAPSHOT_LABEL_MAX_LEN;
+use snapshot_label::{
+    SNAPSHOT_STORAGE_LAYOUT, default_snapshot_slug, sanitize_snapshot_label,
+};
 const DEFAULT_CHAIN_ID: &str = "mochi-local";
 const DEFAULT_TORII_BASE_PORT: u16 = 8080;
 const DEFAULT_P2P_BASE_PORT: u16 = 1337;
@@ -5087,72 +5095,6 @@ fn validate_managed_peer_paths_against(
     }
     Ok(())
 }
-fn parse_keyed_value(line: &str, keys: &[&str]) -> Option<String> {
-    let lower = line.to_ascii_lowercase();
-    for key in keys {
-        if let Some(start) = lower.find(key) {
-            let remainder = &line[start + key.len()..];
-            if let Some((_, value)) = remainder
-                .split_once(':')
-                .or_else(|| remainder.split_once('='))
-            {
-                let trimmed = value.trim().trim_matches([',', ';']);
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_owned());
-                }
-            }
-        }
-    }
-    for token in line.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
-        if let Some((key, value)) = token.split_once(['=', ':'])
-            && keys
-                .iter()
-                .any(|candidate| key.eq_ignore_ascii_case(candidate))
-        {
-            let trimmed = value.trim().trim_matches([',', ';']);
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_owned());
-            }
-        }
-    }
-    None
-}
-fn parse_kagami_verify_output(
-    profile: GenesisProfile,
-    vrf_seed_hex: Option<&str>,
-    output: &str,
-) -> KagamiVerifyReport {
-    let mut chain_id = None;
-    let mut peers_with_pop = None;
-    let mut fingerprint = None;
-    let mut vrf_seed = vrf_seed_hex.map(|value| value.to_owned());
-    for line in output.lines() {
-        if chain_id.is_none() {
-            chain_id = parse_keyed_value(line, &["chain_id", "chain id", "chain"]);
-        }
-        if peers_with_pop.is_none() {
-            peers_with_pop = parse_keyed_value(
-                line,
-                &["peers_with_pop", "peers-with-pop", "pop_peers", "pop"],
-            )
-            .and_then(|value| value.parse().ok());
-        }
-        if fingerprint.is_none() {
-            fingerprint = parse_keyed_value(line, &["fingerprint", "hash", "fingerprint_hex"]);
-        }
-        if vrf_seed.is_none() {
-            vrf_seed = parse_keyed_value(line, &["vrf_seed_hex", "vrf-seed", "vrf_seed"]);
-        }
-    }
-    KagamiVerifyReport {
-        profile,
-        chain_id,
-        vrf_seed_hex: vrf_seed,
-        peers_with_pop,
-        fingerprint,
-        raw_output: output.to_owned(),
-    }
-}
 fn default_data_root() -> PathBuf {
     std::env::var_os("MOCHI_DATA_ROOT")
         .map(PathBuf::from)
@@ -5164,52 +5106,6 @@ fn resolve_data_root(data_root: &Path) -> io::Result<PathBuf> {
         Ok(data_root.to_path_buf())
     } else {
         Ok(env::current_dir()?.join(data_root))
-    }
-}
-fn default_snapshot_slug() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO);
-    format!("snapshot-{}-{:03}", now.as_secs(), now.subsec_millis())
-}
-const SNAPSHOT_LABEL_MAX_LEN: usize = 64;
-const SNAPSHOT_STORAGE_LAYOUT: &str = "kura-subdirectory-v1";
-fn sanitize_snapshot_label(label: &str) -> Option<String> {
-    let mut sanitized = String::with_capacity(label.len().min(SNAPSHOT_LABEL_MAX_LEN));
-    let mut previous_was_sep = true;
-    for ch in label.chars() {
-        match ch {
-            'a'..='z' | '0'..='9' => {
-                if sanitized.len() == SNAPSHOT_LABEL_MAX_LEN {
-                    break;
-                }
-                sanitized.push(ch);
-                previous_was_sep = false;
-            }
-            'A'..='Z' => {
-                if sanitized.len() == SNAPSHOT_LABEL_MAX_LEN {
-                    break;
-                }
-                sanitized.push(ch.to_ascii_lowercase());
-                previous_was_sep = false;
-            }
-            '-' | '_' | ' ' | '.' => {
-                if !previous_was_sep && sanitized.len() < SNAPSHOT_LABEL_MAX_LEN {
-                    sanitized.push('-');
-                    previous_was_sep = true;
-                }
-            }
-            _ => {
-                // Skip unsupported characters but continue scanning so alphanumeric
-                // runs can still be recovered.
-            }
-        }
-    }
-    let trimmed = sanitized.trim_matches('-');
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
     }
 }
 struct SnapshotMetadata {

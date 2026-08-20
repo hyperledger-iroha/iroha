@@ -318,7 +318,35 @@ def _sealed_build_report(tmp_path: Path, executable: Path) -> tuple[Path, str]:
         "unit_graph_preflight": {},
         "verification_binary_path": str(executable) + ".verification",
     }
-    payload = MODULE.resource_guard._canonical_json(report)
+    inner_payload = MODULE.resource_guard._canonical_json(report)
+    native_launch = {
+        "argument_contract": MODULE.NATIVE_SEALED_BUILDER_ARGUMENT_CONTRACT,
+        "argument_sha256": "a" * 64,
+        "builder_entrypoint_sha256": "b" * 64,
+        "contract": MODULE.NATIVE_SEALED_BUILDER_LAUNCH_CONTRACT,
+        "controller_sha256": "c" * 64,
+        "environment_contract": MODULE.NATIVE_SEALED_BUILDER_ENVIRONMENT_CONTRACT,
+        "environment_sha256": "d" * 64,
+        "macos_build": "25A1",
+        "os_tcb_contract": MODULE.NATIVE_SEALED_BUILDER_OS_TCB_CONTRACT,
+        "os_tcb_sha256": "e" * 64,
+        "python_interpreter_sha256": "f" * 64,
+        "python_runtime_tree_sha256": "1" * 64,
+        "report_publication_contract": (
+            MODULE.NATIVE_SEALED_BUILDER_REPORT_PUBLICATION_CONTRACT
+        ),
+        "runtime_dependency_contract": (
+            MODULE.NATIVE_SEALED_BUILDER_RUNTIME_DEPENDENCY_CONTRACT
+        ),
+    }
+    envelope = {
+        "builder_report_hex": inner_payload.hex(),
+        "builder_report_sha256": hashlib.sha256(inner_payload).hexdigest(),
+        "builder_report_size_bytes": len(inner_payload),
+        "native_launch": native_launch,
+        "schema": MODULE.NATIVE_SEALED_BUILD_REPORT_SCHEMA,
+    }
+    payload = MODULE.resource_guard._canonical_json(envelope)
     path = tmp_path / "sealed-build-report.json"
     path.write_bytes(payload)
     path.chmod(0o600)
@@ -342,9 +370,14 @@ def _guarded_args(tmp_path: Path, executable: Path) -> list[str]:
 def test_sealed_build_report_rejects_second_build_substitution(tmp_path: Path) -> None:
     executable = _fake_prebuilt_generator(tmp_path)
     report_path, _digest = _sealed_build_report(tmp_path, executable)
-    report = json.loads(report_path.read_text(encoding="utf-8"))
+    envelope = json.loads(report_path.read_text(encoding="utf-8"))
+    report = json.loads(bytes.fromhex(envelope["builder_report_hex"]))
     report["builds"][1]["output"]["sha256"] = "a" * 64
-    payload = MODULE.resource_guard._canonical_json(report)
+    inner_payload = MODULE.resource_guard._canonical_json(report)
+    envelope["builder_report_hex"] = inner_payload.hex()
+    envelope["builder_report_sha256"] = hashlib.sha256(inner_payload).hexdigest()
+    envelope["builder_report_size_bytes"] = len(inner_payload)
+    payload = MODULE.resource_guard._canonical_json(envelope)
     report_path.write_bytes(payload)
 
     with pytest.raises(
@@ -352,6 +385,21 @@ def test_sealed_build_report_rejects_second_build_substitution(tmp_path: Path) -
     ):
         MODULE._open_sealed_build_report(
             report_path, hashlib.sha256(payload).hexdigest()
+        )
+
+
+def test_direct_python_v1_build_report_is_not_promotion_admissible(tmp_path: Path) -> None:
+    executable = _fake_prebuilt_generator(tmp_path)
+    report_path, _digest = _sealed_build_report(tmp_path, executable)
+    envelope = json.loads(report_path.read_text(encoding="utf-8"))
+    direct_payload = bytes.fromhex(envelope["builder_report_hex"])
+    report_path.write_bytes(direct_payload)
+
+    with pytest.raises(
+        MODULE.resource_guard.GuardError, match="native-launch envelope"
+    ):
+        MODULE._open_sealed_build_report(
+            report_path, hashlib.sha256(direct_payload).hexdigest()
         )
 
 

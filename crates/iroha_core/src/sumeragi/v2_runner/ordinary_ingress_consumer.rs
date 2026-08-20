@@ -573,20 +573,17 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 mark_leader_wire_volatile(receiver, &ingress_ownership)?;
             }
         }
-<<<<<<< HEAD
-        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
-            return Err(V2RunnerError::Service(
-                "certified body response bypassed its lifecycle Fetch owner".to_owned(),
-            ));
-=======
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => {
+            // This arm is reachable only for one authenticated response occurrence that
+            // lifecycle selection classified as non-selected or stale. Consume its exact
+            // move-only ingress owner once and terminate it without retaining a response
+            // carrier; a selected fetch response must instead complete through lifecycle.
             iroha_logger::debug!(
                 request_hash = %response.request_hash,
                 active_height = executor.context().height,
                 "retired certified body response outside lifecycle selection"
             );
             mark_leader_wire_volatile(receiver, &ingress_ownership)?;
->>>>>>> origin/optimizations
         }
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) => {
             let Some(reply_routes) = reply_routes else {

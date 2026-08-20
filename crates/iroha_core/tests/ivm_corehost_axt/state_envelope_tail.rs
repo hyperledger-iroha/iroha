@@ -63,6 +63,7 @@ fn core_host_exports_axt_envelopes_to_state_block() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
@@ -74,7 +75,7 @@ fn core_host_exports_axt_envelopes_to_state_block() {
         manifest_root,
         vec![0xAA, 0xBB, 0xCC],
         20,
-        binding,
+        &handle,
         &intent,
         &Quantity::from(5_u64),
     );
@@ -444,6 +445,7 @@ fn core_host_records_multi_dataspace_envelope() {
     let intent_a = RemoteSpendIntent {
         asset_dsid: dsid_a,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
@@ -453,6 +455,7 @@ fn core_host_records_multi_dataspace_envelope() {
     let intent_b = RemoteSpendIntent {
         asset_dsid: dsid_b,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
@@ -464,7 +467,7 @@ fn core_host_records_multi_dataspace_envelope() {
         [0xA1; 32],
         b"multi-ds-a".to_vec(),
         50,
-        binding,
+        &handle_a,
         &intent_a,
         &Quantity::from(10_u64),
     );
@@ -473,7 +476,7 @@ fn core_host_records_multi_dataspace_envelope() {
         [0xB2; 32],
         b"multi-ds-b".to_vec(),
         50,
-        binding,
+        &handle_b,
         &intent_b,
         &Quantity::from(15_u64),
     );
@@ -636,6 +639,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
             intent: ModelRemoteSpendIntent {
                 asset_dsid: dsid,
                 op: ModelSpendOp {
+                    asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
@@ -710,6 +714,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),

@@ -506,14 +506,14 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 865
-_G_UNIT_TEST_COUNT = 530
+_PRODUCTION_TEST_COUNT = 864
+_G_UNIT_TEST_COUNT = 522
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        324,
+        316,
         "lib",
     ),
     (
@@ -623,7 +623,7 @@ _PRODUCTION_MODULES = (
     ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 70),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
@@ -636,17 +636,6 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-lifecycle-coordinator",
         "sumeragi::v2_lifecycle_coordinator",
-<<<<<<< HEAD
-        39,
-    ),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    (
-        "production-v2-runner-lifecycle-height-driver",
-        "sumeragi::v2_runner::lifecycle_height_driver::tests",
-        1,
-    ),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 88),
-=======
         42,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
@@ -656,7 +645,6 @@ _PRODUCTION_MODULES = (
         1,
     ),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 90),
->>>>>>> origin/optimizations
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -786,9 +774,9 @@ _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
     ("python", 63),
     ("javascript", 61),
-    ("swift", 4),
-    ("kotlin", 6),
-    ("java", 5),
+    ("swift", 5),
+    ("kotlin", 7),
+    ("java", 6),
 )
 _SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
 _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (

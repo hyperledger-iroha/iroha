@@ -236,7 +236,7 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
     let payload = transaction.payload();
     let exact_json = norito::json::to_json(payload).expect("serialize transaction payload");
     let expected_json = format!(
-        "{{\"domain\":{domain},\"authority\":{authority},\"creation_time_ms\":{creation_time_ms},\"instructions\":{instructions},\"time_to_live_ms\":{time_to_live_ms},\"nonce\":{nonce},\"fee_payment\":{fee_payment},\"metadata\":{metadata},\"attachments\":null}}",
+        "{{\"domain\":{domain},\"authority\":{authority},\"creation_time_ms\":{creation_time_ms},\"instructions\":{instructions},\"time_to_live_ms\":{time_to_live_ms},\"nonce\":{nonce},\"fee_payment\":{fee_payment},\"admission_intent\":{admission_intent},\"metadata\":{metadata},\"attachments\":null}}",
         domain = norito::json::to_json(&payload.domain).expect("serialize transaction domain"),
         authority =
             norito::json::to_json(&payload.authority).expect("serialize transaction authority"),
@@ -248,6 +248,8 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
         nonce = norito::json::to_json(&payload.nonce).expect("serialize transaction nonce"),
         fee_payment =
             norito::json::to_json(&payload.fee_payment).expect("serialize transaction fee intent"),
+        admission_intent = norito::json::to_json(&payload.admission_intent)
+            .expect("serialize transaction admission intent"),
         metadata =
             norito::json::to_json(&payload.metadata).expect("serialize transaction metadata"),
     );
@@ -295,7 +297,15 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
         norito::json::from_value::<TransactionPayload>(unknown).is_err(),
         "unknown transaction payload fields must fail closed"
     );
-<<<<<<< HEAD
+    let mut missing_admission_intent = canonical.clone();
+    missing_admission_intent
+        .as_object_mut()
+        .expect("transaction payload object")
+        .remove("admission_intent");
+    assert!(
+        norito::json::from_value::<TransactionPayload>(missing_admission_intent).is_err(),
+        "transaction payload admission_intent is mandatory"
+    );
     assert_eq!(
         canonical
             .as_object()
@@ -312,16 +322,6 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
     assert!(
         norito::json::from_value::<TransactionPayload>(missing_attachments).is_err(),
         "transaction payload attachments are mandatory even when null"
-=======
-    let mut missing_admission_intent = canonical.clone();
-    missing_admission_intent
-        .as_object_mut()
-        .expect("transaction payload object")
-        .remove("admission_intent");
-    assert!(
-        norito::json::from_value::<TransactionPayload>(missing_admission_intent).is_err(),
-        "transaction payload admission_intent is mandatory"
->>>>>>> origin/optimizations
     );
     let mut missing_domain = canonical;
     missing_domain
@@ -2616,18 +2616,12 @@ fn entrypoint_hashes_match_direct_encoding() {
     assert_eq!(HashOf::new(&entry_time), entry_time.hash());
     assert_eq!(time_entry.hash_as_entrypoint(), entry_time.hash());
 }
-#[test]
-fn verify_signature_rejects_missing_multisig_signatures() {
-    let chain = test_network_id(0x20);
+
+fn empty_multisig_payload(network: u8, policy: MultisigPolicy) -> model::TransactionPayload {
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let signer = checked_random_keypair();
-    let member =
-        MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
-    let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
-    let authority = AccountId::new_multisig(policy);
-    let payload = model::TransactionPayload {
-        domain: TransactionDomain::Network(chain),
-        authority,
+    model::TransactionPayload {
+        domain: TransactionDomain::Network(test_network_id(network)),
+        authority: AccountId::new_multisig(policy),
         creation_time_ms: 0,
         instructions: Executable::Instructions(ConstVec::from(Vec::new())),
         time_to_live_ms: None,
@@ -2636,7 +2630,16 @@ fn verify_signature_rejects_missing_multisig_signatures() {
         admission_intent: TransactionAdmissionIntent::Ordinary,
         metadata: Metadata::default(),
         attachments: None,
-    };
+    }
+}
+
+#[test]
+fn verify_signature_rejects_missing_multisig_signatures() {
+    let signer = checked_random_keypair();
+    let member =
+        MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
+    let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
+    let payload = empty_multisig_payload(0x20, policy);
     let signature = TransactionSignature(checked_transaction_payload_signature(
         signer.private_key(),
         &payload,
@@ -2661,25 +2664,11 @@ fn verify_signature_rejects_missing_multisig_signatures() {
 }
 #[test]
 fn verify_signature_accepts_multisig_with_quorum() {
-    let chain = test_network_id(0x21);
-    let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let signer = checked_random_keypair();
     let member =
         MultisigMember::new(signer.public_key().clone(), 2).expect("multisig member valid");
     let policy = MultisigPolicy::new(2, vec![member]).expect("multisig policy valid");
-    let authority = AccountId::new_multisig(policy.clone());
-    let payload = model::TransactionPayload {
-        domain: TransactionDomain::Network(chain),
-        authority,
-        creation_time_ms: 0,
-        instructions: Executable::Instructions(ConstVec::from(Vec::new())),
-        time_to_live_ms: None,
-        nonce: None,
-        fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-        admission_intent: TransactionAdmissionIntent::Ordinary,
-        metadata: Metadata::default(),
-        attachments: None,
-    };
+    let payload = empty_multisig_payload(0x21, policy);
     let member_sig = checked_transaction_payload_signature(signer.private_key(), &payload);
     let signature = TransactionSignature(member_sig.clone());
     let multisig_signatures = MultisigSignatures::new(vec![MultisigSignature::new(
@@ -2761,25 +2750,11 @@ fn transaction_builder_try_sign_multisig_rejects_empty_signers() {
 }
 #[test]
 fn verify_signature_rejects_empty_multisig_bundle() {
-    let chain = test_network_id(0x24);
-    let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let signer = checked_random_keypair();
     let member =
         MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
     let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
-    let authority = AccountId::new_multisig(policy);
-    let payload = model::TransactionPayload {
-        domain: TransactionDomain::Network(chain),
-        authority,
-        creation_time_ms: 0,
-        instructions: Executable::Instructions(ConstVec::from(Vec::new())),
-        time_to_live_ms: None,
-        nonce: None,
-        fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-        admission_intent: TransactionAdmissionIntent::Ordinary,
-        metadata: Metadata::default(),
-        attachments: None,
-    };
+    let payload = empty_multisig_payload(0x24, policy);
     let signature = TransactionSignature(checked_transaction_payload_signature(
         signer.private_key(),
         &payload,
@@ -2799,26 +2774,12 @@ fn verify_signature_rejects_empty_multisig_bundle() {
 }
 #[test]
 fn verify_signature_rejects_unknown_signer() {
-    let chain = test_network_id(0x25);
-    let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let member_key = checked_random_keypair();
     let unknown_key = checked_random_keypair();
     let member =
         MultisigMember::new(member_key.public_key().clone(), 1).expect("multisig member valid");
     let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
-    let authority = AccountId::new_multisig(policy);
-    let payload = model::TransactionPayload {
-        domain: TransactionDomain::Network(chain),
-        authority,
-        creation_time_ms: 0,
-        instructions: Executable::Instructions(ConstVec::from(Vec::new())),
-        time_to_live_ms: None,
-        nonce: None,
-        fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-        admission_intent: TransactionAdmissionIntent::Ordinary,
-        metadata: Metadata::default(),
-        attachments: None,
-    };
+    let payload = empty_multisig_payload(0x25, policy);
     let unknown_signature =
         checked_transaction_payload_signature(unknown_key.private_key(), &payload);
     let signature = TransactionSignature(unknown_signature.clone());
@@ -2841,8 +2802,6 @@ fn verify_signature_rejects_unknown_signer() {
 }
 #[test]
 fn verify_signature_does_not_double_count_duplicates() {
-    let chain = test_network_id(0x26);
-    let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let signer = checked_random_keypair();
     let other = checked_random_keypair();
     let members = vec![
@@ -2850,19 +2809,7 @@ fn verify_signature_does_not_double_count_duplicates() {
         MultisigMember::new(other.public_key().clone(), 1).expect("multisig member valid"),
     ];
     let policy = MultisigPolicy::new(2, members).expect("multisig policy valid");
-    let authority = AccountId::new_multisig(policy);
-    let payload = model::TransactionPayload {
-        domain: TransactionDomain::Network(chain),
-        authority,
-        creation_time_ms: 0,
-        instructions: Executable::Instructions(ConstVec::from(Vec::new())),
-        time_to_live_ms: None,
-        nonce: None,
-        fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-        admission_intent: TransactionAdmissionIntent::Ordinary,
-        metadata: Metadata::default(),
-        attachments: None,
-    };
+    let payload = empty_multisig_payload(0x26, policy);
     let signature = TransactionSignature(checked_transaction_payload_signature(
         signer.private_key(),
         &payload,
@@ -2907,25 +2854,11 @@ fn verify_signature_accepts_mixed_algorithms() {
 }
 #[test]
 fn signature_count_tracks_all_multisig_entries() {
-    let chain = test_network_id(0x28);
-    let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let signer = checked_random_keypair();
     let member =
         MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
     let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
-    let authority = AccountId::new_multisig(policy);
-    let payload = model::TransactionPayload {
-        domain: TransactionDomain::Network(chain),
-        authority,
-        creation_time_ms: 0,
-        instructions: Executable::Instructions(ConstVec::from(Vec::new())),
-        time_to_live_ms: None,
-        nonce: None,
-        fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-        admission_intent: TransactionAdmissionIntent::Ordinary,
-        metadata: Metadata::default(),
-        attachments: None,
-    };
+    let payload = empty_multisig_payload(0x28, policy);
     let signature = checked_transaction_payload_signature(signer.private_key(), &payload);
     let multisig_signatures = MultisigSignatures::new(vec![
         MultisigSignature::new(signer.public_key().clone(), signature.clone()),
@@ -2964,74 +2897,7 @@ fn transaction_result_hash_matches_inner() {
         TransactionResult::hash_from_inner(&err_inner)
     );
 }
-#[test]
-fn sealed_transaction_commitment_signs_and_reveals_expected_hash() {
-    let tx = sample_signed_transaction();
-    let private_key: iroha_crypto::PrivateKey =
-        "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-            .parse()
-            .unwrap();
-    let salt = [0xA5; 32];
-    let reveal_deadline_height = 42;
-    let network_id = tx.network_id().expect("ordinary transaction network id");
-    let commitment =
-        compute_sealed_transaction_commitment(network_id, &tx, salt, reveal_deadline_height);
-    {
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-        assert_eq!(
-            compute_sealed_transaction_commitment(network_id, &tx, salt, reveal_deadline_height,),
-            commitment
-        );
-    }
-    let payload = SealedTransactionCommitmentPayload::new(
-        *network_id,
-        tx.authority().clone(),
-        commitment,
-        10,
-        reveal_deadline_height,
-        core::num::NonZeroU64::new(7),
-    );
-    let signed = SignedSealedTransactionCommitment::sign(payload.clone(), &private_key);
-    signed
-        .verify_signature()
-        .expect("sealed commitment signature verifies");
-    assert_eq!(signed.payload(), &payload);
-    assert_eq!(signed.commitment(), &commitment);
-    let reveal = SealedTransactionReveal::new(commitment, tx, salt);
-    assert_eq!(
-        reveal.expected_commitment_with_deadline(reveal_deadline_height),
-        commitment
-    );
-    assert_ne!(
-        reveal.expected_commitment_with_deadline(reveal_deadline_height + 1),
-        commitment
-    );
-}
-#[test]
-fn sealed_transaction_commitment_try_sign_matches_compatibility_sign() {
-    let tx = sample_signed_transaction();
-    let private_key: iroha_crypto::PrivateKey =
-        "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-            .parse()
-            .unwrap();
-    let network_id = *tx.network_id().expect("ordinary transaction network id");
-    let payload = SealedTransactionCommitmentPayload::new(
-        network_id,
-        tx.authority().clone(),
-        compute_sealed_transaction_commitment(&network_id, &tx, [0x5A; 32], 64),
-        11,
-        64,
-        core::num::NonZeroU64::new(9),
-    );
-    let fallible = SignedSealedTransactionCommitment::try_sign(payload.clone(), &private_key)
-        .expect("sealed commitment signing should succeed");
-    let compatibility = SignedSealedTransactionCommitment::sign(payload, &private_key);
-    assert_eq!(fallible, compatibility);
-    fallible
-        .verify_signature()
-        .expect("fallible sealed commitment signature verifies");
-}
+#[path = "signed/sealed_commitment_tests.rs"]
+mod sealed_commitment_tests;
 include!("signed/genesis_domain_test.rs");
 include!("signed/result_json_test.rs");

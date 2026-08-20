@@ -824,8 +824,8 @@ def _successor_production_recovery_source_fidelity_errors(
                         "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()))",
                         "let (queued, after_apply_selection) = with_lifecycle_current_runner_turn_for_test(",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
-                        "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",
-                        "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
+                        "ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)",
+                        "ProductionCompletionDispatchV1::ApplyQueued",
                         "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
                         ".initialize_recovered_local_proposal(setup_runner)",
                         "let mut activated = launched.activate( Instant::now(), activation, local_proposal_state )",
@@ -1621,7 +1621,6 @@ self.io.is_some()
                 "single restored lifecycle ordinal source",
                 lifecycle_launch,
                 (
-                    "inputs.network.reply_route_source_capacity().max(1)",
                     "inputs.auxiliary_io_capacity",
                     "lifecycle_ordinals.clone()",
                     "lifecycle_ordinals .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
@@ -1639,7 +1638,7 @@ self.io.is_some()
                 "certified Serve restore/start capacity parity",
                 lifecycle_launch,
                 "inputs.auxiliary_io_capacity",
-                2,
+                1,
             )
             require_tokens(
                 launch_path,
@@ -2192,7 +2191,7 @@ self.io.is_some()
                 effects_source,
                 "single-preview recovered next-Vote body executor join",
                 "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body(",
-                "/// Publish executor-retained owners",
+                "/// Reserve exclusive mutation of the exact recovered response-family claim.",
             )
             require_order(
                 effects_path,
@@ -3119,7 +3118,7 @@ self.io.is_some()
                 "restart-closed recovered Sign-to-Broadcast settlement",
                 recovered_sign_settlement,
                 (
-                    "recovered_lifecycle_sign_completion.take()",
+                    "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
                     "prepare_recovered_lifecycle_sign_completion(authority)",
                     "prepare_recovered_lifecycle_sign_broadcast_successor(",
                     "prepare_recovered_lifecycle_sign_broadcast_transition(",
@@ -3170,7 +3169,7 @@ self.io.is_some()
                 "restart-closed recovered Vote Broadcast-and-next-Sign settlement",
                 recovered_vote_two_child_settlement,
                 (
-                    "recovered_lifecycle_sign_completion.take()",
+                    "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
                     "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
                     "preview.is_vote_broadcast_and_sign_shape()",
                     "prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(",
@@ -3215,7 +3214,7 @@ self.io.is_some()
                 "restart-closed initial Proposal PrepareIntent settlement",
                 recovered_proposal_prepare_wal_settlement,
                 (
-                    "recovered_lifecycle_sign_completion.take()",
+                    "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
                     "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
                     "RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
                     "preview.project_proposal_exact_output_authority()",
@@ -3237,7 +3236,7 @@ self.io.is_some()
                 recovered_proposal_prepare_wal_settlement,
                 (
                     "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)",
-                    "*recovered_lifecycle_sign_completion = Some(completion)",
+                    "*pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::RecoveredSign(completion))",
                     "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable",
                 ),
             )
@@ -3270,7 +3269,7 @@ self.io.is_some()
                 "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
                 recovered_proposal_two_child_settlement,
                 (
-                    "recovered_lifecycle_sign_completion.take()",
+                    "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
                     "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
                     "preview.project_proposal_exact_output_authority()",
                     "capture_recovered_lifecycle_proposal_exact_output(output_authority)",
@@ -3297,7 +3296,7 @@ self.io.is_some()
                 (
                     "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)",
                     "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable",
-                    "*recovered_lifecycle_sign_completion = Some(completion)",
+                    "*pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::RecoveredSign(completion))",
                     "drop(output)",
                     "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired",
                 ),
@@ -3444,13 +3443,11 @@ self.io.is_some()
                 lifecycle_open_source,
                 (
                     "PhaseBroadcast(",
-                    "PhaseBroadcastAndSign(",
                     "PhaseBroadcastAndNextSign(",
                     "ControlBroadcast(",
-                    "assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup",
-                    "assemble_storage_only_with_recovered_phase_broadcast_and_sign_and_durable_fetch_startup",
-                    "assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup",
-                    "assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup",
+                    "assemble_storage_only_with_recovered_phase_broadcast_and_body_pipeline_startup",
+                    "assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_body_pipeline_startup",
+                    "assemble_storage_only_with_recovered_control_broadcast_and_body_pipeline_startup",
                 ),
             )
             require_tokens(
@@ -3562,7 +3559,7 @@ self.io.is_some()
                 lifecycle_open_path,
                 lifecycle_open_source,
                 "cold recovered phase-Broadcast storage assembly",
-                "fn assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(",
+                "fn assemble_storage_only_with_recovered_phase_broadcast_and_body_pipeline_startup(",
                 "/// Assemble the exact standalone control Sign with every durable Fetch.",
             )
             require_tokens(
@@ -3578,7 +3575,7 @@ self.io.is_some()
                 lifecycle_open_path,
                 lifecycle_open_source,
                 "cold recovered control-Broadcast storage assembly",
-                "fn assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup(",
+                "fn assemble_storage_only_with_recovered_control_broadcast_and_body_pipeline_startup(",
                 "/// Assemble the standalone Decision Fetch with every durable body-backed Fetch.",
             )
             require_tokens(
@@ -3658,17 +3655,17 @@ self.io.is_some()
             launched_owner_fields = region(
                 launch_path,
                 launch_source,
-                "launched recovered Sign Drop order",
+                "launched unified lifecycle completion Drop order",
                 "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
                 "/// Result of draining one dedicated recovered Apply worker completion.",
             )
             require_order(
                 launch_path,
-                "launched recovered Sign Drop order",
+                "launched unified lifecycle completion Drop order",
                 launched_owner_fields,
                 (
                     "services: ProductionV2Services",
-                    "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+                    "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>",
                     "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
                 ),
             )
@@ -3676,7 +3673,7 @@ self.io.is_some()
                 scheduler_path,
                 scheduler_source,
                 "lifecycle-owned recovered Decision Fetch dispatch",
-                "fn dispatch_recovered_completion_with_runner_debt(",
+                "fn dispatch_completion_with_runner_debt(",
                 "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
             )
             require_order(
@@ -4066,10 +4063,10 @@ self.io.is_some()
                 ),
             )
             require_tokens(
-                runner_path,
+                turn_driver_path,
                 "ordinary runner shared ingress drain predicate",
-                runner_source,
-                ("v2_ingress_head_can_drain(inbound, executor, terminal_subject)",),
+                turn_driver_source,
+                ("v2_ingress_head_can_drain(occurrence.inbound(), executor, terminal_subject,)",),
             )
             require_literals(
                 effects_path,
@@ -4130,7 +4127,7 @@ self.io.is_some()
                 worker_path,
                 worker_source,
                 "unified recovered Decision Fetch completion classifier",
-                "pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(",
+                "pub(in crate::sumeragi) fn take_next_lifecycle_completion(",
                 "/// Drain only the oldest recovered-Sign guard;",
             )
             require_order(
@@ -4140,7 +4137,7 @@ self.io.is_some()
                 (
                     "V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)",
                     "prepare_recovered_decision_fetch_body_completion(guarded, 0)",
-                    "RecoveredLifecycleCompletionTakeV1::DecisionFetch(",
+                    "LifecycleCompletionTakeV1::DecisionFetch(",
                 ),
             )
             require_tokens(
@@ -4152,7 +4149,7 @@ self.io.is_some()
                     "recovered_decision_fetch_bodies: BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>",
                     "V2IoCompletion::RecoveredDecisionFetchBodyPersisted",
                     "V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained",
-                    "fn take_next_recovered_lifecycle_completion(",
+                    "fn take_next_lifecycle_completion(",
                     "fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extraction()",
                 ),
             )
@@ -4208,7 +4205,7 @@ self.io.is_some()
                 "restart-closed recovered Decision Fetch-to-Store settlement",
                 recovered_fetch_settlement,
                 (
-                    "*recovered_decision_fetch_body_completion = Some(completion)",
+                    "*pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::RecoveredDecisionFetch(completion),)",
                     "owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure)",
                     "ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired",
                     "ProductionRecoveredDecisionFetchStoreSettlementV1::Applied",
@@ -4298,7 +4295,7 @@ self.io.is_some()
                 lifecycle_open_source,
                 (
                     "RecoveredWalStartupProjectionV1::DecisionStore",
-                    "assemble_storage_only_with_recovered_decision_store_and_durable_fetch_startup",
+                    "assemble_storage_only_with_recovered_decision_store_and_body_pipeline_startup",
                     "recovered_decision_store_chain_records(",
                 ),
             )
@@ -4314,12 +4311,12 @@ self.io.is_some()
             )
             require_order(
                 launch_path,
-                "launched recovered Decision Fetch Drop order",
+                "launched unified lifecycle completion/capacity Drop order",
                 launched_owner_fields,
                 (
                     "services: ProductionV2Services",
-                    "recovered_decision_fetch_body_completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>",
-                    "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+                    "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>",
+                    "pending_ingress_capacity: Option<PendingIngressCapacityV1>",
                     "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
                 ),
             )
@@ -4618,8 +4615,8 @@ self.io.is_some()
                 "activated lifecycle finalization quiescence",
                 activated_finalization,
                 (
-                    "recovered_decision_fetch_body_completion.is_some()",
-                    "recovered_lifecycle_sign_completion.is_some()",
+                    "pending_lifecycle_completion.is_some()",
+                    "pending_ingress_capacity.is_some()",
                     "completion_observer_activation.is_some()",
                     "ProductionLifecycleFinalizationErrorV1::NotReady",
                     "finalized_adapter: finalized",

@@ -29,8 +29,8 @@ async fn disabled_profile_hides_status_and_metrics() {
         None,
         None,
     )
-        .await
-        .unwrap_err();
+    .await
+    .unwrap_err();
     assert_eq!(
         status_err.into_response().status(),
         StatusCode::SERVICE_UNAVAILABLE
@@ -52,8 +52,8 @@ async fn operator_profile_exposes_status_only() {
         None,
         None,
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     assert_eq!(status_resp.status(), StatusCode::OK);
     let metrics_err = handle_metrics(&telemetry).await.unwrap_err();
     assert_eq!(
@@ -74,8 +74,8 @@ async fn extended_profile_exposes_prometheus_metrics() {
         None,
         None,
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     assert_eq!(status_resp.status(), StatusCode::OK);
     let prometheus = handle_metrics(&telemetry).await.unwrap();
     assert!(

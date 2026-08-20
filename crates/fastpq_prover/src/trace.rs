@@ -524,7 +524,8 @@ fn hash_to_field(hash: &Hash) -> u64 {
 ///
 /// # Errors
 ///
-/// Returns [`Error`] when value widths or permission witnesses are malformed.
+/// Returns [`Error`] when numeric encodings, asset keys, mint/burn direction,
+/// permission witnesses, or transfer transcripts are malformed.
 #[allow(clippy::too_many_lines)]
 pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     let mut canonical = batch.clone();
@@ -539,6 +540,8 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     let dsid_hash = hash_with_domain(DSID_DOMAIN, &canonical.public_inputs.dsid)?;
     let slot_value = canonical.public_inputs.slot;
     let mut rows: Vec<RowData> = Vec::with_capacity(canonical.transitions.len());
+    // TODO: Constrain these running values in the AIR before enabling Mint/Burn or generic
+    // multi-row conservation in a public proof-semantics profile.
     let mut running_per_asset: HashMap<Vec<u8>, i128> = HashMap::new();
     let mut supply_counters: HashMap<Vec<u8>, i128> = HashMap::new();
     for transition in &canonical.transitions {
@@ -549,15 +552,15 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         let (asset_id_bytes, perm_hash) = match &transition.operation {
             crate::OperationKind::Transfer => {
                 selectors.transfer = 1;
-                (extract_asset_id(&transition.key), 0)
+                (extract_canonical_asset_id(&transition.key)?, 0)
             }
             crate::OperationKind::Mint => {
                 selectors.mint = 1;
-                (extract_asset_id(&transition.key), 0)
+                (extract_canonical_asset_id(&transition.key)?, 0)
             }
             crate::OperationKind::Burn => {
                 selectors.burn = 1;
-                (extract_asset_id(&transition.key), 0)
+                (extract_canonical_asset_id(&transition.key)?, 0)
             }
             crate::OperationKind::RoleGrant {
                 role_id,
@@ -579,7 +582,7 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
                 } else {
                     selectors.role_revoke = 1;
                 }
-                (extract_asset_id(&transition.key), perm)
+                (Vec::new(), perm)
             }
             crate::OperationKind::MetaSet => {
                 selectors.meta_set = 1;
@@ -599,6 +602,15 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         let (_value_old, _value_new, delta_signed, pre_value_u64) = if numeric_values {
             let pre_value_u64 = decode_u64_le(&transition.pre_value)?;
             let post_value_u64 = decode_u64_le(&transition.post_value)?;
+            match &transition.operation {
+                crate::OperationKind::Mint if post_value_u64 <= pre_value_u64 => {
+                    return Err(Error::InvalidAssetValueChange { operation: "mint" });
+                }
+                crate::OperationKind::Burn if post_value_u64 >= pre_value_u64 => {
+                    return Err(Error::InvalidAssetValueChange { operation: "burn" });
+                }
+                _ => {}
+            }
             let value_old = i128::from(pre_value_u64);
             let value_new = i128::from(post_value_u64);
             (value_old, value_new, value_new - value_old, pre_value_u64)
@@ -789,8 +801,11 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
 }
 /// Return the canonical FASTPQ column layout for a transition batch without materialising rows.
 ///
-#[must_use]
-pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Vec<String> {
+/// # Errors
+///
+/// Returns [`Error::InvalidAssetKey`] when a numeric operation does not use the canonical
+/// `asset/<asset-id>/<account>` key shape.
+pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<String>> {
     let mut canonical = batch.clone();
     canonical.sort();
     let mut max_key_limbs = 0usize;
@@ -800,7 +815,12 @@ pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Vec<String> {
     for transition in &canonical.transitions {
         let asset_id_bytes = match &transition.operation {
             crate::OperationKind::MetaSet => transition.key.clone(),
-            _ => extract_asset_id(&transition.key),
+            crate::OperationKind::RoleGrant { .. } | crate::OperationKind::RoleRevoke { .. } => {
+                Vec::new()
+            }
+            crate::OperationKind::Transfer
+            | crate::OperationKind::Mint
+            | crate::OperationKind::Burn => extract_canonical_asset_id(&transition.key)?,
         };
         max_key_limbs = max_key_limbs.max(pack_bytes(&transition.key).limbs.len());
         max_value_old = max_value_old.max(pack_bytes(&transition.pre_value).limbs.len());
@@ -847,7 +867,7 @@ pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Vec<String> {
         columns.push(format!("node_in_{level}"));
         columns.push(format!("node_out_{level}"));
     }
-    columns
+    Ok(columns)
 }
 impl TraceColumn {
     fn new(name: impl Into<String>, values: impl Iterator<Item = u64>) -> Self {
@@ -1519,25 +1539,30 @@ pub fn hash_columns_gpu_fused(
     });
     Some(ColumnDigests::new(leaves, Some(parents)))
 }
-fn extract_asset_id(key: &[u8]) -> Vec<u8> {
-    key.strip_prefix(b"asset/").map_or_else(
-        || key.to_vec(),
-        |rest| {
-            rest.iter()
-                .position(|&b| b == b'/')
-                .map_or_else(|| rest.to_vec(), |end| rest[..end].to_vec())
-        },
-    )
+fn extract_canonical_asset_id(key: &[u8]) -> Result<Vec<u8>> {
+    let rest = key.strip_prefix(b"asset/").ok_or(Error::InvalidAssetKey)?;
+    let separator = rest
+        .iter()
+        .position(|&byte| byte == b'/')
+        .ok_or(Error::InvalidAssetKey)?;
+    let (asset_id, account_with_separator) = rest.split_at(separator);
+    let account = &account_with_separator[1..];
+    if asset_id.is_empty() || account.is_empty() || account.contains(&b'/') {
+        return Err(Error::InvalidAssetKey);
+    }
+    Ok(asset_id.to_vec())
 }
 fn decode_u64_le(bytes: &[u8]) -> Result<u64> {
-    if bytes.len() > core::mem::size_of::<u64>() {
-        return Err(Error::ValueWidth {
+    if bytes.len() != core::mem::size_of::<u64>() {
+        return Err(Error::InvalidAssetValueLength {
             length: bytes.len(),
         });
     }
-    let mut chunk = [0u8; 8];
-    chunk[..bytes.len()].copy_from_slice(bytes);
-    Ok(u64::from_le_bytes(chunk))
+    Ok(u64::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("numeric asset value has exact width"),
+    ))
 }
 fn field_from_i128(value: i128) -> u64 {
     let modulus = i128::from(GOLDILOCKS_MODULUS);
@@ -1702,8 +1727,14 @@ enum LdeColumnsState {
     Ready(Vec<Vec<u64>>),
 }
 impl TracePolynomialData {
+    #[cfg(test)]
     pub(crate) fn lde_columns(&mut self) -> &Vec<Vec<u64>> {
         match &self.lde_state {
+            LdeColumnsState::Ready(columns) => columns,
+        }
+    }
+    pub(crate) fn into_lde_columns(self) -> Vec<Vec<u64>> {
+        match self.lde_state {
             LdeColumnsState::Ready(columns) => columns,
         }
     }
@@ -2136,7 +2167,89 @@ mod tests {
             .iter()
             .map(|column| column.name.clone())
             .collect::<Vec<_>>();
-        assert_eq!(column_names_for_batch(&batch), expected);
+        assert_eq!(
+            column_names_for_batch(&batch).expect("canonical column names"),
+            expected
+        );
+    }
+    #[test]
+    fn build_trace_enforces_strict_mint_and_burn_direction() {
+        for (operation, before, after) in [
+            (OperationKind::Mint, 4_u64, 5_u64),
+            (OperationKind::Burn, 5_u64, 4_u64),
+        ] {
+            let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+            batch.push(StateTransition::new(
+                b"asset/xor/alice".to_vec(),
+                before.to_le_bytes().to_vec(),
+                after.to_le_bytes().to_vec(),
+                operation,
+            ));
+            build_trace(&batch).expect("correctly directed asset operation");
+        }
+
+        for (operation, before, after, expected_operation) in [
+            (OperationKind::Mint, 5_u64, 4_u64, "mint"),
+            (OperationKind::Mint, 5_u64, 5_u64, "mint"),
+            (OperationKind::Burn, 4_u64, 5_u64, "burn"),
+            (OperationKind::Burn, 5_u64, 5_u64, "burn"),
+        ] {
+            let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+            batch.push(StateTransition::new(
+                b"asset/xor/alice".to_vec(),
+                before.to_le_bytes().to_vec(),
+                after.to_le_bytes().to_vec(),
+                operation,
+            ));
+            let error = build_trace(&batch).expect_err("wrong-direction asset operation");
+            assert!(matches!(
+                error,
+                Error::InvalidAssetValueChange { operation } if operation == expected_operation
+            ));
+        }
+    }
+    #[test]
+    fn build_trace_rejects_noncanonical_asset_operation_keys() {
+        for key in [
+            b"xor/alice".as_slice(),
+            b"asset//alice".as_slice(),
+            b"asset/xor".as_slice(),
+            b"asset/xor/".as_slice(),
+            b"asset/xor/account/alice".as_slice(),
+        ] {
+            let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+            batch.push(StateTransition::new(
+                key.to_vec(),
+                4_u64.to_le_bytes().to_vec(),
+                5_u64.to_le_bytes().to_vec(),
+                OperationKind::Mint,
+            ));
+            assert!(matches!(build_trace(&batch), Err(Error::InvalidAssetKey)));
+        }
+    }
+    #[test]
+    fn build_trace_rejects_noncanonical_numeric_asset_value_lengths() {
+        for length in [0_usize, 1, 7, 9] {
+            for mutate_pre_value in [true, false] {
+                let mut batch =
+                    TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+                let (pre_value, post_value) = if mutate_pre_value {
+                    (vec![0; length], 5_u64.to_le_bytes().to_vec())
+                } else {
+                    (4_u64.to_le_bytes().to_vec(), vec![0; length])
+                };
+                batch.push(StateTransition::new(
+                    b"asset/xor/alice".to_vec(),
+                    pre_value,
+                    post_value,
+                    OperationKind::Mint,
+                ));
+                assert!(matches!(
+                    build_trace(&batch),
+                    Err(Error::InvalidAssetValueLength { length: actual }) if actual == length
+                ));
+            }
+        }
     }
     #[test]
     fn metadata_commitment_uses_full_width_canonical_limbs() {

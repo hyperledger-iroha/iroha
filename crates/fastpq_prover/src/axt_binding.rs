@@ -1,16 +1,22 @@
 use crate::{
-    Error, OperationKind, PublicInputs, Result, StateTransition, TransitionBatch,
+    Error, OperationKind, ProofSemantics, PublicInputs, Result, StateTransition, TransitionBatch,
     gadgets::transfer::decode_transcripts,
-    proof::{Proof, verify},
+    proof::{Proof, Prover, verify_with_semantics},
+    validate_batch_semantics,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
+    account::AccountId,
+    asset::id::AssetDefinitionId,
     fastpq::{
         FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY,
     },
-    nexus::{AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, ProofBlob},
+    nexus::{
+        AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtRemoteSpendClaimV1, ProofBlob,
+        compute_remote_spend_claim_commitment_v1,
+    },
 };
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
@@ -42,6 +48,12 @@ pub const AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY: &str = "axt_fastpq_expiry_slot_v1
 /// inserted and with this field removed. It prevents descriptor-only synthetic
 /// batches from being accepted as AXT proof material.
 pub const AXT_FASTPQ_BATCH_SEAL_METADATA_KEY: &str = "axt_fastpq_batch_seal_v1";
+/// Metadata key carrying the canonical preimages of proof-bound remote-spend commitments.
+///
+/// The preimages let the verifier link every advertised handle commitment to
+/// one concrete transfer transcript. A hash-only commitment cannot establish
+/// this relation because its descriptor binding is not recoverable.
+pub const AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY: &str = "axt_fastpq_remote_spend_claims_v1";
 /// Canonical FASTPQ parameter name used by maintained AXT flows.
 pub const DEFAULT_PARAMETER: &str = "fastpq-lane-balanced";
 /// Maximum encoded AXT `FastPQ` batch/proof payload accepted before decoding.
@@ -122,6 +134,128 @@ pub fn encode_axt_fastpq_payload(batch: &TransitionBatch, proof: Proof) -> Resul
     };
     encode_canonical_norito(&payload)
 }
+
+/// Attach canonical remote-spend claim preimages before sealing an AXT batch.
+///
+/// `claims` must be ordered so their V1 commitments exactly equal the
+/// binding's strictly ordered commitment set. The subsequent AXT binder and
+/// verifier additionally require an exact one-to-one match with the batch's
+/// transfer transcripts.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidAxtBinding`] when the batch has already been sealed
+/// or the supplied claims do not exactly reconstruct the binding commitment
+/// set. Returns [`Error::Encode`] when canonical Norito encoding fails.
+pub fn set_axt_remote_spend_claims(
+    batch: &mut TransitionBatch,
+    binding: &AxtFastpqBinding,
+    claims: &[AxtRemoteSpendClaimV1],
+) -> Result<()> {
+    if batch
+        .metadata
+        .contains_key(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY)
+    {
+        return Err(Error::InvalidAxtBinding {
+            details: "remote-spend claims must be attached before the AXT batch is sealed".into(),
+        });
+    }
+    let canonical = require_canonical_binding(binding)?;
+    let commitments: Vec<_> = claims
+        .iter()
+        .map(compute_remote_spend_claim_commitment_v1)
+        .collect();
+    if commitments != canonical.remote_spend_intent_commitments {
+        return Err(Error::InvalidAxtBinding {
+            details:
+                "remote-spend claim preimages do not exactly reconstruct the binding commitment set"
+                    .into(),
+        });
+    }
+    if claims.is_empty() {
+        batch
+            .metadata
+            .remove(AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY);
+    } else {
+        batch.metadata.insert(
+            AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY.into(),
+            encode_canonical_norito(&claims.to_vec())?,
+        );
+    }
+    Ok(())
+}
+
+impl Prover {
+    /// Produce a proof for a batch bound to a canonical outer AXT statement.
+    ///
+    /// The explicit binding argument is the trusted selector for AXT proof
+    /// semantics. Batch metadata cannot opt a generic state proof into opaque
+    /// effect semantics. Transfer claims require only transfer rows and their
+    /// canonical witnesses. Opaque authorization/compliance-labelled carriers
+    /// are available only to specialized consumers that independently
+    /// authenticate the claimed effect; the FASTPQ proof does not establish
+    /// authorization or compliance by itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `binding` is not canonical, the proof-bound batch
+    /// does not exactly match it, the batch shape is invalid for the selected
+    /// AXT claim, or proof generation fails.
+    pub fn prove_axt_bound(
+        &self,
+        batch: &TransitionBatch,
+        binding: &AxtFastpqBinding,
+    ) -> Result<Proof> {
+        let canonical = require_canonical_binding(binding)?;
+        verify_batch_matches_binding(batch, &canonical)?;
+        self.prove_with_semantics(batch, axt_proof_semantics(&canonical)?)
+    }
+}
+
+/// Require a canonical AXT binding to select the witnessed transfer profile.
+///
+/// Generic contract and block-admission consumers must call this before
+/// treating successful AXT verification as an execution fact. Opaque
+/// authorization/compliance-labelled carriers are intentionally rejected:
+/// they are only data carriers for specialized paths that independently
+/// authenticate the referenced effect.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidAxtBinding`] when `binding` is not canonical and
+/// [`Error::InvalidProofSemantics`] when it selects an opaque profile.
+pub fn validate_axt_transfer_claim_binding(binding: &AxtFastpqBinding) -> Result<()> {
+    let canonical = require_canonical_binding(binding)?;
+    match axt_proof_semantics(&canonical)? {
+        ProofSemantics::AxtTransferClaim => Ok(()),
+        semantics => Err(Error::InvalidProofSemantics {
+            profile: semantics.name(),
+            details: "generic AXT consumers require a witnessed transfer claim; opaque effect carriers require independent authenticated-effect validation"
+                .into(),
+        }),
+    }
+}
+
+/// Verify a proof against a batch and its canonical outer AXT statement.
+///
+/// The explicit binding is the trusted semantics selector. It must exactly
+/// match the proof-bound batch metadata; metadata by itself never enables AXT
+/// semantics through the generic [`crate::verify`] entry point.
+///
+/// # Errors
+///
+/// Returns an error when `binding` is not canonical, the batch does not
+/// exactly match it, the selected AXT semantic profile rejects the batch, or
+/// cryptographic proof verification fails.
+pub fn verify_axt_bound_batch(
+    batch: &TransitionBatch,
+    proof: &Proof,
+    binding: &AxtFastpqBinding,
+) -> Result<()> {
+    let canonical = require_canonical_binding(binding)?;
+    verify_batch_matches_binding(batch, &canonical)?;
+    verify_with_semantics(batch, proof, axt_proof_semantics(&canonical)?)
+}
 /// Decode the canonical AXT binding already embedded in a `FastPQ` batch.
 ///
 /// This helper never mutates the batch. It is intended for export paths that need to package proof
@@ -169,7 +303,7 @@ pub fn axt_proof_envelope_from_bound_batch(
                 .into(),
         });
     }
-    verify(batch, &proof)?;
+    verify_axt_bound_batch(batch, &proof, &binding)?;
     Ok(AxtProofEnvelope {
         dsid: DataSpaceId::new(binding.source_dsid),
         manifest_root,
@@ -303,6 +437,7 @@ pub fn bind_axt_batch_with_proof_metadata(
         });
     }
     require_concrete_execution_batch(batch, &context)?;
+    validate_batch_semantics(batch, axt_proof_semantics(&canonical)?)?;
     batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
     batch
         .metadata
@@ -329,6 +464,7 @@ pub fn bind_axt_batch_with_proof_metadata(
         AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY.into(),
         encode_optional_da_commitment(da_commitment),
     );
+    require_remote_spend_transcript_linkage(batch, &canonical)?;
     let seal = axt_batch_seal(batch, &canonical)?;
     batch
         .metadata
@@ -342,6 +478,12 @@ pub fn bind_axt_batch_with_proof_metadata(
 /// use [`verify_axt_proof_blob`] or
 /// [`verify_axt_proof_envelope_with_outer_metadata`] so the outer expiry mirror
 /// is exact-compared as well.
+///
+/// This low-level entry point also accepts opaque effect carriers for
+/// specialized paths that authenticate their effect independently. Successful
+/// verification of an authorization/compliance-labelled opaque carrier is not
+/// authorization or compliance evidence. Generic execution consumers must
+/// first require [`validate_axt_transfer_claim_binding`].
 ///
 /// # Errors
 /// Returns [`Error::InvalidAxtBinding`] when the envelope is missing the structured
@@ -391,7 +533,7 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
                     .into(),
         });
     }
-    verify(&batch, &payload.proof)?;
+    verify_axt_bound_batch(&batch, &payload.proof, binding)?;
     Ok(AxtVerifiedProof {
         statement_digest: axt_statement_digest(envelope, binding, &payload.batch)?,
         proof_digest: Hash::new(&envelope.proof),
@@ -584,6 +726,7 @@ fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBind
         });
     }
     require_concrete_execution_batch(batch, &context)?;
+    validate_batch_semantics(batch, axt_proof_semantics(&canonical)?)?;
     let encoded = required_metadata(batch, AXT_FASTPQ_BINDING_METADATA_KEY)?;
     let decoded = decode_canonical_binding(encoded)?;
     if decoded != canonical {
@@ -620,7 +763,18 @@ fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBind
     let seal = axt_batch_seal(batch, &canonical)?;
     require_metadata_eq(batch, AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, &seal)?;
     require_transfer_claim_witnesses(batch, &context, canonical.claim_type.as_str())?;
+    require_remote_spend_transcript_linkage(batch, &canonical)?;
     Ok(())
+}
+
+fn axt_proof_semantics(binding: &AxtFastpqBinding) -> Result<ProofSemantics> {
+    match binding.claim_type.as_str() {
+        "tx_predicate" | "value_conservation" => Ok(ProofSemantics::AxtTransferClaim),
+        "authorization" | "compliance" => Ok(ProofSemantics::AxtOpaqueEffect),
+        claim_type => Err(Error::InvalidAxtBinding {
+            details: format!("unsupported claim_type: {claim_type}"),
+        }),
+    }
 }
 fn required_metadata<'a>(batch: &'a TransitionBatch, key: &str) -> Result<&'a [u8]> {
     batch
@@ -742,15 +896,6 @@ fn require_transfer_claim_witnesses(
     claim_type: &str,
 ) -> Result<()> {
     if matches!(claim_type, "tx_predicate" | "value_conservation") {
-        let has_transfer = batch
-            .transitions
-            .iter()
-            .any(|transition| matches!(transition.operation, OperationKind::Transfer));
-        if !has_transfer {
-            return Err(Error::InvalidAxtBinding {
-                details: "transfer AXT claim must carry transfer transitions".into(),
-            });
-        }
         let transcripts =
             decode_transcripts(&batch.metadata)?.ok_or_else(|| Error::MissingMetadata {
                 key: TRANSFER_TRANSCRIPTS_METADATA_KEY.to_owned(),
@@ -770,6 +915,149 @@ fn require_transfer_claim_witnesses(
         }
     }
     Ok(())
+}
+fn require_remote_spend_transcript_linkage(
+    batch: &TransitionBatch,
+    binding: &AxtFastpqBinding,
+) -> Result<()> {
+    let encoded_claims = batch
+        .metadata
+        .get(AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY);
+    if binding.remote_spend_intent_commitments.is_empty() {
+        if encoded_claims.is_some() {
+            return Err(Error::InvalidAxtBinding {
+                details: "remote-spend claim metadata is forbidden when the binding commitment set is empty"
+                    .into(),
+            });
+        }
+        return Ok(());
+    }
+    if !matches!(
+        binding.claim_type.as_str(),
+        "tx_predicate" | "value_conservation"
+    ) {
+        return Err(Error::InvalidAxtBinding {
+            details: "remote-spend commitments require a transfer claim; opaque AXT proofs cannot authorize handles"
+                .into(),
+        });
+    }
+    let encoded_claims = encoded_claims.ok_or_else(|| Error::MissingMetadata {
+        key: AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY.to_owned(),
+    })?;
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let claims: Vec<AxtRemoteSpendClaimV1> = decode_from_bytes(encoded_claims)
+        .map_err(|source| Error::TransferMetadataDecode { source })?;
+    if encode_canonical_norito(&claims)?.as_slice() != encoded_claims.as_slice() {
+        return Err(Error::InvalidAxtBinding {
+            details: "remote-spend claim metadata must use canonical Norito bytes".into(),
+        });
+    }
+    let commitments: Vec<_> = claims
+        .iter()
+        .map(compute_remote_spend_claim_commitment_v1)
+        .collect();
+    if commitments != binding.remote_spend_intent_commitments {
+        return Err(Error::InvalidAxtBinding {
+            details: "remote-spend claim metadata does not exactly reconstruct the binding commitment set"
+                .into(),
+        });
+    }
+
+    let source_asset_literal = binding
+        .effect_binding
+        .as_ref()
+        .and_then(|effect| effect.source_asset_definition_id.as_deref())
+        .ok_or_else(|| Error::InvalidAxtBinding {
+            details: "remote-spend commitments require one exact source_asset_definition_id".into(),
+        })?;
+    let source_asset: AssetDefinitionId =
+        source_asset_literal
+            .parse()
+            .map_err(|error| Error::InvalidAxtBinding {
+                details: format!(
+                    "remote-spend source_asset_definition_id is not canonical: {error}"
+                ),
+            })?;
+    if source_asset.to_string() != source_asset_literal {
+        return Err(Error::InvalidAxtBinding {
+            details: "remote-spend source_asset_definition_id must use its canonical literal"
+                .into(),
+        });
+    }
+
+    let transcripts =
+        decode_transcripts(&batch.metadata)?.ok_or_else(|| Error::MissingMetadata {
+            key: TRANSFER_TRANSCRIPTS_METADATA_KEY.to_owned(),
+        })?;
+    let mut transcript_facts = Vec::new();
+    for transcript in &transcripts {
+        for delta in &transcript.deltas {
+            if delta.asset_definition != source_asset {
+                return Err(Error::InvalidAxtBinding {
+                    details: "remote-spend proof contains a transfer for an asset other than source_asset_definition_id"
+                        .into(),
+                });
+            }
+            transcript_facts.push((
+                delta.asset_definition.clone(),
+                delta.from_account.clone(),
+                delta.to_account.clone(),
+                delta.amount.clone(),
+            ));
+        }
+    }
+
+    let mut claim_facts = Vec::with_capacity(claims.len());
+    for claim in &claims {
+        if claim.handle_replay_key.asset_dsid.as_u64() != binding.source_dsid {
+            return Err(Error::InvalidAxtBinding {
+                details:
+                    "remote-spend claim handle asset_dsid does not match the proof source_dsid"
+                        .into(),
+            });
+        }
+        if claim.kind != "transfer" {
+            return Err(Error::InvalidAxtBinding {
+                details: "remote-spend FASTPQ V1 claims must use the exact `transfer` operation"
+                    .into(),
+            });
+        }
+        if claim.asset_definition_id != source_asset {
+            return Err(Error::InvalidAxtBinding {
+                details: "remote-spend claim asset_definition_id does not match source_asset_definition_id"
+                    .into(),
+            });
+        }
+        let from = canonical_remote_account(&claim.from, "from")?;
+        let to = canonical_remote_account(&claim.to, "to")?;
+        claim_facts.push((
+            claim.asset_definition_id.clone(),
+            from,
+            to,
+            claim.effective_amount.clone(),
+        ));
+    }
+    transcript_facts.sort_unstable();
+    claim_facts.sort_unstable();
+    if claim_facts != transcript_facts {
+        return Err(Error::InvalidAxtBinding {
+            details: "remote-spend claims must match transfer transcripts one-for-one (asset, accounts, amount, and cardinality)"
+                .into(),
+        });
+    }
+    Ok(())
+}
+fn canonical_remote_account(value: &str, field: &str) -> Result<AccountId> {
+    let parsed = AccountId::parse_encoded(value).map_err(|error| Error::InvalidAxtBinding {
+        details: format!("remote-spend {field} account is not canonical I105: {error}"),
+    })?;
+    if parsed.canonical() != value {
+        return Err(Error::InvalidAxtBinding {
+            details: format!("remote-spend {field} account must use canonical I105 text"),
+        });
+    }
+    Ok(parsed.into_account_id())
 }
 fn axt_statement_digest(
     envelope: &AxtProofEnvelope,
@@ -1044,6 +1332,7 @@ mod tests {
         asset::id::AssetDefinitionId,
         domain::DomainId,
         fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
+        nexus::{AxtHandleReplayKey, LaneId},
     };
     use iroha_primitives::numeric::Quantity;
     fn sample_binding() -> AxtFastpqBinding {
@@ -1087,7 +1376,7 @@ mod tests {
             amount_commitment: None,
         }
     }
-    fn real_authorization_batch(binding: &AxtFastpqBinding) -> TransitionBatch {
+    fn unbound_axt_batch(binding: &AxtFastpqBinding) -> TransitionBatch {
         let mut batch = TransitionBatch::new(
             DEFAULT_PARAMETER,
             PublicInputs {
@@ -1099,28 +1388,22 @@ mod tests {
                 tx_set_hash: [0x40; 32],
             },
         );
+        let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")
+            .expect("entry hash");
+        batch
+            .metadata
+            .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
+        batch
+    }
+    fn real_authorization_batch(binding: &AxtFastpqBinding) -> TransitionBatch {
+        let mut batch = unbound_axt_batch(binding);
         batch.push(StateTransition::new(
             b"account/real/axt-authorized".to_vec(),
             b"pending".to_vec(),
             b"authorized".to_vec(),
             OperationKind::MetaSet,
         ));
-        batch.push(StateTransition::new(
-            b"role/real/axt-permission".to_vec(),
-            vec![0],
-            vec![1],
-            OperationKind::RoleGrant {
-                role_id: vec![0x11; 32],
-                permission_id: vec![0x22; 32],
-                epoch: 7,
-            },
-        ));
         batch.sort();
-        let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")
-            .expect("entry hash");
-        batch
-            .metadata
-            .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
         bind_axt_batch(&mut batch, binding, [0x42; 32], Some([0x24; 32])).expect("bind AXT batch");
         batch
     }
@@ -1181,9 +1464,57 @@ mod tests {
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
         batch.sort();
+        if !binding.remote_spend_intent_commitments.is_empty() {
+            set_axt_remote_spend_claims(&mut batch, binding, &[real_transfer_claim(binding)])
+                .expect("attach remote-spend claim preimage");
+        }
         bind_axt_batch(&mut batch, binding, [0x42; 32], Some([0x24; 32]))
             .expect("bind transfer AXT batch");
         batch
+    }
+    fn real_transfer_claim(binding: &AxtFastpqBinding) -> AxtRemoteSpendClaimV1 {
+        let domain = DomainId::try_new("axt", "universal").expect("domain id");
+        AxtRemoteSpendClaimV1::new(
+            AxtHandleReplayKey::from_parts(
+                DataSpaceId::new(binding.source_dsid),
+                [0xA5; 32],
+                1,
+                1,
+                LaneId::new(0),
+            ),
+            AssetDefinitionId::derive_from_components(
+                domain.clone(),
+                "rose".parse().expect("asset name"),
+            ),
+            "transfer",
+            deterministic_account("transfer_sender", &domain).to_string(),
+            deterministic_account("transfer_receiver", &domain).to_string(),
+            Quantity::from(35_u64),
+        )
+    }
+    fn transfer_effect_binding(asset_definition: &AssetDefinitionId) -> AxtEffectBinding {
+        AxtEffectBinding {
+            destination_domain: None,
+            destination_account_id: None,
+            vault_account_id: None,
+            issuance_account_id: None,
+            source_asset_definition_id: Some(asset_definition.to_string()),
+            destination_asset_definition_id: None,
+            source_amount_i64: None,
+            destination_amount_i64: None,
+        }
+    }
+    fn remote_transfer_binding() -> AxtFastpqBinding {
+        let domain = DomainId::try_new("axt", "universal").expect("domain id");
+        let asset_definition =
+            AssetDefinitionId::derive_from_components(domain, "rose".parse().unwrap());
+        let mut binding = sample_binding();
+        binding.claim_type = "tx_predicate".to_owned();
+        binding.effect_binding = Some(transfer_effect_binding(&asset_definition));
+        let claim = real_transfer_claim(&binding);
+        binding.remote_spend_intent_commitments =
+            vec![compute_remote_spend_claim_commitment_v1(&claim)];
+        binding
     }
     fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
         let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
@@ -1202,6 +1533,24 @@ mod tests {
             AccountId::new(keypair.public_key().clone())
         );
     }
+
+    #[test]
+    fn generic_consumer_gate_accepts_transfer_and_rejects_opaque_carriers() {
+        validate_axt_transfer_claim_binding(&remote_transfer_binding())
+            .expect("witnessed transfer claim is admissible to generic consumers");
+
+        let opaque = sample_binding();
+        let error = validate_axt_transfer_claim_binding(&opaque)
+            .expect_err("opaque authorization-labelled carrier must need an external authority");
+        assert!(matches!(
+            error,
+            Error::InvalidProofSemantics {
+                profile: "axt_opaque_effect",
+                ..
+            }
+        ));
+    }
+
     fn transfer_balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
         format!("asset/{asset}/{account}").into_bytes()
     }
@@ -1443,15 +1792,15 @@ mod tests {
             },
         );
         batch.push(StateTransition::new(
-            b"asset/mint".to_vec(),
-            vec![0],
-            vec![1],
+            b"asset/xor/alice".to_vec(),
+            0_u64.to_le_bytes().to_vec(),
+            1_u64.to_le_bytes().to_vec(),
             OperationKind::Mint,
         ));
         batch.push(StateTransition::new(
-            b"asset/burn".to_vec(),
-            vec![2],
-            vec![1],
+            b"asset/xor/bob".to_vec(),
+            2_u64.to_le_bytes().to_vec(),
+            1_u64.to_le_bytes().to_vec(),
             OperationKind::Burn,
         ));
         batch.push(StateTransition::new(
@@ -1482,7 +1831,7 @@ mod tests {
         let batch = real_authorization_batch(&good_binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &good_binding)
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let mut bad_binding = good_binding;
@@ -1500,7 +1849,7 @@ mod tests {
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let mut envelope = envelope_with_payload(binding, payload);
@@ -1534,6 +1883,147 @@ mod tests {
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("state transitions"))
         );
+    }
+    #[test]
+    fn bind_axt_batch_rejects_role_row_in_opaque_authorization_claim() {
+        let binding = sample_binding();
+        let mut batch = unbound_axt_batch(&binding);
+        batch.push(StateTransition::new(
+            b"role/attacker/unrelated-permission".to_vec(),
+            vec![0],
+            vec![1],
+            OperationKind::RoleGrant {
+                role_id: vec![0x11; 32],
+                permission_id: vec![0x22; 32],
+                epoch: 7,
+            },
+        ));
+
+        let error = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("opaque authorization must not prove an unrelated permission row");
+        assert!(matches!(
+            error,
+            Error::InvalidProofSemantics {
+                profile: "axt_opaque_effect",
+                ..
+            }
+        ));
+    }
+    #[test]
+    fn bind_axt_batch_rejects_inflationary_burn_appended_to_transfer_claim() {
+        let mut binding = sample_binding();
+        binding.claim_type = "value_conservation".to_owned();
+        let mut batch = unbound_axt_batch(&binding);
+        batch.push(StateTransition::new(
+            b"asset/rose/alice".to_vec(),
+            10_u64.to_le_bytes().to_vec(),
+            7_u64.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        ));
+        batch.push(StateTransition::new(
+            b"asset/rose/mallory".to_vec(),
+            1_u64.to_le_bytes().to_vec(),
+            100_u64.to_le_bytes().to_vec(),
+            OperationKind::Burn,
+        ));
+
+        let error = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("transfer claim must reject an appended inflationary burn");
+        assert!(matches!(
+            error,
+            Error::InvalidProofSemantics {
+                profile: "axt_transfer_claim",
+                ..
+            }
+        ));
+    }
+    #[test]
+    fn generic_prover_rejects_root_changing_opaque_axt_carrier() {
+        let binding = sample_binding();
+        let batch = real_authorization_batch(&binding);
+
+        let error = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect_err("generic state semantics must reject an opaque AXT carrier");
+        assert!(matches!(
+            error,
+            Error::InvalidProofSemantics {
+                profile: "transfer_state_transition",
+                ..
+            }
+        ));
+    }
+    #[test]
+    fn verifier_rejects_fresh_raw_proof_with_role_row_in_opaque_axt_claim() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        batch.push(StateTransition::new(
+            b"role/attacker/unrelated-permission".to_vec(),
+            vec![0],
+            vec![1],
+            OperationKind::RoleGrant {
+                role_id: vec![0x11; 32],
+                permission_id: vec![0x22; 32],
+                epoch: 7,
+            },
+        ));
+        batch.sort();
+        batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+        let seal = axt_batch_seal(&batch, &binding).expect("reseal attacker batch");
+        batch
+            .metadata
+            .insert(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY.into(), seal.to_vec());
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove_raw_statement(&batch)
+            .expect("fresh cryptographic proof for attacker-selected rows");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("attacker payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let error = verify_axt_proof_envelope(&envelope)
+            .expect_err("opaque AXT verifier must reject an unrelated role row");
+        assert!(matches!(
+            error,
+            Error::InvalidProofSemantics {
+                profile: "axt_opaque_effect",
+                ..
+            }
+        ));
+    }
+    #[test]
+    fn verifier_rejects_fresh_raw_proof_with_burn_appended_to_transfer_claim() {
+        let mut binding = sample_binding();
+        binding.claim_type = "value_conservation".to_owned();
+        let mut batch = real_transfer_claim_batch(&binding);
+        batch.push(StateTransition::new(
+            b"asset/rose/mallory".to_vec(),
+            10_u64.to_le_bytes().to_vec(),
+            9_u64.to_le_bytes().to_vec(),
+            OperationKind::Burn,
+        ));
+        batch.sort();
+        batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+        let seal = axt_batch_seal(&batch, &binding).expect("reseal attacker batch");
+        batch
+            .metadata
+            .insert(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY.into(), seal.to_vec());
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove_raw_statement(&batch)
+            .expect("fresh cryptographic proof for attacker-selected rows");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("attacker payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let error = verify_axt_proof_envelope(&envelope)
+            .expect_err("transfer AXT verifier must reject an appended burn");
+        assert!(matches!(
+            error,
+            Error::InvalidProofSemantics {
+                profile: "axt_transfer_claim",
+                ..
+            }
+        ));
     }
     #[test]
     fn bind_axt_batch_rejects_parameter_mismatch() {
@@ -1625,7 +2115,7 @@ mod tests {
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         for key in ["claim_digest", "policy_commitment", "verified_effect_type"] {
             let mut tampered = batch.clone();
@@ -1645,7 +2135,7 @@ mod tests {
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         for key in ["source_receipt_id", "witness_commitment", "corridor"] {
             let mut tampered = batch.clone();
@@ -1668,7 +2158,7 @@ mod tests {
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let mut envelope = envelope_with_payload(binding, payload);
@@ -1684,7 +2174,7 @@ mod tests {
         let mut batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         batch.parameter = "fastpq-lane-minimal".to_owned();
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
@@ -1700,7 +2190,7 @@ mod tests {
         let mut batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         batch.public_inputs.dsid = dsid_bytes(binding.source_dsid + 1);
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
@@ -1716,7 +2206,7 @@ mod tests {
         let mut batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let mut embedded = binding.clone();
         embedded.claim_digest =
@@ -1738,7 +2228,7 @@ mod tests {
         let mut batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         batch
             .metadata
@@ -1792,7 +2282,7 @@ mod tests {
         let mut batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         batch
             .metadata
@@ -1810,7 +2300,7 @@ mod tests {
         let mut batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         batch.metadata.insert(
             "target_dsids".into(),
@@ -1851,10 +2341,11 @@ mod tests {
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
         bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
             .expect("bind transfer claim batch");
-        let proof_batch = real_authorization_batch(&sample_binding());
+        let proof_binding = sample_binding();
+        let proof_batch = real_authorization_batch(&proof_binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&proof_batch)
+            .prove_axt_bound(&proof_batch, &proof_binding)
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
@@ -1867,17 +2358,22 @@ mod tests {
     fn verify_axt_envelope_rejects_transfer_claim_without_transfer_rows() {
         let mut binding = sample_binding();
         binding.claim_type = "value_conservation".to_owned();
-        let batch = real_authorization_batch(&binding);
-        let proof = Prover::canonical(DEFAULT_PARAMETER)
-            .expect("prover")
-            .prove(&batch)
-            .expect("proof");
-        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
-        let envelope = envelope_with_payload(binding, payload);
-        let err = verify_axt_proof_envelope(&envelope).expect_err("non-transfer claim must fail");
-        assert!(
-            matches!(err, Error::InvalidAxtBinding { details } if details.contains("transfer transitions"))
-        );
+        let mut batch = unbound_axt_batch(&binding);
+        batch.push(StateTransition::new(
+            b"account/opaque/not-a-transfer".to_vec(),
+            b"before".to_vec(),
+            b"after".to_vec(),
+            OperationKind::MetaSet,
+        ));
+        let error = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("transfer claim without exclusively transfer rows must fail");
+        assert!(matches!(
+            error,
+            Error::InvalidProofSemantics {
+                profile: "axt_transfer_claim",
+                ..
+            }
+        ));
     }
     #[test]
     fn verify_axt_envelope_accepts_transfer_claims_with_real_transcripts() {
@@ -1900,7 +2396,7 @@ mod tests {
             );
             let proof = Prover::canonical(DEFAULT_PARAMETER)
                 .expect("prover")
-                .prove(&batch)
+                .prove_axt_bound(&batch, &binding)
                 .expect("proof");
             let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
             let envelope = envelope_with_payload(binding, payload);
@@ -1909,6 +2405,185 @@ mod tests {
             assert!(verified.statement_digest.iter().any(|byte| *byte != 0));
             assert!(verified.proof_digest.as_ref().iter().any(|byte| *byte != 0));
         }
+    }
+    #[test]
+    fn remote_spend_claim_is_linked_one_for_one_to_real_transfer_transcript() {
+        let binding = remote_transfer_binding();
+        let batch = real_transfer_claim_batch(&binding);
+        assert!(
+            batch
+                .metadata
+                .contains_key(AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY)
+        );
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove_axt_bound(&batch, &binding)
+            .expect("proof for transcript-linked remote spend");
+        let envelope = envelope_with_payload(
+            binding,
+            encode_axt_fastpq_payload(&batch, proof).expect("payload"),
+        );
+        verify_axt_proof_envelope(&envelope)
+            .expect("exact transcript-linked remote spend must verify");
+    }
+    #[test]
+    fn remote_spend_claim_rejects_mismatched_transcript_amount() {
+        let binding = remote_transfer_binding();
+        let mut batch = real_transfer_claim_batch(&binding);
+        batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+        let mut claims: Vec<AxtRemoteSpendClaimV1> = decode_from_bytes(
+            batch
+                .metadata
+                .get(AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY)
+                .expect("remote-spend claim metadata"),
+        )
+        .expect("decode remote-spend claims");
+        claims[0].effective_amount = Quantity::from(34_u64);
+        batch.metadata.insert(
+            AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY.into(),
+            encode_canonical_norito(&claims).expect("encode mismatched claim"),
+        );
+        let mut malicious_binding = binding;
+        malicious_binding.remote_spend_intent_commitments =
+            vec![compute_remote_spend_claim_commitment_v1(&claims[0])];
+        let error = bind_axt_batch(&mut batch, &malicious_binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("claim amount without an exact transcript must fail closed");
+        assert!(matches!(
+            error,
+            Error::InvalidAxtBinding { details }
+                if details.contains("one-for-one")
+        ));
+    }
+    #[test]
+    fn remote_spend_claim_rejects_two_handle_claims_for_one_transfer_delta() {
+        let mut binding = remote_transfer_binding();
+        let mut batch = real_transfer_claim_batch(&binding);
+        batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+        let claims: Vec<AxtRemoteSpendClaimV1> = decode_from_bytes(
+            batch
+                .metadata
+                .get(AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY)
+                .expect("remote-spend claim metadata"),
+        )
+        .expect("decode remote-spend claims");
+        let mut second = claims[0].clone();
+        second.handle_replay_key.sub_nonce += 1;
+        let mut claims = vec![claims[0].clone(), second];
+        claims.sort_unstable_by_key(compute_remote_spend_claim_commitment_v1);
+        binding.remote_spend_intent_commitments = claims
+            .iter()
+            .map(compute_remote_spend_claim_commitment_v1)
+            .collect();
+        set_axt_remote_spend_claims(&mut batch, &binding, &claims)
+            .expect("attach two distinct handle-bound claims");
+        let error = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("one transfer delta cannot satisfy two handle-bound claims");
+        assert!(matches!(
+            error,
+            Error::InvalidAxtBinding { details }
+                if details.contains("one-for-one") && details.contains("cardinality")
+        ));
+    }
+    #[test]
+    fn remote_spend_claim_rejects_handle_dataspace_different_from_proof_source() {
+        let mut binding = remote_transfer_binding();
+        let mut batch = real_transfer_claim_batch(&binding);
+        batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+        let mut claims: Vec<AxtRemoteSpendClaimV1> = decode_from_bytes(
+            batch
+                .metadata
+                .get(AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY)
+                .expect("remote-spend claim metadata"),
+        )
+        .expect("decode remote-spend claims");
+        claims[0].handle_replay_key.asset_dsid = DataSpaceId::new(binding.source_dsid + 1);
+        binding.remote_spend_intent_commitments =
+            vec![compute_remote_spend_claim_commitment_v1(&claims[0])];
+        set_axt_remote_spend_claims(&mut batch, &binding, &claims)
+            .expect("attach mismatched-dataspace claim preimage");
+        let error = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("claim dataspace must equal the proof source partition");
+        assert!(matches!(
+            error,
+            Error::InvalidAxtBinding { details }
+                if details.contains("asset_dsid") && details.contains("source_dsid")
+        ));
+    }
+    #[test]
+    fn remote_spend_claim_rejects_alias_account_text() {
+        let binding = remote_transfer_binding();
+        let mut batch = real_transfer_claim_batch(&binding);
+        batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+        let mut claims: Vec<AxtRemoteSpendClaimV1> = decode_from_bytes(
+            batch
+                .metadata
+                .get(AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY)
+                .expect("remote-spend claim metadata"),
+        )
+        .expect("decode remote-spend claims");
+        claims[0].from = "spender@payments".to_owned();
+        batch.metadata.insert(
+            AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY.into(),
+            encode_canonical_norito(&claims).expect("encode alias claim"),
+        );
+        let mut malicious_binding = binding;
+        malicious_binding.remote_spend_intent_commitments =
+            vec![compute_remote_spend_claim_commitment_v1(&claims[0])];
+        let error = bind_axt_batch(&mut batch, &malicious_binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("an alias claim account must fail closed");
+        assert!(matches!(
+            error,
+            Error::InvalidAxtBinding { details } if details.contains("canonical I105")
+        ));
+    }
+    #[test]
+    fn remote_spend_claim_rejects_opaque_profile_and_wrong_asset() {
+        let mut opaque_binding = remote_transfer_binding();
+        opaque_binding.claim_type = "authorization".to_owned();
+        let mut opaque_batch = unbound_axt_batch(&opaque_binding);
+        opaque_batch.push(StateTransition::new(
+            b"account/axt/opaque".to_vec(),
+            b"pending".to_vec(),
+            b"authorized".to_vec(),
+            OperationKind::MetaSet,
+        ));
+        let claim = real_transfer_claim(&opaque_binding);
+        set_axt_remote_spend_claims(&mut opaque_batch, &opaque_binding, &[claim])
+            .expect("attach exact commitment preimage");
+        let error = bind_axt_batch(
+            &mut opaque_batch,
+            &opaque_binding,
+            [0x42; 32],
+            Some([0x24; 32]),
+        )
+        .expect_err("opaque proof must never authorize a remote spend");
+        assert!(matches!(
+            error,
+            Error::InvalidAxtBinding { details }
+                if details.contains("opaque AXT proofs cannot authorize handles")
+        ));
+
+        let mut wrong_asset_binding = remote_transfer_binding();
+        let mut wrong_asset_batch = real_transfer_claim_batch(&wrong_asset_binding);
+        wrong_asset_batch
+            .metadata
+            .remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+        let wrong_domain = DomainId::try_new("other", "universal").expect("domain id");
+        let wrong_asset =
+            AssetDefinitionId::derive_from_components(wrong_domain, "rose".parse().unwrap());
+        wrong_asset_binding.effect_binding = Some(transfer_effect_binding(&wrong_asset));
+        let error = bind_axt_batch(
+            &mut wrong_asset_batch,
+            &wrong_asset_binding,
+            [0x42; 32],
+            Some([0x24; 32]),
+        )
+        .expect_err("wrong source asset must fail before proof generation");
+        assert!(matches!(
+            error,
+            Error::InvalidAxtBinding { details }
+                if details.contains("asset other than source_asset_definition_id")
+        ));
     }
     #[test]
     fn verify_axt_envelope_rejects_transfer_transcript_from_an_unrelated_transaction() {
@@ -1933,7 +2608,7 @@ mod tests {
             .expect("reseal unrelated transfer batch");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_with_semantics(&batch, ProofSemantics::AxtTransferClaim)
             .expect("proof for internally consistent unrelated transcript");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
@@ -1954,7 +2629,7 @@ mod tests {
         );
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
@@ -1982,7 +2657,7 @@ mod tests {
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let payload = AxtFastpqProofPayload {
             batch: transition_batch_to_model(&batch),
@@ -2017,7 +2692,7 @@ mod tests {
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
@@ -2042,7 +2717,7 @@ mod tests {
         .expect("bind proof amount");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let mut envelope =
             axt_proof_envelope_from_bound_batch(&batch, proof, [0x42; 32], Some([0x24; 32]))
@@ -2080,7 +2755,7 @@ mod tests {
         .expect("bind proof expiry");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let blob =
             axt_proof_blob_from_bound_batch(&batch, proof, [0x42; 32], Some([0x24; 32]), Some(5))
@@ -2120,7 +2795,7 @@ mod tests {
         );
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let blob = axt_proof_blob_from_bound_batch(&batch, proof, [0x42; 32], None, None)
             .expect("package authenticated no-expiry proof");
@@ -2142,7 +2817,7 @@ mod tests {
                 .insert(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY.into(), seal.to_vec());
             let proof = Prover::canonical(DEFAULT_PARAMETER)
                 .expect("prover")
-                .prove(&batch)
+                .prove_with_semantics(&batch, ProofSemantics::AxtOpaqueEffect)
                 .expect("proof");
             let envelope = AxtProofEnvelope {
                 dsid: DataSpaceId::new(binding.source_dsid),
@@ -2211,7 +2886,7 @@ mod tests {
         .expect("bind original expiry");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
 
         batch.metadata.insert(
@@ -2247,7 +2922,7 @@ mod tests {
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let mut envelope = envelope_with_payload(binding, payload);
@@ -2272,7 +2947,7 @@ mod tests {
         .expect("bind proof amount");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
 
         let mut malformed = batch.clone();
@@ -2328,7 +3003,7 @@ mod tests {
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
@@ -2442,7 +3117,7 @@ mod tests {
         let mut batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         batch.push(StateTransition::new(
             b"account/real/axt-tampered".to_vec(),
@@ -2474,7 +3149,7 @@ mod tests {
             .expect("rebind mutated batch");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&other_batch)
+            .prove_axt_bound(&other_batch, &binding)
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
@@ -2487,7 +3162,7 @@ mod tests {
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let raw_proof = to_bytes(&proof).expect("proof bytes");
         let envelope = envelope_with_payload(binding, raw_proof);
@@ -2509,7 +3184,7 @@ mod tests {
         .expect("bind proof expiry");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
         let manifest_root = [0x42; 32];
         let blob = axt_proof_blob_from_bound_batch(
@@ -2547,7 +3222,7 @@ mod tests {
         .expect("bind proof metadata");
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
 
         let wrong_manifest = axt_proof_blob_from_bound_batch(
@@ -2580,11 +3255,11 @@ mod tests {
     fn axt_proof_blob_helper_rejects_unbound_batch() {
         let binding = sample_binding();
         let mut batch = real_authorization_batch(&binding);
-        batch.metadata.remove(AXT_FASTPQ_BINDING_METADATA_KEY);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
+        batch.metadata.remove(AXT_FASTPQ_BINDING_METADATA_KEY);
         let err = axt_proof_blob_from_bound_batch(&batch, proof, [0x42; 32], None, None)
             .expect_err("unbound batch must fail");
         assert!(
@@ -2595,11 +3270,11 @@ mod tests {
     fn verify_axt_envelope_rejects_batch_without_axt_binding_metadata() {
         let binding = sample_binding();
         let mut batch = real_authorization_batch(&binding);
-        batch.metadata.remove(AXT_FASTPQ_BINDING_METADATA_KEY);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("proof");
+        batch.metadata.remove(AXT_FASTPQ_BINDING_METADATA_KEY);
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
         let err = verify_axt_proof_envelope(&envelope).expect_err("missing binding must fail");

@@ -132,6 +132,82 @@ class SealedCandidateBuildTests(unittest.TestCase):
         self.assert_no_owned_live_process_group_member(
             int(pid_path.read_text(encoding="ascii").strip())
         )
+
+    def test_native_builder_launch_rejects_missing_receipt(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(
+                builder.CandidateBuildError,
+                "requires its native pre-exec launch receipt",
+            ):
+                builder._validate_native_builder_launch([])
+
+    def test_native_builder_launch_rejects_unknown_environment(self) -> None:
+        base_environment = {
+            "HOME": "/var/empty",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TMPDIR": "/private/var/tmp",
+            "TZ": "UTC",
+        }
+        environment_values = [
+            value
+            for name in sorted(base_environment)
+            for value in (name, base_environment[name])
+        ]
+        launch = {
+            "argument_contract": builder.NATIVE_SEALED_BUILDER_ARGUMENT_CONTRACT,
+            "argument_sha256": builder._native_builder_digest(
+                builder.NATIVE_SEALED_BUILDER_ARGUMENT_CONTRACT, []
+            ),
+            "builder_entrypoint_sha256": "1" * 64,
+            "contract": builder.NATIVE_SEALED_BUILDER_LAUNCH_CONTRACT,
+            "controller_sha256": "2" * 64,
+            "environment_contract": (
+                builder.NATIVE_SEALED_BUILDER_ENVIRONMENT_CONTRACT
+            ),
+            "environment_sha256": builder._native_builder_digest(
+                builder.NATIVE_SEALED_BUILDER_ENVIRONMENT_CONTRACT,
+                environment_values,
+            ),
+            "macos_build": "25F84",
+            "os_tcb_contract": "iroha.kagemusha.macos-os-library-tcb.v1",
+            "os_tcb_sha256": "3" * 64,
+            "python_interpreter_sha256": "4" * 64,
+            "python_runtime_tree_sha256": "5" * 64,
+            "report_publication_contract": (
+                "iroha.kagemusha.native-no-replace-report-publication.v1"
+            ),
+            "runtime_dependency_contract": (
+                "iroha.kagemusha.symlink-free-macho-runtime-closure.v1"
+            ),
+        }
+        receipt = builder._canonical_json_line({"native_launch": launch})
+        environment = {
+            **base_environment,
+            builder.NATIVE_SEALED_BUILDER_RECEIPT_FD_ENV: "11",
+            builder.NATIVE_SEALED_BUILDER_RECEIPT_SHA256_ENV: hashlib.sha256(
+                receipt
+            ).hexdigest(),
+            builder.NATIVE_SEALED_BUILDER_ENTRYPOINT_FD_ENV: "12",
+            builder.NATIVE_SEALED_BUILDER_REVIEWED_ROOT_ENV: str(builder.REPO_ROOT),
+            "KAGEMUSHA_HOSTILE_PYTHONSTARTUP": "/tmp/hostile.py",
+        }
+        reads = iter((receipt, b""))
+        fifo_metadata = mock.Mock(st_mode=builder.stat.S_IFIFO)
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch.object(builder.os, "fstat", return_value=fifo_metadata),
+            mock.patch.object(builder.os, "read", side_effect=lambda *_: next(reads)),
+            mock.patch.object(builder.os, "close"),
+        ):
+            with self.assertRaisesRegex(
+                builder.CandidateBuildError,
+                "environment differs from the native launch contract",
+            ):
+                builder._validate_native_builder_launch([])
+
     def setUp(self) -> None:
         # macOS attaches host-specific provenance xattrs to temporary-directory
         # ancestors.  These tests exercise admission logic with synthetic roots;

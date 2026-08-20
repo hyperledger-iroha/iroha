@@ -213,6 +213,46 @@ struct AxtIssuerKeyBinding {
     issuer: UniversalAccountId,
     public_key: PublicKey,
 }
+struct ExactProofConsumption<'proof> {
+    proof: &'proof ProofBlob,
+    consumed: Vec<[u8; 32]>,
+}
+struct ExactProofConsumptionIndex<'proof> {
+    groups: Vec<ExactProofConsumption<'proof>>,
+    buckets: BTreeMap<(Option<u64>, Hash), Vec<usize>>,
+}
+impl<'proof> ExactProofConsumptionIndex<'proof> {
+    fn new() -> Self {
+        Self {
+            groups: Vec::new(),
+            buckets: BTreeMap::new(),
+        }
+    }
+    fn index(&mut self, proof: &'proof ProofBlob) -> usize {
+        let key = (proof.expiry_slot, Hash::new(&proof.payload));
+        if let Some(index) = self.buckets.get(&key).and_then(|bucket| {
+            bucket
+                .iter()
+                .copied()
+                .find(|index| self.groups[*index].proof == proof)
+        }) {
+            return index;
+        }
+        let index = self.groups.len();
+        self.groups.push(ExactProofConsumption {
+            proof,
+            consumed: Vec::new(),
+        });
+        self.buckets.entry(key).or_default().push(index);
+        index
+    }
+    fn consume(&mut self, index: usize, commitment: [u8; 32]) {
+        self.groups[index].consumed.push(commitment);
+    }
+    fn into_groups(self) -> impl Iterator<Item = ExactProofConsumption<'proof>> {
+        self.groups.into_iter()
+    }
+}
 const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = ivm::gas::HOST_BYTE_GAS_BASE;
 const PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT: u64 = ivm::gas::SYSCALL_GAS_PER_BYTE;
 const CREATE_NFTS_ALL_GAS: u64 = ivm::gas::HOST_BYTE_GAS_BASE;
@@ -365,6 +405,17 @@ fn legacy_transfer_v1_source_scope_for_world<W: WorldReadOnly>(
         return Err(ivm::VMError::PermissionDenied);
     };
     Ok(AssetBalanceScope::Dataspace(dataspace))
+}
+/// Convert a registered definition policy and exact AXT intent dataspace into
+/// the public balance scope that the remote proof is claiming.
+pub(crate) const fn remote_spend_asset_scope_from_policy(
+    policy: AssetBalancePolicy,
+    asset_dsid: DataSpaceId,
+) -> AssetBalanceScope {
+    match policy {
+        AssetBalancePolicy::Global => AssetBalanceScope::Global,
+        AssetBalancePolicy::DataspaceRestricted => AssetBalanceScope::Dataspace(asset_dsid),
+    }
 }
 #[cfg(feature = "sm-ffi-openssl")]
 fn apply_sm_openssl_preview(enabled: bool) {
@@ -676,6 +727,8 @@ pub struct CoreHostImpl<QS> {
     axt_policy_snapshot: Option<AxtPolicySnapshot>,
     // Issuer keys resolved only from committed Space Directory/UAID state.
     axt_issuer_keys: Arc<BTreeMap<DataSpaceId, AxtIssuerKeyBinding>>,
+    // Authoritative definition policies frozen from WSV for state-free AXT runs.
+    axt_asset_policies: Arc<BTreeMap<AssetDefinitionId, AssetBalancePolicy>>,
     // Bounded replay ledger hydrated from WSV.
     axt_replay_ledger: Arc<BTreeMap<AxtHandleReplayKey, AxtReplayRecord>>,
     // Slot for which cached AXT proofs were verified.
@@ -2686,6 +2739,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
             axt_issuer_keys: Arc::new(BTreeMap::new()),
+            axt_asset_policies: Arc::new(BTreeMap::new()),
             axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
@@ -2811,6 +2865,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
             axt_issuer_keys: Arc::new(BTreeMap::new()),
+            axt_asset_policies: Arc::new(BTreeMap::new()),
             axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
@@ -2894,6 +2949,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_policy_snapshot: None,
             axt_issuer_keys: Arc::new(BTreeMap::new()),
+            axt_asset_policies: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
             last_axt_reject: None,
@@ -3399,6 +3455,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 public_key,
             },
         );
+    }
+    /// Install one registered asset policy into an explicitly constructed test host.
+    ///
+    /// Production hosts obtain this snapshot only through [`Self::hydrate_axt_state`].
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn set_axt_asset_policy_for_tests(
+        &mut self,
+        asset_definition_id: AssetDefinitionId,
+        policy: AssetBalancePolicy,
+    ) {
+        Arc::make_mut(&mut self.axt_asset_policies).insert(asset_definition_id, policy);
     }
     fn clear_axt_proof_cache(&mut self) {
         for (dsid, entry) in core::mem::take(Arc::make_mut(&mut self.axt_proof_cache)) {
@@ -6028,6 +6095,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 replay_ledger.insert(*key, *entry);
             }
         }
+        let asset_policies = state
+            .world()
+            .asset_definitions_iter()
+            .map(|definition| (definition.id.clone(), definition.balance_scope_policy()))
+            .collect();
         let mut issuer_keys = BTreeMap::new();
         for binding in &snapshot.entries {
             if binding.policy.manifest_root.iter().all(|byte| *byte == 0) {
@@ -6058,6 +6130,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.axt_replay_ledger = Arc::new(replay_ledger);
         self.install_validated_axt_policy_snapshot(&snapshot, policy);
         self.axt_issuer_keys = Arc::new(issuer_keys);
+        self.axt_asset_policies = Arc::new(asset_policies);
         self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
         Ok(())
     }
@@ -6077,6 +6150,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(ivm::VMError::PermissionDenied);
         };
+        fastpq_prover::validate_axt_transfer_claim_binding(binding).map_err(|err| {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!("generic AXT proof admission requires a witnessed transfer claim: {err}"),
+            );
+            ivm::VMError::PermissionDenied
+        })?;
         if binding.source_dsid != dsid.as_u64() {
             self.record_axt_reject(
                 AxtRejectReason::Proof,
@@ -6166,6 +6248,52 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             payload: proof.payload.clone(),
             expiry_slot: proof.expiry_slot,
         };
+        // Decode and enforce the generic-consumer semantic profile before the
+        // proof cache lookup. Otherwise a proof cached by an older or more
+        // specialized verification path could turn an opaque carrier into a
+        // contract-observable authorization success.
+        let envelope =
+            decode_canonical_norito::<ModelAxtProofEnvelope>(&proof.payload).map_err(|err| {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    Some(dsid),
+                    Some(policy.target_lane),
+                    format!("proof payload is not an AXT proof envelope: {err}"),
+                );
+                self.note_axt_proof_cache_event(AXT_PROOF_CACHE_REJECT);
+                ivm::VMError::NoritoInvalid
+            })?;
+        if envelope.dsid != dsid || envelope.manifest_root != policy.manifest_root {
+            self.record_axt_reject(
+                AxtRejectReason::Manifest,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!(
+                    "proof does not match policy manifest_root={}",
+                    hex::encode(policy.manifest_root)
+                ),
+            );
+            self.note_axt_proof_cache_event(AXT_PROOF_CACHE_REJECT);
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        let Some(binding) = envelope.fastpq_binding.as_ref() else {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                "FASTPQ proof envelope is missing fastpq_binding",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        };
+        fastpq_prover::validate_axt_transfer_claim_binding(binding).map_err(|err| {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!("generic AXT proof admission requires a witnessed transfer claim: {err}"),
+            );
+            ivm::VMError::PermissionDenied
+        })?;
         let digest = Self::axt_proof_cache_digest(proof);
         let mut cache_snapshot: Option<CachedProofEntry> = None;
         let mut cache_event: Option<&'static str> = None;
@@ -6219,30 +6347,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     hex::encode(policy.manifest_root)
                 ),
             );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        let envelope =
-            decode_canonical_norito::<ModelAxtProofEnvelope>(&proof.payload).map_err(|err| {
-                self.record_axt_reject(
-                    AxtRejectReason::Proof,
-                    Some(dsid),
-                    Some(policy.target_lane),
-                    format!("proof payload is not an AXT proof envelope: {err}"),
-                );
-                self.note_axt_proof_cache_event(AXT_PROOF_CACHE_REJECT);
-                ivm::VMError::NoritoInvalid
-            })?;
-        if envelope.dsid != dsid || envelope.manifest_root != policy.manifest_root {
-            self.record_axt_reject(
-                AxtRejectReason::Manifest,
-                Some(dsid),
-                Some(policy.target_lane),
-                format!(
-                    "proof does not match policy manifest_root={}",
-                    hex::encode(policy.manifest_root)
-                ),
-            );
-            self.note_axt_proof_cache_event(AXT_PROOF_CACHE_REJECT);
             return Err(ivm::VMError::PermissionDenied);
         }
         self.verify_fastpq_envelope_binding(dsid, &envelope, proof.expiry_slot, policy)?;
@@ -9262,12 +9366,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         usage: &axt::HandleUsage,
         proof: &ProofBlob,
     ) -> Result<(), ivm::VMError> {
-        let descriptor_binding = usage
-            .handle
-            .binding_array()
-            .ok_or(ivm::VMError::NoritoInvalid)?;
         axt::validate_remote_spend_intent_commitment(
-            descriptor_binding,
+            &usage.handle,
             &usage.intent,
             &usage.amount,
             proof,
@@ -9337,24 +9437,98 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             err.to_vm_error()
         })
     }
+    fn validate_axt_remote_spend_asset_policy(
+        &mut self,
+        intent: &RemoteSpendIntent,
+        target_lane: LaneId,
+    ) -> Result<(), ivm::VMError> {
+        let balance_policy = if let Some(state_ref) = self.query_state.get() {
+            state_ref.asset_balance_policy(&intent.op.asset_definition_id)
+        } else {
+            self.axt_asset_policies
+                .get(&intent.op.asset_definition_id)
+                .copied()
+                .ok_or(ivm::VMError::DecodeError)
+        };
+        let balance_policy = match balance_policy {
+            Ok(policy) => policy,
+            Err(error) => {
+                self.record_axt_reject(
+                    AxtRejectReason::PolicyDenied,
+                    Some(intent.asset_dsid),
+                    Some(target_lane),
+                    "remote-spend asset definition is not registered",
+                );
+                return Err(error);
+            }
+        };
+        let source_scope = remote_spend_asset_scope_from_policy(balance_policy, intent.asset_dsid);
+        axt::validate_remote_spend_asset_scope(intent.asset_dsid, source_scope).map_err(|error| {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(intent.asset_dsid),
+                Some(target_lane),
+                "remote-spend asset does not belong to the intent dataspace",
+            );
+            error
+        })
+    }
     fn validate_axt_remote_spends_at_commit(
         &mut self,
         state: &axt::HostAxtState,
     ) -> Result<(), ivm::VMError> {
+        // Digest buckets avoid comparing every large proof payload with every
+        // handle. Exact equality within a matching bucket remains the final
+        // collision-safe identity check. Fallback groups are indexed once by
+        // dataspace so repeated uses neither rehash nor rescan their payload.
+        let mut consumed_by_proof = ExactProofConsumptionIndex::new();
+        let mut fallback_group_by_dsid = BTreeMap::new();
+        for (dsid, proof) in state.proofs() {
+            let group_index = consumed_by_proof.index(proof);
+            fallback_group_by_dsid.insert(*dsid, group_index);
+        }
         for usage in state.handles() {
-            let proof = usage
-                .proof
-                .as_ref()
-                .or_else(|| state.proofs().get(&usage.intent.asset_dsid))
-                .ok_or_else(|| {
-                    self.record_axt_reject(
-                        AxtRejectReason::Proof,
-                        Some(usage.intent.asset_dsid),
-                        Some(usage.handle.target_lane),
-                        "missing FASTPQ proof for remote spend intent commitment",
-                    );
-                    ivm::VMError::PermissionDenied
-                })?;
+            if let Some(origin_dsid) = usage.handle.subject.origin_dsid
+                && !state.expected_dsids().contains(&origin_dsid)
+            {
+                self.record_axt_reject(
+                    AxtRejectReason::Descriptor,
+                    Some(usage.intent.asset_dsid),
+                    Some(usage.handle.target_lane),
+                    "authenticated handle origin dataspace is not declared by the bound AXT descriptor",
+                );
+                return Err(ivm::VMError::PermissionDenied);
+            }
+            let (proof, proof_group_index) = if let Some(proof) = usage.proof.as_ref() {
+                let group_index = consumed_by_proof.index(proof);
+                (proof, group_index)
+            } else {
+                let proof = state
+                    .proofs()
+                    .get(&usage.intent.asset_dsid)
+                    .ok_or_else(|| {
+                        self.record_axt_reject(
+                            AxtRejectReason::Proof,
+                            Some(usage.intent.asset_dsid),
+                            Some(usage.handle.target_lane),
+                            "missing FASTPQ proof for remote spend intent commitment",
+                        );
+                        ivm::VMError::PermissionDenied
+                    })?;
+                let group_index = *fallback_group_by_dsid
+                    .get(&usage.intent.asset_dsid)
+                    .ok_or_else(|| {
+                        self.record_axt_reject(
+                            AxtRejectReason::Proof,
+                            Some(usage.intent.asset_dsid),
+                            Some(usage.handle.target_lane),
+                            "missing indexed FASTPQ fallback proof",
+                        );
+                        ivm::VMError::PermissionDenied
+                    })?;
+                (proof, group_index)
+            };
+            self.validate_axt_remote_spend_asset_policy(&usage.intent, usage.handle.target_lane)?;
             self.validate_axt_proof_covers_handle_expiry(usage, proof)?;
             // A per-dataspace proof may be installed or replaced after a
             // handle was recorded. Re-resolve against the exact proof that
@@ -9400,6 +9574,43 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 return Err(ivm::VMError::PermissionDenied);
             }
             self.validate_axt_remote_spend_commitment(usage, proof)?;
+            let commitment = axt::expected_remote_spend_intent_commitment_v1(
+                &usage.handle,
+                &usage.intent,
+                &resolved.amount,
+            )
+            .map_err(|error| {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    Some(usage.intent.asset_dsid),
+                    Some(usage.handle.target_lane),
+                    "remote-spend handle cannot be represented by the proof commitment",
+                );
+                error
+            })?;
+            consumed_by_proof.consume(proof_group_index, commitment);
+        }
+        for group in consumed_by_proof.into_groups() {
+            let envelope = decode_canonical_norito::<ModelAxtProofEnvelope>(&group.proof.payload)
+                .map_err(|_| {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    None,
+                    None,
+                    "final FASTPQ proof is not a canonical AXT proof envelope",
+                );
+                ivm::VMError::NoritoInvalid
+            })?;
+            let facts = axt::AxtProofUseFacts::from_verified_envelope(envelope);
+            if let Err(error) = facts.validate_remote_spend_consumption(&group.consumed) {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    None,
+                    None,
+                    "FASTPQ remote-spend claims were not consumed exactly once",
+                );
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -9441,11 +9652,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let intent_tlv = Self::expect_tlv(vm, intent_ptr, PointerType::NoritoBytes)?;
         gas_len = gas_len.saturating_add(intent_tlv.payload.len());
         let intent: RemoteSpendIntent = Self::decode_header(intent_tlv.payload)?;
-        let (state_binding, dsid_expected, has_touch) = {
+        let (state_binding, dsid_expected, origin_expected, has_touch) = {
             let state_ref = self.axt_state.as_ref().expect("axt_state checked above");
             (
                 state_ref.binding(),
                 state_ref.expected_dsids().contains(&intent.asset_dsid),
+                handle
+                    .subject
+                    .origin_dsid
+                    .is_none_or(|origin| state_ref.expected_dsids().contains(&origin)),
                 state_ref.has_touch(&intent.asset_dsid),
             )
         };
@@ -9464,6 +9679,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 Some(intent.asset_dsid),
                 Some(handle.target_lane),
                 "intent references undeclared dataspace",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        if !origin_expected {
+            self.record_axt_reject(
+                AxtRejectReason::Descriptor,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "authenticated handle origin dataspace is not declared by the bound AXT descriptor",
             );
             return Err(ivm::VMError::PermissionDenied);
         }
@@ -9608,6 +9832,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(error);
         }
+        self.validate_axt_remote_spend_asset_policy(&intent, handle.target_lane)?;
         let usage = axt::HandleUsage {
             handle,
             intent,
@@ -13086,6 +13311,10 @@ seiyaku PrivilegedBinding {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".to_owned(),
                 from: authority,
                 to: destination,
@@ -13187,6 +13416,56 @@ seiyaku PrivilegedBinding {
         assert_eq!(entry.digest, expected_digest);
         assert_eq!(entry.manifest_root, Some(manifest_root));
     }
+
+    #[test]
+    fn axt_verify_ds_proof_rejects_opaque_carrier_before_valid_cache_hit() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(103);
+        let manifest_root = [0xA3; 32];
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        let mut host = CoreHost::new(ALICE_ID.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
+        let mut vm = IVM::new(10_000);
+        begin_axt_envelope(&mut host, &mut vm, &descriptor);
+        let opaque = opaque_proof_blob_for(
+            dsid,
+            manifest_root,
+            b"opaque-authorization-cache-attack",
+            20,
+        );
+        let digest = CoreHost::axt_proof_cache_digest(&opaque);
+        host.cache_proof_entry(
+            dsid,
+            digest,
+            Some(20),
+            Some(5),
+            Some(manifest_root),
+            true,
+            AXT_PROOF_CACHE_HIT,
+        );
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &norito_blob(&opaque));
+        vm.set_register(10, ds_ptr);
+        vm.set_register(11, proof_ptr);
+        assert_eq!(
+            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+            Err(VMError::PermissionDenied),
+            "an old valid cache bit must not make an opaque carrier contract-observable"
+        );
+        let reject = host.take_axt_reject_for_tests().expect("reject context");
+        assert_eq!(reject.reason, AxtRejectReason::Proof);
+        assert!(
+            reject
+                .detail
+                .contains("requires a witnessed transfer claim")
+        );
+    }
+
     #[test]
     fn axt_verify_ds_proof_rejects_mutated_outer_expiry_on_cache_hit() {
         crate::test_alias::ensure();
@@ -13514,6 +13793,10 @@ seiyaku PrivilegedBinding {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
@@ -13596,6 +13879,10 @@ seiyaku PrivilegedBinding {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
@@ -13677,6 +13964,10 @@ seiyaku PrivilegedBinding {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
@@ -13845,6 +14136,10 @@ seiyaku PrivilegedBinding {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
@@ -13910,6 +14205,10 @@ seiyaku PrivilegedBinding {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
@@ -14445,6 +14744,11 @@ seiyaku PrivilegedBinding {
                 intent: RemoteSpendIntent {
                     asset_dsid: dsid,
                     op: SpendOp {
+                        asset_definition_id:
+                            iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                            ])
+                            .expect("valid AXT fixture asset id"),
                         kind: "transfer".into(),
                         from: authority.to_string(),
                         to: fixture_account_literal("bob"),
@@ -14556,6 +14860,10 @@ seiyaku PrivilegedBinding {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
@@ -14634,6 +14942,11 @@ seiyaku PrivilegedBinding {
             intent: RemoteSpendIntent {
                 asset_dsid,
                 op: SpendOp {
+                    asset_definition_id:
+                        iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                        ])
+                        .expect("valid AXT fixture asset id"),
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: fixture_account_literal("bob"),
@@ -14724,6 +15037,10 @@ seiyaku PrivilegedBinding {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
@@ -14818,6 +15135,10 @@ seiyaku PrivilegedBinding {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
@@ -14919,6 +15240,10 @@ seiyaku PrivilegedBinding {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("charlie"),
@@ -16564,6 +16889,29 @@ mod tests {
         ivm::host::state_value_gas(norito_blob(&state_path_for_test(path)).len(), value_len)
     }
     include!("host/core_codec_and_contract_tests.rs");
+
+    #[test]
+    fn remote_spend_asset_scope_respects_registered_balance_policy() {
+        let private = DataSpaceId::new(7);
+        let global_scope = remote_spend_asset_scope_from_policy(
+            AssetBalancePolicy::Global,
+            DataSpaceId::UNIVERSAL,
+        );
+        assert_eq!(global_scope, AssetBalanceScope::Global);
+        ivm::axt::validate_remote_spend_asset_scope(DataSpaceId::UNIVERSAL, global_scope)
+            .expect("global balance is valid only in the universal dataspace");
+        assert!(
+            ivm::axt::validate_remote_spend_asset_scope(private, global_scope).is_err(),
+            "global balance must not be relabelled as private-dataspace state"
+        );
+
+        let restricted_scope =
+            remote_spend_asset_scope_from_policy(AssetBalancePolicy::DataspaceRestricted, private);
+        assert_eq!(restricted_scope, AssetBalanceScope::Dataspace(private));
+        ivm::axt::validate_remote_spend_asset_scope(private, restricted_scope)
+            .expect("restricted balance uses the exact signed intent dataspace");
+    }
+
     #[test]
     fn deployed_contract_runtime_binding_uses_live_identity_and_exact_artifact() {
         let authority = ALICE_ID.clone();
@@ -20585,6 +20933,23 @@ seiyaku OpaqueInstructionSubmission {
         proof_seed: &[u8],
         expiry_slot: u64,
     ) -> ProofBlob {
+        proof_blob_for_profile(dsid, manifest_root, proof_seed, expiry_slot, false)
+    }
+    fn opaque_proof_blob_for(
+        dsid: DataSpaceId,
+        manifest_root: [u8; 32],
+        proof_seed: &[u8],
+        expiry_slot: u64,
+    ) -> ProofBlob {
+        proof_blob_for_profile(dsid, manifest_root, proof_seed, expiry_slot, true)
+    }
+    fn proof_blob_for_profile(
+        dsid: DataSpaceId,
+        manifest_root: [u8; 32],
+        proof_seed: &[u8],
+        expiry_slot: u64,
+        opaque: bool,
+    ) -> ProofBlob {
         let source_tx_commitment = test_digest(b"axt-host-test:source-tx", &[proof_seed]);
         let claim_digest = test_digest(b"axt-host-test:claim", &[proof_seed]);
         let witness_commitment = test_digest(b"axt-host-test:witness", &[proof_seed]);
@@ -20595,7 +20960,11 @@ seiyaku OpaqueInstructionSubmission {
             source_dataspace: format!("test-dataspace-{}", dsid.as_u64()),
             source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),
             source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
-            claim_type: "authorization".to_owned(),
+            claim_type: if opaque {
+                "authorization".to_owned()
+            } else {
+                "tx_predicate".to_owned()
+            },
             claim_digest: hex::encode(claim_digest.as_ref()),
             witness_commitment: hex::encode(witness_commitment.as_ref()),
             policy_commitment: hex::encode(policy_commitment.as_ref()),
@@ -20620,12 +20989,65 @@ seiyaku OpaqueInstructionSubmission {
                 tx_set_hash: test_digest(b"axt-host-test:tx-set", &[proof_seed]).into(),
             },
         );
-        batch.push(fastpq_prover::StateTransition::new(
-            b"axt/host/proof".to_vec(),
-            proof_seed.to_vec(),
-            manifest_root.to_vec(),
-            fastpq_prover::OperationKind::MetaSet,
-        ));
+        if opaque {
+            batch.push(fastpq_prover::StateTransition::new(
+                b"axt/host/proof".to_vec(),
+                proof_seed.to_vec(),
+                manifest_root.to_vec(),
+                fastpq_prover::OperationKind::MetaSet,
+            ));
+        } else {
+            let asset_definition = AssetDefinitionId::derive_from_components(
+                fixture_domain_id(),
+                "xor".parse().expect("fixture asset name"),
+            );
+            let from_account = fixture_account("alice");
+            let to_account = fixture_account("bob");
+            let mut transcripts = vec![iroha_data_model::fastpq::TransferTranscript {
+                batch_hash: source_tx_commitment,
+                deltas: vec![iroha_data_model::fastpq::TransferDeltaTranscript {
+                    from_account: from_account.clone(),
+                    to_account: to_account.clone(),
+                    asset_definition: asset_definition.clone(),
+                    amount: Quantity::from(1_u64),
+                    from_balance_before: Quantity::from(10_u64),
+                    from_balance_after: Quantity::from(9_u64),
+                    to_balance_before: Quantity::from(5_u64),
+                    to_balance_after: Quantity::from(6_u64),
+                    from_smt_witness: Default::default(),
+                    to_smt_witness: Default::default(),
+                }],
+                authority_digest: Hash::new(b"axt-host-test:transfer-authority"),
+                poseidon_preimage_digest: None,
+            }];
+            let (old_root, new_root) =
+                fastpq_prover::gadgets::transfer::attach_transfer_smt_witnesses(&mut transcripts)
+                    .expect("attach transfer SMT witnesses");
+            batch.public_inputs.old_root = old_root;
+            batch.public_inputs.new_root = new_root;
+            let poseidon_preimage_digest =
+                fastpq_prover::gadgets::transfer::compute_poseidon_digest(
+                    &transcripts[0].deltas[0],
+                    &transcripts[0].batch_hash,
+                );
+            transcripts[0].poseidon_preimage_digest = Some(poseidon_preimage_digest);
+            batch.push(fastpq_prover::StateTransition::new(
+                format!("asset/{asset_definition}/{from_account}").into_bytes(),
+                10_u64.to_le_bytes().to_vec(),
+                9_u64.to_le_bytes().to_vec(),
+                fastpq_prover::OperationKind::Transfer,
+            ));
+            batch.push(fastpq_prover::StateTransition::new(
+                format!("asset/{asset_definition}/{to_account}").into_bytes(),
+                5_u64.to_le_bytes().to_vec(),
+                6_u64.to_le_bytes().to_vec(),
+                fastpq_prover::OperationKind::Transfer,
+            ));
+            batch.metadata.insert(
+                iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY.to_owned(),
+                norito::to_bytes(&transcripts).expect("encode transfer transcripts"),
+            );
+        }
         batch.sort();
         batch.metadata.insert(
             "entry_hash".to_owned(),
@@ -20642,7 +21064,7 @@ seiyaku OpaqueInstructionSubmission {
         .expect("bind AXT test batch");
         let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
             .expect("FASTPQ prover")
-            .prove(&batch)
+            .prove_axt_bound(&batch, &binding)
             .expect("FASTPQ proof");
         let fastpq_payload =
             fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");

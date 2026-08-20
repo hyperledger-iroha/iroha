@@ -233,6 +233,8 @@ def test_rollout_bundle_has_no_backend_offline_proof_prerequisite() -> None:
         assert obsolete not in workflow
     assert "prepare_taira_offline_reset_bundle.py" not in workflow
     assert "prepare-reset" in workflow
+    assert workflow.count("--genesis-native-verifier") >= 2
+    assert workflow.count("--trusted-genesis-native-verifier-sha256") >= 2
     assert "TAIRA_MACOS_OFFLINE_GENESIS_PATH" not in workflow
     assert "TAIRA_MACOS_KAGEMUSHA_RELEASE_BUNDLE_PATH" not in workflow
 
@@ -417,7 +419,7 @@ def _assert_native_privacy_composer_bundle_contract(
         '"TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR=$privacy_input"'
         in workflow
     )
-    assert "Snapshot only the four public privacy inputs with the installed controller" in workflow
+    assert "Snapshot only the five public NEVO/privacy inputs with the installed controller" in workflow
     for name in (
         "privacy_bootstrap_plan.json",
         "config.toml",
@@ -451,7 +453,11 @@ def _assert_native_privacy_composer_bundle_contract(
     )
     assert '"privacy_bootstrap_release": privacy_bootstrap_release' in builder
     assert '"bound_by_plan_sha256": True' in builder
-    assert '"native_recomposition_passed": True' in builder
+    assert '"native_recomposition_passed": native_recomposition_passed' in builder
+    assert (
+        'native_recomposition_passed != (os.environ["PROFILE_NAME"] == "release")'
+        in builder
+    )
     assert '"bundled_release_validation_passed": True' in builder
     assert 'os.environ["PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256"]' in builder
 
@@ -946,7 +952,7 @@ def _assert_portable_signed_taira_authority_contract(
     assert "taira_privacy_release_runner" not in finalizer
     assert "bin/iroha3d" not in finalizer
     assert "target/release" not in finalizer
-    linux_snapshot = workflow.index("Snapshot only the four public privacy inputs")
+    linux_snapshot = workflow.index("Snapshot only the five public NEVO/privacy inputs")
     linux_build = workflow.index("Reconstruct source and build the unsigned Linux archive")
     linux_authenticate = workflow.index("Finalize and sign Linux bytes using only installed authority code")
     qualification = workflow.index("macos-secret-free-qualification:")
@@ -1155,8 +1161,38 @@ def test_mcp_automatic_canary_threads_explicit_onboarding_token_file() -> None:
         "ABSOLUTE_PATH" in source
     )
     assert '--onboarding-token-file "$ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE"' in source
+    assert "--domain dpn" in source
     assert 'domain = account.get("domain", "universal")' in source
     assert 'domain = f"{domain}.universal"' not in source
+
+
+def test_kaigi_localnet_uses_scoped_multi_credential_onboarding_secrets() -> None:
+    source = (TAIRA_DIR / "bootstrap_kaigi_localnet.sh").read_text(encoding="utf-8")
+
+    assert 'shared.get("account_onboarding_credentials", [])' in source
+    assert '{"dpn", "is2"}.difference' in source
+    assert 'scope not in {"dpn", "is", "is2"}' in source
+    assert "account onboarding credentials must not reuse API tokens" in source
+    assert 'runtime_dir / f"onboarding-token-{index:02d}-{credential[\'scope\']}"' in source
+    assert 'f"token_hash = {json.dumps(token_hash)}"' in source
+    assert 'TAIRA_ONBOARDING_API_TOKEN=' not in source
+    assert 'runtime/onboarding-token"' not in source
+
+
+def test_kaigi_localnet_enforces_exact_onboarding_token_bounds() -> None:
+    source = (TAIRA_DIR / "bootstrap_kaigi_localnet.sh").read_text(encoding="utf-8")
+    start = source.index("def validate_token(")
+    end = source.index("\ndef validate_credential_id(", start)
+    namespace: dict[str, object] = {}
+    exec(source[start:end], namespace)
+    validate_token = namespace["validate_token"]
+    assert callable(validate_token)
+
+    assert validate_token("x" * 32, "test token") == "x" * 32
+    assert validate_token("x" * 256, "test token") == "x" * 256
+    for invalid in ("x" * 31, "x" * 257, "x" * 31 + " ", "é" * 32):
+        with pytest.raises(SystemExit, match="32 to 256|printable ASCII"):
+            validate_token(invalid, "test token")
 
 
 def test_public_cutover_cannot_skip_fleet_or_exact_commit() -> None:

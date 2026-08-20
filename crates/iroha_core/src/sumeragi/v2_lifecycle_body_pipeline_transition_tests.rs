@@ -12,6 +12,18 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+    /// Test-only view of the pure staged reducer copy. Production callers must
+    /// retain one of the sealed registry-and-adapter publication owners.
+    struct PreparedBodyStageTransition<'a> {
+        _coordinator: &'a mut LifecycleCoordinator,
+        staged: LifecycleCoordinator,
+        edge: DurableContinuationEdge,
+        parent_ordinal: u128,
+        child_ordinal: u128,
+        owner: OwnerId,
+        child_slot: PhysicalSlotId,
+        child_digest: super::super::LifecycleDigest,
+    }
     pub(super) struct FetchStoreFixture {
         coordinator: LifecycleCoordinator,
         lease: TurnLease,
@@ -270,8 +282,8 @@ mod tests {
         .expect("one certified Fetch owner");
         let fetch_pending = fetch_owner
             .current_effect_producer(&fetch_effect)
-            .expect("seal certified Fetch producer")
-            .mint_pending_binding();
+            .map(|producer| producer.mint_pending_binding())
+            .expect("mint sealed certified Fetch binding");
         let fetch_digest = digest_from_hash(fetch_pending.exact_effect_identity());
         let store_pending = fetch_pending
             .project_certified_fetch_store_successor(&fetch_effect, &store_effect)
@@ -443,8 +455,8 @@ mod tests {
                 );
                 let fetch_pending = fetch_owner
                     .current_effect_producer(&fetch_effect)
-                    .expect("seal remote-Proposal Fetch producer")
-                    .mint_pending_binding();
+                    .map(|producer| producer.mint_pending_binding())
+                    .expect("mint sealed remote-Proposal Fetch binding");
                 let fetch_replay = fetch_owner
                     .exact_remote_proposal_fetch_replay(&fetch_effect)
                     .expect("retain authenticated remote-Proposal replay evidence");
@@ -1186,19 +1198,21 @@ mod tests {
         );
         let foreign_store_owner = bind_adapter_effect_batch_ownership(
             core::slice::from_ref(&store_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
-                foreign_owner_tag,
-                99,
-                b"foreign Store-to-Validate lineage",
-            )],
+            vec![
+                RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                    foreign_owner_tag,
+                    99,
+                    b"foreign Store-to-Validate lineage",
+                ),
+            ],
         )
         .expect("bind foreign Store owner")
         .pop()
         .expect("one foreign Store owner");
         let foreign_store_pending = foreign_store_owner
             .current_effect_producer(&store_effect)
-            .expect("seal foreign Store producer")
-            .mint_pending_binding();
+            .map(|producer| producer.mint_pending_binding())
+            .expect("mint foreign Store pending binding");
         let foreign_validate_pending = foreign_store_pending
             .project_store_validate_successor(&store_effect, &validate_effect)
             .expect("project foreign Validate pending binding");

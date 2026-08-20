@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 import plistlib
 import pwd
+import re
 import selectors
 import signal
 import socket

@@ -166,7 +166,9 @@ runtime-only config path, preferring `/run/secrets/taira-canary-client.toml`
 when that directory is writable and otherwise falling back to
 `${TMPDIR:-/tmp}`. If that file does not exist, automatic bootstrap additionally
 requires `--onboarding-token-file ABSOLUTE_PATH`; the credential remains in its
-owner-private source file and is passed only to the bootstrap subprocess. An
+owner-private source file and is passed only to the bootstrap subprocess. That
+file must contain the bearer token for the DPN-scoped onboarding credential;
+automatic bootstrap creates a dataspace-root `<label>@dpn` alias. An
 explicit `--write-config` must already exist and is read without modification;
 the script never overwrites operator-supplied signing material. Automatic
 bootstrap posts the current universal-account DTO to `/v1/accounts/onboard`,
@@ -438,7 +440,7 @@ if not isinstance(rules, list):
     fail("nexus.routing_policy.rules is not an array")
 expected_rules = [
     (3, "dpn", "account", "*@dpn"),
-    (4, "is", "account", "*@wonderland.is"),
+    (4, "is", "account", "*@is"),
     (5, "is2", "account", "*@boi.is2"),
     (5, "is2", "account", "*@leumi.is2"),
     (5, "is2", "account", "*@hapoalim.is2"),
@@ -3483,6 +3485,7 @@ ensure_write_canary_config() {
     --chain-id "$EXPECTED_TAIRA_CHAIN_ID"
     --network-id "$OPERATOR_NETWORK_ID"
     --alias-prefix "$ROLLOUT_CANARY_ALIAS_PREFIX"
+    --domain dpn
     --time-to-live-ms "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
     --status-timeout-ms "$status_timeout_ms"
   )

@@ -6,7 +6,9 @@ use crate::{
         TRANSCRIPT_TAG_ALPHA_PREFIX, TRANSCRIPT_TAG_GAMMA, TRANSCRIPT_TAG_INIT,
         TRANSCRIPT_TAG_ROOTS,
     },
-    ordering, trace, trace_commitment,
+    ordering,
+    semantics::{ProofSemantics, validate_batch_semantics},
+    trace, trace_commitment,
 };
 use core::convert::TryFrom;
 use fastpq_isi::{CANONICAL_PARAMETER_SETS, StarkParameterSet, find_by_name};
@@ -289,9 +291,38 @@ impl Prover {
     ///
     /// # Errors
     ///
-    /// Propagates errors from [`trace_commitment`] and from the configured backend implementation.
-    /// The generated proof is verified through the canonical verifier path before being returned.
+    /// Returns [`Error::InvalidProofSemantics`] unless the batch is an unchanged empty statement or
+    /// contains only fully witnessed transfers. Other errors propagate from [`trace_commitment`]
+    /// and the configured backend implementation. The generated proof is verified through the
+    /// canonical verifier path before being returned.
     pub fn prove(&self, batch: &TransitionBatch) -> Result<Proof> {
+        self.prove_with_semantics(batch, ProofSemantics::TransferStateTransition)
+    }
+
+    pub(crate) fn prove_with_semantics(
+        &self,
+        batch: &TransitionBatch,
+        semantics: ProofSemantics,
+    ) -> Result<Proof> {
+        validate_batch_semantics(batch, semantics)?;
+        self.prove_raw(batch)
+    }
+
+    /// Produce a cryptographic fixture proof without assigning state-transition semantics.
+    ///
+    /// This escape hatch is available only to unit tests and `dev-tools` builds. It proves byte
+    /// and transcript determinism, not that the supplied operations constitute valid state
+    /// updates. Production callers must use [`Self::prove`] or an AXT-bound proving wrapper.
+    ///
+    /// # Errors
+    ///
+    /// Propagates trace construction, backend, encoding, and cryptographic self-check errors.
+    #[cfg(any(test, feature = "dev-tools"))]
+    pub fn prove_raw_statement(&self, batch: &TransitionBatch) -> Result<Proof> {
+        self.prove_raw(batch)
+    }
+
+    fn prove_raw(&self, batch: &TransitionBatch) -> Result<Proof> {
         let commitment = trace_commitment(&self.params, batch)?;
         let ordering = ordering::ordering_hash(batch)?;
         let permission_hashes = collect_permission_hashes(batch)?;
@@ -302,7 +333,7 @@ impl Prover {
             .backend
             .prove(batch, &public_io, PROTOCOL_VERSION, params_version)?;
         let proof = materialise_proof(commitment, public_io, artifact, params_version)?;
-        verify_with_limits(batch, &proof, prover_self_check_limits(batch, &proof))?;
+        verify_with_limits_raw(batch, &proof, prover_self_check_limits(batch, &proof))?;
         Ok(proof)
     }
 }
@@ -310,25 +341,81 @@ impl Prover {
 ///
 /// # Errors
 ///
-/// Returns [`Error::UnknownParameter`] when the proof references an unknown parameter set, or an
-/// appropriate [`Error`] variant identifying the invalid proof component.
+/// Returns [`Error::InvalidProofSemantics`] unless the batch is an unchanged empty statement or
+/// contains only fully witnessed transfers, [`Error::UnknownParameter`] when the proof references
+/// an unknown parameter set, or another [`Error`] identifying the invalid proof component.
 pub fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
-    verify_with_limits(batch, proof, VerifyLimits::default())
+    verify_with_semantics(batch, proof, ProofSemantics::TransferStateTransition)
+}
+
+pub(crate) fn verify_with_semantics(
+    batch: &TransitionBatch,
+    proof: &Proof,
+    semantics: ProofSemantics,
+) -> Result<()> {
+    verify_with_limits_and_semantics(batch, proof, VerifyLimits::default(), semantics)
 }
 /// Verify a V1 proof from proof contents, public inputs, commitments, Merkle paths, lookup product
 /// binding, AIR openings, FRI query chains, challenges, and parameter/version checks.
 ///
 /// # Errors
 ///
-/// Returns [`Error::UnknownParameter`] when the proof references an unknown parameter set,
-/// [`Error::VerifierLimitExceeded`] when inputs exceed the supplied limits, or another [`Error`]
-/// variant identifying the invalid proof component.
+/// Returns [`Error::VerifierLimitExceeded`] before semantic or cryptographic work when inputs
+/// exceed the supplied limits, [`Error::InvalidProofSemantics`] for batches outside the witnessed
+/// transfer profile, [`Error::UnknownParameter`] for unknown parameter sets, or another [`Error`]
+/// identifying the invalid proof component.
 #[allow(clippy::too_many_lines)]
 pub fn verify_with_limits(
     batch: &TransitionBatch,
     proof: &Proof,
     limits: VerifyLimits,
 ) -> Result<()> {
+    verify_with_limits_and_semantics(
+        batch,
+        proof,
+        limits,
+        ProofSemantics::TransferStateTransition,
+    )
+}
+
+pub(crate) fn verify_with_limits_and_semantics(
+    batch: &TransitionBatch,
+    proof: &Proof,
+    limits: VerifyLimits,
+    semantics: ProofSemantics,
+) -> Result<()> {
+    // Bound attacker-controlled batch/proof scans before inspecting profile semantics or
+    // rebuilding transcript commitments.
+    enforce_verify_limits(batch, proof, limits)?;
+    validate_batch_semantics(batch, semantics)?;
+    verify_after_limits(batch, proof)
+}
+
+/// Verify a cryptographic fixture proof without assigning state-transition semantics.
+///
+/// This escape hatch is available only to unit tests and `dev-tools` builds. It checks the proof
+/// protocol and its binding to the supplied batch, but deliberately makes no claim that the batch
+/// operations are valid state updates.
+///
+/// # Errors
+///
+/// Returns the same cryptographic, encoding, or verifier-limit errors as [`verify_with_limits`].
+#[cfg(any(test, feature = "dev-tools"))]
+pub fn verify_raw_statement(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
+    verify_with_limits_raw(batch, proof, VerifyLimits::default())
+}
+
+fn verify_with_limits_raw(
+    batch: &TransitionBatch,
+    proof: &Proof,
+    limits: VerifyLimits,
+) -> Result<()> {
+    enforce_verify_limits(batch, proof, limits)?;
+    verify_after_limits(batch, proof)
+}
+
+#[allow(clippy::too_many_lines)]
+fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     if proof.protocol_version != PROTOCOL_VERSION {
         return Err(Error::UnsupportedProtocolVersion {
             version: proof.protocol_version,
@@ -352,7 +439,6 @@ pub fn verify_with_limits(
             actual: proof.params_version,
         });
     }
-    enforce_verify_limits(batch, proof, limits)?;
     let expected_commitment = trace_commitment(&params, batch)?;
     if expected_commitment != proof.trace_commitment {
         return Err(Error::CommitmentMismatch);
@@ -366,7 +452,32 @@ pub fn verify_with_limits(
     if lde_domain_size == 0 {
         return Err(Error::QueryIndexOutOfRange { index: 0, len: 0 });
     }
-    ensure_trace_root_matches_batch(&params, batch, proof)?;
+    let expected_derived = backend::derive_batch_commitments(
+        &params,
+        batch,
+        &expected_public_io,
+        proof.protocol_version,
+        proof.params_version,
+    )?;
+    if proof.trace_root != field_norito::core::to_bytes(expected_derived.trace_root) {
+        return Err(Error::TraceRootMismatch);
+    }
+    if proof.lookup_root != field_norito::core::to_bytes(expected_derived.lookup_root)
+        || proof.lde_domain_size != expected_derived.lde_domain_size
+    {
+        return Err(Error::LookupRootMismatch);
+    }
+    if proof.air_trace_root != field_norito::core::to_bytes(expected_derived.air_trace_root) {
+        return Err(Error::AirTraceRootMismatch);
+    }
+    if proof.air_composition_root
+        != field_norito::core::to_bytes(expected_derived.air_composition_root)
+    {
+        return Err(Error::AirCompositionRootMismatch);
+    }
+    if proof.lookup_grand_product != expected_derived.lookup_grand_product {
+        return Err(Error::LookupGrandProductMismatch);
+    }
     let trace_root =
         field_norito::core::from_bytes(&proof.trace_root).ok_or(Error::TraceRootMismatch)?;
     let lde_root =
@@ -476,7 +587,7 @@ pub fn verify_with_limits(
             actual: proof.air_openings.len(),
         });
     }
-    let column_names = trace::column_names_for_batch(batch);
+    let column_names = trace::column_names_for_batch(batch)?;
     let lde_chunk_size = backend::lde_chunk_size(params.fri.arity).max(1);
     let lde_leaf_count = leaf_count_for_values(lde_domain_size, lde_chunk_size)?;
     let lde_path_len = merkle_path_len_for_leaf_count(lde_leaf_count)?;
@@ -577,22 +688,6 @@ pub fn verify_with_limits(
     }
     Ok(())
 }
-fn ensure_trace_root_matches_batch(
-    params: &StarkParameterSet,
-    batch: &TransitionBatch,
-    proof: &Proof,
-) -> Result<()> {
-    let trace = trace::build_trace(batch)?;
-    let column_digests = trace::column_hashes(&trace, params)?;
-    let expected_trace_root = trace::merkle_root_with_first_level(
-        column_digests.leaves(),
-        column_digests.fused_parents(),
-    );
-    if proof.trace_root != field_norito::core::to_bytes(expected_trace_root) {
-        return Err(Error::TraceRootMismatch);
-    }
-    Ok(())
-}
 #[allow(clippy::too_many_lines)]
 fn enforce_verify_limits(
     batch: &TransitionBatch,
@@ -604,22 +699,6 @@ fn enforce_verify_limits(
             limit: "max_transitions",
             actual: batch.transitions.len(),
             max: limits.max_transitions,
-        });
-    }
-    let batch_bytes = batch_size_hint(batch);
-    if batch_bytes > limits.max_batch_bytes {
-        return Err(Error::VerifierLimitExceeded {
-            limit: "max_batch_bytes",
-            actual: batch_bytes,
-            max: limits.max_batch_bytes,
-        });
-    }
-    let proof_bytes = proof_size_hint(proof);
-    if proof_bytes > limits.max_proof_bytes {
-        return Err(Error::VerifierLimitExceeded {
-            limit: "max_proof_bytes",
-            actual: proof_bytes,
-            max: limits.max_proof_bytes,
         });
     }
     if proof.fri_layers.len() > limits.max_fri_layers {
@@ -664,6 +743,32 @@ fn enforce_verify_limits(
             limit: "max_queries",
             actual: proof.air_openings.len(),
             max: limits.max_queries,
+        });
+    }
+    for fri_query in &proof.fri_queries {
+        if fri_query.rounds.len() > limits.max_fri_layers {
+            return Err(Error::VerifierLimitExceeded {
+                limit: "max_fri_layers",
+                actual: fri_query.rounds.len(),
+                max: limits.max_fri_layers,
+            });
+        }
+    }
+    // Only scan variable-size payloads after their enclosing collection counts are bounded.
+    let batch_bytes = batch_size_hint(batch);
+    if batch_bytes > limits.max_batch_bytes {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_batch_bytes",
+            actual: batch_bytes,
+            max: limits.max_batch_bytes,
+        });
+    }
+    let proof_bytes = proof_size_hint(proof);
+    if proof_bytes > limits.max_proof_bytes {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_proof_bytes",
+            actual: proof_bytes,
+            max: limits.max_proof_bytes,
         });
     }
     for air_opening in &proof.air_openings {
@@ -1229,6 +1334,16 @@ mod field_norito {
 mod tests {
     use super::*;
     use crate::{OperationKind, PublicInputs, StateTransition};
+    fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
+        verify_with_limits_raw(batch, proof, VerifyLimits::default())
+    }
+    fn verify_with_limits(
+        batch: &TransitionBatch,
+        proof: &Proof,
+        limits: VerifyLimits,
+    ) -> Result<()> {
+        verify_with_limits_raw(batch, proof, limits)
+    }
     fn verify_limits_with_override(apply: impl FnOnce(&mut VerifyLimits)) -> VerifyLimits {
         let mut limits = VerifyLimits::default();
         apply(&mut limits);
@@ -1245,15 +1360,15 @@ mod tests {
     fn sample_batch() -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         batch.push(StateTransition::new(
-            b"account/alice".to_vec(),
-            vec![1],
-            vec![2],
+            b"asset/xor/alice".to_vec(),
+            1_u64.to_le_bytes().to_vec(),
+            2_u64.to_le_bytes().to_vec(),
             OperationKind::Mint,
         ));
         batch.push(StateTransition::new(
-            b"asset/xor".to_vec(),
-            vec![10, 0, 0, 0],
-            vec![11, 0, 0, 0],
+            b"asset/xor/bob".to_vec(),
+            10_u64.to_le_bytes().to_vec(),
+            11_u64.to_le_bytes().to_vec(),
             OperationKind::Mint,
         ));
         batch.sort();
@@ -1263,15 +1378,20 @@ mod tests {
     fn sample_batch_with_size(rows: usize) -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         for idx in 0..rows {
-            let key = format!("asset/xor/account/{idx:04}").into_bytes();
+            let key = format!("asset/xor/account-{idx:04}").into_bytes();
             let idx_u64 = u64::try_from(idx).expect("sample row index fits u64");
             let pre = idx_u64.to_le_bytes().to_vec();
-            let post = idx_u64.wrapping_add(1).to_le_bytes().to_vec();
             let op = match idx % 3 {
                 0 => OperationKind::Mint,
                 1 => OperationKind::Burn,
                 _ => OperationKind::MetaSet,
             };
+            let post_value = if matches!(&op, OperationKind::Burn) {
+                idx_u64 - 1
+            } else {
+                idx_u64.wrapping_add(1)
+            };
+            let post = post_value.to_le_bytes().to_vec();
             batch.push(StateTransition::new(key, pre, post, op));
         }
         batch.sort();
@@ -1376,6 +1496,40 @@ mod tests {
         let artifact = prover
             .backend
             .prove(source, &target_public_io, PROTOCOL_VERSION, params_version)
+            .unwrap();
+        materialise_proof(
+            target_commitment,
+            target_public_io,
+            artifact,
+            params_version,
+        )
+        .unwrap()
+    }
+    fn proof_over_source_lde_with_target_trace_root(
+        prover: &Prover,
+        source: &TransitionBatch,
+        target: &TransitionBatch,
+    ) -> Proof {
+        let target_commitment = trace_commitment(&prover.params, target).unwrap();
+        let target_public_io = target_public_io_for(target);
+        let params_version = canonical_params_version(&prover.params).unwrap();
+        let target_roots = backend::derive_batch_commitments(
+            &prover.params,
+            target,
+            &target_public_io,
+            PROTOCOL_VERSION,
+            params_version,
+        )
+        .unwrap();
+        let artifact = prover
+            .backend
+            .prove_with_transcript_trace_root(
+                source,
+                &target_public_io,
+                PROTOCOL_VERSION,
+                params_version,
+                target_roots.trace_root,
+            )
             .unwrap();
         materialise_proof(
             target_commitment,
@@ -1736,11 +1890,72 @@ mod tests {
         );
     }
     #[test]
-    fn verify_accepts_canonical_v1_roundtrip() {
+    fn raw_crypto_verifier_accepts_canonical_v1_roundtrip() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let proof = prover.prove(&batch).unwrap();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
         verify(&batch, &proof).unwrap();
+    }
+    #[test]
+    fn strict_state_profile_accepts_unchanged_empty_batch() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let proof = prover.prove(&batch).expect("strict empty no-op proof");
+        super::verify(&batch, &proof).expect("strict empty no-op verification");
+    }
+    #[test]
+    fn strict_state_profile_rejects_cryptographically_valid_mint_statement() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let raw_proof = prover
+            .prove_raw_statement(&batch)
+            .expect("cryptographically valid raw statement");
+
+        assert!(matches!(
+            prover.prove(&batch),
+            Err(Error::InvalidProofSemantics {
+                profile: "transfer_state_transition",
+                ..
+            })
+        ));
+        assert!(matches!(
+            super::verify(&batch, &raw_proof),
+            Err(Error::InvalidProofSemantics {
+                profile: "transfer_state_transition",
+                ..
+            })
+        ));
+    }
+    #[test]
+    fn raw_prover_and_verifier_reject_wrong_mint_and_burn_direction() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        for (operation, valid_before, valid_after, invalid_after, expected_operation) in [
+            (OperationKind::Mint, 4_u64, 5_u64, 3_u64, "mint"),
+            (OperationKind::Burn, 5_u64, 4_u64, 6_u64, "burn"),
+        ] {
+            let mut valid = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+            valid.push(StateTransition::new(
+                b"asset/xor/alice".to_vec(),
+                valid_before.to_le_bytes().to_vec(),
+                valid_after.to_le_bytes().to_vec(),
+                operation.clone(),
+            ));
+            let proof = prover
+                .prove_raw_statement(&valid)
+                .expect("correctly directed raw statement");
+            verify_raw_statement(&valid, &proof).expect("correctly directed raw verification");
+
+            let mut invalid = valid.clone();
+            invalid.transitions[0].post_value = invalid_after.to_le_bytes().to_vec();
+            assert!(matches!(
+                prover.prove_raw_statement(&invalid),
+                Err(Error::InvalidAssetValueChange { operation }) if operation == expected_operation
+            ));
+            assert!(matches!(
+                verify_raw_statement(&invalid, &proof),
+                Err(Error::InvalidAssetValueChange { operation }) if operation == expected_operation
+            ));
+        }
     }
     #[test]
     fn verify_rejects_batch_parameter_mismatch_before_replay() {
@@ -1973,7 +2188,7 @@ mod tests {
     fn verify_rejects_modified_roots() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.trace_root[0] ^= 0xAA;
         verify(&batch, &proof).unwrap_err();
     }
@@ -1982,8 +2197,8 @@ mod tests {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(8);
         let foreign = sample_batch_with_size(9);
-        let mut proof = prover.prove(&batch).unwrap();
-        let foreign_proof = prover.prove(&foreign).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
+        let foreign_proof = prover.prove_raw_statement(&foreign).unwrap();
         proof.trace_root = foreign_proof.trace_root;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
@@ -1997,8 +2212,8 @@ mod tests {
         let batch = sample_batch_with_size(8);
         let mut foreign = batch.clone();
         foreign.transitions[2].post_value[0] ^= 0x5A;
-        let mut proof = prover.prove(&batch).unwrap();
-        let foreign_proof = prover.prove(&foreign).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
+        let foreign_proof = prover.prove_raw_statement(&foreign).unwrap();
         proof.trace_root = foreign_proof.trace_root;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
@@ -2070,6 +2285,30 @@ mod tests {
                     limit: "max_transitions",
                     ..
                 }
+            ),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+    #[test]
+    fn verify_transition_limit_rejects_before_semantic_profile_validation() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
+        assert!(matches!(
+            validate_batch_semantics(&batch, ProofSemantics::TransferStateTransition),
+            Err(Error::InvalidProofSemantics { .. })
+        ));
+
+        let limits = verify_limits_with_override(|limits| limits.max_transitions = 0);
+        let err = super::verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::VerifierLimitExceeded {
+                    limit: "max_transitions",
+                    actual,
+                    max: 0,
+                } if actual == batch.transitions.len()
             ),
             "unexpected verifier error: {err:?}"
         );
@@ -2178,7 +2417,7 @@ mod tests {
     fn verify_parameter_mismatch_rejects_before_trace_root_binding() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let mut batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         batch.parameter = "fastpq-lane-latency".to_owned();
         proof.trace_root[0] ^= 0xAA;
         let err = verify(&batch, &proof).unwrap_err();
@@ -2194,7 +2433,7 @@ mod tests {
     fn verify_public_io_mismatch_rejects_before_trace_root_binding() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.slot = proof.public_io.slot.wrapping_add(1);
         proof.trace_root[0] ^= 0xAA;
         let err = verify(&batch, &proof).unwrap_err();
@@ -2204,7 +2443,7 @@ mod tests {
     fn verify_rejects_commitment_mismatch_before_trace_root_binding() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.trace_commitment = Hash::new(b"tampered-fastpq-commitment");
         proof.trace_root[0] ^= 0xAA;
         let err = verify(&batch, &proof).unwrap_err();
@@ -2214,7 +2453,7 @@ mod tests {
     fn verify_rejects_trace_root_before_malformed_deep_roots() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.trace_root[0] ^= 0xAA;
         proof.lookup_root[8] = 1;
         proof.air_trace_root[8] = 1;
@@ -2231,10 +2470,7 @@ mod tests {
         proof.lookup_root = field_norito::core::to_bytes(42);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
-            matches!(
-                err,
-                Error::LookupChallengeMismatch | Error::QueryMerklePathMismatch { .. }
-            ),
+            matches!(err, Error::LookupRootMismatch),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -2244,10 +2480,7 @@ mod tests {
         proof.air_trace_root = field_norito::core::to_bytes(43);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
-            matches!(
-                err,
-                Error::FriChallengeMismatch { .. } | Error::AirMerklePathMismatch { .. }
-            ),
+            matches!(err, Error::AirTraceRootMismatch),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -2257,10 +2490,7 @@ mod tests {
         proof.air_composition_root = field_norito::core::to_bytes(44);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
-            matches!(
-                err,
-                Error::FriChallengeMismatch { .. } | Error::AirMerklePathMismatch { .. }
-            ),
+            matches!(err, Error::AirCompositionRootMismatch),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -2268,7 +2498,7 @@ mod tests {
     fn verify_rejects_tampered_commitment() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.trace_commitment = Hash::new(b"tampered-fastpq-commitment");
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::CommitmentMismatch));
@@ -2278,25 +2508,13 @@ mod tests {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let source = sample_batch_with_size(8);
         let target = sample_batch_with_size(9);
-        let mut proof = prover.prove(&source).unwrap();
-        let target_proof = prover.prove(&target).unwrap();
+        let mut proof = prover.prove_raw_statement(&source).unwrap();
+        let target_proof = prover.prove_raw_statement(&target).unwrap();
         proof.trace_commitment = target_proof.trace_commitment;
         proof.public_io = target_proof.public_io;
         let err = verify(&target, &proof).unwrap_err();
         assert!(
-            matches!(
-                err,
-                Error::TraceRootMismatch
-                    | Error::LookupRootMismatch
-                    | Error::AirTraceRootMismatch
-                    | Error::AirCompositionRootMismatch
-                    | Error::LookupChallengeMismatch
-                    | Error::FriChallengeMismatch { .. }
-                    | Error::QueryMismatch { .. }
-                    | Error::QueryMerklePathMismatch { .. }
-                    | Error::AirMerklePathMismatch { .. }
-                    | Error::AirConstraintMismatch { .. }
-            ),
+            matches!(err, Error::TraceRootMismatch),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -2322,6 +2540,23 @@ mod tests {
         let err = verify(&target, &proof).unwrap_err();
         assert!(
             matches!(err, Error::TraceRootMismatch),
+            "unexpected verifier error: {err:?}"
+        );
+    }
+    #[test]
+    fn verify_rejects_self_consistent_foreign_lde_bound_to_target_trace_root() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let source = sample_batch_with_size(8);
+        let mut target = source.clone();
+        target.transitions[3].post_value[0] ^= 0x7F;
+        let proof = proof_over_source_lde_with_target_trace_root(&prover, &source, &target);
+        let legitimate = prover.prove_raw_statement(&target).unwrap();
+        assert_eq!(proof.trace_root, legitimate.trace_root);
+        assert_ne!(proof.lookup_root, legitimate.lookup_root);
+
+        let err = verify(&target, &proof).unwrap_err();
+        assert!(
+            matches!(err, Error::LookupRootMismatch),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -2363,7 +2598,7 @@ mod tests {
         let mut target = source.clone();
         target.transitions[3].post_value[0] ^= 0x7F;
         let mut proof = proof_over_source_trace_with_target_statement(&prover, &source, &target);
-        let target_proof = prover.prove(&target).unwrap();
+        let target_proof = prover.prove_raw_statement(&target).unwrap();
         graft_artifact_commitments(&mut proof, &target_proof);
         let err = verify(&target, &proof).unwrap_err();
         assert!(
@@ -2384,7 +2619,7 @@ mod tests {
         let mut target = source.clone();
         target.transitions[3].post_value[0] ^= 0x42;
         let mut proof = proof_over_source_trace_with_target_statement(&prover, &source, &target);
-        let target_proof = prover.prove(&target).unwrap();
+        let target_proof = prover.prove_raw_statement(&target).unwrap();
         proof.trace_root = target_proof.trace_root;
         proof.lookup_root = target_proof.lookup_root;
         proof.air_trace_root = target_proof.air_trace_root;
@@ -2410,7 +2645,7 @@ mod tests {
     fn verify_rejects_ordering_hash_mutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.ordering_hash[0] ^= 0x01;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::OrderingHashMismatch));
@@ -2419,7 +2654,7 @@ mod tests {
     fn verify_rejects_dsid_mutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.dsid[0] ^= 0x01;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::PublicIoMismatch { field: "dsid" }));
@@ -2428,7 +2663,7 @@ mod tests {
     fn verify_rejects_slot_mutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.slot = proof.public_io.slot.wrapping_add(1);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::PublicIoMismatch { field: "slot" }));
@@ -2437,7 +2672,7 @@ mod tests {
     fn verify_rejects_old_root_mutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.old_root[0] ^= 0x01;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::PublicIoMismatch { field: "old_root" }));
@@ -2446,7 +2681,7 @@ mod tests {
     fn verify_rejects_new_root_mutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.new_root[0] ^= 0x01;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::PublicIoMismatch { field: "new_root" }));
@@ -2455,7 +2690,7 @@ mod tests {
     fn verify_rejects_perm_root_mutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.perm_root[0] ^= 0x01;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
@@ -2467,7 +2702,7 @@ mod tests {
     fn verify_rejects_tx_set_hash_mutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.tx_set_hash[0] ^= 0x01;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
@@ -2481,7 +2716,7 @@ mod tests {
     fn verify_rejects_permission_hash_mutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_permission();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             !proof.public_io.permission_hashes.is_empty(),
             "expected at least one permission hash for mutation test"
@@ -2496,7 +2731,7 @@ mod tests {
         let mut batch = sample_batch_with_permission();
         let spoofed_hashes = vec![[0x11; 32], [0x22; 32]];
         batch.public_inputs.perm_root = perm_root_from_permission_hashes(&spoofed_hashes);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert_eq!(proof.public_io.perm_root, batch.public_inputs.perm_root);
         proof.public_io.permission_hashes = spoofed_hashes;
         let err = verify(&batch, &proof).unwrap_err();
@@ -2508,7 +2743,7 @@ mod tests {
         let mut batch = sample_batch_with_permission();
         batch.public_inputs.perm_root = [0; 32];
         batch.public_inputs.tx_set_hash = [0; 32];
-        let proof = prover.prove(&batch).unwrap();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
         assert_ne!(proof.public_io.perm_root, [0; 32]);
         assert_ne!(proof.public_io.tx_set_hash, [0; 32]);
         assert_verify_rejects(
@@ -2535,7 +2770,7 @@ mod tests {
     fn verify_rejects_wrong_betas() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         if let Some(beta) = proof.betas.first_mut() {
             *beta = beta.wrapping_add(1);
         }
@@ -2546,7 +2781,7 @@ mod tests {
     fn verify_rejects_wrong_lookup_challenge() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(8);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.lookup_challenge = proof.lookup_challenge.wrapping_add(1);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::LookupChallengeMismatch));
@@ -2555,45 +2790,32 @@ mod tests {
     fn verify_rejects_wrong_lookup_grand_product() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(8);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.lookup_grand_product = proof.lookup_grand_product.wrapping_add(1);
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                Error::LookupGrandProductMismatch
-                    | Error::FriChallengeMismatch { .. }
-                    | Error::QueryMismatch { .. }
-                    | Error::QueryMerklePathMismatch { .. }
-                    | Error::AirMerklePathMismatch { .. }
-                    | Error::AirConstraintMismatch { .. }
-            ),
-            "unexpected verifier error: {err:?}"
-        );
+        assert!(matches!(err, Error::LookupGrandProductMismatch));
     }
     #[test]
     fn verify_rejects_modified_lookup_root() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(16);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.lookup_root[0] ^= 0xAA;
-        verify(&batch, &proof).unwrap_err();
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::LookupRootMismatch));
     }
     #[test]
     fn verify_rejects_fri_layer_length_mismatch() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             proof.fri_layers.len() > 1,
             "expected at least one FRI layer plus terminal root"
         );
         proof.fri_layers.pop();
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::FriLayerLengthMismatch { .. } | Error::FriChallengeLengthMismatch { .. }
-        ));
+        assert!(matches!(err, Error::FriLayerLengthMismatch { .. }));
     }
     #[test]
     fn verify_rejects_extra_fri_layer_for_domain_schedule() {
@@ -2644,7 +2866,7 @@ mod tests {
     fn verify_rejects_fri_layer_mutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             !proof.fri_layers.is_empty(),
             "expected non-empty FRI layer list"
@@ -2660,7 +2882,7 @@ mod tests {
     fn verify_rejects_fri_challenge_length_mismatch() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(!proof.betas.is_empty(), "expected at least one FRI beta");
         proof.betas.pop();
         let err = verify(&batch, &proof).unwrap_err();
@@ -2670,7 +2892,7 @@ mod tests {
     fn verify_rejects_query_count_mismatch() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(!proof.queries.is_empty(), "expected queries in proof");
         proof.queries.pop();
         let err = verify(&batch, &proof).unwrap_err();
@@ -2742,7 +2964,7 @@ mod tests {
     fn verify_rejects_query_opening_permutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(proof.queries.len() > 1, "expected multiple query openings");
         proof.queries.swap(0, 1);
         let err = verify(&batch, &proof).unwrap_err();
@@ -2752,7 +2974,7 @@ mod tests {
     fn verify_rejects_air_opening_permutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             proof.air_openings.len() > 1,
             "expected multiple AIR openings"
@@ -2765,7 +2987,7 @@ mod tests {
     fn verify_rejects_fri_query_permutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             proof.fri_queries.len() > 1,
             "expected multiple FRI query openings"
@@ -2778,7 +3000,7 @@ mod tests {
     fn verify_rejects_duplicate_query_opening_with_preserved_count() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(proof.queries.len() > 1, "expected multiple query openings");
         proof.queries[1] = proof.queries[0].clone();
         let err = verify(&batch, &proof).unwrap_err();
@@ -2788,7 +3010,7 @@ mod tests {
     fn verify_rejects_wrong_query_value() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .queries
             .first_mut()
@@ -2801,7 +3023,7 @@ mod tests {
     fn verify_rejects_wrong_query_chunk_value() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .queries
             .first_mut()
@@ -2821,7 +3043,7 @@ mod tests {
     fn verify_rejects_wrong_query_merkle_path() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .queries
             .first_mut()
@@ -2919,29 +3141,31 @@ mod tests {
     fn verify_rejects_wrong_air_composition_root() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.air_composition_root[0] ^= 0x01;
-        verify(&batch, &proof).unwrap_err();
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::AirCompositionRootMismatch));
     }
     #[test]
     fn verify_rejects_wrong_air_trace_root() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.air_trace_root[0] ^= 0x01;
-        verify(&batch, &proof).unwrap_err();
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::AirTraceRootMismatch));
     }
     #[test]
     fn verify_rejects_missing_air_challenges() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.alphas.clear();
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
             err,
             Error::AirChallengeCountMismatch {
-                expected: 2,
+                expected: AIR_COMPOSITION_ALPHA_COUNT,
                 actual: 0
             }
         ));
@@ -2950,7 +3174,7 @@ mod tests {
     fn verify_rejects_extra_air_challenges() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.alphas.push(42);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
@@ -2978,7 +3202,7 @@ mod tests {
     fn verify_rejects_air_opening_index_mismatch() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .air_openings
             .first_mut()
@@ -2991,7 +3215,7 @@ mod tests {
     fn verify_rejects_air_opening_count_mismatch() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             !proof.air_openings.is_empty(),
             "expected sampled AIR openings"
@@ -3008,7 +3232,7 @@ mod tests {
     fn verify_limits_reject_transition_count_limit() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let proof_batch = sample_batch();
-        let proof = prover.prove(&proof_batch).unwrap();
+        let proof = prover.prove_raw_statement(&proof_batch).unwrap();
         let batch = sample_batch_with_size(3);
         let limits = verify_limits_with_override(|limits| {
             limits.max_transitions = batch.transitions.len() - 1
@@ -3027,7 +3251,7 @@ mod tests {
     fn verify_limits_reject_batch_size_limit() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let proof = prover.prove(&batch).unwrap();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
         let batch_bytes = batch_size_hint(&batch);
         assert!(batch_bytes > 0, "sample batch must have a byte footprint");
         let limits = verify_limits_with_override(|limits| limits.max_batch_bytes = batch_bytes - 1);
@@ -3045,7 +3269,7 @@ mod tests {
     fn verify_limits_reject_fri_layer_count_limit() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let proof = prover.prove(&batch).unwrap();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
         let layer_count = proof.fri_layers.len();
         assert!(layer_count > 0, "proof must carry FRI layer roots");
         let limits = verify_limits_with_override(|limits| limits.max_fri_layers = layer_count - 1);
@@ -3063,7 +3287,7 @@ mod tests {
     fn verify_limits_reject_oversized_air_rows() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let proof = prover.prove(&batch).unwrap();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
         let row_len = proof
             .air_openings
             .first()
@@ -3086,7 +3310,7 @@ mod tests {
     fn verify_limits_reject_query_count_limit() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let proof = prover.prove(&batch).unwrap();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
         let query_count = proof.queries.len();
         assert!(query_count > 0, "proof must carry sampled queries");
         let limits = verify_limits_with_override(|limits| limits.max_queries = query_count - 1);
@@ -3104,7 +3328,7 @@ mod tests {
     fn verify_limits_reject_extra_fri_query_count() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let query_count = proof.queries.len();
         assert!(query_count > 0, "proof must carry sampled queries");
         let extra = proof
@@ -3128,7 +3352,7 @@ mod tests {
     fn verify_limits_reject_extra_air_opening_count() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let query_count = proof.queries.len();
         assert!(query_count > 0, "proof must carry sampled queries");
         let extra = proof
@@ -3152,7 +3376,7 @@ mod tests {
     fn verify_limits_reject_oversized_query_chunks() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let proof = prover.prove(&batch).unwrap();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
         let chunk_len = proof
             .queries
             .first()
@@ -3176,7 +3400,7 @@ mod tests {
     fn verify_limits_reject_oversized_query_merkle_path() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let path = &mut proof
             .queries
             .first_mut()
@@ -3212,10 +3436,35 @@ mod tests {
         enforce_verify_limits(&batch, &proof, limits).unwrap();
     }
     #[test]
+    fn enforce_verify_limits_bounds_nested_fri_rounds_before_payload_scan() {
+        let batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        proof.fri_queries[0].rounds = vec![
+            FriRoundOpening {
+                round: 0,
+                index: 0,
+                values: Vec::new(),
+                folded_value: 0,
+                merkle_path: Vec::new(),
+            };
+            2
+        ];
+        let limits = verify_limits_with_override(|limits| limits.max_fri_layers = 1);
+        let err = enforce_verify_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_fri_layers",
+                actual: 2,
+                max: 1,
+            }
+        ));
+    }
+    #[test]
     fn verify_limits_reject_oversized_proof_payload() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let proof = prover.prove(&batch).unwrap();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
         let proof_bytes = proof_size_hint(&proof);
         assert!(proof_bytes > 0, "proof size hint should be non-zero");
         let limits = verify_limits_with_override(|limits| limits.max_proof_bytes = proof_bytes - 1);
@@ -3260,7 +3509,7 @@ mod tests {
     fn verify_limits_reject_oversized_air_merkle_paths() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let proof = prover.prove(&batch).unwrap();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
         let path_len = proof
             .air_openings
             .first()
@@ -3283,7 +3532,7 @@ mod tests {
     fn verify_limits_reject_oversized_final_fri_values() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let values = &mut proof
             .fri_queries
             .first_mut()
@@ -3305,7 +3554,7 @@ mod tests {
     fn verify_limits_reject_oversized_fri_round_values() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let proof = prover.prove(&batch).unwrap();
+        let proof = prover.prove_raw_statement(&batch).unwrap();
         let values_len = proof
             .fri_queries
             .first()
@@ -3330,7 +3579,7 @@ mod tests {
     fn verify_limits_reject_oversized_final_fri_merkle_path() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let path = &mut proof
             .fri_queries
             .first_mut()
@@ -3352,7 +3601,7 @@ mod tests {
     fn verify_limits_reject_oversized_fri_round_merkle_path() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let path = &mut proof
             .fri_queries
             .first_mut()
@@ -3375,7 +3624,7 @@ mod tests {
     fn verify_rejects_wrong_final_fri_merkle_path() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let query = proof
             .fri_queries
             .first_mut()
@@ -3392,7 +3641,7 @@ mod tests {
     fn verify_rejects_zero_lde_domain_size() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.lde_domain_size = 0;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
@@ -3404,11 +3653,11 @@ mod tests {
     fn verify_rejects_nonzero_lde_domain_size_tamper() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.lde_domain_size = proof.lde_domain_size.saturating_add(1);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
-            matches!(err, Error::LookupRootMismatch | Error::QueryMismatch { .. }),
+            matches!(err, Error::LookupRootMismatch),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -3416,7 +3665,7 @@ mod tests {
     fn verify_rejects_wrong_fri_folded_value() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let round = proof
             .fri_queries
             .first_mut()
@@ -3430,7 +3679,7 @@ mod tests {
     fn verify_rejects_wrong_final_fri_value() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let value = proof
             .fri_queries
             .first_mut()
@@ -3868,7 +4117,7 @@ mod tests {
     fn verify_rejects_wrong_air_next_row_opening() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .air_openings
             .first_mut()
@@ -3888,7 +4137,7 @@ mod tests {
     fn verify_rejects_wrong_air_row_opening() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .air_openings
             .first_mut()
@@ -3908,7 +4157,7 @@ mod tests {
     fn verify_rejects_wrong_air_composition_merkle_path() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .air_openings
             .first_mut()
@@ -3925,7 +4174,7 @@ mod tests {
     fn verify_rejects_wrong_air_composition_opening() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .air_openings
             .first_mut()
@@ -3941,7 +4190,7 @@ mod tests {
     fn verify_rejects_mismatched_large_batch_by_commitment() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let small_batch = sample_batch();
-        let proof = prover.prove(&small_batch).unwrap();
+        let proof = prover.prove_raw_statement(&small_batch).unwrap();
         let large_batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
         let limits = verify_limits_with_override(|limits| {
             limits.max_transitions = large_batch.transitions.len()
@@ -3960,7 +4209,7 @@ mod tests {
     fn verify_rejects_stale_version() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
-        let mut proof = prover.prove(&batch).unwrap();
+        let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.params_version = proof.params_version.wrapping_add(1);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::ParameterVersionMismatch { .. }));

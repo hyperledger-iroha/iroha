@@ -1156,6 +1156,9 @@ def test_admission_controller_closure_matches_the_root_sealer() -> None:
         sorted(controller_seal.MACOS_FILES)
     )
     assert {
+        "configs/soranexus/taira/config.toml",
+        "configs/soranexus/taira/genesis.json",
+        "scripts/compose_taira_nevo_reset_genesis.py",
         "scripts/deploy_taira_v21_reset_authority.py",
         "scripts/deploy_taira_v21_reset_health.py",
     } <= set(admission.MACOS_CONTROLLER_FILES)

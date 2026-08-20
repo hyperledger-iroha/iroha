@@ -8,6 +8,7 @@ const VERGEN_GIT_SHA_ENV: &str = "VERGEN_GIT_SHA";
 const VERGEN_CARGO_FEATURES_ENV: &str = "VERGEN_CARGO_FEATURES";
 const VERGEN_CARGO_TARGET_TRIPLE_ENV: &str = "VERGEN_CARGO_TARGET_TRIPLE";
 const IROHA_DPN_VALIDATOR_RELEASE_COMMIT_ENV: &str = "IROHA_DPN_VALIDATOR_RELEASE_COMMIT";
+const LOCAL_FAST_BUILD_GIT_SHA: &str = "local-fast-build";
 const GIT_RERUN_ENV_VARS: &[&str] = &[VERGEN_GIT_SHA_ENV, IROHA_DPN_VALIDATOR_RELEASE_COMMIT_ENV];
 #[derive(Debug)]
 struct GitDirectories {
@@ -62,6 +63,10 @@ fn emit_git_rerun_hints() {
     for env_var in GIT_RERUN_ENV_VARS {
         println!("cargo:rerun-if-env-changed={env_var}");
     }
+    let git_sha_override = env::var(VERGEN_GIT_SHA_ENV).ok();
+    if !should_emit_git_filesystem_rerun_hints(git_sha_override.as_deref()) {
+        return;
+    }
     let Some(git_dirs) = resolve_git_directories() else {
         return;
     };
@@ -82,6 +87,9 @@ fn emit_git_rerun_hints() {
             emit_existing_rerun_if_changed(&path);
         }
     }
+}
+fn should_emit_git_filesystem_rerun_hints(git_sha_override: Option<&str>) -> bool {
+    !git_sha_override.is_some_and(|sha| sha.trim() == LOCAL_FAST_BUILD_GIT_SHA)
 }
 fn resolve_git_directories() -> Option<GitDirectories> {
     let worktree = resolve_git_dir()?;
@@ -271,6 +279,24 @@ mod tests {
             GIT_RERUN_ENV_VARS,
             &[VERGEN_GIT_SHA_ENV, IROHA_DPN_VALIDATOR_RELEASE_COMMIT_ENV,]
         );
+    }
+    #[test]
+    fn local_fast_git_sha_skips_git_filesystem_rerun_hints() {
+        assert!(!should_emit_git_filesystem_rerun_hints(Some(
+            LOCAL_FAST_BUILD_GIT_SHA
+        )));
+    }
+    #[test]
+    fn exact_git_sha_keeps_git_filesystem_rerun_hints() {
+        assert!(should_emit_git_filesystem_rerun_hints(Some(
+            "6f4e5a2d3a9ab7cd61234b1234f8aadeadbeef00"
+        )));
+    }
+    #[test]
+    fn missing_or_empty_git_sha_keeps_git_filesystem_rerun_hints() {
+        for git_sha_override in [None, Some(""), Some(" \n")] {
+            assert!(should_emit_git_filesystem_rerun_hints(git_sha_override));
+        }
     }
     #[test]
     fn parse_head_reference_parses_symbolic_head() {

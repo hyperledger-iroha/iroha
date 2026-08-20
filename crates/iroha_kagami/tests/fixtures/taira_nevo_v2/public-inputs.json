@@ -1,0 +1,9 @@
+{
+  "schema": "iroha.taira.nevo-reset-public-inputs.v2",
+  "onboarding_authority_account_id": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
+  "api_signer_account_id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+  "dpn_inori_account_id": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+  "dpn_epr_guard_account_id": "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT",
+  "is2_onboarding_token_hash": "blake3:11590239c854c8e1033a98997443be5280c3a883ef97b8999ee45539a8d4197e",
+  "dpn_onboarding_token_hash": "blake3:1c0a72b28a75a1ef2c09779c7de338ae5afc99e4945ceab869fa72b12bc0efcb"
+}

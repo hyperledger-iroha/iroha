@@ -46700,16 +46700,7 @@ impl<'state> StateBlock<'state> {
         &mut self,
         entry: &MergeLedgerEntry,
     ) -> Result<(), MergeLedgerCommitError> {
-<<<<<<< HEAD
-        self.ensure_pristine_certified_merge_stage()?;
-=======
         self.ensure_pristine_execution_control_stage()?;
-        if !self.state_ref.nexus_snapshot().enabled {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "certified merge entry requires Nexus multilane mode".to_owned(),
-            ));
-        }
->>>>>>> origin/optimizations
         if entry.merge_qc.carrier_height != self._curr_block.height().get()
             || Some(entry.merge_qc.carrier_parent_hash) != self._curr_block.prev_block_hash()
             || entry.merge_qc.view != self._curr_block.view_change_index()

@@ -2130,43 +2130,11 @@ mod tests {
             ..CandidateAttachments::default()
         };
         assert!(candidate_has_proposal_work(&[], &control, &prepared));
-<<<<<<< HEAD
-=======
         let queue_plan = CandidateAttachments {
             queue_plan_admissions: vec![vec![0xA5]],
             ..CandidateAttachments::default()
         };
         assert!(candidate_has_proposal_work(&[], &queue_plan, &prepared));
-        let parent_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
-        let validator_key = KeyPair::try_from_seed(vec![40; 32], Algorithm::Ed25519)
-            .expect("deterministic validator key");
-        let roster_evidence = CandidateAttachments {
-            previous_roster_evidence: Some(PreviousRosterEvidence {
-                height: 1,
-                block_hash: parent_hash,
-                validator_checkpoint: ValidatorSetCheckpoint::new(
-                    1,
-                    0,
-                    parent_hash,
-                    Hash::prehashed([0x12; 32]),
-                    Hash::prehashed([0x34; 32]),
-                    vec![PeerId::from(validator_key.public_key().clone())],
-                    vec![1],
-                    Vec::new(),
-                    VALIDATOR_SET_HASH_VERSION_V1,
-                    None,
-                ),
-                stake_snapshot: None,
-            }),
-            ..CandidateAttachments::default()
-        };
-        assert!(candidate_has_proposal_work(
-            &[],
-            &roster_evidence,
-            &prepared
-        ));
->>>>>>> origin/optimizations
     }
     #[test]
     fn snapshot_candidate_parent_is_exact_and_one_shot() {

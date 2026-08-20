@@ -821,6 +821,16 @@ pub(crate) fn validate_native_amx_receipt_against_plan(
         expected_v2_context,
     )
 }
+/// Return the Native-AMX source identity of one exact queued/executed entrypoint.
+pub(crate) fn native_amx_source_id_from_entrypoint_hash(
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> [u8; iroha_crypto::Hash::LENGTH] {
+    // Native AMX identifies the exact queued/executed entrypoint. In particular, a sealed reveal
+    // must remain distinct from the signed transaction it opens.
+    let mut source_id = [0_u8; iroha_crypto::Hash::LENGTH];
+    source_id.copy_from_slice(entrypoint_hash.as_ref());
+    source_id
+}
 #[derive(Clone, Copy)]
 enum NativeAmxValidationAuthority<'a> {
     Live {
@@ -995,7 +1005,7 @@ fn validate_native_amx_receipt_against_plan_with_authority(
         ));
     }
     if receipt.source_id != expected_source_id {
-        return Err("native AMX receipt source transaction mismatch".to_owned());
+        return Err("native AMX receipt source entrypoint mismatch".to_owned());
     }
     if receipt.network_id != expected_network_id {
         return Err("native AMX receipt network identity mismatch".to_owned());
@@ -4911,15 +4921,17 @@ pub(crate) mod valid {
             };
             struct VerifiedProof<'block> {
                 proof: &'block ProofBlob,
+                dsid: DataSpaceId,
                 facts: ivm::axt::AxtProofUseFacts,
             }
-            type VerifiedProofBuckets = BTreeMap<(DataSpaceId, Option<u64>, Hash), Vec<usize>>;
+            type VerifiedProofBuckets = BTreeMap<(Option<u64>, Hash), Vec<usize>>;
             // Digest buckets make repeated exact-value lookups independent of the
             // number and size of unrelated proofs. The full-value equality check
             // inside a matching bucket keeps hash collisions fail-safe, while
             // references avoid copying proof payloads owned by the block.
             let mut verified_proofs = Vec::<VerifiedProof<'block>>::new();
             let mut verified_proof_buckets = VerifiedProofBuckets::new();
+            let mut block_consumed_by_proof = BTreeMap::<usize, Vec<[u8; 32]>>::new();
             let mut resolved_proof_amounts =
                 BTreeMap::<(usize, Option<Quantity>), ivm::axt::ResolvedHandleAmount>::new();
             let validate_proof = |verified_proofs: &mut Vec<VerifiedProof<'block>>,
@@ -4930,7 +4942,7 @@ pub(crate) mod valid {
                                   policy_slot: u64,
                                   min_expiry_slot: Option<u64>|
              -> Result<usize, BlockValidationError> {
-                let cache_key = (dsid, proof.expiry_slot, Hash::new(&proof.payload));
+                let cache_key = (proof.expiry_slot, Hash::new(&proof.payload));
                 let cached_index = verified_proof_buckets.get(&cache_key).and_then(|bucket| {
                     bucket
                         .iter()
@@ -4938,6 +4950,16 @@ pub(crate) mod valid {
                         .find(|index| verified_proofs[*index].proof == proof)
                 });
                 if let Some(index) = cached_index {
+                    if verified_proofs[index].dsid != dsid {
+                        return Err(make_axt_error_with(
+                            AxtRejectReason::Manifest,
+                            "one exact FASTPQ proof cannot be relabelled for another dataspace",
+                            Some(dsid),
+                            Some(policy.target_lane),
+                            None,
+                            None,
+                        ));
+                    }
                     validate_proof_expiry(proof, dsid, policy, policy_slot, min_expiry_slot)?;
                     return Ok(index);
                 }
@@ -4986,6 +5008,28 @@ pub(crate) mod valid {
                         None,
                     ));
                 }
+                let binding = envelope.fastpq_binding.as_ref().ok_or_else(|| {
+                    make_axt_error_with(
+                        AxtRejectReason::Proof,
+                        "FASTPQ proof envelope is missing fastpq_binding",
+                        Some(dsid),
+                        Some(policy.target_lane),
+                        None,
+                        None,
+                    )
+                })?;
+                fastpq_prover::validate_axt_transfer_claim_binding(binding).map_err(|err| {
+                    make_axt_error_with(
+                        AxtRejectReason::Proof,
+                        &format!(
+                            "generic AXT proof admission requires a witnessed transfer claim: {err}"
+                        ),
+                        Some(dsid),
+                        Some(policy.target_lane),
+                        None,
+                        None,
+                    )
+                })?;
                 validate_proof_expiry(proof, dsid, policy, policy_slot, min_expiry_slot)?;
                 #[cfg(all(test, feature = "app_api"))]
                 AXT_FASTPQ_PROOF_VERIFICATION_COUNT
@@ -5007,6 +5051,7 @@ pub(crate) mod valid {
                 let index = verified_proofs.len();
                 verified_proofs.push(VerifiedProof {
                     proof,
+                    dsid,
                     facts: ivm::axt::AxtProofUseFacts::from_verified_envelope(envelope),
                 });
                 verified_proof_buckets
@@ -5411,6 +5456,15 @@ pub(crate) mod valid {
                         ));
                     }
                 }
+                // Consumption is scoped to this envelope, even when global
+                // proof verification memoizes an identical proof value used
+                // by another envelope. Every fallback proof starts with an
+                // empty assignment so a claim-carrying proof with no handle
+                // cannot authorize an unrelated effect.
+                let mut consumed_by_proof = proofs_by_ds
+                    .iter()
+                    .map(|(dsid, (_, proof_index))| (*proof_index, (*dsid, Vec::new())))
+                    .collect::<BTreeMap<usize, (DataSpaceId, Vec<[u8; 32]>)>>();
                 let mut dataspace_proofs_present: BTreeSet<DataSpaceId> =
                     proofs_by_ds.keys().copied().collect();
                 let mut accumulators: BTreeMap<HandleBudgetKey, HandleAccumulator> =
@@ -5463,6 +5517,18 @@ pub(crate) mod valid {
                             envelope_lane,
                             AxtRejectReason::Descriptor,
                             "handle references undeclared dataspace",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if let Some(origin_dsid) = fragment.handle.subject.origin_dsid
+                        && !expected_dsids.contains(&origin_dsid)
+                    {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Descriptor,
+                            "authenticated handle origin dataspace is not declared by the bound AXT descriptor",
                             Some(fragment.intent.asset_dsid),
                             None,
                             None,
@@ -5902,8 +5968,41 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
+                    let balance_policy = state_block
+                        .world
+                        .asset_definition(&fragment.intent.op.asset_definition_id)
+                        .map_err(|_| {
+                            make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::PolicyDenied,
+                                "remote-spend asset definition is not registered",
+                                Some(fragment.intent.asset_dsid),
+                                None,
+                                None,
+                            )
+                        })?
+                        .balance_scope_policy();
+                    let source_scope =
+                        crate::smartcontracts::ivm::host::remote_spend_asset_scope_from_policy(
+                            balance_policy,
+                            fragment.intent.asset_dsid,
+                        );
+                    ivm::axt::validate_remote_spend_asset_scope(
+                        fragment.intent.asset_dsid,
+                        source_scope,
+                    )
+                    .map_err(|_| {
+                        make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "remote-spend asset does not belong to the intent dataspace",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        )
+                    })?;
                     ivm::axt::validate_model_remote_spend_intent_commitment_from_proof_facts(
-                        fragment.handle.axt_binding.into_array(),
+                        &fragment.handle,
                         &fragment.intent,
                         &resolved_amount.amount,
                         proof_facts,
@@ -5918,6 +6017,33 @@ pub(crate) mod valid {
                             None,
                         )
                     })?;
+                    let commitment = ivm::axt::expected_model_remote_spend_intent_commitment_v1(
+                        &fragment.handle,
+                        &fragment.intent,
+                        &resolved_amount.amount,
+                    );
+                    match consumed_by_proof.entry(proof_index) {
+                        std::collections::btree_map::Entry::Occupied(mut entry) => {
+                            if entry.get().0 != fragment.intent.asset_dsid {
+                                return Err(make_env_error(
+                                    envelope_lane,
+                                    AxtRejectReason::Proof,
+                                    "one exact FASTPQ proof was selected for different dataspaces",
+                                    Some(fragment.intent.asset_dsid),
+                                    None,
+                                    None,
+                                ));
+                            }
+                            entry.get_mut().1.push(commitment);
+                        }
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert((fragment.intent.asset_dsid, vec![commitment]));
+                        }
+                    }
+                    block_consumed_by_proof
+                        .entry(proof_index)
+                        .or_default()
+                        .push(commitment);
                     if !seen.insert(replay_key) {
                         return Err(make_env_error(
                             envelope_lane,
@@ -5945,6 +6071,43 @@ pub(crate) mod valid {
                         ));
                     }
                 }
+                for (proof_index, (dsid, consumed)) in consumed_by_proof {
+                    verified_proofs[proof_index]
+                        .facts
+                        .validate_remote_spend_consumption(&consumed)
+                        .map_err(|_| {
+                            make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::Proof,
+                                "FASTPQ remote-spend claims were not consumed exactly once",
+                                Some(dsid),
+                                None,
+                                None,
+                            )
+                        })?;
+                }
+            }
+            // A copied proof remains one canonical statement at block scope.
+            // Enforcing its commitment multiset again across all envelopes
+            // prevents the same claim set from being replayed through several
+            // individually well-formed envelope records.
+            for (proof_index, verified) in verified_proofs.iter().enumerate() {
+                let consumed = block_consumed_by_proof
+                    .get(&proof_index)
+                    .map_or(&[][..], Vec::as_slice);
+                verified
+                    .facts
+                    .validate_remote_spend_consumption(consumed)
+                    .map_err(|_| {
+                        make_axt_error_with(
+                            AxtRejectReason::Proof,
+                            "FASTPQ remote-spend claims were not consumed exactly once in the block",
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                    })?;
             }
             for (dsid, policy) in &policies {
                 let reconstructed = next_sub_nonces
@@ -9489,14 +9652,13 @@ pub(crate) mod valid {
                 })?;
                 match (&plan, context.native_amx_receipt.as_ref()) {
                     (crate::queue::RoutingPlan::NativeAmx(_), Some(receipt)) => {
-                        let Some(source_tx) = Self::signed_transaction_from_entrypoint(&entrypoint)
-                        else {
+                        if Self::signed_transaction_from_entrypoint(&entrypoint).is_none() {
                             return Err(Self::execution_context_error(format!(
                                 "native AMX receipt at index {idx} is not attached to a signed transaction"
                             )));
-                        };
-                        let mut expected_source_id = [0u8; iroha_crypto::Hash::LENGTH];
-                        expected_source_id.copy_from_slice(source_tx.hash().as_ref());
+                        }
+                        let expected_source_id =
+                            native_amx_source_id_from_entrypoint_hash(context.entrypoint_hash);
                         let expected_network_id = *state.network_id();
                         let entrypoint_untyped = Hash::from(context.entrypoint_hash);
                         let ownership_key = (
@@ -20814,6 +20976,200 @@ pub(crate) mod valid {
             ));
         }
         #[test]
+        fn execution_context_validation_uses_sealed_reveal_entrypoint_as_native_amx_source() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(4)
+            .collect::<Vec<_>>();
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+            let first_dataspace = DataSpaceId::new(7);
+            let second_dataspace = DataSpaceId::new(8);
+            let mut world = World::new();
+            insert_active_consensus_keys(&mut world, &key_pairs);
+            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
+            {
+                let mut nexus = state.nexus_snapshot();
+                nexus.lane_catalog = LaneCatalog::new(
+                    nonzero!(4_u32),
+                    vec![
+                        LaneConfig::default(),
+                        LaneConfig {
+                            id: LaneId::new(2),
+                            dataspace_id: first_dataspace,
+                            alias: "first".to_owned(),
+                            ..LaneConfig::default()
+                        },
+                        LaneConfig {
+                            id: LaneId::new(3),
+                            dataspace_id: second_dataspace,
+                            alias: "second".to_owned(),
+                            ..LaneConfig::default()
+                        },
+                    ],
+                )
+                .expect("lane catalog");
+                nexus.lane_config =
+                    iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+                nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                    DataSpaceMetadata::default(),
+                    DataSpaceMetadata {
+                        id: first_dataspace,
+                        alias: "acme".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                    DataSpaceMetadata {
+                        id: second_dataspace,
+                        alias: "bank".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("dataspace catalog");
+                state
+                    .set_nexus(nexus)
+                    .expect("pre-genesis native AMX test catalog must install atomically");
+            }
+            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
+            let _prev_hash = commit_block_with_applied_lane_predecessors(
+                &state,
+                &kura,
+                &topology,
+                leader.private_key(),
+                &[
+                    (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                    (LaneId::new(2), first_dataspace),
+                    (LaneId::new(3), second_dataspace),
+                ],
+            );
+            let (authority, signer) = gen_account_in("sealed-native-context-check");
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let signed = TransactionBuilder::new_with_time_source(
+                state.network_id,
+                authority,
+                &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "acme").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("treasury", "bank").expect("domain id"),
+                ))),
+            ])
+            .sign(signer.private_key());
+            let entrypoint = TransactionEntrypoint::SealedReveal(
+                iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+                    Hash::new(b"ordinary-native-amx-sealed-reveal"),
+                    signed.clone(),
+                    [0xA5; 32],
+                ),
+            );
+            let entrypoint_hash = entrypoint.hash();
+            let accepted_for_plan =
+                AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(&entrypoint));
+            let plan = {
+                let view = state.view();
+                crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                    &view.nexus,
+                    &accepted_for_plan,
+                    view.world(),
+                    u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                    2,
+                )
+                .expect("sealed mixed-dataspace writes should build a native AMX plan")
+            };
+            assert!(matches!(plan, crate::queue::RoutingPlan::NativeAmx(_)));
+            let coordinator = plan.coordinator_route();
+            let mut ownership = sample_lane_payload_ownership_for_context(
+                2,
+                0,
+                coordinator.lane_id,
+                coordinator.dataspace_id,
+                state
+                    .lane_incarnation_at_height(coordinator.lane_id, 2)
+                    .expect("native AMX coordinator incarnation at candidate height"),
+                vec![0],
+                vec![Hash::from(entrypoint_hash)],
+                topology.as_ref(),
+            );
+            bind_applied_lane_predecessor(&kura, &mut ownership);
+            let outer_source_id = native_amx_source_id_from_entrypoint_hash(entrypoint_hash);
+            let inner_source_id =
+                native_amx_source_id_from_entrypoint_hash(signed.hash_as_entrypoint());
+            assert_ne!(outer_source_id, inner_source_id);
+            time_handle.advance(Duration::from_millis(1));
+
+            let build_block = |source_id| {
+                let receipt = NativeAmxReceipt {
+                    version: 2,
+                    source_id,
+                    network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                        HashOf::from_untyped_unchecked(Hash::new(
+                            b"foreign-native-amx-network-for-source-boundary",
+                        )),
+                    ),
+                    plan_digest: plan.digest(),
+                    lane_id: coordinator.lane_id,
+                    dataspace_id: coordinator.dataspace_id,
+                    lane_incarnation: ownership.lane_incarnation,
+                    authority_context_height: 2,
+                    lane_block_height: ownership.lane_block_height,
+                    lane_block_view: ownership.lane_block_view,
+                    coordinator_proposal_hash: Hash::new(b"source-boundary-coordinator-proposal"),
+                    legs: Vec::new(),
+                };
+                let context =
+                    crate::queue::execution_context_for_routing_plan(entrypoint_hash, &plan)
+                        .with_native_amx_receipt(receipt);
+                let execution_context = BlockExecutionContextBundle::new(vec![context])
+                    .with_lane_payload_ownerships(vec![ownership.clone()]);
+                let accepted =
+                    AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+                let builder =
+                    BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                        .chain(0, state.view().latest_block().as_deref())
+                        .with_execution_context(Some(execution_context));
+                let block = with_current_state_da_sidecars(builder, &state)
+                    .sign(leader.private_key())
+                    .unpack(|_| {});
+                SignedBlock::from(block)
+            };
+            let outer_source_block = build_block(outer_source_id);
+            let view = state.query_view();
+            let error = ValidBlock::validate_execution_context_with_state(
+                &outer_source_block,
+                &topology,
+                &view,
+                sumeragi_v2_test_profile(&outer_source_block),
+            )
+            .expect_err("the deliberately foreign receipt network must fail after source binding");
+            assert!(matches!(
+                error,
+                BlockValidationError::ExecutionContextInvalid(ref message)
+                    if message.contains("network identity mismatch")
+            ));
+
+            let inner_source_block = build_block(inner_source_id);
+            let error = ValidBlock::validate_execution_context_with_state(
+                &inner_source_block,
+                &topology,
+                &view,
+                sumeragi_v2_test_profile(&inner_source_block),
+            )
+            .expect_err("the underlying signed identity must fail at the source boundary");
+            assert!(matches!(
+                error,
+                BlockValidationError::ExecutionContextInvalid(ref message)
+                    if message.contains("source entrypoint mismatch")
+            ));
+        }
+        #[test]
         fn validate_static_state_dependent_rejects_stale_default_context_for_elastic_route() {
             setup_elastic_lane_validation_state!(kura, key_pairs, topology, leader, state);
             let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
@@ -24378,12 +24734,17 @@ mod commit {
             query::store::LiveQueryStore,
             state::{State, World},
         };
+        use iroha_data_model::fastpq::{
+            TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferSmtWitness,
+            TransferTranscript,
+        };
         use iroha_data_model::nexus::{
-            AssetHandle, AssetPermissionManifest, AxtBinding, AxtDescriptor, AxtEnvelopeRecord,
-            AxtHandleFragment, AxtHandleIssuerContextV1, AxtPolicyBinding, AxtPolicyEntry,
-            AxtPolicySnapshot, AxtProofEnvelope, AxtProofFragment, AxtTouchFragment, AxtTouchSpec,
-            GroupBinding, HandleBudget, HandleSubject, ManifestVersion, ProofBlob,
-            RemoteSpendIntent, SpendOp, TouchManifest, UniversalAccountId,
+            AssetHandle, AssetPermissionManifest, AxtBinding, AxtDescriptor, AxtEffectBinding,
+            AxtEnvelopeRecord, AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
+            AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope,
+            AxtProofFragment, AxtRemoteSpendClaimV1, AxtTouchFragment, AxtTouchSpec, GroupBinding,
+            HandleBudget, HandleSubject, ManifestVersion, ProofBlob, RemoteSpendIntent, SpendOp,
+            TouchManifest, UniversalAccountId,
         };
         use iroha_primitives::time::TimeSource;
         use std::{collections::BTreeMap, time::Duration};
@@ -24391,6 +24752,12 @@ mod commit {
         const ACCOUNT_TO_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
         fn binding_for_descriptor(descriptor: &AxtDescriptor) -> AxtBinding {
             descriptor.binding().expect("descriptor binding")
+        }
+        fn sample_asset_definition_id() -> AssetDefinitionId {
+            AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id")
         }
         fn sample_handle(
             binding: AxtBinding,
@@ -24427,6 +24794,7 @@ mod commit {
                 intent: RemoteSpendIntent {
                     asset_dsid: dsid,
                     op: SpendOp {
+                        asset_definition_id: sample_asset_definition_id(),
                         kind: "transfer".to_owned(),
                         from: ACCOUNT_FROM_LITERAL.to_owned(),
                         to: ACCOUNT_TO_LITERAL.to_owned(),
@@ -24461,12 +24829,70 @@ mod commit {
             expiry_slot: u64,
             committed_amount: Option<u128>,
             amount_commitment: Option<[u8; 32]>,
-            remote_spend_intent_commitments: Vec<[u8; 32]>,
+            remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
         ) -> ProofBlob {
+            proof_blob_for_with_profile(
+                dsid,
+                manifest_root,
+                proof_seed,
+                expiry_slot,
+                committed_amount,
+                amount_commitment,
+                remote_spend_claims,
+                false,
+            )
+        }
+        fn opaque_proof_blob_for(
+            dsid: DataSpaceId,
+            manifest_root: [u8; 32],
+            proof_seed: &[u8],
+            expiry_slot: u64,
+        ) -> ProofBlob {
+            proof_blob_for_with_profile(
+                dsid,
+                manifest_root,
+                proof_seed,
+                expiry_slot,
+                None,
+                None,
+                Vec::new(),
+                true,
+            )
+        }
+        #[allow(clippy::too_many_arguments)]
+        fn proof_blob_for_with_profile(
+            dsid: DataSpaceId,
+            manifest_root: [u8; 32],
+            proof_seed: &[u8],
+            expiry_slot: u64,
+            committed_amount: Option<u128>,
+            amount_commitment: Option<[u8; 32]>,
+            mut remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
+            opaque: bool,
+        ) -> ProofBlob {
+            assert!(
+                !opaque || remote_spend_claims.is_empty(),
+                "opaque proof fixture cannot carry remote-spend claims"
+            );
             let source_tx_commitment = test_digest(b"axt-block-test:source-tx", &[proof_seed]);
             let claim_digest = test_digest(b"axt-block-test:claim", &[proof_seed]);
             let witness_commitment = test_digest(b"axt-block-test:witness", &[proof_seed]);
             let policy_commitment = test_digest(b"axt-block-test:policy", &[&manifest_root[..]]);
+            remote_spend_claims
+                .sort_by_key(iroha_data_model::nexus::compute_remote_spend_claim_commitment_v1);
+            let remote_spend_intent_commitments = remote_spend_claims
+                .iter()
+                .map(iroha_data_model::nexus::compute_remote_spend_claim_commitment_v1)
+                .collect::<Vec<_>>();
+            let source_asset = remote_spend_claims
+                .first()
+                .map(|claim| claim.asset_definition_id.clone());
+            assert!(
+                remote_spend_claims
+                    .iter()
+                    .all(|claim| Some(&claim.asset_definition_id) == source_asset.as_ref()),
+                "one FASTPQ proof fixture must use one exact asset definition"
+            );
             let binding = iroha_data_model::nexus::AxtFastpqBinding {
                 parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
                 source_dsid: dsid.as_u64(),
@@ -24476,7 +24902,11 @@ mod commit {
                     hex::encode(source_tx_commitment.as_ref())
                 ),
                 source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
-                claim_type: "authorization".to_owned(),
+                claim_type: if opaque {
+                    "authorization".to_owned()
+                } else {
+                    "tx_predicate".to_owned()
+                },
                 claim_digest: hex::encode(claim_digest.as_ref()),
                 witness_commitment: hex::encode(witness_commitment.as_ref()),
                 policy_commitment: hex::encode(policy_commitment.as_ref()),
@@ -24485,7 +24915,16 @@ mod commit {
                 verifier_id: "fastpq".to_owned(),
                 verifier_version: "v1".to_owned(),
                 target_dsids: vec![dsid.as_u64()],
-                effect_binding: None,
+                effect_binding: source_asset.as_ref().map(|asset| AxtEffectBinding {
+                    destination_domain: None,
+                    destination_account_id: None,
+                    vault_account_id: None,
+                    issuance_account_id: None,
+                    source_asset_definition_id: Some(asset.to_string()),
+                    destination_asset_definition_id: None,
+                    source_amount_i64: None,
+                    destination_amount_i64: None,
+                }),
                 remote_spend_intent_commitments,
             };
             let mut dsid_bytes = [0_u8; 16];
@@ -24501,12 +24940,120 @@ mod commit {
                     tx_set_hash: test_digest(b"axt-block-test:tx-set", &[proof_seed]).into(),
                 },
             );
-            batch.push(fastpq_prover::StateTransition::new(
-                b"axt/block/proof".to_vec(),
-                proof_seed.to_vec(),
-                manifest_root.to_vec(),
-                fastpq_prover::OperationKind::MetaSet,
-            ));
+            if opaque {
+                batch.push(fastpq_prover::StateTransition::new(
+                    b"axt/block/proof".to_vec(),
+                    proof_seed.to_vec(),
+                    manifest_root.to_vec(),
+                    fastpq_prover::OperationKind::MetaSet,
+                ));
+            } else {
+                let batch_hash = source_tx_commitment;
+                let mut transcripts = if remote_spend_claims.is_empty() {
+                    let from =
+                        AccountId::parse_encoded(ACCOUNT_FROM_LITERAL).expect("canonical sender");
+                    let to =
+                        AccountId::parse_encoded(ACCOUNT_TO_LITERAL).expect("canonical receiver");
+                    vec![TransferTranscript {
+                        batch_hash,
+                        deltas: vec![TransferDeltaTranscript {
+                            from_account: from,
+                            to_account: to,
+                            asset_definition: sample_asset_definition_id(),
+                            amount: Quantity::from(1_u64),
+                            from_balance_before: Quantity::from(1_000_000_u64),
+                            from_balance_after: Quantity::from(999_999_u64),
+                            to_balance_before: Quantity::from(100_u64),
+                            to_balance_after: Quantity::from(101_u64),
+                            from_smt_witness: TransferSmtWitness::default(),
+                            to_smt_witness: TransferSmtWitness::default(),
+                        }],
+                        authority_digest: Hash::new(b"axt-block-transfer-authority"),
+                        poseidon_preimage_digest: None,
+                    }]
+                } else {
+                    remote_spend_claims
+                        .iter()
+                        .map(|claim| {
+                            let from =
+                                AccountId::parse_encoded(&claim.from).expect("canonical sender");
+                            let to =
+                                AccountId::parse_encoded(&claim.to).expect("canonical receiver");
+                            let amount = iroha_data_model::fastpq::normalized_numeric_to_u64(
+                                claim.effective_amount.as_numeric(),
+                                0,
+                            )
+                            .expect("fixture transfer amount is an exact scale-zero u64");
+                            TransferTranscript {
+                                batch_hash,
+                                deltas: vec![TransferDeltaTranscript {
+                                    from_account: from,
+                                    to_account: to,
+                                    asset_definition: claim.asset_definition_id.clone(),
+                                    amount: claim.effective_amount.clone(),
+                                    from_balance_before: Quantity::from(1_000_000_u64),
+                                    from_balance_after: Quantity::from(1_000_000_u64 - amount),
+                                    to_balance_before: Quantity::from(100_u64),
+                                    to_balance_after: Quantity::from(100_u64 + amount),
+                                    from_smt_witness: TransferSmtWitness::default(),
+                                    to_smt_witness: TransferSmtWitness::default(),
+                                }],
+                                authority_digest: Hash::new(b"axt-block-transfer-authority"),
+                                poseidon_preimage_digest: None,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let (old_root, new_root) =
+                    fastpq_prover::gadgets::transfer::attach_transfer_smt_witnesses(
+                        &mut transcripts,
+                    )
+                    .expect("attach transfer SMT witnesses");
+                batch.public_inputs.old_root = old_root;
+                batch.public_inputs.new_root = new_root;
+                for transcript in &mut transcripts {
+                    transcript.poseidon_preimage_digest =
+                        Some(fastpq_prover::gadgets::transfer::compute_poseidon_digest(
+                            &transcript.deltas[0],
+                            &transcript.batch_hash,
+                        ));
+                    for delta in &transcript.deltas {
+                        let balance_bytes = |value: &Quantity| {
+                            iroha_data_model::fastpq::normalized_numeric_to_u64(
+                                value.as_numeric(),
+                                0,
+                            )
+                            .expect("fixture balance is an exact u64")
+                            .to_le_bytes()
+                            .to_vec()
+                        };
+                        batch.push(fastpq_prover::StateTransition::new(
+                            format!("asset/{}/{}", delta.asset_definition, delta.from_account)
+                                .into_bytes(),
+                            balance_bytes(&delta.from_balance_before),
+                            balance_bytes(&delta.from_balance_after),
+                            fastpq_prover::OperationKind::Transfer,
+                        ));
+                        batch.push(fastpq_prover::StateTransition::new(
+                            format!("asset/{}/{}", delta.asset_definition, delta.to_account)
+                                .into_bytes(),
+                            balance_bytes(&delta.to_balance_before),
+                            balance_bytes(&delta.to_balance_after),
+                            fastpq_prover::OperationKind::Transfer,
+                        ));
+                    }
+                }
+                batch.metadata.insert(
+                    TRANSFER_TRANSCRIPTS_METADATA_KEY.to_owned(),
+                    norito::to_bytes(&transcripts).expect("encode transfer transcripts"),
+                );
+                fastpq_prover::set_axt_remote_spend_claims(
+                    &mut batch,
+                    &binding,
+                    &remote_spend_claims,
+                )
+                .expect("attach remote-spend claims");
+            }
             batch.sort();
             batch.metadata.insert(
                 "entry_hash".to_owned(),
@@ -24523,7 +25070,7 @@ mod commit {
             .expect("bind AXT test batch");
             let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
                 .expect("FASTPQ prover")
-                .prove(&batch)
+                .prove_axt_bound(&batch, &binding)
                 .expect("FASTPQ proof");
             let fastpq_payload = fastpq_prover::encode_axt_fastpq_payload(&batch, proof)
                 .expect("AXT FASTPQ payload");
@@ -24541,21 +25088,35 @@ mod commit {
                 expiry_slot: Some(expiry_slot),
             }
         }
-        fn remote_spend_intent_commitment(
+        fn remote_spend_claim(
             handle: &AxtHandleFragment,
             effective_amount: &Quantity,
-        ) -> [u8; 32] {
-            iroha_data_model::nexus::compute_remote_spend_intent_commitment_v1(
-                handle.handle.axt_binding,
-                handle.intent.asset_dsid,
-                &handle.intent.op.kind,
-                &handle.intent.op.from,
-                &handle.intent.op.to,
-                effective_amount,
+        ) -> AxtRemoteSpendClaimV1 {
+            AxtRemoteSpendClaimV1::new(
+                AxtHandleReplayKey::from_handle(handle.intent.asset_dsid, &handle.handle),
+                handle.intent.op.asset_definition_id.clone(),
+                handle.intent.op.kind.clone(),
+                handle.intent.op.from.clone(),
+                handle.intent.op.to.clone(),
+                effective_amount.clone(),
             )
         }
         fn authenticated_axt_validation_state_for(
             entries: &[(DataSpaceId, LaneId, u8)],
+        ) -> (
+            State,
+            KeyPair,
+            UniversalAccountId,
+            BTreeMap<DataSpaceId, [u8; 32]>,
+        ) {
+            authenticated_axt_validation_state_for_with_asset_policy(
+                entries,
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            )
+        }
+        fn authenticated_axt_validation_state_for_with_asset_policy(
+            entries: &[(DataSpaceId, LaneId, u8)],
+            asset_policy: iroha_data_model::asset::AssetBalancePolicy,
         ) -> (
             State,
             KeyPair,
@@ -24574,7 +25135,14 @@ mod commit {
             let issuer_account = iroha_data_model::account::Account::new(issuer_account_id.clone())
                 .with_uaid(Some(issuer_uaid))
                 .build(&issuer_account_id);
-            let mut world = World::with([], [issuer_account], []);
+            let asset_definition = iroha_data_model::asset::AssetDefinition::numeric(
+                sample_asset_definition_id(),
+                "AXT fixture asset",
+                asset_policy,
+                None,
+            )
+            .build(&issuer_account_id);
+            let mut world = World::with([], [issuer_account], [asset_definition]);
             world
                 .rebuild_uaid_account_index()
                 .expect("seed canonical AXT issuer index");
@@ -24644,7 +25212,6 @@ mod commit {
             manifest_root: [u8; 32],
         ) -> AxtHandleFragment {
             let dsid = fragment.intent.asset_dsid;
-            fragment.handle.subject.origin_dsid = Some(DataSpaceId::UNIVERSAL);
             let context = AxtHandleIssuerContextV1 {
                 network_id: state.network_id,
                 asset_dsid: dsid,
@@ -24667,7 +25234,7 @@ mod commit {
             proof_seed: &[u8],
             expiry_slot: u64,
             committed_amount: u128,
-            remote_spend_intent_commitments: Vec<[u8; 32]>,
+            remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
         ) -> (ProofBlob, [u8; 32]) {
             let mut proof = proof_blob_for_with_amount(
                 dsid,
@@ -24676,7 +25243,7 @@ mod commit {
                 expiry_slot,
                 Some(committed_amount),
                 None,
-                remote_spend_intent_commitments,
+                remote_spend_claims,
             );
             let amount = committed_amount
                 .to_string()
@@ -24696,10 +25263,27 @@ mod commit {
             manifest_tag: u8,
             proof_seed: &[u8],
         ) -> (State, AxtEnvelopeRecord) {
+            hidden_amount_fixture_with_asset_policy(
+                dsid,
+                manifest_tag,
+                proof_seed,
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            )
+        }
+        fn hidden_amount_fixture_with_asset_policy(
+            dsid: u64,
+            manifest_tag: u8,
+            proof_seed: &[u8],
+            asset_policy: iroha_data_model::asset::AssetBalancePolicy,
+        ) -> (State, AxtEnvelopeRecord) {
             let dsid = DataSpaceId::new(dsid);
             let lane = LaneId::new(1);
-            let (state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(dsid, lane, manifest_tag);
+            let (state, issuer, issuer_uaid, manifest_roots) =
+                authenticated_axt_validation_state_for_with_asset_policy(
+                    &[(dsid, lane, manifest_tag)],
+                    asset_policy,
+                );
+            let manifest_root = manifest_roots[&dsid];
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -24721,7 +25305,7 @@ mod commit {
                 proof_seed,
                 12,
                 5,
-                vec![remote_spend_intent_commitment(&handle, &effective_amount)],
+                vec![remote_spend_claim(&handle, &effective_amount)],
             );
             handle.amount_commitment = Some(commitment);
             handle.proof = Some(proof);
@@ -25439,8 +26023,11 @@ mod commit {
                 touches: Vec::new(),
             };
             let binding = binding_for_descriptor(&descriptor);
+            let mut cross_origin_handle =
+                sample_handle(binding, lane_a, dsid_a, 20, manifest_root_a);
+            cross_origin_handle.handle.subject.origin_dsid = Some(dsid_b);
             let handle_a = sign_axt_validation_handle(
-                sample_handle(binding, lane_a, dsid_a, 20, manifest_root_a),
+                cross_origin_handle,
                 &state,
                 &issuer,
                 issuer_uaid,
@@ -25469,7 +26056,7 @@ mod commit {
                             25,
                             None,
                             None,
-                            vec![remote_spend_intent_commitment(&handle_a, &amount)],
+                            vec![remote_spend_claim(&handle_a, &amount)],
                         ),
                     },
                     AxtProofFragment {
@@ -25481,7 +26068,7 @@ mod commit {
                             25,
                             None,
                             None,
-                            vec![remote_spend_intent_commitment(&handle_b, &amount)],
+                            vec![remote_spend_claim(&handle_b, &amount)],
                         ),
                     },
                 ],
@@ -25522,18 +26109,15 @@ mod commit {
             let handle_a = sample_handle(binding, lane, dsid, 20, manifest_root);
             let mut handle_b = handle_a.clone();
             handle_b.handle.sub_nonce = 2;
-            handle_b.intent.op.to = ACCOUNT_FROM_LITERAL.to_owned();
             let mut handle_a =
                 sign_axt_validation_handle(handle_a, &state, &issuer, issuer_uaid, manifest_root);
             let mut handle_b =
                 sign_axt_validation_handle(handle_b, &state, &issuer, issuer_uaid, manifest_root);
             let amount = Quantity::from(5_u64);
-            let mut commitments = vec![
-                remote_spend_intent_commitment(&handle_a, &amount),
-                remote_spend_intent_commitment(&handle_b, &amount),
+            let claims = vec![
+                remote_spend_claim(&handle_a, &amount),
+                remote_spend_claim(&handle_b, &amount),
             ];
-            commitments.sort_unstable();
-            commitments.dedup();
             let mut proof = proof_blob_for_with_amount(
                 dsid,
                 manifest_root,
@@ -25541,7 +26125,7 @@ mod commit {
                 25,
                 None,
                 None,
-                commitments,
+                claims,
             );
             let amount_commitment =
                 ivm::axt::derive_amount_commitment(dsid, &amount, Some(proof.payload.as_slice()));
@@ -25561,6 +26145,17 @@ mod commit {
                 handles: vec![handle_a, handle_b],
                 commit_height: 1,
             };
+            let mut unconsumed_claim = envelope.clone();
+            unconsumed_claim
+                .handles
+                .pop()
+                .expect("fixture has a second proof-bound handle");
+            expect_axt_envelope_error(
+                &state,
+                unconsumed_claim,
+                AxtRejectReason::Proof,
+                "claims were not consumed exactly once",
+            );
             let mut attached_envelope = envelope.clone();
             let attached_proof = attached_envelope
                 .proofs
@@ -25625,6 +26220,142 @@ mod commit {
             let state_block = state.block(block.header());
             validate_axt_envelopes(&block, &state_block)
                 .expect("authenticated hidden amount must pass block admission");
+        }
+
+        #[test]
+        fn axt_validation_rejects_opaque_authorization_carrier_at_generic_boundary() {
+            let dsid = DataSpaceId::new(117);
+            let lane = LaneId::new(1);
+            let (state, _, _, manifest_root) = authenticated_axt_validation_state(dsid, lane, 0x75);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let envelope = AxtEnvelopeRecord {
+                binding: binding_for_descriptor(&descriptor),
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: opaque_proof_blob_for(
+                        dsid,
+                        manifest_root,
+                        b"opaque-generic-block-attack",
+                        12,
+                    ),
+                }],
+                handles: Vec::new(),
+                commit_height: 1,
+            };
+            expect_axt_envelope_error(
+                &state,
+                envelope,
+                AxtRejectReason::Proof,
+                "requires a witnessed transfer claim",
+            );
+        }
+
+        #[test]
+        fn axt_validation_enforces_registered_asset_balance_policy() {
+            let (restricted_state, restricted_envelope) =
+                hidden_amount_fixture(118, 0x76, b"restricted-private-dataspace-control");
+            let mut restricted_snapshot =
+                axt_policy_snapshot_for_validation_test(&restricted_state);
+            restricted_snapshot.entries[0].policy.next_handle_counter = 2;
+            restricted_snapshot.version =
+                AxtPolicySnapshot::compute_version(&restricted_snapshot.entries);
+            let restricted_block =
+                build_block_with_envelopes(restricted_envelope.clone(), restricted_snapshot);
+            validate_axt_envelopes(
+                &restricted_block,
+                &restricted_state.block(restricted_block.header()),
+            )
+            .expect("a registered restricted asset may use its exact signed intent dataspace");
+
+            let (global_state, global_envelope) = hidden_amount_fixture_with_asset_policy(
+                118,
+                0x76,
+                b"restricted-private-dataspace-control",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+            );
+            expect_axt_envelope_error(
+                &global_state,
+                global_envelope,
+                AxtRejectReason::PolicyDenied,
+                "does not belong to the intent dataspace",
+            );
+
+            let mut missing_state = restricted_state;
+            let mut world = missing_state.world.block();
+            assert!(
+                world
+                    .asset_definitions
+                    .remove(sample_asset_definition_id())
+                    .is_some(),
+                "fixture asset definition must be present before removal"
+            );
+            world.commit();
+            expect_axt_envelope_error(
+                &missing_state,
+                restricted_envelope,
+                AxtRejectReason::PolicyDenied,
+                "asset definition is not registered",
+            );
+        }
+
+        #[test]
+        fn axt_validation_rejects_duplicate_use_of_one_proof_claim() {
+            let (state, mut envelope) = hidden_amount_fixture(119, 0x77, b"duplicate-proof-claim");
+            envelope.handles.push(envelope.handles[0].clone());
+            expect_axt_envelope_error(
+                &state,
+                envelope,
+                AxtRejectReason::Duplicate,
+                "handle fragments are not strictly ordered",
+            );
+        }
+
+        #[test]
+        fn axt_validation_rejects_signed_origin_outside_bound_descriptor() {
+            let dsid = DataSpaceId::new(120);
+            let lane = LaneId::new(1);
+            let (state, issuer, issuer_uaid, manifest_root) =
+                authenticated_axt_validation_state(dsid, lane, 0x78);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let mut handle = sample_handle(binding, lane, dsid, 12, manifest_root);
+            handle.handle.subject.origin_dsid = Some(DataSpaceId::new(9_999));
+            let handle =
+                sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
+            let amount = Quantity::from(5_u64);
+            let proof = proof_blob_for_with_amount(
+                dsid,
+                manifest_root,
+                b"signed-undeclared-origin",
+                12,
+                None,
+                None,
+                vec![remote_spend_claim(&handle, &amount)],
+            );
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment { dsid, proof }],
+                handles: vec![handle],
+                commit_height: 1,
+            };
+            expect_axt_envelope_error(
+                &state,
+                envelope,
+                AxtRejectReason::Descriptor,
+                "origin dataspace is not declared",
+            );
         }
         #[test]
         fn axt_validation_rejects_proof_reused_for_another_remote_spend_recipient() {
@@ -25768,7 +26499,7 @@ mod commit {
             let binding = binding_for_descriptor(&descriptor);
             let signed_fragment = |dsid, manifest_root| {
                 let mut fragment = sample_handle(binding, lane, dsid, 5, manifest_root);
-                fragment.handle.subject.origin_dsid = Some(DataSpaceId::UNIVERSAL);
+                fragment.handle.subject.origin_dsid = Some(dsid);
                 fragment.intent.op.amount = Some("7".parse().expect("canonical spend quantity"));
                 fragment.amount = Some("7".parse().expect("canonical fragment quantity"));
                 let context = AxtHandleIssuerContextV1 {
@@ -25800,7 +26531,7 @@ mod commit {
                         12,
                         None,
                         None,
-                        vec![remote_spend_intent_commitment(&handle_a, &amount)],
+                        vec![remote_spend_claim(&handle_a, &amount)],
                     ),
                 },
                 AxtProofFragment {
@@ -25812,7 +26543,7 @@ mod commit {
                         12,
                         None,
                         None,
-                        vec![remote_spend_intent_commitment(&handle_b, &amount)],
+                        vec![remote_spend_claim(&handle_b, &amount)],
                     ),
                 },
             ];
@@ -26118,10 +26849,7 @@ mod commit {
                 9,
                 None,
                 None,
-                vec![remote_spend_intent_commitment(
-                    &handle,
-                    &Quantity::from(5_u64),
-                )],
+                vec![remote_spend_claim(&handle, &Quantity::from(5_u64))],
             );
             let envelope = AxtEnvelopeRecord {
                 binding,
@@ -26184,10 +26912,7 @@ mod commit {
                 10,
                 None,
                 None,
-                vec![remote_spend_intent_commitment(
-                    &handle,
-                    &Quantity::from(5_u64),
-                )],
+                vec![remote_spend_claim(&handle, &Quantity::from(5_u64))],
             );
             let envelope = AxtEnvelopeRecord {
                 binding,
@@ -28694,6 +29419,70 @@ mod tests {
                 (paynet, NativeAmxPhase::Prepare, NativeAmxPhase::Commit),
                 (cbuae, NativeAmxPhase::Prepare, NativeAmxPhase::Commit)
             ]
+        );
+    }
+    #[test]
+    fn native_amx_receipt_validation_binds_sealed_reveal_source_to_outer_entrypoint() {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let (signed, _) =
+            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
+        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            Hash::new(b"native-amx-sealed-reveal-commitment"),
+            signed.clone(),
+            [0xA5; 32],
+        ));
+        let entrypoint_hash = reveal.hash();
+        let source_id = native_amx_source_id_from_entrypoint_hash(entrypoint_hash);
+        let inner_source_id =
+            native_amx_source_id_from_entrypoint_hash(signed.hash_as_entrypoint());
+        assert_ne!(
+            source_id, inner_source_id,
+            "a sealed reveal must retain its outer entrypoint identity"
+        );
+
+        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        let routing_plan = crate::queue::RoutingPlan::native_amx(
+            crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+            vec![
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(2), cbuae),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let (world, keypairs) = native_amx_test_world_with_keys();
+        let receipt =
+            signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
+        let coordinator_proposal = native_amx_test_coordinator_proposal(
+            routing_plan.coordinator_route(),
+            entrypoint_hash,
+            42,
+            &keypairs,
+        );
+        let authority = native_amx_test_authority(world, &keypairs);
+        let validate = |expected_source_id| {
+            validate_native_amx_receipt_against_plan(
+                &receipt,
+                &coordinator_proposal,
+                entrypoint_hash,
+                &routing_plan,
+                expected_source_id,
+                native_amx_test_network_id(),
+                &dataspace_catalog,
+                &authority,
+                Some(expected_native_amx_test_context(42)),
+            )
+        };
+        validate(source_id).expect("outer sealed-reveal source identity must validate");
+        assert_eq!(
+            validate(inner_source_id),
+            Err("native AMX receipt source entrypoint mismatch".to_owned()),
+            "the underlying signed-transaction identity must not replace the sealed entrypoint"
         );
     }
     #[test]

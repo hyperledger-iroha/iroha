@@ -418,7 +418,7 @@ future-uncommitted storage is truncated or rejected according to the crash
 boundary; incomplete network assemblies are never persisted.
 
 Chain truncation publishes a fsynced prune intent before lowering the durable
-block marker. Carrier/log, commit-roster, WSV-checkpoint, commit-manifest,
+block marker. Carrier/log, WSV-checkpoint, commit-manifest,
 pipeline-recovery, and roster-metadata sidecar suffixes are removed
 forward-only, and the live block/query indexes remain on the old prefix until
 all durable stages complete. Startup finishes an interrupted intent before

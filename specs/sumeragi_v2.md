@@ -1258,13 +1258,8 @@ transaction-inclusion fairness, or censorship resistance.
 
 Ten arbitrary-context Core safety wrappers are TLAPS-proved. This includes historical TC-lock
 Commit authorization, the dependent direct-or-installed-authorization timeout wrapper, and the
-<<<<<<< HEAD
-narrower grouped-timeout kernel for Commit intents already present at timeout. The archived
-revision-3-rooted ledger has its final 44/3/6/1 status vector and
-=======
 narrower grouped-timeout kernel for Commit intents already present at timeout. The canonical
 revision-4 ledger has its final 44/3/6/1 status vector and
->>>>>>> origin/optimizations
 `machine_checked_completion: true`, but that flag is not revision-4 proof evidence. The liveness
 claim remains conditional until fresh strict ledger evidence and the separate mandatory revision-4
 TLC/mutation corridor pass against the same signed source.

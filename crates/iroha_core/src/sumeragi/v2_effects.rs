@@ -88,8 +88,6 @@ use super::v2_core::{
 #[cfg(test)]
 use super::v2_runtime::bind_adapter_effect_batch_ownership;
 #[cfg(test)]
-use super::v2_transport::CertifiedBodyResponseClaimDisposition;
-#[cfg(test)]
 use super::v2_transport::authenticate_certified_body_request;
 use super::{
     FairV2IngressOwnershipEvidence,
@@ -1020,6 +1018,7 @@ impl BodyFetchTask {
         }
     }
     /// Immutable actor-global lifecycle ordinal retained through reconstruction.
+    #[cfg(test)]
     pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
         self.ownership.owner().lifecycle_ordinal()
     }
@@ -1488,12 +1487,6 @@ pub(crate) enum CompletionDisposition {
     Rejected,
     /// The work identifier was already completed or belongs to an old owner.
     Stale,
-}
-/// Result of transferring one certified-body fetch owner into the executor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CertifiedBodyFetchCompletionDisposition {
-    /// The exact service owner was retired once.
-    Completed,
 }
 /// Result of handing an authenticated chunk to the bounded reconstruction
 /// service.
@@ -2428,6 +2421,7 @@ struct FetchCompletionPlan {
 }
 /// Closed executor-side retirement prepared for the coordinator-owned
 /// certified-Fetch completion path.
+/// TODO: Wire ordinary certified-Fetch Phase B through the final runner.
 /// This plan reserves no legacy runtime command and mints no lifecycle
 /// ordinal. It freezes only existing exact request, Fetch, and body-pipeline
 /// indexes so the post-dequeue tail can retire them without another fallible
@@ -3944,6 +3938,46 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime
             .prepare_recovered_decision_fetch_store(authority)
     }
+    /// Seal the serialized adapter's current reducer-fence generation.
+    pub(in crate::sumeragi) fn lifecycle_reducer_fence_observation(
+        &self,
+    ) -> super::v2::LifecycleReducerFenceObservationV1 {
+        self.runtime.lifecycle_reducer_fence_observation()
+    }
+    /// Preview one ordinary certified Fetch-to-Store reducer transition.
+    pub(in crate::sumeragi) fn prepare_certified_fetch_store_adapter(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<super::v2::CertifiedFetchStoreAdapterPreparationV1<'_>, super::v2::AdapterError>
+    {
+        self.runtime.prepare_certified_fetch_store(tag, manifest)
+    }
+    /// Preview one ordinary durable Store-to-Validate reducer transition.
+    pub(in crate::sumeragi) fn prepare_durable_store_validate_adapter(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<super::v2::DurableStoreValidateAdapterPreparationV1<'_>, super::v2::AdapterError>
+    {
+        self.runtime
+            .prepare_durable_store_validate(tag, round, subject, receipt)
+    }
+    /// Preview one registry-owned Ready Validate outcome through the serialized adapter.
+    pub(in crate::sumeragi) fn prepare_ready_durable_validate_adapter_preview<'registry>(
+        &mut self,
+        execution: super::v2_lifecycle_coordinator::PreparedReadyDurableValidateExecution<
+            'registry,
+        >,
+    ) -> Result<
+        super::v2_lifecycle_coordinator::PreparedReadyDurableValidateAdapterPreview<'registry, '_>,
+        super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError<'registry>,
+    > {
+        self.runtime
+            .prepare_ready_durable_validate_adapter_preview(execution)
+    }
     /// Preview one exact lifecycle-owned signature on the serialized adapter.
     pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(
         &mut self,
@@ -4267,7 +4301,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         Ok((self.runtime, finality.receipt, finality.artifact))
     }
 }
-include!("v2_effects_body_lifecycle_adapter_bridge.rs");
 impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Borrow the immutable context governing this executor height.
     pub(crate) const fn context(&self) -> &wire::HeightContext {
@@ -4822,8 +4855,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(self.close_after_transferring_runtime_terminals(error, services));
             }
         };
-        self.consume_leader_wire_runtime_terminals(services)
-            .map_err(|error| self.close(error, services))?;
+        if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+            return Err(self.close(error, services));
+        }
         if changed && let Err(error) = self.publish_status(services) {
             return Err(self.close(error, services));
         }
@@ -6729,8 +6763,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.park_retained_effect_batch()
                 .map_err(|error| self.close(error, services))?;
         }
-        self.publish_external_lifecycle_owners()
-            .map_err(|error| self.close(error, services))?;
+        if let Err(error) = self.publish_external_lifecycle_owners() {
+            return Err(self.close(error, services));
+        }
         let wal_step = self
             .output_guard
             .begin_fail_stop_operation()
@@ -6762,8 +6797,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     self.restore_parked_effect_batch()
                         .map_err(|error| self.close(error, services))?;
                 }
-                self.publish_external_lifecycle_owners()
-                    .map_err(|error| self.close(error, services))?;
+                if let Err(error) = self.publish_external_lifecycle_owners() {
+                    return Err(self.close(error, services));
+                }
                 if let Err(error) = self.publish_status(services) {
                     return Err(self.close(error, services));
                 }
@@ -6801,8 +6837,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
             return Ok(EffectExecutorStep::Idle);
         }
-        self.publish_external_lifecycle_owners()
-            .map_err(|error| self.close(error, services))?;
+        if let Err(error) = self.publish_external_lifecycle_owners() {
+            return Err(self.close(error, services));
+        }
         let wal_step = self
             .output_guard
             .begin_fail_stop_operation()
@@ -6872,8 +6909,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .map_err(|error| self.close(error, services))?;
             return Ok(step);
         }
-        self.publish_external_lifecycle_owners()
-            .map_err(|error| self.close(error, services))?;
+        if let Err(error) = self.publish_external_lifecycle_owners() {
+            return Err(self.close(error, services));
+        }
         let wal_step = self
             .output_guard
             .begin_fail_stop_operation()
@@ -8634,10 +8672,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .task
             .ownership()
             .current_effect_producer(&pending_effect)
+            .map(|producer| producer.mint_pending_binding())
             .ok_or(EffectTransportError::Authentication(
                 V2TransportError::InconsistentRequestIndex(request_hash),
-            ))?
-            .mint_pending_binding();
+            ))?;
         if !pending
             .task
             .matches_reconstructed_manifest(&response.manifest)
@@ -8832,9 +8870,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .task
             .ownership()
             .current_effect_producer(&effect)
-            .ok_or_else(|| "pending certified Fetch lost its exact effect binding".to_owned())
-            .map_err(EffectTransportError::FailClosed)?
-            .mint_pending_binding();
+            .map(|producer| producer.mint_pending_binding())
+            .ok_or_else(|| {
+                EffectTransportError::FailClosed(
+                    "pending certified Fetch lost its exact effect binding".to_owned(),
+                )
+            })?;
         if &binding != candidate.pending_effect_binding() {
             return Err(EffectTransportError::BodyMismatch(
                 "fresh selector changed the pending Fetch binding",
@@ -8931,160 +8972,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .expect("preflighted body-pipeline owner remains installed");
         assert_eq!(removed_owner, prepared.body_pipeline_owner);
     }
-<<<<<<< HEAD
-=======
-    /// Authenticate a certified response against the exact outstanding signed
-    /// request, rederive its canonical DA manifest, then enqueue body
-    /// availability with the original fetch tag.
-    #[cfg(test)]
-    pub(crate) fn accept_certified_body_response<S: V2EffectServices>(
-        &mut self,
-        response: wire::CertifiedBodyResponse,
-        authenticated_responder: &PeerId,
-        services: &mut S,
-    ) -> Result<CompletionDisposition, EffectTransportError> {
-        self.accept_certified_body_response_inner(response, authenticated_responder, services)
-    }
-    fn accept_certified_body_response_inner<S: V2EffectServices>(
-        &mut self,
-        response: wire::CertifiedBodyResponse,
-        authenticated_responder: &PeerId,
-        services: &mut S,
-    ) -> Result<CompletionDisposition, EffectTransportError> {
-        if self.output_guard.restart_required() {
-            return Err(EffectTransportError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
-            ));
-        }
-        if let Some(reason) = &self.fatal_reason {
-            return Err(EffectTransportError::FailClosed(reason.clone()));
-        }
-        let work_id = self
-            .certified_work
-            .get(&response.request_hash)
-            .copied()
-            .ok_or(EffectTransportError::Authentication(
-                V2TransportError::UnsolicitedResponse(response.request_hash),
-            ))?;
-        let Some(pending) = self.pending_fetches.get(&work_id) else {
-            return Err(self.fail_closed_transport(
-                "certified body response has no exact pending fetch",
-                services,
-            ));
-        };
-        if pending.request_hash != Some(response.request_hash) {
-            return Err(self.fail_closed_transport(
-                "certified body response differs from pending request ownership",
-                services,
-            ));
-        }
-        let task = pending.task.clone();
-        let pending_request_hash = pending
-            .request_hash
-            .expect("certified response ownership was checked to retain its exact request hash");
-        if !task.matches_reconstructed_manifest(&response.manifest) {
-            return Err(EffectTransportError::BodyMismatch(
-                "certified response manifest differs from proposal authority",
-            ));
-        }
-        let authenticated = self.outstanding_requests.authenticate_response(
-            &self.context,
-            response,
-            authenticated_responder,
-        )?;
-        let authenticated_request_hash = authenticated.response().request_hash;
-        let response = authenticated.response().clone();
-        let request_hash = response.request_hash;
-        let response_manifest = response.manifest;
-        let body_payload_hash = Hash::new(&response.body);
-        let ready_body = ReadyBody::derive(&self.context, task.round, task.subject, response.body)
-            .map_err(|_| {
-                EffectTransportError::BodyMismatch(
-                    "certified body cannot reproduce its canonical chunk manifest",
-                )
-            })?;
-        if ready_body.manifest != response_manifest {
-            return Err(EffectTransportError::BodyMismatch(
-                "certified response manifest is not canonical for its body",
-            ));
-        }
-        let ready_manifest = ready_body.manifest.clone();
-        let key = (task.round, task.subject);
-        let prospective_owner = self.body_pipeline_owners.get(&key).copied();
-        let prospective_trace = historical_body_pipeline_projection(
-            &self.context,
-            &task,
-            request_hash,
-            pending_request_hash,
-            authenticated_request_hash,
-            &response_manifest,
-            &ready_manifest,
-            body_payload_hash,
-            prospective_owner,
-            false,
-            false,
-        );
-        let Some(checked_transition) =
-            check_production_historical_body_pipeline_transition(prospective_trace)
-        else {
-            return Err(self.fail_closed_transport(
-                "certified body admission failed its prospective historical pipeline gate",
-                services,
-            ));
-        };
-        let prospective_trace = checked_transition.into_projection();
-        let plan = self.plan_fetch_completion(&task, ready_body, None, services)?;
-        match self
-            .outstanding_requests
-            .claim_authenticated_response(&authenticated)
-        {
-            Ok(
-                CertifiedBodyResponseClaimDisposition::Acquired
-                | CertifiedBodyResponseClaimDisposition::Coalesced,
-            ) => {}
-            Err(error) => {
-                self.abort_fetch_completion(plan);
-                return Err(error.into());
-            }
-        }
-        match services.complete_certified_body_fetch(&task) {
-            Ok(CertifiedBodyFetchCompletionDisposition::Completed) => {}
-            #[cfg(test)]
-            Ok(CertifiedBodyFetchCompletionDisposition::Retryable) => {
-                self.abort_fetch_completion(plan);
-                return Err(EffectTransportError::Backpressure);
-            }
-            Err(error) => {
-                self.abort_fetch_completion(plan);
-                return Err(self.fail_closed_transport(error, services));
-            }
-        }
-        if let Err(error) = self.commit_fetch_completion(plan) {
-            return Err(self.fail_closed_transport(runtime_enqueue_error(error), services));
-        }
-        let owner_after = self.body_pipeline_owners.get(&key).copied();
-        let observed_trace = historical_body_pipeline_projection(
-            &self.context,
-            &task,
-            request_hash,
-            pending_request_hash,
-            authenticated_request_hash,
-            &response_manifest,
-            &ready_manifest,
-            body_payload_hash,
-            owner_after,
-            self.pending_fetches.contains_key(&task.id()),
-            self.outstanding_requests.contains(request_hash),
-        );
-        if observed_trace != prospective_trace {
-            return Err(self.fail_closed_transport(
-                "certified body admission diverged from its checked prospective transition",
-                services,
-            ));
-        }
-        Ok(CompletionDisposition::Accepted)
-    }
->>>>>>> origin/optimizations
     /// Accept a durable application completion only when its typed Kura receipt
     /// and canonical finality artifact exactly match the Apply effect.
     pub(crate) fn complete_application<S: V2EffectServices>(
@@ -12726,10 +12613,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     rebound,
                     owner,
                 } => {
-                    // An unpublished BodyAvailable handoff retains an exact
-                    // token in runtime ingress. The protected FetchBody task
-                    // and that token are one logical pipeline: move both to
-                    // the installed incarnation before
+                    // A typed Retryable certified-response handoff retains an
+                    // unpublished BodyAvailable token in runtime ingress. The
+                    // protected FetchBody task and that token are one logical
+                    // pipeline: move both to the installed incarnation before
                     // publishing the local task mutation. Backpressure before
                     // reservation legitimately leaves no token to move.
                     self.runtime

@@ -9989,6 +9989,16 @@ impl V2LaneWorkAdapter {
         }
         Ok(disposition)
     }
+    /// Register one lifecycle-owned Validate dependency without transferring
+    /// it into the generic executor deferral census.
+    pub(in crate::sumeragi) fn defer_missing_lifecycle_validate_sidecar(
+        &mut self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        reference: CertifiedMergeLedgerReference,
+    ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
+        self.defer_missing_merge_sidecar_with_priority(round, subject, reference, false, true)
+    }
     fn defer_missing_merge_sidecar_with_priority(
         &mut self,
         round: wire::ConsensusRound,
@@ -10076,8 +10086,18 @@ impl V2LaneWorkAdapter {
         }
         let committed_height = u64::try_from(self.state.committed_height())
             .map_err(|_| V2LaneWorkError::StateHeightMismatch)?;
-        let deferred = if lifecycle_owned {
+        let deferred = if lifecycle_owned && decided {
             self.merge_sidecars.defer_lifecycle_decided_block(
+                subject.block_hash,
+                round.height,
+                reference.merge_qc.view,
+                reference,
+                &self.local_peer,
+                committed_height,
+                Instant::now(),
+            )
+        } else if lifecycle_owned {
+            self.merge_sidecars.defer_lifecycle_block(
                 subject.block_hash,
                 round.height,
                 reference.merge_qc.view,
@@ -22167,107 +22187,7 @@ pub(super) mod tests {
         );
     }
     #[test]
-<<<<<<< HEAD
-    fn decided_lane_ownership_moves_to_successor_until_its_session_is_durable() {
-=======
-    fn committed_lane_status_publisher_tracks_evidence_revisions_and_clear() {
-        let _guard = super::super::status::rbc_status_test_guard();
-        super::super::status::clear_v2_status();
-        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
-        let mut publisher = super::super::v2_runner::CommittedLaneStatusPublisher::default();
-        assert!(publisher.publish_if_changed(&adapter));
-        assert!(
-            super::super::status::committed_lane_blocks_snapshot().is_empty(),
-            "startup must first publish the recovered empty root"
-        );
-        assert!(
-            !publisher.publish_if_changed(&adapter),
-            "an unchanged runner turn must not rescan or republish lane status"
-        );
-        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
-        adapter
-            .pending_committed_lanes
-            .push_back(committed_lane_session(&proposal, &keys));
-        adapter.note_committed_lane_status_change();
-        assert!(
-            publisher.publish_if_changed(&adapter),
-            "a newly committed volatile session must publish on the next bounded runner edge"
-        );
-        let published = super::super::status::committed_lane_blocks_snapshot();
-        assert_eq!(published.len(), 1);
-        assert_eq!(published[0].proposal, proposal);
-        assert_eq!(
-            published[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::AwaitingExecutablePayload
-        );
-        assert!(
-            !publisher.publish_if_changed(&adapter),
-            "publication must acknowledge the exact adapter/Kura revision"
-        );
-        adapter
-            .kura
-            .store_block(block)
-            .expect("publish exact canonical payload evidence");
-        assert!(publisher.publish_if_changed(&adapter));
-        assert_eq!(
-            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor
-        );
-        let recovered = adapter
-            .kura
-            .recover_lane_block_payload(&proposal)
-            .expect("recover exact lane payload");
-        adapter
-            .kura
-            .persist_lane_block_execution_input(&recovered)
-            .expect("persist exact execution input");
-        assert!(publisher.publish_if_changed(&adapter));
-        assert_eq!(
-            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication
-        );
-        assert_passive_committed_lane_status_reads(&adapter, &proposal);
-        let input = adapter
-            .kura
-            .read_lane_block_execution_input(
-                proposal.descriptor.lane_id,
-                proposal.descriptor.lane_block_height,
-            )
-            .expect("read exact execution input");
-        let clean_result =
-            TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::default()));
-        adapter
-            .kura
-            .persist_lane_block_execution_preflight(
-                &input,
-                u64::try_from(adapter.state.committed_height()).expect("fixture state height"),
-                Some(adapter.state.lane_execution_state_hash()),
-                vec![clean_result],
-            )
-            .expect("persist current exact clean preflight");
-        assert!(publisher.publish_if_changed(&adapter));
-        assert_eq!(
-            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightedAwaitingStateApplication
-        );
-        adapter
-            .kura
-            .persist_lane_block_application_receipt(&proposal)
-            .expect("persist exact canonical receipt");
-        assert!(publisher.publish_if_changed(&adapter));
-        assert_eq!(
-            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
-        );
-        super::super::status::clear_v2_status();
-        assert!(
-            super::super::status::committed_lane_blocks_snapshot().is_empty(),
-            "v2 shutdown/reset must not retain the previous runtime's status root"
-        );
-    }
-    #[test]
     fn decided_lane_ownership_blocks_successor_until_its_session_is_durable() {
->>>>>>> origin/optimizations
         // Result-bearing genesis carries external entrypoints before any lane
         // ownership can exist. Its empty ownership set is complete, not a
         // malformed lane plan or a missing lane certificate.

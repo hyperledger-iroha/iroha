@@ -11,7 +11,8 @@ use crate::{
 use iroha_crypto::{Hash, Signature};
 use iroha_data_model::nexus::{
     AssetHandle as ModelAssetHandle, AxtBinding, AxtDescriptor as ModelAxtDescriptor,
-    AxtHandleFragment, AxtHandleIssuerContextV1, AxtPolicyEntry as ModelAxtPolicyEntry,
+    AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
+    AxtPolicyEntry as ModelAxtPolicyEntry,
     AxtPolicySnapshot as ModelAxtPolicySnapshot,
     AxtPolicySnapshotValidationError as ModelAxtPolicySnapshotValidationError,
     AxtProofEnvelope as ModelAxtProofEnvelope, AxtTouchSpec as ModelAxtTouchSpec, DataSpaceId,
@@ -21,7 +22,10 @@ use iroha_data_model::nexus::{
     TouchManifest as ModelTouchManifest, compute_descriptor_binding,
     compute_remote_spend_intent_commitment_v1, validate_descriptor as validate_model_descriptor,
 };
-use iroha_data_model::prelude::{AccountId, Quantity};
+use iroha_data_model::{
+    asset::AssetBalanceScope,
+    prelude::{AccountId, AssetDefinitionId, Quantity},
+};
 use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -97,6 +101,35 @@ impl AxtProofUseFacts {
             fixed_amount_commitment,
             variable_amount_commitment_payload,
             remote_spend_intent_commitments,
+        }
+    }
+
+    /// Return the proof-bound, canonically ordered remote-spend commitments.
+    #[must_use]
+    pub fn remote_spend_intent_commitments(&self) -> &[[u8; 32]] {
+        &self.remote_spend_intent_commitments
+    }
+
+    /// Require exact one-time consumption of every proof-bound remote-spend claim.
+    ///
+    /// The input may arrive in handle execution order. It is sorted without
+    /// deduplication, so duplicate handle consumption and unconsumed proof
+    /// claims both fail the exact comparison.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::PermissionDenied`] unless the consumed commitment
+    /// multiset exactly equals the proof's canonical commitment set.
+    pub fn validate_remote_spend_consumption(
+        &self,
+        consumed_commitments: &[[u8; 32]],
+    ) -> Result<(), VMError> {
+        let mut consumed = consumed_commitments.to_vec();
+        consumed.sort_unstable();
+        if consumed == self.remote_spend_intent_commitments {
+            Ok(())
+        } else {
+            Err(VMError::PermissionDenied)
         }
     }
 }
@@ -664,9 +697,8 @@ pub fn validate_asset_handle(handle: &AssetHandle) -> Result<(), VMError> {
         || handle.manifest_view_root.len() != 32
         || handle.group_binding.composability_group_id.is_empty()
         || !canonical_nonempty_strings(&handle.scope)
-        || handle.subject.account.trim() != handle.subject.account
         || (!handle.subject.account.is_empty()
-            && AccountId::parse_encoded(&handle.subject.account).is_err())
+            && canonical_account_id(&handle.subject.account).is_none())
     {
         return Err(VMError::NoritoInvalid);
     }
@@ -772,6 +804,8 @@ pub struct RemoteSpendIntent {
 /// Simplified representation of spend operations.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SpendOp {
+    /// Exact asset definition authorized by the handle and proof statement.
+    pub asset_definition_id: AssetDefinitionId,
     /// Operation kind (e.g., "transfer").
     pub kind: String,
     /// Origin account id in canonical I105 form.
@@ -788,14 +822,11 @@ pub struct SpendOp {
 /// Returns [`VMError::NoritoInvalid`] for empty or non-canonical operation and account strings, and
 /// [`VMError::PermissionDenied`] for an explicit zero amount.
 pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VMError> {
-    if intent.op.kind.is_empty() || intent.op.kind.trim() != intent.op.kind {
+    if intent.op.kind != "transfer" {
         return Err(VMError::NoritoInvalid);
     }
     for account in [&intent.op.from, &intent.op.to] {
-        if account.is_empty()
-            || account.trim() != account
-            || AccountId::parse_encoded(account).is_err()
-        {
+        if canonical_account_id(account).is_none() {
             return Err(VMError::NoritoInvalid);
         }
     }
@@ -803,6 +834,34 @@ pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VM
         return Err(VMError::PermissionDenied);
     }
     Ok(())
+}
+
+fn canonical_account_id(value: &str) -> Option<AccountId> {
+    let parsed = AccountId::parse_encoded(value).ok()?;
+    (parsed.canonical() == value).then(|| parsed.into_account_id())
+}
+
+/// Require a registered asset policy's balance scope to match the intent dataspace.
+///
+/// Globally scoped assets belong to the universal dataspace. A
+/// dataspace-restricted definition selects the exact signed intent/proof
+/// dataspace bucket. Callers must first establish that the asset definition is
+/// registered in committed state and derive `resolved_scope` from its balance
+/// policy; the opaque asset-definition identifier carries no routing meaning.
+///
+/// # Errors
+///
+/// Returns [`VMError::PermissionDenied`] when the policy-derived scope does not
+/// match `asset_dsid`.
+pub fn validate_remote_spend_asset_scope(
+    asset_dsid: DataSpaceId,
+    resolved_scope: AssetBalanceScope,
+) -> Result<(), VMError> {
+    let matches = match resolved_scope {
+        AssetBalanceScope::Global => asset_dsid == DataSpaceId::UNIVERSAL,
+        AssetBalanceScope::Dataspace(dataspace) => asset_dsid == dataspace,
+    };
+    matches.then_some(()).ok_or(VMError::PermissionDenied)
 }
 /// Validate a persisted data-model intent with the pointer-runtime invariants.
 ///
@@ -813,6 +872,7 @@ pub fn validate_model_remote_spend_intent(intent: &ModelRemoteSpendIntent) -> Re
     validate_remote_spend_intent(&RemoteSpendIntent {
         asset_dsid: intent.asset_dsid,
         op: SpendOp {
+            asset_definition_id: intent.op.asset_definition_id.clone(),
             kind: intent.op.kind.clone(),
             from: intent.op.from.clone(),
             to: intent.op.to.clone(),
@@ -831,20 +891,15 @@ pub fn validate_model_remote_spend_intent(intent: &ModelRemoteSpendIntent) -> Re
 ///
 /// Returns [`VMError::NoritoInvalid`] when the proof is not a canonical AXT
 /// envelope, and [`VMError::PermissionDenied`] when it lacks the exact
-/// descriptor/dataspace/operation/account/amount commitment.
+/// handle identity/asset/operation/account/amount commitment.
 pub fn validate_remote_spend_intent_commitment(
-    descriptor_binding: [u8; 32],
+    handle: &AssetHandle,
     intent: &RemoteSpendIntent,
     effective_amount: &Quantity,
     proof: &ProofBlob,
 ) -> Result<(), VMError> {
     validate_remote_spend_intent_commitment_components(
-        descriptor_binding,
-        intent.asset_dsid,
-        &intent.op.kind,
-        &intent.op.from,
-        &intent.op.to,
-        effective_amount,
+        expected_remote_spend_intent_commitment_v1(handle, intent, effective_amount)?,
         &proof.payload,
     )
 }
@@ -857,18 +912,13 @@ pub fn validate_remote_spend_intent_commitment(
 /// Returns the same error classification as
 /// [`validate_remote_spend_intent_commitment`].
 pub fn validate_model_remote_spend_intent_commitment(
-    descriptor_binding: [u8; 32],
+    handle: &ModelAssetHandle,
     intent: &ModelRemoteSpendIntent,
     effective_amount: &Quantity,
     proof: &ModelProofBlob,
 ) -> Result<(), VMError> {
     validate_remote_spend_intent_commitment_components(
-        descriptor_binding,
-        intent.asset_dsid,
-        &intent.op.kind,
-        &intent.op.from,
-        &intent.op.to,
-        effective_amount,
+        expected_model_remote_spend_intent_commitment_v1(handle, intent, effective_amount),
         &proof.payload,
     )
 }
@@ -881,9 +931,9 @@ pub fn validate_model_remote_spend_intent_commitment(
 /// # Errors
 ///
 /// Returns [`VMError::PermissionDenied`] when the proof facts do not contain
-/// the exact descriptor/dataspace/operation/account/amount commitment.
+/// the exact handle identity/asset/operation/account/amount commitment.
 pub fn validate_model_remote_spend_intent_commitment_from_proof_facts(
-    descriptor_binding: [u8; 32],
+    handle: &ModelAssetHandle,
     intent: &ModelRemoteSpendIntent,
     effective_amount: &Quantity,
     facts: &AxtProofUseFacts,
@@ -892,22 +942,58 @@ pub fn validate_model_remote_spend_intent_commitment_from_proof_facts(
         return Err(VMError::PermissionDenied);
     }
     validate_remote_spend_intent_commitment_components_from_commitments(
-        descriptor_binding,
+        expected_model_remote_spend_intent_commitment_v1(handle, intent, effective_amount),
+        &facts.remote_spend_intent_commitments,
+    )
+}
+
+/// Derive the commitment expected for one concrete pointer-ABI handle use.
+///
+/// # Errors
+///
+/// Returns [`VMError::NoritoInvalid`] if the handle descriptor binding is not
+/// exactly 32 bytes.
+pub fn expected_remote_spend_intent_commitment_v1(
+    handle: &AssetHandle,
+    intent: &RemoteSpendIntent,
+    effective_amount: &Quantity,
+) -> Result<[u8; 32], VMError> {
+    let binding = handle.binding_array().ok_or(VMError::NoritoInvalid)?;
+    let replay_key = AxtHandleReplayKey::from_parts(
         intent.asset_dsid,
+        binding,
+        handle.handle_era,
+        handle.sub_nonce,
+        handle.target_lane,
+    );
+    Ok(compute_remote_spend_intent_commitment_v1(
+        replay_key,
+        &intent.op.asset_definition_id,
         &intent.op.kind,
         &intent.op.from,
         &intent.op.to,
         effective_amount,
-        &facts.remote_spend_intent_commitments,
+    ))
+}
+
+/// Derive the commitment expected for one concrete persisted handle use.
+#[must_use]
+pub fn expected_model_remote_spend_intent_commitment_v1(
+    handle: &ModelAssetHandle,
+    intent: &ModelRemoteSpendIntent,
+    effective_amount: &Quantity,
+) -> [u8; 32] {
+    compute_remote_spend_intent_commitment_v1(
+        AxtHandleReplayKey::from_handle(intent.asset_dsid, handle),
+        &intent.op.asset_definition_id,
+        &intent.op.kind,
+        &intent.op.from,
+        &intent.op.to,
+        effective_amount,
     )
 }
 fn validate_remote_spend_intent_commitment_components(
-    descriptor_binding: [u8; 32],
-    asset_dsid: DataSpaceId,
-    kind: &str,
-    from: &str,
-    to: &str,
-    effective_amount: &Quantity,
+    expected: [u8; 32],
     proof_payload: &[u8],
 ) -> Result<(), VMError> {
     let envelope = decode_canonical_norito::<ModelAxtProofEnvelope>(proof_payload)
@@ -917,32 +1003,14 @@ fn validate_remote_spend_intent_commitment_components(
         .as_ref()
         .ok_or(VMError::PermissionDenied)?;
     validate_remote_spend_intent_commitment_components_from_commitments(
-        descriptor_binding,
-        asset_dsid,
-        kind,
-        from,
-        to,
-        effective_amount,
+        expected,
         &binding.remote_spend_intent_commitments,
     )
 }
 fn validate_remote_spend_intent_commitment_components_from_commitments(
-    descriptor_binding: [u8; 32],
-    asset_dsid: DataSpaceId,
-    kind: &str,
-    from: &str,
-    to: &str,
-    effective_amount: &Quantity,
+    expected: [u8; 32],
     remote_spend_intent_commitments: &[[u8; 32]],
 ) -> Result<(), VMError> {
-    let expected = compute_remote_spend_intent_commitment_v1(
-        AxtBinding::new(descriptor_binding),
-        asset_dsid,
-        kind,
-        from,
-        to,
-        effective_amount,
-    );
     remote_spend_intent_commitments
         .binary_search(&expected)
         .map(|_| ())
@@ -1400,6 +1468,7 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
         let intent = ModelRemoteSpendIntent {
             asset_dsid: usage.intent.asset_dsid,
             op: ModelSpendOp {
+                asset_definition_id: usage.intent.op.asset_definition_id.clone(),
                 kind: usage.intent.op.kind.clone(),
                 from: usage.intent.op.from.clone(),
                 to: usage.intent.op.to.clone(),
@@ -1479,6 +1548,7 @@ fn manifest_root_array(handle: &AssetHandle) -> Result<[u8; 32], VMError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::domain::DomainId;
     const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     const ACCOUNT_TO_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
     fn quantity(value: u128) -> Quantity {
@@ -1486,6 +1556,12 @@ mod tests {
             .to_string()
             .parse()
             .expect("test amount is a canonical quantity")
+    }
+    fn test_asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("test asset domain"),
+            "rose".parse().expect("test asset name"),
+        )
     }
     #[test]
     fn expiry_slot_with_skew_respects_caps() {
@@ -1755,6 +1831,7 @@ mod tests {
         RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: test_asset_definition_id(),
                 kind: "transfer".into(),
                 from: ACCOUNT_FROM_LITERAL.into(),
                 to: ACCOUNT_TO_LITERAL.into(),
@@ -1788,6 +1865,42 @@ mod tests {
         }
         assert_eq!(
             validate_remote_spend_intent(&sample_intent(dsid, Some(0))),
+            Err(VMError::PermissionDenied)
+        );
+        for kind in ["mint", "Transfer", " transfer", "transfer "] {
+            let mut invalid = valid.clone();
+            invalid.op.kind = kind.to_owned();
+            assert_eq!(
+                validate_remote_spend_intent(&invalid),
+                Err(VMError::NoritoInvalid),
+                "non-transfer operation {kind:?} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_spend_asset_scope_requires_exact_authoritative_dataspace() {
+        let dsid = DataSpaceId::new(7);
+        assert_eq!(
+            validate_remote_spend_asset_scope(dsid, AssetBalanceScope::Dataspace(dsid)),
+            Ok(())
+        );
+        assert_eq!(
+            validate_remote_spend_asset_scope(
+                DataSpaceId::UNIVERSAL,
+                AssetBalanceScope::Global,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_remote_spend_asset_scope(
+                dsid,
+                AssetBalanceScope::Dataspace(DataSpaceId::new(8)),
+            ),
+            Err(VMError::PermissionDenied)
+        );
+        assert_eq!(
+            validate_remote_spend_asset_scope(dsid, AssetBalanceScope::Global),
             Err(VMError::PermissionDenied)
         );
     }
@@ -1878,26 +1991,19 @@ mod tests {
         proof
     }
     fn proof_for_remote_spends(
-        descriptor_binding: [u8; 32],
-        intents: &[(&RemoteSpendIntent, Quantity)],
+        intents: &[(&AssetHandle, &RemoteSpendIntent, Quantity)],
     ) -> ProofBlob {
         let dsid = intents
             .first()
             .expect("remote-spend proof fixture is non-empty")
-            .0
+            .1
             .asset_dsid;
         let mut binding = sample_fastpq_binding(dsid);
         binding.remote_spend_intent_commitments = intents
             .iter()
-            .map(|(intent, amount)| {
-                compute_remote_spend_intent_commitment_v1(
-                    AxtBinding::new(descriptor_binding),
-                    intent.asset_dsid,
-                    &intent.op.kind,
-                    &intent.op.from,
-                    &intent.op.to,
-                    amount,
-                )
+            .map(|(handle, intent, amount)| {
+                expected_remote_spend_intent_commitment_v1(handle, intent, amount)
+                    .expect("fixture handle binding")
             })
             .collect();
         binding.remote_spend_intent_commitments.sort_unstable();
@@ -1925,16 +2031,16 @@ mod tests {
         hidden.op.to = ACCOUNT_FROM_LITERAL.to_owned();
         let clear_amount = quantity(5);
         let hidden_amount = quantity(7);
-        let proof = proof_for_remote_spends(
-            descriptor_binding,
-            &[
-                (&clear, clear_amount.clone()),
-                (&hidden, hidden_amount.clone()),
-            ],
-        );
+        let clear_handle = sample_handle(dsid, descriptor_binding, 10, Some(10));
+        let mut hidden_handle = clear_handle.clone();
+        hidden_handle.sub_nonce += 1;
+        let proof = proof_for_remote_spends(&[
+            (&clear_handle, &clear, clear_amount.clone()),
+            (&hidden_handle, &hidden, hidden_amount.clone()),
+        ]);
         assert_eq!(
             validate_remote_spend_intent_commitment(
-                descriptor_binding,
+                &clear_handle,
                 &clear,
                 &clear_amount,
                 &proof,
@@ -1943,7 +2049,7 @@ mod tests {
         );
         assert_eq!(
             validate_remote_spend_intent_commitment(
-                descriptor_binding,
+                &hidden_handle,
                 &hidden,
                 &hidden_amount,
                 &proof,
@@ -1956,15 +2062,25 @@ mod tests {
         let model_clear = ModelRemoteSpendIntent {
             asset_dsid: clear.asset_dsid,
             op: ModelSpendOp {
+                asset_definition_id: clear.op.asset_definition_id.clone(),
                 kind: clear.op.kind.clone(),
                 from: clear.op.from.clone(),
                 to: clear.op.to.clone(),
                 amount: clear.op.amount.clone(),
             },
         };
+        let model_handle = AxtHandleFragment::try_from(&HandleUsage {
+            handle: clear_handle.clone(),
+            intent: clear.clone(),
+            proof: None,
+            amount: clear_amount.clone(),
+            amount_commitment: None,
+        })
+        .expect("convert fixture handle")
+        .handle;
         assert_eq!(
             validate_model_remote_spend_intent_commitment_from_proof_facts(
-                descriptor_binding,
+                &model_handle,
                 &model_clear,
                 &clear_amount,
                 &facts,
@@ -1975,7 +2091,7 @@ mod tests {
         substituted_model.op.to = ACCOUNT_FROM_LITERAL.to_owned();
         assert_eq!(
             validate_model_remote_spend_intent_commitment_from_proof_facts(
-                descriptor_binding,
+                &model_handle,
                 &substituted_model,
                 &clear_amount,
                 &facts,
@@ -1992,7 +2108,7 @@ mod tests {
             }
             assert_eq!(
                 validate_remote_spend_intent_commitment(
-                    descriptor_binding,
+                    &clear_handle,
                     &substituted,
                     &clear_amount,
                     &proof,
@@ -2005,7 +2121,7 @@ mod tests {
         substituted_dsid.asset_dsid = DataSpaceId::new(94);
         assert_eq!(
             validate_remote_spend_intent_commitment(
-                descriptor_binding,
+                &clear_handle,
                 &substituted_dsid,
                 &clear_amount,
                 &proof,
@@ -2015,16 +2131,77 @@ mod tests {
         );
         assert_eq!(
             validate_remote_spend_intent_commitment(
-                descriptor_binding,
+                &clear_handle,
                 &clear,
                 &quantity(6),
                 &proof,
             ),
             Err(VMError::PermissionDenied)
         );
+        let mut substituted_asset = clear.clone();
+        substituted_asset.op.asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("test asset domain"),
+            "iris".parse().expect("test asset name"),
+        );
         assert_eq!(
-            validate_remote_spend_intent_commitment([0x94; 32], &clear, &clear_amount, &proof,),
+            validate_remote_spend_intent_commitment(
+                &clear_handle,
+                &substituted_asset,
+                &clear_amount,
+                &proof,
+            ),
+            Err(VMError::PermissionDenied),
+            "substituted asset definition must not reuse the proof"
+        );
+        let mut substituted_handle = clear_handle.clone();
+        substituted_handle.axt_binding = vec![0x94; 32];
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &substituted_handle,
+                &clear,
+                &clear_amount,
+                &proof,
+            ),
             Err(VMError::PermissionDenied)
+        );
+        let mut second_handle = clear_handle.clone();
+        second_handle.sub_nonce += 1;
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &second_handle,
+                &clear,
+                &clear_amount,
+                &proof,
+            ),
+            Err(VMError::PermissionDenied),
+            "a proof for one handle must not authorize a new handle identity"
+        );
+
+        let clear_commitment = expected_remote_spend_intent_commitment_v1(
+            &clear_handle,
+            &clear,
+            &clear_amount,
+        )
+        .expect("fixture commitment");
+        let hidden_commitment = expected_remote_spend_intent_commitment_v1(
+            &hidden_handle,
+            &hidden,
+            &hidden_amount,
+        )
+        .expect("fixture commitment");
+        assert_eq!(
+            facts.validate_remote_spend_consumption(&[hidden_commitment, clear_commitment]),
+            Ok(())
+        );
+        assert_eq!(
+            facts.validate_remote_spend_consumption(&[clear_commitment, clear_commitment]),
+            Err(VMError::PermissionDenied),
+            "one proof claim cannot be consumed twice"
+        );
+        assert_eq!(
+            facts.validate_remote_spend_consumption(&[clear_commitment]),
+            Err(VMError::PermissionDenied),
+            "an unconsumed proof claim must fail closed"
         );
 
         // An empty intent set remains valid metadata for generic VERIFY_DS
@@ -2041,7 +2218,7 @@ mod tests {
         .expect("generic FastPQ proof accepts an empty remote-spend binding");
         assert_eq!(
             validate_remote_spend_intent_commitment(
-                descriptor_binding,
+                &clear_handle,
                 &clear,
                 &clear_amount,
                 &empty_proof,
@@ -2056,7 +2233,7 @@ mod tests {
         };
         assert_eq!(
             validate_remote_spend_intent_commitment(
-                descriptor_binding,
+                &clear_handle,
                 &clear,
                 &clear_amount,
                 &unbound_proof,

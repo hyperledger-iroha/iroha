@@ -37,6 +37,13 @@ GENESIS_EXPECTED_HASH_LITERAL = MODULE.validator_renderer._format_literal(
 )
 
 
+def test_network_id_is_derived_from_the_authenticated_reset_genesis() -> None:
+    assert (
+        MODULE.network_id_from_genesis_expected_hash(GENESIS_EXPECTED_HASH)
+        == GENESIS_EXPECTED_HASH_LITERAL
+    )
+
+
 def _receipt_keypair(index: int) -> tuple[str, str, str]:
     return _support_receipt_keypair(index)
 
@@ -156,7 +163,10 @@ def _build_bundle(tmp_path: Path, binary_sha: str, source_commit: str) -> Path:
             MODULE.canonical_genesis_identity(GENESIS_EXPECTED_HASH),
         ),
         ("genesis.json", b'{"chain":"taira"}\n'),
+        ("genesis.pre-sign-rendered.json", b'{"pre_sign":true}\n'),
+        ("genesis.reviewed-unsigned.json", b'{"reviewed":true}\n'),
         ("genesis.signed.nrt", b"signed-genesis"),
+        ("nevo-reset.review.json", b'{"nevo_review":true}\n'),
         ("validator-roster.toml", b"roster\n"),
     ):
         _write(bundle / name, body)

@@ -1089,7 +1089,7 @@ mod tests {
             fastpq_prover::PoseidonExecutionMode::Cpu,
         )
         .expect("FASTPQ prover")
-        .prove(&batch)
+        .prove_axt_bound(&batch, &binding)
         .expect("FASTPQ proof");
         let fastpq_payload =
             fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
@@ -1196,7 +1196,7 @@ mod tests {
             fastpq_prover::PoseidonExecutionMode::Cpu,
         )
         .expect("FASTPQ prover")
-        .prove(&batch)
+        .prove_axt_bound(&batch, &binding)
         .expect("FASTPQ proof");
         let fastpq_payload =
             fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");

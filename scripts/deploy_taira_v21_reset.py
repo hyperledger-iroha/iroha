@@ -74,7 +74,6 @@ PEER_COUNT = taira_constants.PEER_COUNT
 CHAIN_ID = taira_constants.CHAIN_ID
 CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
 NETWORK_NAME = taira_constants.NETWORK_NAME
-NETWORK_ID = taira_constants.NETWORK_ID
 PROTOCOL_VERSION = 4
 TAIRA_LANE_COUNT = 7
 UNIVERSAL_DATASPACE_ID = 0
@@ -194,7 +193,10 @@ TOP_LEVEL_NAMES = {
     "base-config.toml",
     "genesis.identity.toml",
     "genesis.json",
+    "genesis.pre-sign-rendered.json",
+    "genesis.reviewed-unsigned.json",
     "genesis.signed.nrt",
+    "nevo-reset.review.json",
     "rendered",
     "reset-manifest.json",
     "validator-roster.toml",
@@ -358,6 +360,12 @@ def require_genesis_identity(
     if payload != canonical_genesis_identity(expected_hash):
         fail("genesis.identity.toml is not the canonical paired deployment identity")
     return info
+
+def network_id_from_genesis_expected_hash(value: object) -> str:
+    """Derive the canonical NetworkId bound to an authenticated reset genesis."""
+
+    genesis_hash = require_genesis_expected_hash(value)
+    return validator_renderer._format_literal("hash", genesis_hash.upper())
 
 def require_commit(value: object, label: str = "expected source commit") -> str:
     """Require one full nonzero lowercase Git object id."""
@@ -1726,6 +1734,7 @@ def validate_bundle(
     expected_dpn_validator_release_commit: str,
     minimum_free_bytes: int,
     maximum_fsync_latency_ms: int,
+    headroom_anchor: Optional[Path] = None,
 ) -> BundlePlan:
     """Authenticate a fresh v21 bundle without changing it or running binaries."""
 
@@ -1896,7 +1905,7 @@ def validate_bundle(
         [
             bundle,
             *(peer.storage for peer in peers),
-            INSTALL_ROOT / "runtime",
+            headroom_anchor if headroom_anchor is not None else INSTALL_ROOT / "runtime",
         ],
         minimum_free_bytes,
     )
@@ -4263,6 +4272,9 @@ def apply_reset(
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
 
+    genesis_block_hash = require_genesis_expected_hash(
+        bundle.manifest.get("genesis_expected_hash")
+    )
     report: dict[str, Any] = {
         "applied": True,
         "absent_old_children": sorted(
@@ -4276,11 +4288,9 @@ def apply_reset(
         "chain_id": CHAIN_ID,
         "config_set_sha256": deployed_config_set_sha256(bundle),
         "deployment_completed_at_unix_ms": deployment_completed_at_unix_ms(),
-        "genesis_block_hash": require_genesis_expected_hash(
-            bundle.manifest.get("genesis_expected_hash")
-        ),
+        "genesis_block_hash": genesis_block_hash,
         "nexus_topology": restarted.nexus_topology,
-        "network_id": NETWORK_ID,
+        "network_id": network_id_from_genesis_expected_hash(genesis_block_hash),
         "network_name": NETWORK_NAME,
         "protocol_version": PROTOCOL_VERSION,
         "signed_genesis_sha256": require_sha256(

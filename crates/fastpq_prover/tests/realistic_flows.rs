@@ -1,6 +1,6 @@
 //! FASTPQ proof smoke tests covering realistic governance and remittance scenarios.
 use fastpq_prover::{
-    OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
+    Error, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
     gadgets::transfer::attach_transfer_smt_witnesses, verify,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -112,17 +112,28 @@ fn prove_and_verify(mut batch: TransitionBatch) {
     let proof = prover.prove(&batch).expect("FASTPQ proof");
     verify(&batch, &proof).expect("FASTPQ verification");
 }
+fn assert_strict_state_profile_rejects(mut batch: TransitionBatch) {
+    batch.sort();
+    let prover = Prover::canonical("fastpq-lane-balanced").expect("canonical prover");
+    assert!(matches!(
+        prover.prove(&batch),
+        Err(Error::InvalidProofSemantics {
+            profile: "transfer_state_transition",
+            ..
+        })
+    ));
+}
 #[test]
-fn governance_flow_proof_verifies() {
-    prove_and_verify(governance_batch());
+fn governance_flow_fails_closed_without_permission_witnesses() {
+    assert_strict_state_profile_rejects(governance_batch());
 }
 #[test]
 fn remittance_flow_proof_verifies() {
     prove_and_verify(remittance_batch());
 }
 #[test]
-fn governance_and_remittance_combined_proof_verifies() {
-    prove_and_verify(combined_batch());
+fn governance_and_remittance_combined_flow_fails_closed() {
+    assert_strict_state_profile_rejects(combined_batch());
 }
 fn remittance_transcript(
     asset_definition: &AssetDefinitionId,

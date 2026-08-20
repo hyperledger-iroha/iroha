@@ -3,7 +3,7 @@
 \* retires an exact retained Serve or leader-wire fence. The model explores
 \* certificate-last and certificate-first arrival orders, two ordinary
 \* Progress owners, the complete Completion reserve, and several distinct
-\* certificate roots sharing one retained physical credit.
+\* certificate roots sharing one physical certified credit.
 
 EXTENDS FiniteSets, Naturals, Sequences, TLC
 
@@ -48,7 +48,6 @@ VARIABLES
     pendingProgress,
     pendingCompletion,
     pendingCertified,
-    escapePhase,
     unpublishedBodyAvailable,
     conflictingProposalQueued,
     installedTC,
@@ -57,7 +56,7 @@ VARIABLES
 vars ==
     <<ownerIdentity, ownerSnapshot, ownerRetained, offeredKind,
       authenticated, stage, runtimeQueue, pendingProgress,
-      pendingCompletion, pendingCertified, escapePhase,
+      pendingCompletion, pendingCertified,
       unpublishedBodyAvailable, conflictingProposalQueued,
       installedTC, decided>>
 
@@ -131,7 +130,6 @@ TypeOK ==
     /\ pendingProgress \in 0..2
     /\ pendingCompletion \in 0..1
     /\ pendingCertified \subseteq CertifiedKinds
-    /\ escapePhase \in {"Fresh", "Charged", "Spent"}
     /\ unpublishedBodyAvailable \in BOOLEAN
     /\ conflictingProposalQueued \in BOOLEAN
     /\ ~(unpublishedBodyAvailable /\ conflictingProposalQueued)
@@ -166,7 +164,6 @@ Init ==
          ELSE {}
     /\ installedTC = FALSE
     /\ decided = FALSE
-    /\ escapePhase = "Fresh"
 
 OfferAdvancesRetainedOwner ==
     /\ OfferContext = ownerIdentity.context
@@ -189,12 +186,10 @@ AdmitCertifiedEscape ==
     /\ ownerRetained
     /\ authenticated
     /\ CertifiedFenceEscapeKind(offeredKind)
-    /\ escapePhase = "Fresh"
     /\ OfferAdvancesRetainedOwner
     /\ CanUseCertifiedFinalSlot
     /\ stage' = "Runtime"
     /\ runtimeQueue' = Append(runtimeQueue, offeredKind)
-    /\ escapePhase' = "Charged"
     /\ UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained, offeredKind,
                     authenticated, pendingProgress, pendingCompletion,
                     pendingCertified, unpublishedBodyAvailable,
@@ -205,12 +200,10 @@ AdmitCertifiedEscapeEarly ==
     /\ ownerRetained
     /\ authenticated
     /\ CertifiedFenceEscapeKind(offeredKind)
-    /\ escapePhase = "Fresh"
     /\ OfferAdvancesRetainedOwner
     /\ CanUseCertifiedEarlySlot
     /\ stage' = "Runtime"
     /\ runtimeQueue' = Append(runtimeQueue, offeredKind)
-    /\ escapePhase' = "Charged"
     /\ UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained, offeredKind,
                     authenticated, pendingProgress, pendingCompletion,
                     pendingCertified, unpublishedBodyAvailable,
@@ -223,7 +216,7 @@ AdmitOrdinaryProgress ==
     /\ pendingProgress' = pendingProgress - 1
     /\ UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained, offeredKind,
                     authenticated, stage, pendingCompletion, pendingCertified,
-                    escapePhase, unpublishedBodyAvailable,
+                    unpublishedBodyAvailable,
                     conflictingProposalQueued, installedTC, decided>>
 
 AdmitOrdinaryCompletion ==
@@ -233,18 +226,16 @@ AdmitOrdinaryCompletion ==
     /\ pendingCompletion' = pendingCompletion - 1
     /\ UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained, offeredKind,
                     authenticated, stage, pendingProgress, pendingCertified,
-                    escapePhase, unpublishedBodyAvailable,
+                    unpublishedBodyAvailable,
                     conflictingProposalQueued, installedTC, decided>>
 
 AdmitAdditionalCertified(kind) ==
     /\ stage = "Runtime"
     /\ authenticated
-    /\ escapePhase = "Fresh"
     /\ kind \in pendingCertified
     /\ CanAppendClass(runtimeQueue, kind, "Progress", TRUE)
     /\ runtimeQueue' = Append(runtimeQueue, kind)
     /\ pendingCertified' = pendingCertified \ {kind}
-    /\ escapePhase' = "Charged"
     /\ UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained, offeredKind,
                     authenticated, stage, pendingProgress, pendingCompletion,
                     unpublishedBodyAvailable, conflictingProposalQueued,
@@ -257,7 +248,7 @@ ReserveUnpublishedBodyAvailable ==
     /\ conflictingProposalQueued' = FALSE
     /\ UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained, offeredKind,
                     authenticated, stage, runtimeQueue, pendingProgress,
-                    pendingCompletion, pendingCertified, escapePhase,
+                    pendingCompletion, pendingCertified,
                     installedTC, decided>>
 
 CertifiedQueueIndices ==
@@ -284,12 +275,6 @@ DispatchCertifiedEscape ==
     /\ CertifiedFenceEscapeKind(offeredKind)
     /\ stage' = "TrustedTail"
     /\ runtimeQueue' = SubSeq(runtimeQueue, 1, Len(runtimeQueue) - 1)
-    /\ escapePhase' =
-         IF QueueCertifiedCount(runtimeQueue') = 0
-              /\ ~CanAppendClass(
-                    runtimeQueue', "Completion", "Completion", FALSE)
-         THEN "Spent"
-         ELSE escapePhase
     /\ UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained, offeredKind,
                     authenticated, pendingProgress, pendingCompletion,
                     pendingCertified, unpublishedBodyAvailable,
@@ -304,12 +289,6 @@ DispatchEarlyCertifiedEscape ==
     /\ runtimeQueue[FirstCertifiedQueueIndex] = offeredKind
     /\ stage' = "TrustedTail"
     /\ runtimeQueue' = RemoveAt(runtimeQueue, FirstCertifiedQueueIndex)
-    /\ escapePhase' =
-         IF QueueCertifiedCount(runtimeQueue') = 0
-              /\ ~CanAppendClass(
-                    runtimeQueue', "Completion", "Completion", FALSE)
-         THEN "Spent"
-         ELSE escapePhase
     /\ UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained, offeredKind,
                     authenticated, pendingProgress, pendingCompletion,
                     pendingCertified, unpublishedBodyAvailable,
@@ -324,7 +303,6 @@ RunCertifiedTrustedTail ==
     /\ ownerRetained' = FALSE
     /\ installedTC' = (offeredKind = "TimeoutCertificate")
     /\ decided' = (offeredKind \in {"CommitQC", "CommitCertificateResponse"})
-    /\ escapePhase' = "Fresh"
     /\ UNCHANGED <<ownerIdentity, ownerSnapshot, offeredKind,
                     authenticated, runtimeQueue, pendingProgress,
                     pendingCompletion, pendingCertified,
@@ -415,16 +393,6 @@ HandledOutcomeExact ==
         IF offeredKind = "TimeoutCertificate"
         THEN installedTC /\ ~decided
         ELSE ~installedTC /\ decided
-
-CertifiedEscapeEpisodeIsOneShot ==
-  /\ escapePhase \in {"Fresh", "Charged", "Spent"}
-  /\ (escapePhase \in {"Charged", "Spent"}
-        => /\ ~ENABLED AdmitCertifiedEscape
-           /\ ~ENABLED AdmitCertifiedEscapeEarly
-           /\ ~ENABLED (\E kind \in CertifiedKinds:
-                          AdmitAdditionalCertified(kind)))
-  /\ (stage = "Handled" => /\ ~ownerRetained
-                             /\ escapePhase = "Fresh")
 
 UnpublishedBodyAvailableOwnsOrdinaryCompletion ==
   /\ ~(unpublishedBodyAvailable /\ conflictingProposalQueued)

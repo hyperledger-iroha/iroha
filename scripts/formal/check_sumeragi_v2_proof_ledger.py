@@ -28703,15 +28703,8 @@ if uses_certified_fence_escape_reserve {
     _require_rust_token_sequence(
         core_path,
         ordinary_receive,
-        """
-self.try_recv_if_at_checked_classified(
-    service_attempt_at,
-    false,
-    FairV2IngressBarrierBypass::None,
-    predicate,
-)
-""",
-        "ordinary timestamped ingress must delegate with no barrier bypass",
+        "self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)",
+        "ordinary timestamped ingress must delegate to the single classifier",
         errors,
     )
     same_control_slot = _require_rust_item(
@@ -28759,7 +28752,7 @@ left.sender() == right.sender()
         queue_gate,
         _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES["queue_gate_verdict"],
         "live control predecessor blocks strict-newer carrier authorization "
-        "while preserving the two exact dependency exceptions",
+        "while preserving the three exact dependency classes",
         errors,
     )
     control_regression_path, control_regression_source = (
@@ -41241,761 +41234,6 @@ def _decision_recovery_lifecycle_mutation_source_fidelity_errors(
     return errors
 
 
-def _retained_response_escape_latch_source_fidelity_errors(
-    repo_root: Path = ROOT_DIR,
-) -> list[str]:
-    """Pin the one-shot retained-response certificate escape in Rust."""
-
-    errors: list[str] = []
-    effects_path = repo_root / "crates/iroha_core/src/sumeragi/v2_effects.rs"
-    effects_test_path = effects_path.parent / "tests/v2_effects_main_05.rs"
-    runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
-    lifecycle_runner_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
-    sources: dict[Path, str] = {}
-    for path in (
-        effects_path,
-        effects_test_path,
-        runtime_path,
-        lifecycle_runner_path,
-    ):
-        _loaded_path, source = _read_reviewed_rust_source(
-            repo_root,
-            path.relative_to(repo_root).as_posix(),
-            errors,
-            "retained-response escape-latch source",
-        )
-        sources[path] = source
-    if any(not source for source in sources.values()):
-        return errors
-
-    effects_source = sources[effects_path]
-    effects_test_source = sources[effects_test_path]
-    runtime_source = sources[runtime_path]
-    lifecycle_runner_source = sources[lifecycle_runner_path]
-    executor_context = (
-        (
-            "impl",
-            "<",
-            "R",
-            ":",
-            "EffectRuntime",
-            ">",
-            "V2EffectExecutor",
-            "<",
-            "R",
-            ">",
-        ),
-    )
-    runtime_context = (
-        (
-            "impl",
-            "<",
-            "D",
-            ":",
-            "RuntimeDriver",
-            ">",
-            "SerializedV2Runtime",
-            "<",
-            "D",
-            ">",
-        ),
-    )
-
-    carrier_candidates = rust_struct_items(
-        effects_source, "RetainedCertifiedBodyResponse"
-    )
-    carrier = carrier_candidates[0] if len(carrier_candidates) == 1 else None
-    if len(carrier_candidates) != 1:
-        errors.append(
-            f"{effects_path}: require exactly one retained certified-body carrier; "
-            f"found {len(carrier_candidates)}"
-        )
-    else:
-        _require_rust_item_token_sha256(
-            effects_path,
-            carrier,
-            _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
-                "effects::RetainedCertifiedBodyResponse"
-            ],
-            "retained certified-body response carrier",
-            errors,
-        )
-        _require_rust_token_sequence(
-            effects_path,
-            carrier,
-            "certified_fence_escape_phase: RetainedCertifiedFenceEscapePhase,",
-            "retained response must own its one-shot escape phase",
-            errors,
-        )
-
-    _require_rust_source_token_sequence(
-        effects_path,
-        effects_source,
-        """
-enum RetainedCertifiedFenceEscapePhase {
-    Fresh,
-    Charged,
-    Spent,
-}
-""",
-        "retained response latch must have exactly Fresh, Charged, and Spent",
-        errors,
-    )
-    _require_rust_source_token_sequence(
-        effects_path,
-        effects_source,
-        "fn has_certified_fence_escape_credit(&self) -> bool;",
-        "effect runtime must expose the exact retained certificate credit",
-        errors,
-    )
-
-    effects_items: dict[str, RustItem | None] = {}
-    for item_name in (
-        "accept_certified_body_response_with_ingress_ownership",
-        "retained_response_may_admit_certified_fence_escape",
-        "reconcile_retained_response_certified_fence_escape_phase",
-    ):
-        candidates = tuple(
-            item
-            for item in rust_items(effects_source, item_name)
-            if item.brace_context == executor_context
-        )
-        item = candidates[0] if len(candidates) == 1 else None
-        effects_items[item_name] = item
-        if len(candidates) != 1:
-            errors.append(
-                f"{effects_path}: require one executor latch method {item_name}; "
-                f"found {len(candidates)}"
-            )
-            continue
-        _require_rust_item_token_sha256(
-            effects_path,
-            item,
-            _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
-                f"effects::{item_name}"
-            ],
-            f"retained-response latch method {item_name}",
-            errors,
-        )
-
-    _require_rust_token_sequence(
-        effects_path,
-        effects_items.get("accept_certified_body_response_with_ingress_ownership"),
-        """
-certified_fence_escape_phase: if self.runtime.has_certified_fence_escape_credit() {
-    RetainedCertifiedFenceEscapePhase::Charged
-} else {
-    RetainedCertifiedFenceEscapePhase::Fresh
-},
-""",
-        "a new carrier must start Charged exactly when runtime already owns credit",
-        errors,
-    )
-    _require_rust_token_sequence(
-        effects_path,
-        effects_items.get("retained_response_may_admit_certified_fence_escape"),
-        """
-self.reconcile_retained_response_certified_fence_escape_phase();
-self.retained_certified_body_response
-    .as_ref()
-    .is_some_and(|carrier| {
-        carrier.certified_fence_escape_phase == RetainedCertifiedFenceEscapePhase::Fresh
-    })
-""",
-        "only a reconciled Fresh carrier may admit new certified ingress",
-        errors,
-    )
-    _require_rust_token_sequence(
-        effects_path,
-        effects_items.get(
-            "reconcile_retained_response_certified_fence_escape_phase"
-        ),
-        """
-RetainedCertifiedFenceEscapePhase::Fresh if has_credit => {
-    RetainedCertifiedFenceEscapePhase::Charged
-}
-RetainedCertifiedFenceEscapePhase::Charged if !has_credit && completion_blocked => {
-    RetainedCertifiedFenceEscapePhase::Spent
-}
-phase => phase,
-""",
-        "latch reconciliation must charge once and keep Spent absorbing",
-        errors,
-    )
-
-    runtime_candidates = tuple(
-        item
-        for item in rust_items(runtime_source, "has_certified_fence_escape_credit")
-        if item.brace_context == runtime_context
-    )
-    runtime_credit = runtime_candidates[0] if len(runtime_candidates) == 1 else None
-    if len(runtime_candidates) != 1:
-        errors.append(
-            f"{runtime_path}: require one serialized runtime credit observer; "
-            f"found {len(runtime_candidates)}"
-        )
-    else:
-        _require_rust_item_token_sha256(
-            runtime_path,
-            runtime_credit,
-            _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
-                "runtime::has_certified_fence_escape_credit"
-            ],
-            "serialized runtime escape-credit observer",
-            errors,
-        )
-
-    retained_response = _require_rust_item(
-        lifecycle_runner_path,
-        lifecycle_runner_source,
-        "service_retained_certified_response",
-        errors,
-    )
-    _require_rust_item_context(
-        lifecycle_runner_path,
-        retained_response,
-        (),
-        "retained-response latch runner",
-        errors,
-        expected_attributes=("#[allow(clippy::too_many_arguments)]",),
-    )
-    _require_rust_item_token_sha256(
-        lifecycle_runner_path,
-        retained_response,
-        _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
-            "lifecycle_runner::service_retained_certified_response"
-        ],
-        "retained-response latch runner",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lifecycle_runner_path,
-        retained_response,
-        """
-if executor.retained_response_may_admit_certified_fence_escape() {
-    drain_v2_ingress(
-        receiver,
-        executor,
-        services,
-        lane_work,
-        output_guard,
-        kura,
-        key_pair,
-        block_sync_server,
-        block_sync,
-        block_sync_request,
-        npos_vrf,
-        V2IngressDrainMode::CertifiedFenceEscape,
-        1,
-    )?;
-}
-drain_v2_ingress(
-    receiver,
-    executor,
-    services,
-    lane_work,
-    output_guard,
-    kura,
-    key_pair,
-    block_sync_server,
-    block_sync,
-    block_sync_request,
-    npos_vrf,
-    V2IngressDrainMode::TimeoutVoteEpisode,
-    1,
-)?;
-executor.reconcile_retained_response_certified_fence_escape_phase();
-advance_pacemaker_once(receiver, executor, services)?;
-executor.reconcile_retained_response_certified_fence_escape_phase();
-""",
-        "fresh certificate credit must remain conditional while the independent TimeoutVote drain and one already-owned pacemaker turn remain unconditional",
-        errors,
-    )
-
-    test_candidates = tuple(
-        item
-        for item in rust_items(
-            effects_test_source,
-            "retained_response_certificate_escape_is_charged_only_once",
-        )
-        if item.brace_context == ()
-    )
-    latch_test = test_candidates[0] if len(test_candidates) == 1 else None
-    if len(test_candidates) != 1:
-        errors.append(
-            f"{effects_test_path}: require one retained-response one-shot regression; "
-            f"found {len(test_candidates)}"
-        )
-    else:
-        _require_rust_item_context(
-            effects_test_path,
-            latch_test,
-            (),
-            "retained-response one-shot regression",
-            errors,
-            expected_attributes=("#[test]",),
-        )
-        _require_rust_item_token_sha256(
-            effects_test_path,
-            latch_test,
-            _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
-                "test::retained_response_certificate_escape_is_charged_only_once"
-            ],
-            "retained-response one-shot regression",
-            errors,
-        )
-        _require_rust_token_sequence(
-            effects_test_path,
-            latch_test,
-            "assert!(executor.retained_response_may_admit_certified_fence_escape());",
-            "one-shot regression must exercise the initial Fresh permission",
-            errors,
-        )
-        for phase, count in (("Charged", 1), ("Spent", 2)):
-            _require_rust_token_sequence(
-                effects_test_path,
-                latch_test,
-                f"RetainedCertifiedFenceEscapePhase::{phase}",
-                f"one-shot regression must exercise {phase}",
-                errors,
-                count=count,
-            )
-
-    expected_keys = {
-        "effects::RetainedCertifiedBodyResponse",
-        "effects::accept_certified_body_response_with_ingress_ownership",
-        "effects::retained_response_may_admit_certified_fence_escape",
-        "effects::reconcile_retained_response_certified_fence_escape_phase",
-        "runtime::has_certified_fence_escape_credit",
-        "lifecycle_runner::service_retained_certified_response",
-        "test::retained_response_certificate_escape_is_charged_only_once",
-    }
-    observed_keys = set(
-        _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256
-    )
-    if observed_keys != expected_keys:
-        errors.append(
-            "retained-response escape-latch Rust source-seal inventory must be exact; "
-            f"missing={sorted(expected_keys - observed_keys)}, "
-            f"extra={sorted(observed_keys - expected_keys)}"
-        )
-    return errors
-
-
-def _retained_response_escape_latch_formal_source_fidelity_errors(
-    formal_dir: Path,
-) -> list[str]:
-    """Pin the formal latch, exact root, runner arm, and descent proof."""
-
-    errors: list[str] = []
-    operator_files = set(
-        _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_OPERATOR_SHA256
-    )
-    theorem_files = set(
-        _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_THEOREM_SHA256
-    )
-    expected_files = {
-        "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2AsyncInstallRunnerProofs.tla",
-        "SumeragiV2AsyncTemporalRankProofs.tla",
-    }
-    if operator_files | theorem_files != expected_files:
-        errors.append(
-            "retained-response formal source-seal file inventory must contain "
-            f"exactly {sorted(expected_files)}"
-        )
-    for filename in sorted(operator_files | theorem_files):
-        path = formal_dir / filename
-        if not path.is_file() or path.is_symlink():
-            errors.append(
-                f"{path}: retained-response formal source must be a regular file"
-            )
-            continue
-        source = path.read_text(encoding="utf-8")
-        for symbol, expected_sha256 in (
-            _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_OPERATOR_SHA256.get(
-                filename, {}
-            ).items()
-        ):
-            extracted = _top_level_operator_body(
-                source, symbol, preserve_string_contents=True
-            )
-            if extracted is None:
-                errors.append(f"{path}: missing source-sealed latch operator {symbol}")
-                continue
-            body, line = extracted
-            observed_sha256 = hashlib.sha256(
-                " ".join(body.split()).encode("utf-8")
-            ).hexdigest()
-            if observed_sha256 != expected_sha256:
-                errors.append(
-                    f"{path}:{line}: retained-response latch operator {symbol} "
-                    f"must match reviewed digest {expected_sha256}; found "
-                    f"{observed_sha256}"
-                )
-        for symbol, expected_sha256 in (
-            _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_THEOREM_SHA256.get(
-                filename, {}
-            ).items()
-        ):
-            extracted = _top_level_theorem_body(
-                source, symbol, preserve_string_contents=True
-            )
-            if extracted is None:
-                errors.append(f"{path}: missing source-sealed latch theorem {symbol}")
-                continue
-            body, line = extracted
-            observed_sha256 = hashlib.sha256(
-                " ".join(body.split()).encode("utf-8")
-            ).hexdigest()
-            if observed_sha256 != expected_sha256:
-                errors.append(
-                    f"{path}:{line}: retained-response latch theorem {symbol} "
-                    f"must match reviewed digest {expected_sha256}; found "
-                    f"{observed_sha256}"
-                )
-
-    network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    network_source = (
-        network_path.read_text(encoding="utf-8")
-        if network_path.is_file() and not network_path.is_symlink()
-        else ""
-    )
-    exact_classifier = _top_level_operator_body(
-        network_source,
-        "AsyncQueuedCandidateIsCertifiedFenceEscape",
-        preserve_string_contents=True,
-    )
-    if exact_classifier is not None:
-        normalized = " ".join(exact_classifier[0].split())
-        required = (
-            'candidate.class = "Progress"',
-            'candidate.kind \\in {"DeliverTC", "DeliverQC"}',
-            "candidate.evidence \\in AsyncNetworkItems",
-            "AsyncCertifiedFenceEscapeItem(candidate.evidence)",
-            "candidate.causalOrigin.payload.authority =",
-            "AsyncRouteNeutralCandidateEvidence(candidate.evidence)",
-            'candidate.kind = "DeliverTC"',
-            'candidate.evidence.kind = "TimeoutCertificate"',
-            'candidate.causalOrigin.phase = "DeliverTC"',
-            'candidate.kind = "DeliverQC"',
-            'candidate.evidence.kind \\in '
-            '{"CommitQC", "CommitCertificateResponse"}',
-            'candidate.causalOrigin.phase = "DeliverQC"',
-        )
-        missing = [token for token in required if token not in normalized]
-        if missing:
-            errors.append(
-                f"{network_path}:{exact_classifier[1]}: certified credit must "
-                f"use the exact direct command classifier; missing={missing!r}"
-            )
-    enqueue = _top_level_operator_body(
-        network_source, "EnqueueCandidate", preserve_string_contents=True
-    )
-    if enqueue is not None:
-        normalized = " ".join(enqueue[0].split())
-        ordinary_branch = (
-            "/\\ AsyncCandidateProducerContinuationOrdinaryEnqueuePreservesReplayPrefix( "
-            "candidate) /\\ ~AsyncCandidateIsDirectCertifiedFenceEscape(candidate) "
-            "/\\ CanEnqueueClass(node, candidate.class)"
-        )
-        if normalized.count(ordinary_branch) != 1:
-            errors.append(
-                f"{network_path}:{enqueue[1]}: ordinary EnqueueCandidate must "
-                "consume its exact class-aware capacity predicate once"
-            )
-
-    install_path = formal_dir / "SumeragiV2AsyncInstallRunnerProofs.tla"
-    if install_path.is_file() and not install_path.is_symlink():
-        install_source = install_path.read_text(encoding="utf-8")
-        case_split = _top_level_theorem_body(
-            install_source,
-            "RunNodeWorkConcreteActionCaseSplit",
-            preserve_string_contents=True,
-        )
-        if case_split is not None:
-            statement = _tla_statement_without_proof(case_split[0])
-            if statement.count("SerializedCertifiedPacemakerStep(node)") != 1:
-                errors.append(
-                    f"{install_path}:{case_split[1]}: RunNodeWork case split must "
-                    "contain the certified pacemaker arm exactly once"
-                )
-        install_dependencies = {
-            "SerializedCertifiedPacemakerPreservesClaimIngressOwnership": (
-                "ExecuteCommandLeavesIngress",
-                "ExecuteCommandOnlyRetiresCertifiedResponseClaim",
-                "CertifiedResponseClaimIngressOwnershipIsDownwardClosed",
-            ),
-            "SerializedCertifiedPacemakerRefinesCoreBracketNext": (
-                "DirectTimeoutStepRefinesCoreBracketNext",
-                "ExecuteCommandRefinesCoreBracketNext",
-                "CoreStutterRefinesBracketNext",
-            ),
-            "SerializedCertifiedPacemakerPreservesSchedulerType": (
-                "ExecutedFreshCommandSuccessorsTypedAndOwned",
-                "RunnerServiceFramePreservesClockType",
-            ),
-        }
-        for theorem, dependencies in install_dependencies.items():
-            extracted = _top_level_theorem_body(
-                install_source, theorem, preserve_string_contents=True
-            )
-            if extracted is None:
-                continue
-            missing = [
-                dependency
-                for dependency in dependencies
-                if not _tla_dependency_present(extracted[0], dependency)
-            ]
-            if missing:
-                errors.append(
-                    f"{install_path}:{extracted[1]}: {theorem} must retain "
-                    f"certified pacemaker refinement dependencies {missing!r}"
-                )
-
-    temporal_path = formal_dir / "SumeragiV2AsyncTemporalRankProofs.tla"
-    if temporal_path.is_file() and not temporal_path.is_symlink():
-        temporal_source = temporal_path.read_text(encoding="utf-8")
-        descent = _top_level_theorem_body(
-            temporal_source,
-            "ClaimedResponseSerializedCertifiedPacemakerDecreasesAux",
-            preserve_string_contents=True,
-        )
-        if descent is not None:
-            required = (
-                "SerializedCertifiedPacemakerStep",
-                "CertifiedResponseClaimPacemakerWorkDebt",
-                "CertifiedResponseClaimDirectPacemakerWorkTokens",
-                "CertifiedResponseClaimCausalPacemakerWorkTokens",
-                "CertifiedResponseClaimFreshEscapePotential",
-                "AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget",
-                "AsyncCausalExactRemainingOccurrenceBudget",
-                "CertifiedPacemakerRootIndices",
-                "CertifiedPacemakerCausalIndices",
-                "AsyncCertifiedFenceEscapeItem",
-                "AsyncCertifiedFenceEscapeKinds",
-                "AsyncAuthenticatedCertifiedFenceEscapeAuthorities",
-                "RetainedCertifiedFenceEscapePhase",
-                "AsyncControlServiceSlotTransition",
-                "AsyncCertifiedFenceEscapeStateAfterRuntime",
-                "RetainedCertifiedFenceEscapePhaseAfter",
-            )
-            missing = [
-                token
-                for token in required
-                if not _tla_dependency_present(descent[0], token)
-            ]
-            if missing:
-                errors.append(
-                    f"{temporal_path}:{descent[1]}: certified pacemaker descent "
-                    f"must retain exact latch/rank dependencies {missing!r}"
-                )
-
-        capacity_debt_action_theorems = (
-            "ClaimedResponseBlockedLocalDecreasesAux",
-            "ClaimedResponseBlockedLocalPredecessorDecreasesAux",
-            "ClaimedResponseBlockedIngressDecreasesAux",
-            "ClaimedResponseDeferredDrainDecreasesAux",
-            "ClaimedResponseDeferredTagDecreasesAux",
-            "ClaimedResponseDirectTimeoutDecreasesAux",
-            "ClaimedResponseFifoRuntimeDecreasesCapacityDebt",
-            "ClaimedResponseRetransmitDecreasesAux",
-            "ClaimedResponseIdleRuntimeOpensSlot",
-            "ClaimedResponseSerializedCertifiedPacemakerDecreasesAux",
-            "ClaimedResponseTargetOnlyProducesAuxOutcome",
-            "ClaimedResponseSameNodeRunProducesAuxOutcome",
-            "ClaimedResponseOtherRunnerPreservesAux",
-            "ClaimedResponseClockPreservesOrDecreasesAux",
-            "ClaimedResponseIoPreservesAux",
-            "ClaimedResponseNetworkOrFaultPreservesAux",
-            "ClaimedResponseOuterPrefixPreservesAux",
-        )
-        common_capacity_debt_dependencies = (
-            "CertifiedResponseClaimCapacityDebt",
-            "CertifiedResponseClaimPacemakerWorkDebt",
-            "CertifiedResponseClaimDirectPacemakerWorkTokens",
-            "CertifiedResponseClaimCausalPacemakerWorkTokens",
-            "CertifiedResponseClaimFreshEscapePotential",
-            "RetainedCertifiedFenceEscapePhase",
-            "AsyncControlServiceSlotTransition",
-            "AsyncCertifiedFenceEscapeStateAfterRuntime",
-            "RetainedCertifiedFenceEscapePhaseAfter",
-        )
-        for theorem in capacity_debt_action_theorems:
-            extracted = _top_level_theorem_body(
-                temporal_source, theorem, preserve_string_contents=True
-            )
-            if extracted is None:
-                errors.append(
-                    f"{temporal_path}: missing retained-response capacity-debt "
-                    f"action theorem {theorem}"
-                )
-                continue
-            statement = " ".join(
-                _tla_statement_without_proof(extracted[0]).split()
-            )
-            if "AsyncControlServiceSlotTransition" not in statement:
-                errors.append(
-                    f"{temporal_path}:{extracted[1]}: {theorem} must assume "
-                    "the serialized retained-latch transition"
-                )
-            missing = [
-                dependency
-                for dependency in common_capacity_debt_dependencies
-                if not _tla_dependency_present(extracted[0], dependency)
-            ]
-            if missing:
-                errors.append(
-                    f"{temporal_path}:{extracted[1]}: {theorem} must retain "
-                    f"the complete one-shot capacity-debt dependencies {missing!r}"
-                )
-
-        exact_action_dependencies = {
-            "ClaimedResponseBlockedIngressDecreasesAux": (
-                "AsyncCausalExactRemainingOccurrenceBudgetIsBounded",
-                "FS_CardinalityType",
-                "EnqueueCandidate",
-                "AsyncCandidateIsDirectCertifiedFenceEscape",
-                "AsyncQueuedCandidateIsCertifiedFenceEscape",
-                "AsyncCertifiedFenceEscapeItem",
-                "AsyncCertifiedFenceEscapeKinds",
-                "AsyncAuthenticatedCertifiedFenceEscapeAuthorities",
-                "AsyncCandidateHasCertifiedFenceRoot",
-                "CertifiedPacemakerRootIndices",
-                "CertifiedPacemakerCausalIndices",
-                "AsyncCausalExactRemainingOccurrenceBudget",
-                "AsyncCertifiedResponseClaimStateAfterRetirement",
-                "AsyncCertifiedResponseClaimStateAfterAdmission",
-            ),
-            "ClaimedResponseFifoRuntimeDecreasesCapacityDebt": (
-                "AsyncQueuedCandidateIsCertifiedFenceEscape",
-                "AsyncCandidateIsDirectCertifiedFenceEscape",
-                "AsyncCertifiedFenceEscapeItem",
-                "AsyncCertifiedFenceEscapeKinds",
-                "AsyncAuthenticatedCertifiedFenceEscapeAuthorities",
-                "AsyncCandidateHasCertifiedFenceRoot",
-                "CertifiedPacemakerRootIndices",
-                "CertifiedPacemakerCausalIndices",
-                "AsyncCausalExactRemainingOccurrenceBudget",
-                "AsyncCertifiedResponseClaimStateAfterRetirement",
-                "AsyncCertifiedResponseClaimStateAfterAdmission",
-            ),
-            "ClaimedResponseSerializedCertifiedPacemakerDecreasesAux": (
-                "AsyncQueuedCandidateIsCertifiedFenceEscape",
-                "AsyncCandidateIsDirectCertifiedFenceEscape",
-                "AsyncCertifiedFenceEscapeItem",
-                "AsyncCertifiedFenceEscapeKinds",
-                "AsyncAuthenticatedCertifiedFenceEscapeAuthorities",
-                "AsyncCandidateHasCertifiedFenceRoot",
-                "CertifiedPacemakerRootIndices",
-                "CertifiedPacemakerCausalIndices",
-                "AsyncCausalExactRemainingOccurrenceBudget",
-                "AsyncCertifiedResponseClaimStateAfterRetirement",
-                "AsyncCertifiedResponseClaimStateAfterAdmission",
-            ),
-        }
-        for theorem, dependencies in exact_action_dependencies.items():
-            extracted = _top_level_theorem_body(
-                temporal_source, theorem, preserve_string_contents=True
-            )
-            if extracted is None:
-                continue
-            missing = [
-                dependency
-                for dependency in dependencies
-                if not _tla_dependency_present(extracted[0], dependency)
-            ]
-            if missing:
-                errors.append(
-                    f"{temporal_path}:{extracted[1]}: {theorem} must retain "
-                    f"exact authenticated latch accounting {missing!r}"
-                )
-
-        serialized_runtime = _top_level_theorem_body(
-            temporal_source,
-            "ClaimedResponseSerializedRunnerRuntimeDecreasesAux",
-            preserve_string_contents=True,
-        )
-        if serialized_runtime is not None:
-            statement = " ".join(
-                _tla_statement_without_proof(serialized_runtime[0]).split()
-            )
-            required = (
-                "AsyncControlServiceSlotTransition",
-                "ClaimedResponseDeferredDrainDecreasesAux",
-                "ClaimedResponseDeferredTagDecreasesAux",
-                "ClaimedResponseDirectTimeoutDecreasesAux",
-                "ClaimedResponseFifoRuntimeDecreasesCapacityDebt",
-                "ClaimedResponseRetransmitDecreasesAux",
-                "ClaimedResponseIdleRuntimeOpensSlot",
-            )
-            missing = [
-                dependency
-                for dependency in required
-                if not _tla_dependency_present(serialized_runtime[0], dependency)
-            ]
-            if "AsyncControlServiceSlotTransition" not in statement or missing:
-                errors.append(
-                    f"{temporal_path}:{serialized_runtime[1]}: serialized Runtime "
-                    "wrapper must thread the latch transition through every arm; "
-                    f"missing={missing!r}"
-                )
-
-        blocked_step = _top_level_theorem_body(
-            temporal_source,
-            "ClaimedResponseBlockedAuxStep",
-            preserve_string_contents=True,
-        )
-        if blocked_step is not None:
-            normalized = " ".join(blocked_step[0].split())
-            required = (
-                "<3>0. AsyncControlServiceSlotTransition",
-                "BY <2>2 DEF AsyncNext",
-                "<3>0, <3>1",
-                "<3>0, <3>4",
-                "<3>0, <3>7",
-                "<3>0, <3>8",
-            )
-            missing = [token for token in required if token not in normalized]
-            if missing:
-                errors.append(
-                    f"{temporal_path}:{blocked_step[1]}: blocked-step case split "
-                    f"must derive and thread the latch transition; missing={missing!r}"
-                )
-
-        fair_step = _top_level_theorem_body(
-            temporal_source,
-            "FairClaimedResponseAuxOneStep",
-            preserve_string_contents=True,
-        )
-        if fair_step is not None:
-            normalized = " ".join(fair_step[0].split())
-            fair_action_with_next = (
-                "/\\ <<PostGstRunNode(node)>>_AsyncAllVars /\\ AsyncNext =>"
-            )
-            if fair_action_with_next not in normalized:
-                errors.append(
-                    f"{temporal_path}:{fair_step[1]}: fair claimed-response "
-                    "descent must combine the weak-fair runner with AsyncNext's "
-                    "serialized latch transition"
-                )
-
-    liveness_config = formal_dir / "liveness.cfg"
-    if not liveness_config.is_file() or liveness_config.is_symlink():
-        errors.append(
-            f"{liveness_config}: retained-response liveness config must be regular"
-        )
-    else:
-        config_source = liveness_config.read_text(encoding="utf-8")
-        required_invariant = "INVARIANT AsyncCertifiedFenceEscapeEpisodeInvariant"
-        if config_source.splitlines().count(required_invariant) != 1:
-            errors.append(
-                f"{liveness_config}: retained-response liveness config must "
-                f"contain exactly one {required_invariant!r}"
-            )
-    return errors
-
-
 def _runtime_clock_reservation_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -47975,6 +47213,7 @@ _ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ADDITIONS_AFTER = {
     ),
     "AsyncCandidateProducerContinuationRunnerSelectionIsPairwisePhysicalMinimum": (
         "AsyncLeaderWireCarrierCannotBypassFrozenPrefix",
+        "AsyncOrdinarySelectorPreservesCertifiedResponseBeforeTimeoutVote",
         "AsyncCertifiedFenceEscapeCrossesSelectedServeBarrier",
         "AsyncCertifiedFenceEscapeCrossesMatchingLeaderWireBarrier",
     ),
@@ -48051,32 +47290,32 @@ _ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ADDITIONS_AFTER = {
     ),
 }
 
-_ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_COUNT = 420
+_ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_COUNT = 421
 # The release tuple is dependency-layer ordered, so pin declaration order
 # separately while retaining an explicit reviewed name set below.
 _ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ORDER_SHA256 = (
-    "b0ea3758c78e58f8df6d6c2809295ac06d27d92f4055c37b1d0841bb16cdafdb"
+    "7319c82dbeb2ab456bdfcc822cccce563e9f9373f954e5ff50a5fa911ce7e275"
 )
 
-_ASYNC_NETWORK_MIGRATION_OPERATOR_SHA256 = dict(( ("AsyncCandidateServiceStateAfterTerminalRetirement", "0dfe3284b17c61679e5b1e685ca184208392ae5a74172432e6bdebca438d08bc"), ("AsyncCandidateTerminalServiceReservationNeededIn", "ca211d0441e8beff9a1e98d11c93e2e21c6a3dfcf561c6de8373a52e99b95327"), ("AsyncCandidateTerminalServiceReservationAvailableIn", "a226e8d0324aa2470ad6cd3ef3ff013db562b986c3ee8d3a2cfe6b84856c5e49"), ("AsyncCandidateLifecycleNewAdmissions", "d89695b92f31750fc8d43b446eefb79412bcd9c77d7d6d16d684437c4a5ec0b2"), ("AsyncPacketOwnsClockDeadline", "0e0b38fd486161f49b27466948e3cdd075f51ba16d3202ad48c517ae84ef5508"), ("AsyncIoExceptServeReservationsVars", "e78974b75e308507a0f4005d54b080d7fd2e3a4e38e85ec17b09ff94aa6e5644"), ("CoalesceSupersededExactServeRequest", "aac2e9436071ea9d57ec08d0f2672401ba65451f5d70d02f965fc1d693fe644b"), ("RejectConflictingExactServeRequest", "ad6cfec94caa040f9286c9994a8cd63728e1ee764b4160992958393f26ffacb4"), ("AsyncServeTransportAdmissionGateAllowsVia", "80a38b8f5f35bb6f3855db50a72a2c649ba1575c97c3df7e89b59c6b1ada1ea7"), ("CanAdmitIngressItemVia", "9118a92fcbc3db95916e8b792d9b72945bc33891c22a48f21daed4edd4601fd2"), ("ReserveExactServeCapacityVia", "eb3da2c2be428151e76bd2245fdb2bea293f8fcf45e80cdf06616584bf930fbe"), ("AdvanceExactServeCapacityVia", "5bf08a66c5ffd8e00d451c44e456e8b2542d61427f44b65d60a990d8ee7fa067"), ("CoalesceExactServeIngressCapacityVia", "311270c9b45fe2f1edf36e4344d0f165db250e1c40fa53e634bb65e92fc38218"), ("ResumeExactServeCapacityVia", "a382d8541641ce0853cc9fcc5a5914e74130864eda5d0f64b640e4b60b8f1519"), ("CoalesceExactServeCapacityVia", "0a5b041b6af636d4ada2a7d27e69032410bc32b5933a6a9f0121d115aa86df9b"), ("ReserveExactServeCapacity", "562a00dca984b3675b16b2e83a49db786ac1c0c7b934e0da8619e5af9077e64a"), ("AdvanceExactServeCapacity", "4603b3d73e0aac7904231b5822d08c1016305d1fcbe7c65e0d2479a90da383b9"), ("CoalesceExactServeIngressCapacity", "779d594f73bda5d9c55f7c0bd3d1348a999dd7f749782df1306c998c4dda4191"), ("ResumeExactServeCapacity", "7d59f5fa5f137f4caf36b2ae3a41559e7f90f4b44976dc24b1eee5e68212d684"), ("CoalesceExactServeCapacity", "afaf0ac42cf8dbd94790f09d383b7812c32ca3eda471f3f339dbec8c97248f2f"), ("AcceptOrCoalesceExactServeRequest", "fed3347022f8d7fbea304d02ee16eca6771b97f8260d90831146b35b65398cf5"), ("AcceptOrReserveExactServeIngress", "86e66d56d20713576459ba5ded98aaab53703564ff0635550e25b1cfb3208649"), ("AsyncTimeoutRecoveryVoteBarrierException", "d8522b9b23b8314bdbbe6b6a81d601dfab6d3fbaa389e51e76029b33db0f5b5e"), ("AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier", "085073b59232d8c3e930b7fead0151ac8d6a37602452c556ad4174a98b734988"), ("AsyncFairIngressCoreStateTransition", "79efdc6f3f3d887fd6b96297173c5490b5f9e8d705918bfcf1856542de2f8896"), ("TimeoutDue", "b8dd4238614670c8223fbc82fe21093d95d5c53379c971b3960d0c0ce389dae6"),
+_ASYNC_NETWORK_REVIEWED_OPERATOR_SHA256 = dict(( ("AsyncCandidateServiceStateAfterTerminalRetirement", "0dfe3284b17c61679e5b1e685ca184208392ae5a74172432e6bdebca438d08bc"), ("AsyncCandidateTerminalServiceReservationNeededIn", "ca211d0441e8beff9a1e98d11c93e2e21c6a3dfcf561c6de8373a52e99b95327"), ("AsyncCandidateTerminalServiceReservationAvailableIn", "a226e8d0324aa2470ad6cd3ef3ff013db562b986c3ee8d3a2cfe6b84856c5e49"), ("AsyncCandidateLifecycleNewAdmissions", "d89695b92f31750fc8d43b446eefb79412bcd9c77d7d6d16d684437c4a5ec0b2"), ("AsyncPacketOwnsClockDeadline", "0e0b38fd486161f49b27466948e3cdd075f51ba16d3202ad48c517ae84ef5508"), ("AsyncIoExceptServeReservationsVars", "e78974b75e308507a0f4005d54b080d7fd2e3a4e38e85ec17b09ff94aa6e5644"), ("CoalesceSupersededExactServeRequest", "aac2e9436071ea9d57ec08d0f2672401ba65451f5d70d02f965fc1d693fe644b"), ("RejectConflictingExactServeRequest", "ad6cfec94caa040f9286c9994a8cd63728e1ee764b4160992958393f26ffacb4"), ("AsyncServeTransportAdmissionGateAllowsVia", "80a38b8f5f35bb6f3855db50a72a2c649ba1575c97c3df7e89b59c6b1ada1ea7"), ("CanAdmitIngressItemVia", "9118a92fcbc3db95916e8b792d9b72945bc33891c22a48f21daed4edd4601fd2"), ("ReserveExactServeCapacityVia", "eb3da2c2be428151e76bd2245fdb2bea293f8fcf45e80cdf06616584bf930fbe"), ("AdvanceExactServeCapacityVia", "5bf08a66c5ffd8e00d451c44e456e8b2542d61427f44b65d60a990d8ee7fa067"), ("CoalesceExactServeIngressCapacityVia", "311270c9b45fe2f1edf36e4344d0f165db250e1c40fa53e634bb65e92fc38218"), ("ResumeExactServeCapacityVia", "a382d8541641ce0853cc9fcc5a5914e74130864eda5d0f64b640e4b60b8f1519"), ("CoalesceExactServeCapacityVia", "0a5b041b6af636d4ada2a7d27e69032410bc32b5933a6a9f0121d115aa86df9b"), ("ReserveExactServeCapacity", "562a00dca984b3675b16b2e83a49db786ac1c0c7b934e0da8619e5af9077e64a"), ("AdvanceExactServeCapacity", "4603b3d73e0aac7904231b5822d08c1016305d1fcbe7c65e0d2479a90da383b9"), ("CoalesceExactServeIngressCapacity", "779d594f73bda5d9c55f7c0bd3d1348a999dd7f749782df1306c998c4dda4191"), ("ResumeExactServeCapacity", "7d59f5fa5f137f4caf36b2ae3a41559e7f90f4b44976dc24b1eee5e68212d684"), ("CoalesceExactServeCapacity", "afaf0ac42cf8dbd94790f09d383b7812c32ca3eda471f3f339dbec8c97248f2f"), ("AcceptOrCoalesceExactServeRequest", "fed3347022f8d7fbea304d02ee16eca6771b97f8260d90831146b35b65398cf5"), ("AcceptOrReserveExactServeIngress", "86e66d56d20713576459ba5ded98aaab53703564ff0635550e25b1cfb3208649"), ("AsyncTimeoutControlDependencyAdvancesLeaderWire", "fc8c50a29cf3a52c5ceccccf383c03b7b9d8e5d63670fb774d212c2049e1c0a2"), ("AsyncFairIngressCoreStateTransition", "79efdc6f3f3d887fd6b96297173c5490b5f9e8d705918bfcf1856542de2f8896"), ("TimeoutDue", "b8dd4238614670c8223fbc82fe21093d95d5c53379c971b3960d0c0ce389dae6"),
     ("AdmitHiddenPacket", "4ac6bdc2837d18f5a90a6eb761dcd6ce5e578616b516826f921175a00db1aeba"),
 ))
 
 
-def _async_network_migration_contract_errors(path: Path, source: str) -> list[str]:
-    """Seal the reviewed authority and ordering migration corridor."""
+def _async_network_reviewed_contract_errors(path: Path, source: str) -> list[str]:
+    """Seal the reviewed first-release authority and ordering contract."""
 
     errors = []
-    for symbol, expected_sha256 in _ASYNC_NETWORK_MIGRATION_OPERATOR_SHA256.items():
+    for symbol, expected_sha256 in _ASYNC_NETWORK_REVIEWED_OPERATOR_SHA256.items():
         extracted = _top_level_operator_body(source, symbol, preserve_string_contents=True)
         if extracted is None:
-            errors.append(f"{path}: missing reviewed AsyncNetwork migration contract {symbol}")
+            errors.append(f"{path}: missing reviewed AsyncNetwork contract {symbol}")
             continue
         body, line = extracted
         observed_sha256 = hashlib.sha256(" ".join(body.split()).encode()).hexdigest()
         if observed_sha256 != expected_sha256:
             errors.append(
-                f"{path}:{line}: reviewed AsyncNetwork migration contract {symbol} "
+                f"{path}:{line}: reviewed AsyncNetwork contract {symbol} "
                 f"must match normalized digest {expected_sha256}; found {observed_sha256}"
             )
     return errors
@@ -48090,7 +47329,28 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         return []
     source = path.read_text(encoding="utf-8")
     stripped = strip_tla_comments(source)
-    errors = _async_network_migration_contract_errors(path, source)
+    errors = _async_network_reviewed_contract_errors(path, source)
+    for retired_symbol in (
+        "RetainedCertifiedFenceEscapePhases",
+        "RetainedCertifiedFenceEscapePhase",
+        "RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape",
+        "AsyncQueueDepthAfter",
+        "AsyncQueuedClassCountAfter",
+        "AsyncQueuedNoncompletionCountAfter",
+        "AsyncQueuedCertifiedFenceEscapeCountAfter",
+        "AsyncCertifiedFenceCreditAfter",
+        "CanEnqueueCertifiedResponseAfter",
+        "RetainedCertifiedFenceEscapePhaseAfter",
+        "AsyncCertifiedFenceEscapeStateAfterRuntime",
+        "AsyncCertifiedFenceEscapeEpisodeInvariant",
+        "AsyncTimeoutRecoveryVoteBarrierException",
+        "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier",
+    ):
+        if _symbol_exists(stripped, retired_symbol):
+            errors.append(
+                f"{path}: first-release async model must not retain retired "
+                f"corridor symbol {retired_symbol}"
+            )
     exact_header = (
         "---- MODULE SumeragiV2AsyncNetwork ----\n"
         "EXTENDS SumeragiV2Inductive, Sequences, FiniteSets, Naturals, "
@@ -51439,9 +50699,7 @@ asyncServeProducerTurnReady' =
                 "\\/ /\\ item.kind \\in AsyncReplyRequestKinds "
                 "/\\ AsyncServeLogicalRequestIdentity(node, item) "
                 "= ownerIdentity "
-                "\\/ AsyncCertifiedFenceEscapeItem(item) "
-                "\\/ AsyncTimeoutRecoveryVoteBarrierException( "
-                "node, source, index)"
+                "\\/ AsyncCertifiedFenceEscapeItem(item)"
             ),
             "AsyncCertifiedFenceEscapeAdvancesLeaderWire": (
                 "/\\ AsyncCertifiedFenceEscapeItem(item) "
@@ -51454,21 +50712,17 @@ asyncServeProducerTurnReady' =
                 "\\A predecessorSource \\in AsyncIngressSources: "
                 "owner.ingressPredecessors[predecessorSource] = 0"
             ),
-            "AsyncTimeoutRecoveryVoteBarrierException": (
-                "LET item == asyncIngressLanes[node][source][index] "
-                "IN /\\ source = item.source "
-                "/\\ source \\in ValidatorIds "
-                "/\\ AsyncTimeoutRecoveryVoteAdmissionRequired(node, item) "
-                "/\\ AsyncTimeoutRecoveryVoteCandidateDefined(node, item) "
-                "/\\ AsyncTimeoutRecoveryVoteAdmissionPlan(node, item) "
-                "\\cap {\"FirstAdmission\", \"CoalescedRetry\"} # {} "
-                "/\\ IngressItemCanDrain(node, item)"
-            ),
-            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier": (
-                "/\\ owner.phase = \"CertifiedResponse\" "
-                "/\\ owner.status = \"Ingress\" "
-                "/\\ AsyncTimeoutRecoveryVoteBarrierException( "
-                "node, source, index)"
+            "AsyncTimeoutControlDependencyAdvancesLeaderWire": (
+                "/\\ owner.phase \\in {\"Proposal\", \"PrepareVote\", "
+                "\"CommitVote\", \"PrepareQC\", \"CommitQC\", "
+                "\"TimeoutVote\"} "
+                "/\\ item.kind \\in {\"TimeoutVote\", \"TimeoutCertificate\"} "
+                "/\\ AsyncControlItemContext(item) = owner.context "
+                "/\\ DeliveryHeight(item) = owner.height "
+                "/\\ IF item.kind = \"TimeoutVote\" "
+                "THEN /\\ owner.phase # \"TimeoutVote\" "
+                "/\\ DeliveryView(item) \\in owner.view..(owner.view + 1) "
+                "ELSE DeliveryView(item) >= owner.view"
             ),
             "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget": (
                 "IF ~AsyncLeaderWireIngressOwnsSharedPhysicalTurn(node) "
@@ -51479,8 +50733,7 @@ asyncServeProducerTurnReady' =
                 "\\/ /\\ AsyncLeaderWireAdmissionMatchesRecord(item, owner) "
                 "/\\ AsyncLeaderWireIngressPrefixCleared(owner) "
                 "\\/ AsyncCertifiedFenceEscapeAdvancesLeaderWire(item, owner) "
-                "\\/ AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier( "
-                "node, source, index, owner)"
+                "\\/ AsyncTimeoutControlDependencyAdvancesLeaderWire(item, owner)"
             ),
             "AsyncFairIngressCoreStateTransition": (
                 "IF /\\ item.kind = \"CommitCertificateResponse\" "
@@ -51880,7 +51133,7 @@ asyncServeProducerTurnReady' =
             "8e5fe148b229c92f05813e873a62bc86f7e26f711d0f2717205c422d74d45811"
         ),
         "AsyncControlServiceStateTypeInvariant": (
-            "c23f80802359d9f5ed4d7a5e3c148f37da646e4783ec7557a950515aa28ab989"
+            "cf699d6f78bf9dfbb2747bb14fe7db9449cfa48a1d28d12c9e3fada0a9df90ef"
         ),
         "CandidateAdmissionCoalesced": (
             "d26ec50a7b57b1909bfda5ea26363fa276d14f16fbbbbbc20cb2b57193497f5a"
@@ -51910,10 +51163,10 @@ asyncServeProducerTurnReady' =
             "82e9fdd115fb7b72a6a52ea4c856c9138f465da3198960aa54b7067dc4b46f31"
         ),
         "AsyncControlServiceStateAfterReset": (
-            "4cd7ad3ec32b7d8b2c0ce2687303dfeeb0938b2e3f190e5a68ed8ec6b3ad13d1"
+            "35cff526b32dfe40e036be322a0f7fd4c58fe37ce99787ce518ee3d9eab58509"
         ),
         "AsyncControlServiceSlotTransition": (
-            "d7398b0e68c3abd377c5cc36554b47c172e6bb22980c83e324fbccf58d3470e6"
+            "331eafef52ce24936d6eb86fe8acfd3b0ee07ef43cc1aba67198787c8e4f61bf"
         ),
         "AppendCausalSuccessors": (
             "f4c500c716af8d23357691a07a603700fa1d762b2192a2f310845ea021bc5781"
@@ -51947,7 +51200,7 @@ asyncServeProducerTurnReady' =
         "AsyncCandidateServiceIdentity",
         # These aggregate state records are sealed below by their normalized
         # digests.  Keeping stale duplicated exact-body literals here would
-        # obscure the retained-response phase field and final reconciliation.
+        # obscure their final-state reconciliation.
         "AsyncControlServiceStateAfterReset",
         "AsyncControlServiceSlotTransition",
         # Policy-rejected packets now drain to deterministic terminal
@@ -52000,7 +51253,7 @@ asyncServeProducerTurnReady' =
         "AsyncServiceActivationFrameVars",
     }
     token_normalized_exact = {
-        "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier",
+        "AsyncTimeoutControlDependencyAdvancesLeaderWire",
     }
     for symbol, expected in exact.items():
         extracted = _top_level_operator_body(
@@ -52028,6 +51281,12 @@ asyncServeProducerTurnReady' =
             )
 
     certified_fence_theorem_dependencies = {
+        "AsyncOrdinarySelectorPreservesCertifiedResponseBeforeTimeoutVote": (
+            "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget",
+            "AsyncTimeoutControlDependencyAdvancesLeaderWire",
+            "AsyncCertifiedFenceEscapeAdvancesLeaderWire",
+            "IngressLane",
+        ),
         "AsyncLeaderWireCarrierCannotBypassFrozenPrefix": (
             "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget",
             "AsyncLeaderWireIngressPrefixCleared",
@@ -53447,48 +52706,16 @@ asyncServeProducerTurnReady' =
         "CanEnqueueCertifiedFenceEscape": (
             'CanEnqueueWithCertifiedFenceCredit(node, "Progress", TRUE)',
         ),
-        "RetainedCertifiedFenceEscapePhases": (
-            '{"Fresh", "Charged", "Spent"}',
-        ),
-        "RetainedCertifiedFenceEscapePhase": (
-            "asyncControlServiceState.certifiedFenceEscapePhase[node]",
-        ),
-        "RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape": (
-            "CertifiedResponseClaimRecordsAt(node) = {}",
-            'RetainedCertifiedFenceEscapePhase(node) = "Fresh"',
-        ),
         "AsyncCertifiedResponseClaimStateAfterRetirement": (
             "CertifiedResponseClaimRecordsFor(",
             "!.certifiedResponseClaims = retained",
-            "!.certifiedFenceEscapePhase =",
-            'THEN "Fresh"',
         ),
         "AsyncCertifiedResponseClaimStateAfterAdmission": (
             "!.certifiedResponseClaims =",
-            "!.certifiedFenceEscapePhase[recipient] =",
-            "AsyncCertifiedFenceCredit(recipient) = 1",
-            'THEN "Charged"',
-            'ELSE "Fresh"',
-        ),
-        "RetainedCertifiedFenceEscapePhaseAfter": (
-            'THEN "Fresh"',
-            'state.certifiedFenceEscapePhase[node] = "Fresh"',
-            "AsyncCertifiedFenceCreditAfter(node) = 1",
-            '-> "Charged"',
-            'state.certifiedFenceEscapePhase[node] = "Charged"',
-            "AsyncCertifiedFenceCreditAfter(node) = 0",
-            "~CanEnqueueCertifiedResponseAfter(node)",
-            '-> "Spent"',
-            "OTHER -> state.certifiedFenceEscapePhase[node]",
-        ),
-        "AsyncCertifiedFenceEscapeStateAfterRuntime": (
-            "!.certifiedFenceEscapePhase =",
-            "RetainedCertifiedFenceEscapePhaseAfter(state, node)",
         ),
         "EnqueueCandidate": (
             "AsyncCandidateIsDirectCertifiedFenceEscape(candidate)",
             "CanEnqueueCertifiedFenceEscape(node)",
-            "RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape(",
             "AsyncCandidateProducerContinuationOrdinaryEnqueuePreservesReplayPrefix(",
             "~AsyncCandidateIsDirectCertifiedFenceEscape(candidate)",
             "CanEnqueueClass(node, candidate.class)",
@@ -53515,14 +52742,6 @@ asyncServeProducerTurnReady' =
             '~CanEnqueueClass(node, "Normal")',
             '~CanEnqueueClass(node, "Progress")',
             '~CanEnqueueClass(node, "Completion")',
-        ),
-        "AsyncCertifiedFenceEscapeEpisodeInvariant": (
-            "RetainedCertifiedFenceEscapePhase(node)",
-            "RetainedCertifiedFenceEscapePhases",
-            'RetainedCertifiedFenceEscapePhase(node) = "Fresh"',
-            'RetainedCertifiedFenceEscapePhase(node) \\in {"Charged", "Spent"}',
-            "~RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape(node)",
-            "AsyncQueuedCertifiedFenceEscapeCount(node) = 0",
         ),
         "ServiceIoWorkerWork": (
             "node \\in AsyncActiveServiceNodes",
@@ -54211,15 +53430,15 @@ asyncServeProducerTurnReady' =
             "leaderWireState ==",
             "serveIngressState ==",
             "timeoutState ==",
-            "finalState ==",
+            "lifecycleFinalState ==",
             "AsyncCandidateLifecycleReservationsAvailableIn(serveIngressState)",
             "AsyncCandidateTerminalServiceReservationAvailableIn( "
             "candidateReclamationState)",
             "AsyncCandidateServiceReservationAvailableIn(candidateMarkedState)",
-            "AsyncCandidateLifecyclePerNodeCapacityRespected(finalState)",
-            "AsyncCandidateServiceOwnerPartitionInvariantIn(finalState)",
+            "AsyncCandidateLifecyclePerNodeCapacityRespected(lifecycleFinalState)",
+            "AsyncCandidateServiceOwnerPartitionInvariantIn(lifecycleFinalState)",
             "AsyncCandidateServiceRecordCapacity",
-            "asyncControlServiceState' = finalState",
+            "asyncControlServiceState' = lifecycleFinalState",
         ),
         "TimeoutDue": (
             "AsyncTimeoutClockDue(node)",
@@ -54245,8 +53464,8 @@ asyncServeProducerTurnReady' =
             "asyncHistoricalRecoveryTargets = {}",
             "candidateServiceMarkers |-> {}",
             "candidateTerminalTombstones |-> {}",
-            "certifiedFenceEscapePhase |->",
-            '[node \\in ValidatorIds |-> "Fresh"]',
+            "producerContinuations |-> {}",
+            "ordinaryIngressCarrierEvidence |-> {}",
             "asyncServiceActivationState = "
             "[restricted |-> FALSE, activeNodes |-> ValidatorIds]",
         ),
@@ -54549,61 +53768,40 @@ asyncServeProducerTurnReady' =
             )
 
         drain_relative = (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs"
         )
         drain_path, drain_source = _read_reviewed_rust_source(
             repo_root,
             drain_relative,
             errors,
-            "physical production ingress-drain provider",
+            "physical production lifecycle ingress owner",
         )
         drain = _require_rust_item(
-            drain_path, drain_source, "drain_v2_ingress", errors
+            drain_path, drain_source, "drain_lifecycle_v2_ingress", errors
         )
-        drain_body = "" if drain is None else " ".join(drain.source.split())
         errors.extend(_borrow_bound_outer_ingress_order_errors(drain_path, drain))
-        for escape_contract, description in (
-            (
-                "mode != V2IngressDrainMode::Ordinary "
-                "&& turn != OuterIngressTurn::Ingress",
-                "both non-Ordinary modes must skip Completion and Runtime turns",
-            ),
-            (
-                "try_recv_if_checked_retiring_obsolete_with_barrier_bypass(barrier_bypass, |inbound|",
-                "ingress drain must use the checked retiring selector with its explicit barrier-bypass capability",
-            ),
-            (
-                "let barrier_bypass = match mode { "
-                "V2IngressDrainMode::TimeoutVoteEpisode => { "
-                "FairV2IngressBarrierBypass::TimeoutVoteEpisode } "
-                "V2IngressDrainMode::Ordinary | V2IngressDrainMode::CertifiedFenceEscape => { "
-                "FairV2IngressBarrierBypass::None } };",
-                "only TimeoutVoteEpisode mode may carry the timeout-vote barrier bypass",
-            ),
-            (
-                "let selected_mode_matches = match mode {",
-                "non-Ordinary drain must select through the explicit three-mode policy",
-            ),
-            ("if message.validate_version().is_err() { return false; }",
-             "non-Ordinary drain must reject wrong-version ingress before its selected predicate"),
-            (
-                "V2IngressDrainMode::CertifiedFenceEscape => { "
-                "network_ingress_is_certified_fence_escape(&message.payload) }",
-                "only CertifiedFenceEscape mode may admit certified ingress",
-            ),
-            (
-                "V2IngressDrainMode::TimeoutVoteEpisode => { "
-                "inbound.ingress_ownership().is_some_and(|ownership| { "
-                "executor.can_admit_timeout_vote_recovery_episode(message, ownership) }) }",
-                "only TimeoutVoteEpisode mode may admit the runtime-checked timeout-vote episode",
-            ),
-            (
-                "if !selected_mode_matches { return false; }",
-                "non-Ordinary drain must reject every item outside its selected reviewed predicate",
-            ),
-        ):
-            if escape_contract not in drain_body:
-                errors.append(f"{drain_path}: {description}")
+        if drain is not None:
+            retired_drain_tokens = (
+                "V2IngressDrainMode",
+                "FairV2IngressBarrierBypass",
+                "try_recv_if_checked_retiring_obsolete_with_barrier_bypass",
+                "service_retained_certified_response",
+            )
+            present = [
+                token for token in retired_drain_tokens if token in drain.source
+            ]
+            if present:
+                errors.append(
+                    f"{drain_path}:{drain.line}: lifecycle ingress owner must not "
+                    f"retain parallel drain policies {present}"
+                )
+            _require_rust_token_sequence(
+                drain_path,
+                drain,
+                "activated.drive_ingress_turn(current_turn)",
+                "the single lifecycle coordinator must classify each ingress turn",
+                errors,
+            )
 
         runner_relative = "crates/iroha_core/src/sumeragi/v2_runner.rs"
         runner_path, runner_source = _read_reviewed_rust_source(
@@ -58117,7 +57315,6 @@ fn validate_shared_ownership_geometry(
     )
     for item_name in (
         "accept_payload_chunk_with_ingress_ownership",
-        "accept_certified_body_response_with_ingress_ownership",
         "classify_payload_chunk_lifecycle",
         "begin_apply", "matches_apply",
         "complete_application",
@@ -58342,8 +57539,8 @@ self.finality_completion
     _require_rust_token_sequence(
         effects_path, prepare_recovered_finality,
         """self.pending_work() != 0 || !self.recovered_decision_fetch_request_index_is_exact_and_empty() || self.retained_effect_batch.is_some()
-|| self.parked_effect_batch.is_some() || self.retained_certified_body_response.is_some()
-|| self.pending_tip_recovery.is_some() || self.finality_completion.is_some()
+|| self.parked_effect_batch.is_some() || self.pending_tip_recovery.is_some()
+|| self.finality_completion.is_some()
 || self.runtime.queued_commands() != 0""",
         "recovered Decision Apply completion must not overtake retained executor work",
         errors)
@@ -58697,33 +57894,21 @@ self.first.lifecycle_ordinal == self.latest.lifecycle_ordinal
         "fair-ingress validation must bind lifecycle, productive runtime ownership, semantic origin, canonical bytes, routes, and non-regressing cursors",
         errors,
     )
-    for item_key, payload_kind, description in (
-        (
-            "effects::accept_payload_chunk_with_ingress_ownership",
-            "PayloadChunk(chunk.clone())",
-            "payload chunk effect consumption",
-        ),
-        (
-            "effects::accept_certified_body_response_with_ingress_ownership",
-            "CertifiedBodyResponse(response.clone())",
-            "certified body response effect consumption",
-        ),
-    ):
-        _require_rust_token_sequence(
-            effects_path,
-            ingress_seam_items[item_key][1],
-            f"""
+    _require_rust_token_sequence(
+        effects_path,
+        ingress_seam_items["effects::accept_payload_chunk_with_ingress_ownership"][1],
+        """
 let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-    wire::ConsensusMessageV2Payload::{payload_kind},
+    wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),
 ));
 if !ingress_ownership.validate_exact()
     || !ingress_ownership.matches_message(&message)
-    || !ingress_ownership.matches_semantic_origin(Some(authenticated_{'sender' if payload_kind.startswith('PayloadChunk') else 'responder'}))
-{{
+    || !ingress_ownership.matches_semantic_origin(Some(authenticated_sender))
+{
 """,
-            f"{description} must reject a changed envelope or semantic origin before mutation",
-            errors,
-        )
+        "payload chunk effect consumption must reject a changed envelope or semantic origin before mutation",
+        errors,
+    )
     _require_rust_token_sequence(
         worker_path,
         ingress_seam_items[
@@ -68208,7 +67393,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
         errors,
     )
     expected_exact_output_runner_items = {
-        "drain_v2_ingress", "authorize_decided_lane_recovery_drain",
+        "authorize_decided_lane_recovery_drain",
         "preflight_finalized_lane_rollover", "rollover_finalized_height_outputs",
         "dispatch_lane_work_effects", "dispatch_lane_work_effects_with_progress",
         "drain_finalized_lane_work_output",
@@ -68380,41 +67565,6 @@ let cleanup = cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor);
         "let pending_activation = activation.bind(successor_authority)?;",
         "pending-Kura finalization must bind the applied successor authority only after authenticating the verified successor",
         errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
-        """
-if mode == V2IngressDrainMode::Ordinary && executor.has_retained_certified_body_response() {
-    return Ok(());
-}
-""",
-        "an exact retained Certified-Serve response must keep exclusive completion progress across ordinary drain batches",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
-        """
-let current_serve = matches!(
-    &message.payload,
-    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)
-        if request.round.height == executor.context().height
-);
-if current_serve {
-    return false;
-}
-""",
-        "terminal recovery drain must retain current-height Serve for the lifecycle selector instead of minting ordinary dequeue authority",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
-        "ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(",
-        "terminal recovery drain must not duplicate lifecycle-owned current-height Serve authentication",
-        errors,
-        count=0,
     )
     _require_rust_token_sequence(
         ordinary_ingress_consumer_path,
@@ -68775,7 +67925,7 @@ def _local_runner_service_contract_source_fidelity_errors(
             paths["ordinary"],
             ordinary,
             "ordinary lifecycle height",
-            4,
+            3,
             "activated.claim_producer_turn_for_local_proposal(&mut active_runner)",
         ),
         (
@@ -68813,8 +67963,8 @@ def _local_runner_service_contract_source_fidelity_errors(
     _require_rust_token_sequence(
         paths["worker"],
         completion,
-        "self.drain_completions_inner(executor, MAX_COMPLETION_DRAIN_BATCH, CompletionDrainPolicy::Fair,)",
-        "typed completion service must use the fixed finite fair-policy scan",
+        "self.drain_completions_inner(executor, MAX_COMPLETION_DRAIN_BATCH)",
+        "typed completion service must use the fixed finite completion scan",
         errors,
     )
     return errors
@@ -70029,9 +69179,6 @@ def validate_ledger(
             formal_dir, ROOT_DIR
         )
     )
-    errors.extend(
-        _retained_response_escape_latch_formal_source_fidelity_errors(formal_dir)
-    )
     errors.extend(_reachable_oracle_guard_errors(formal_dir))
     errors.extend(_exact_certificate_cardinality_source_fidelity_errors(formal_dir))
     errors.extend(_generalized_context_init_errors(formal_dir))
@@ -70139,9 +69286,6 @@ def validate_ledger(
     errors.extend(_same_round_semantic_kernel_source_fidelity_errors(ROOT_DIR))
     errors.extend(
         _runtime_certified_fence_capacity_source_fidelity_errors(ROOT_DIR)
-    )
-    errors.extend(
-        _retained_response_escape_latch_source_fidelity_errors(ROOT_DIR)
     )
     errors.extend(_installed_tc_selector_source_fidelity_errors(formal_dir))
     errors.extend(_local_proposal_timeout_source_fidelity_errors(ROOT_DIR))

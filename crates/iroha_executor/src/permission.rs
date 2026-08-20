@@ -181,6 +181,11 @@ declare_permissions! {
     iroha_executor_data_model::permission::settlement::{CanExecuteSettlement},
     iroha_executor_data_model::permission::settlement::{CanManageFxCorridors},
     iroha_executor_data_model::permission::settlement::{CanSetFxCorridorPolicy},
+    iroha_executor_data_model::permission::dpn::{DpnAdmin},
+    iroha_executor_data_model::permission::dpn::{DpnUser},
+    iroha_executor_data_model::permission::dpn::{DpnInori},
+    iroha_executor_data_model::permission::dpn::{DpnSettlement},
+    iroha_executor_data_model::permission::dpn::{DpnEprGuard},
     iroha_executor_data_model::permission::sorafs::{CanBindSorafsAlias},
     iroha_executor_data_model::permission::sorafs::{CanDeclareSorafsCapacity},
     iroha_executor_data_model::permission::sorafs::{CanSubmitSorafsTelemetry},
@@ -211,6 +216,18 @@ declare_permissions! {
     iroha_executor_data_model::permission::nexus::{CanEnrollFeeSponsorProgram},
 }
 impl AnyPermission {
+    /// Return whether this is one of the account-bound NEVO DPN application roles.
+    pub(crate) fn is_dpn_application_permission(&self) -> bool {
+        matches!(
+            self,
+            Self::DpnAdmin(_)
+                | Self::DpnUser(_)
+                | Self::DpnInori(_)
+                | Self::DpnSettlement(_)
+                | Self::DpnEprGuard(_)
+        )
+    }
+
     /// Return whether this permission is immutable after genesis.
     ///
     /// Exact possession never bypasses this list: these capabilities are bootstrap roots, not
@@ -242,6 +259,11 @@ impl AnyPermission {
                 self,
                 Self::CanReadAccountData(_)
                     | Self::CanIssueSoranetVpnQuote(_)
+                    | Self::DpnAdmin(_)
+                    | Self::DpnUser(_)
+                    | Self::DpnInori(_)
+                    | Self::DpnSettlement(_)
+                    | Self::DpnEprGuard(_)
                     | Self::CanManageAssetDefinitionAlias(CanManageAssetDefinitionAlias {
                         scope: iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(_),
                     })
@@ -510,6 +532,73 @@ mod settlement {
         };
     }
     impl_corridor_permission!(CanSetFxCorridorPolicy);
+}
+mod dpn {
+    use super::*;
+    use iroha_executor_data_model::permission::dpn::{
+        DpnAdmin, DpnEprGuard, DpnInori, DpnSettlement, DpnUser,
+    };
+
+    fn is_direct_dpn_admin(authority: &AccountId, host: &Iroha) -> bool {
+        #[cfg(test)]
+        {
+            let override_permissions = test_override::permissions();
+            if !override_permissions.is_empty() {
+                return has_permission_in_account(&override_permissions, &DpnAdmin);
+            }
+        }
+        let account_permissions: Vec<_> = host
+            .query(FindPermissionsByAccountId::new(authority.clone()))
+            .execute()
+            .expect("INTERNAL BUG: `FindPermissionsByAccountId` must never fail")
+            .map(|result| result.dbg_expect("Failed to get permission from cursor"))
+            .collect();
+        has_permission_in_account(&account_permissions, &DpnAdmin)
+    }
+
+    fn validate_dpn_role_lifecycle(
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        if context.curr_block.is_genesis() || is_direct_dpn_admin(authority, host) {
+            return Ok(());
+        }
+        Err(ValidationFail::NotPermitted(
+            "only genesis or an exact DpnAdmin holder may grant or revoke NEVO DPN permissions"
+                .to_owned(),
+        ))
+    }
+
+    macro_rules! impl_dpn_permission {
+        ($ty:ty) => {
+            impl ValidateGrantRevoke for $ty {
+                fn validate_grant(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    validate_dpn_role_lifecycle(authority, context, host)
+                }
+
+                fn validate_revoke(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    validate_dpn_role_lifecycle(authority, context, host)
+                }
+            }
+        };
+    }
+
+    impl_dpn_permission!(DpnAdmin);
+    impl_dpn_permission!(DpnUser);
+    impl_dpn_permission!(DpnInori);
+    impl_dpn_permission!(DpnSettlement);
+    impl_dpn_permission!(DpnEprGuard);
 }
 mod nexus {
     use super::*;
@@ -2043,7 +2132,7 @@ mod tests {
         let permission = CanExecuteSettlement {
             debited_asset: AssetId::new(
                 AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").expect("asset domain"),
+                    DomainId::try_new("fixture", "universal").expect("asset domain"),
                     "rose".parse().expect("asset name"),
                 ),
                 debited_account.clone(),

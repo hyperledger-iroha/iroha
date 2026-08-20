@@ -73,6 +73,8 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "def expect_static_mutation(",
         "run_bounded_authenticated_process(",
         "expect_static_mutation(READINESS, *mutation)",
+        "validate_native_build_launch_binding(",
+        "validate_native_builder_entrypoint_binding(",
     )
     model = texts[MODEL]
     require(
@@ -433,8 +435,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         'promotion_assert_root_custody "${SCRIPT_PATH}" "promotion readiness gate"',
         'exec 8<"${SCRIPT_PATH}"',
         '"/dev/fd/${GATE_PIN_FD}"',
-        'exec 9<"${PYTHON_BIN}"',
+        'KAGEMUSHA_PRODUCTION_READINESS_PYTHON_PIN_FD',
         '"/dev/fd/${PYTHON_PIN_FD}"',
+        "promotion Python inherited descriptor differs from its path",
         '"${PYTHON_PIN_FD}" "${PYTHON_PATH_FINGERPRINT}"',
         "promotion Python interpreter changed before execution",
         "rejects missing or symlinked script invocation",
@@ -512,8 +515,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         (
             r"promotion_assert_root_custody \"\$\{PYTHON_BIN\}\""
-            r".*?PYTHON_PATH_FINGERPRINT=.*?exec 9<\"\$\{PYTHON_BIN\}\""
+            r".*?PYTHON_PATH_FINGERPRINT=.*?"
             r".*?/dev/fd/\$\{PYTHON_PIN_FD\}.*?"
+            r"promotion Python inherited descriptor differs from its path.*?"
             r"promotion Python interpreter changed before execution.*?"
             r"promotion_assert_root_custody \"\$\{PYTHON_BIN\}\""
         ),
@@ -952,12 +956,14 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "cargo test -p connect_norito_bridge output_membership_local_carrier --lib",
     )
     require(texts[PROMOTION_WORKFLOW], PROMOTION_WORKFLOW, errors,
-        'gate_snapshot="$gate_launch_dir/check_kagemusha_production_readiness.sh"', 'KAGEMUSHA_PRODUCTION_READINESS_GATE_SOURCE_PATH="$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH"',
-        "KAGEMUSHA_PRODUCTION_READINESS_GATE_LAUNCH_FD=8",
-        "KAGEMUSHA_PRODUCTION_READINESS_GATE_EXECUTION_FD=10",
-        'exec 8<"$gate_snapshot"', 'exec 9<"$gate_snapshot"',
-        'exec 10<"$gate_snapshot"', "/usr/bin/shasum -a 256 <&9",
-        "exec /bin/bash /dev/fd/10 promotion")
+        'gate_snapshot="$gate_launch_dir/check_kagemusha_production_readiness.sh"',
+        'KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH="$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH"',
+        'KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD="$KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD"',
+        '"$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"',
+        "launch-kagemusha-readiness-v1",
+        '--gate-snapshot "$gate_snapshot"',
+        '--gate-source "$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH"',
+        '--python-runtime-tree-sha256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256"')
     runtime_dispatch = texts[READINESS].rsplit(
         "\nsource_contract_errors: list[str] = []\n", 1
     )[-1]

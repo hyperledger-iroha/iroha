@@ -772,7 +772,7 @@ def _load_prerequisites(
         network = {
             "name": taira_constants.NETWORK_NAME,
             "chain_id": taira_constants.CHAIN_ID,
-            "network_id": taira_constants.NETWORK_ID,
+            "network_id": deploy_identity["network_id"],
             "protocol_version": checker.PROTOCOL_VERSION,
             "genesis_block_hash": deploy_identity["genesis_block_hash"],
         }
@@ -1026,6 +1026,7 @@ def _lease_binding(
         candidate_handoff_sha256=context.handoff_digests["candidate"],
         publication_handoff_sha256=context.handoff_digests["publication"],
         deploy_handoff_sha256=context.handoff_digests["deploy"],
+        network_id=str(deploy["network_id"]),
         genesis_block_hash=genesis,
         deploy_end_height=int(deploy["end_height"]),
         deploy_end_block_hash=str(deploy["end_hash"]),

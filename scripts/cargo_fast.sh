@@ -7,7 +7,7 @@ set -euo pipefail
 # Prerequisites:
 #   - Cargo must be available on PATH.
 #   - `sccache` is optional; enabled automatically when found unless disabled.
-#   - A fast linker (`mold`/`lld`/`zld`) is optional; probed before use.
+#   - A fast linker (`mold`/`lld`/`zld`) is optional and must be requested.
 #
 # Safe defaults:
 #   - Falls back to system defaults when accelerators are unavailable.
@@ -23,30 +23,44 @@ Usage: scripts/cargo_fast.sh [options] -- <cargo args...>
 
 Runs `cargo` with optional accelerators when available:
   - Enables `sccache` when found (unless --no-sccache is used)
-  - Enables a supported fast linker via RUSTFLAGS when found
+  - Reuses Cargo targets through named, repository-local target slots
 
 Options:
-  --target-dir DIR   Set CARGO_TARGET_DIR=DIR
-  --no-sccache       Do not auto-enable sccache
-  --sccache-dir DIR  Set SCCACHE_DIR (default: <repo>/.cache/sccache)
-  --no-incremental   Set CARGO_INCREMENTAL=0 (helps Rust sccache hit rates)
-  --zero-debug       Set CARGO_PROFILE_{DEV,TEST}_DEBUG=0 for faster local builds
-  --linker MODE      Linker preference: auto|off|mold|lld|ld.lld|zld|ld64.lld|<path>
-  --print-env        Print selected env/config and exit
-  -h, --help         Show this help
+  --target-dir DIR        Set CARGO_TARGET_DIR=DIR
+  --target-slot NAME      Reuse <repo>/target/cargo-fast/NAME
+  --jobs N                Set CARGO_BUILD_JOBS=N (default: Cargo jobserver)
+  --no-sccache            Do not auto-enable sccache
+  --sccache-dir DIR       Set SCCACHE_DIR; otherwise use sccache's default
+  --incremental           Set CARGO_INCREMENTAL=1 for warm local edit loops
+  --no-incremental        Set CARGO_INCREMENTAL=0 for sccache-heavy builds
+  --stable-local-metadata Set VERGEN_GIT_SHA=local-fast-build
+  --zero-debug            Set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
+  --linker MODE           Linker: off (default)|auto|mold|lld|ld.lld|zld|ld64.lld|<path>
+  --print-env             Print selected env/config and exit
+  -h, --help              Show this help
+
+Environment:
+  CARGO_FAST_TARGET_ROOT  Override the root used by --target-slot
 
 Examples:
   scripts/cargo_fast.sh -- check -p irohad
-  scripts/cargo_fast.sh --target-dir /tmp/iroha_fast -- test -p irohad --no-run
-  scripts/cargo_fast.sh --linker off -- build -p irohad
+  scripts/cargo_fast.sh --target-slot core-tests --incremental -- test -p iroha_core
+  scripts/cargo_fast.sh --jobs 6 -- build -p irohad
+  scripts/cargo_fast.sh --linker auto -- build -p irohad
 USAGE
 }
 
 target_dir=""
+target_slot=""
+target_slot_set=false
+jobs=""
+jobs_set=false
 auto_sccache=true
 sccache_dir=""
+incremental=false
 no_incremental=false
-linker_mode="auto"
+stable_local_metadata=false
+linker_mode="off"
 zero_debug=false
 print_env_only=false
 
@@ -64,6 +78,26 @@ while [[ $# -gt 0 ]]; do
 			fi
 			target_dir="$1"
 			;;
+		--target-slot)
+			shift
+			if [[ $# -eq 0 ]]; then
+				echo "error: missing argument for --target-slot" >&2
+				usage >&2
+				exit 1
+			fi
+			target_slot="$1"
+			target_slot_set=true
+			;;
+		--jobs)
+			shift
+			if [[ $# -eq 0 ]]; then
+				echo "error: missing argument for --jobs" >&2
+				usage >&2
+				exit 1
+			fi
+			jobs="$1"
+			jobs_set=true
+			;;
 		--no-sccache)
 			auto_sccache=false
 			;;
@@ -76,8 +110,14 @@ while [[ $# -gt 0 ]]; do
 			fi
 			sccache_dir="$1"
 			;;
+		--incremental)
+			incremental=true
+			;;
 		--no-incremental)
 			no_incremental=true
+			;;
+		--stable-local-metadata)
+			stable_local_metadata=true
 			;;
 		--zero-debug)
 			zero_debug=true
@@ -91,13 +131,13 @@ while [[ $# -gt 0 ]]; do
 			fi
 			linker_mode="$1"
 			;;
-	--print-env)
-		print_env_only=true
-		;;
-	-h | --help)
-		usage
-		exit 0
-		;;
+		--print-env)
+			print_env_only=true
+			;;
+		-h | --help)
+			usage
+			exit 0
+			;;
 	--)
 		shift
 		while [[ $# -gt 0 ]]; do
@@ -124,8 +164,64 @@ if [[ ${#cargo_args[@]} -eq 0 ]]; then
 	exit 1
 fi
 
+cargo_serial_jobs=false
+expect_cargo_job_value=false
+for cargo_arg in "${cargo_args[@]}"; do
+	if [[ "${cargo_arg}" == "--" ]]; then
+		break
+	fi
+	if [[ "${expect_cargo_job_value}" == true ]]; then
+		if [[ "${cargo_arg}" == "1" ]]; then
+			cargo_serial_jobs=true
+		fi
+		expect_cargo_job_value=false
+		continue
+	fi
+	case "${cargo_arg}" in
+	-j | --jobs)
+		expect_cargo_job_value=true
+		;;
+	-j1 | --jobs=1)
+		cargo_serial_jobs=true
+		;;
+	esac
+done
+
+if [[ -n "${target_dir}" ]] && [[ "${target_slot_set}" == true ]]; then
+	echo "error: --target-dir and --target-slot cannot be used together" >&2
+	exit 1
+fi
+
+if [[ "${target_slot_set}" == true ]]; then
+	if [[ -z "${target_slot}" ]] || [[ "${target_slot}" == "." ]] \
+		|| [[ "${target_slot}" == ".." ]] \
+		|| [[ "${target_slot}" == *[!A-Za-z0-9._-]* ]]; then
+		echo "error: --target-slot must contain only letters, numbers, '.', '_', or '-'" >&2
+		exit 1
+	fi
+	target_root="${CARGO_FAST_TARGET_ROOT:-${REPO_ROOT}/target/cargo-fast}"
+	target_dir="${target_root%/}/${target_slot}"
+fi
+
 if [[ -n "${target_dir}" ]]; then
 	export CARGO_TARGET_DIR="${target_dir}"
+fi
+
+if [[ "${jobs_set}" == true ]]; then
+	case "${jobs}" in
+	'' | *[!0-9]*)
+		echo "error: --jobs must be a positive integer" >&2
+		exit 1
+		;;
+	esac
+	case "${jobs}" in
+	*[1-9]*) ;;
+	*)
+		echo "error: --jobs must be a positive integer" >&2
+		exit 1
+		;;
+	esac
+	export CARGO_BUILD_JOBS="${jobs}"
 fi
 
 if [[ "${zero_debug}" == true ]]; then
@@ -133,8 +229,21 @@ if [[ "${zero_debug}" == true ]]; then
 	export CARGO_PROFILE_TEST_DEBUG=0
 fi
 
+if [[ "${incremental}" == true ]] && [[ "${no_incremental}" == true ]]; then
+	echo "error: --incremental and --no-incremental cannot be used together" >&2
+	exit 1
+fi
+
+if [[ "${incremental}" == true ]]; then
+	export CARGO_INCREMENTAL=1
+fi
+
 if [[ "${no_incremental}" == true ]]; then
 	export CARGO_INCREMENTAL=0
+fi
+
+if [[ "${stable_local_metadata}" == true ]]; then
+	export VERGEN_GIT_SHA=local-fast-build
 fi
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -237,30 +346,15 @@ if [[ -n "${RUSTC_WRAPPER:-}" ]] && [[ "${RUSTC_WRAPPER}" == *sccache* ]]; then
 	sccache_active=true
 fi
 
-active_sccache_dir=""
+active_sccache_dir="${SCCACHE_DIR:-}"
 if [[ "${sccache_active}" == true ]]; then
 	if [[ -n "${sccache_dir}" ]]; then
 		active_sccache_dir="${sccache_dir}"
-	elif [[ -n "${SCCACHE_DIR:-}" ]]; then
-		active_sccache_dir="${SCCACHE_DIR}"
-	else
-		active_sccache_dir="${REPO_ROOT}/.cache/sccache"
 	fi
 
-	export SCCACHE_DIR="${active_sccache_dir}"
-	mkdir -p "${active_sccache_dir}" >/dev/null 2>&1 || true
-
-	# Align daemon cache path with requested SCCACHE_DIR when an older server
-	# is already running with a different location.
-	if command -v sccache >/dev/null 2>&1; then
-		current_cache_location="$(
-			sccache --show-stats 2>/dev/null \
-				| sed -n 's/^Cache location[[:space:]]*Local disk: "\(.*\)".*/\1/p' \
-				| head -n 1
-		)"
-		if [[ -n "${current_cache_location}" ]] && [[ "${current_cache_location}" != "${active_sccache_dir}" ]]; then
-			sccache --stop-server >/dev/null 2>&1 || true
-		fi
+	if [[ -n "${active_sccache_dir}" ]]; then
+		export SCCACHE_DIR="${active_sccache_dir}"
+		mkdir -p "${active_sccache_dir}" >/dev/null 2>&1 || true
 	fi
 fi
 
@@ -277,6 +371,16 @@ fi
 echo "[cargo-fast] repo=${REPO_ROOT}"
 if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
 	echo "[cargo-fast] CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+else
+	echo "[cargo-fast] CARGO_TARGET_DIR=workspace-default"
+fi
+if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
+	echo "[cargo-fast] CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
+else
+	echo "[cargo-fast] CARGO_BUILD_JOBS=cargo-default"
+fi
+if [[ "${CARGO_BUILD_JOBS:-}" == "1" ]] || [[ "${cargo_serial_jobs}" == true ]]; then
+	echo "[cargo-fast] warning: one Cargo job serializes compilation; reserve it for constrained or evidence builds" >&2
 fi
 echo "[cargo-fast] sccache=${enabled_sccache}"
 if [[ -n "${SCCACHE_DIR:-}" ]]; then
@@ -294,8 +398,11 @@ if [[ "${zero_debug}" == true ]]; then
 	echo "[cargo-fast] CARGO_PROFILE_DEV_DEBUG=${CARGO_PROFILE_DEV_DEBUG}"
 	echo "[cargo-fast] CARGO_PROFILE_TEST_DEBUG=${CARGO_PROFILE_TEST_DEBUG}"
 fi
-if [[ "${no_incremental}" == true ]]; then
+if [[ "${incremental}" == true ]] || [[ "${no_incremental}" == true ]]; then
 	echo "[cargo-fast] CARGO_INCREMENTAL=${CARGO_INCREMENTAL}"
+fi
+if [[ "${stable_local_metadata}" == true ]]; then
+	echo "[cargo-fast] VERGEN_GIT_SHA=${VERGEN_GIT_SHA}"
 fi
 
 if [[ "${print_env_only}" == true ]]; then

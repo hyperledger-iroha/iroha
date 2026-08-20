@@ -99,7 +99,7 @@ jobs:
       - name: Verify all authenticated release-authority source paths
         run: python3 -I -S scripts/check_taira_release_prerequisites.py
 
-  # This job reads four explicitly public files.  It has no checkout and cannot
+  # This job reads five explicitly public files.  It has no checkout and cannot
   # sign, build, qualify, deploy, or publish.  Its protected environment must
   # contain only the public input path and controller/host trust pins.
   public-privacy-input:
@@ -145,7 +145,7 @@ jobs:
             'import json,sys; v=json.load(sys.stdin); assert v["role"]=="public-input-authority"; assert v["host_id"]==sys.argv[1]; assert v["installation_id"]==sys.argv[2]; assert v["uid"]==int(sys.argv[3])' \
             "$EXPECTED_HOST_ID" "$EXPECTED_INSTALLATION_ID" "$EXPECTED_UID"
 
-      - name: Snapshot only the four public privacy inputs with the installed controller
+      - name: Snapshot only the five public NEVO/privacy inputs with the installed controller
         shell: bash
         env:
           EXPECTED_LAUNCHER_SHA256: ${{ vars.TAIRA_RELEASE_CONTROLLER_LAUNCHER_SHA256 }}
@@ -268,6 +268,7 @@ jobs:
             "$privacy_input/bootle_lantern_broker_public.json" \
             "$privacy_input/config.toml" \
             "$privacy_input/genesis.json" \
+            "$privacy_input/nevo-reset.review.json" \
             "$privacy_input/privacy_bootstrap_plan.json"
           clean_build_env=(
             env -i "HOME=$HOME" "PATH=$PATH" "TMPDIR=${TMPDIR:-/tmp}" LANG=C LC_ALL=C
@@ -694,6 +695,10 @@ jobs:
           QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY: ${{ vars.TAIRA_QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY }}
           TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH: ${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH }}
           TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256: ${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256 }}
+          TAIRA_GENESIS_NATIVE_VERIFIER_PATH: ${{ vars.TAIRA_GENESIS_NATIVE_VERIFIER_PATH }}
+          TAIRA_GENESIS_NATIVE_VERIFIER_SHA256: ${{ vars.TAIRA_GENESIS_NATIVE_VERIFIER_SHA256 }}
+          TAIRA_OPERATOR_STATUS_CLIENT_PATH: ${{ vars.TAIRA_OPERATOR_STATUS_CLIENT_PATH }}
+          TAIRA_OPERATOR_STATUS_CLIENT_SHA256: ${{ vars.TAIRA_OPERATOR_STATUS_CLIENT_SHA256 }}
           TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH: ${{ vars.TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH }}
           TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
           TAIRA_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.TAIRA_RELEASE_MANIFEST_VERIFIER_PATH }}
@@ -786,6 +791,10 @@ jobs:
             --trusted-genesis-external-signer-sha256 "$QUALIFICATION_GENESIS_SIGNER_SHA256" \
             --authenticated-tool-controller "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH" \
             --trusted-authenticated-tool-controller-sha256 "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256" \
+            --genesis-native-verifier "$TAIRA_GENESIS_NATIVE_VERIFIER_PATH" \
+            --trusted-genesis-native-verifier-sha256 "$TAIRA_GENESIS_NATIVE_VERIFIER_SHA256" \
+            --operator-status-client "$TAIRA_OPERATOR_STATUS_CLIENT_PATH" \
+            --trusted-operator-status-client-sha256 "$TAIRA_OPERATOR_STATUS_CLIENT_SHA256" \
             --onboarding-token-hash-tool "$TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH" \
             --kagemusha-release-root "$QUALIFICATION_KAGEMUSHA_RELEASE_ROOT" \
             --kagemusha-activation-authority "$QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY" \
@@ -1075,6 +1084,10 @@ jobs:
           TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY: ${{ vars.TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY }}
           TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH: ${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH }}
           TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256: ${{ vars.TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256 }}
+          TAIRA_GENESIS_NATIVE_VERIFIER_PATH: ${{ vars.TAIRA_GENESIS_NATIVE_VERIFIER_PATH }}
+          TAIRA_GENESIS_NATIVE_VERIFIER_SHA256: ${{ vars.TAIRA_GENESIS_NATIVE_VERIFIER_SHA256 }}
+          TAIRA_OPERATOR_STATUS_CLIENT_PATH: ${{ vars.TAIRA_OPERATOR_STATUS_CLIENT_PATH }}
+          TAIRA_OPERATOR_STATUS_CLIENT_SHA256: ${{ vars.TAIRA_OPERATOR_STATUS_CLIENT_SHA256 }}
           TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH: ${{ vars.TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH }}
           TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
           TAIRA_TRUSTED_BOI_QUALIFICATION_PUBLIC_KEY_PATH: ${{ vars.TAIRA_BOI_QUALIFICATION_SIGNING_PUBLIC_KEY_PATH }}
@@ -1167,6 +1180,10 @@ jobs:
             --trusted-genesis-external-signer-sha256 "$TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256" \
             --authenticated-tool-controller "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH" \
             --trusted-authenticated-tool-controller-sha256 "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256" \
+            --genesis-native-verifier "$TAIRA_GENESIS_NATIVE_VERIFIER_PATH" \
+            --trusted-genesis-native-verifier-sha256 "$TAIRA_GENESIS_NATIVE_VERIFIER_SHA256" \
+            --operator-status-client "$TAIRA_OPERATOR_STATUS_CLIENT_PATH" \
+            --trusted-operator-status-client-sha256 "$TAIRA_OPERATOR_STATUS_CLIENT_SHA256" \
             --onboarding-token-hash-tool "$TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH" \
             --kagemusha-release-root "$TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT" \
             --kagemusha-activation-authority "$TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY" \
@@ -1186,20 +1203,26 @@ jobs:
           args=(--bundle "$reset" --binary "$mac_stage/bin/iroha3d" --supervisor "$supervisor" --admission-archive "$candidate_archive" --admission-authority-dir "$candidate_stage/authority" --boi-qualified-handoff-root "$boi_stage" --expected-source-commit "$source_commit" --expected-dpn-validator-release-commit "$dpn_commit" --expected-cargo-lock-sha256 "$cargo_lock" --expected-workspace-source-manifest-sha256 "$source_manifest" --expected-receipt-id "$receipt_id" --expected-artifact-handoff-sha256 "$handoff_digest" --expected-production-reset-manifest-sha256 "$production_manifest_sha" --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" --trusted-boi-qualification-public-key "$TAIRA_TRUSTED_BOI_QUALIFICATION_PUBLIC_KEY_PATH" --trusted-boi-qualification-signing-fingerprint "$TAIRA_TRUSTED_BOI_QUALIFICATION_SIGNING_FINGERPRINT" --expected-boi-qualification-host-id "$EXPECTED_BOI_QUALIFICATION_HOST_ID" --expected-boi-qualification-installation-id "$EXPECTED_BOI_QUALIFICATION_INSTALLATION_ID" --expected-boi-qualification-controller-digest "$EXPECTED_BOI_QUALIFICATION_CONTROLLER_DIGEST" --expected-workflow-run-id "$GITHUB_RUN_ID" --expected-workflow-run-attempt "$GITHUB_RUN_ATTEMPT" --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" --health-timeout-seconds 240)
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" deploy-reset -- "${args[@]}" >"$RUNNER_TEMP/deploy-preflight.json"
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" deploy-reset -- "${args[@]}" --apply >"$RUNNER_TEMP/deploy-applied.json"
-          /usr/bin/python3 -I -S - "$RUNNER_TEMP/deploy-preflight.json" "$RUNNER_TEMP/deploy-applied.json" <<'PY'
+          /usr/bin/python3 -I -S - "$RUNNER_TEMP/deploy-preflight.json" "$RUNNER_TEMP/deploy-applied.json" "$reset/reset-manifest.json" <<'PY'
           import json,sys
-          before,after=(json.load(open(path,encoding="ascii")) for path in sys.argv[1:])
+          before,after,manifest=(json.load(open(path,encoding="ascii")) for path in sys.argv[1:])
           exact_int=lambda value: isinstance(value,int) and not isinstance(value,bool)
           sha=lambda value: isinstance(value,str) and len(value)==64 and value==value.lower() and value!="0"*64 and all(character in "0123456789abcdef" for character in value)
+          def canonical_network_id(genesis_hash):
+              if not sha(genesis_hash): raise SystemExit("reset manifest genesis hash is invalid")
+              body=genesis_hash.upper(); crc=0xFFFF
+              for byte in b"hash:"+body.encode("ascii"):
+                  crc^=byte<<8
+                  for _ in range(8): crc=((crc<<1)^0x1021)&0xFFFF if crc&0x8000 else (crc<<1)&0xFFFF
+              return f"hash:{body}#{crc:04X}"
           if before.get("applied") is not False or after.get("applied") is not True or before.get("admission_receipt_id") != after.get("admission_receipt_id"): raise SystemExit("deployment preflight/apply contract failed")
-          expected={"chain_id":"fc56984b-2be7-431d-840e-21514d1883f0","network_id":"hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94","network_name":"taira","peer_count":4,"protocol_version":4,"restart_proof":"passed"}
+          genesis=manifest.get("genesis_expected_hash"); signed_genesis=manifest.get("signed_genesis_sha256")
+          if manifest.get("schema")!="taira-exact2f-reset-bundle" or not isinstance(manifest.get("chain_id"),str) or not sha(signed_genesis): raise SystemExit("authenticated reset manifest identity is invalid")
+          expected={"chain_id":manifest["chain_id"],"network_id":canonical_network_id(genesis),"network_name":"taira","peer_count":4,"protocol_version":4,"restart_proof":"passed","genesis_block_hash":genesis,"signed_genesis_sha256":signed_genesis}
           if any(type(after.get(key)) is not type(value) or after.get(key)!=value for key,value in expected.items()): raise SystemExit("deployment identity contract failed")
           if not exact_int(after.get("deployment_completed_at_unix_ms")) or after["deployment_completed_at_unix_ms"]<=0: raise SystemExit("deployment completion time is invalid")
           if not exact_int(after.get("start_height")) or not exact_int(after.get("end_height")) or after["start_height"]<1 or after["end_height"]<=after["start_height"]: raise SystemExit("deployment height proof is invalid")
           if any(not sha(after.get(field)) for field in ("binary_sha256","config_set_sha256","end_block_hash","signed_genesis_sha256","supervisor_sha256","topology_sha256")): raise SystemExit("deployment artifact identity is invalid")
-          if int(after["end_block_hash"][-2:],16)&1==0: raise SystemExit("deployment end block hash is invalid")
-          genesis=after.get("genesis_block_hash")
-          if not sha(genesis) or int(genesis[-2:],16)&1==0: raise SystemExit("deployment genesis hash is invalid")
           signers=after.get("receipt_signers")
           slugs=tuple(f"taira-validator-{index}" for index in range(1,5))
           fields={"binary_stat_seal","config_sha256","lifecycle_binding_sha256","node_id","public_key","runtime_binding_sha256"}

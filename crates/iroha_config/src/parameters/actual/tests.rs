@@ -605,19 +605,19 @@ mod tests {
     fn sumeragi_v2_body_ingress_message_capacity_is_checked_and_roster_scaled() {
         assert_eq!(
             sumeragi_v2_body_ingress_required_message_capacity(0, 0),
-            Some(1)
+            Some(0)
         );
         assert_eq!(
             sumeragi_v2_body_ingress_required_message_capacity(4, 2),
-            Some(28)
+            Some(26)
         );
         assert_eq!(
             sumeragi_v2_body_ingress_required_message_capacity(5, 2),
-            Some(33)
+            Some(31)
         );
         assert_eq!(
             sumeragi_v2_body_ingress_required_message_capacity(31, 2),
-            Some(163)
+            Some(161)
         );
         assert_eq!(
             sumeragi_v2_body_ingress_required_message_capacity(usize::MAX, 0),
@@ -634,15 +634,20 @@ mod tests {
     fn sumeragi_v2_body_ingress_byte_capacity_is_checked_and_roster_scaled() {
         assert_eq!(
             sumeragi_v2_body_ingress_required_byte_capacity(4, 2, 33),
-            Some(7 * 33)
+            Some(6 * 33)
         );
         assert_eq!(
             sumeragi_v2_body_ingress_required_byte_capacity(0, 0, usize::MAX),
-            Some(usize::MAX),
-            "the anonymous-only exact maximum remains representable"
+            Some(0),
+            "an empty authenticated source set reserves no identityless partition"
         );
         assert_eq!(
             sumeragi_v2_body_ingress_required_byte_capacity(1, 0, usize::MAX),
+            Some(usize::MAX),
+            "one authenticated partition at the exact maximum remains representable"
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_byte_capacity(2, 0, usize::MAX),
             None,
             "multiplying two source partitions must fail closed on overflow"
         );

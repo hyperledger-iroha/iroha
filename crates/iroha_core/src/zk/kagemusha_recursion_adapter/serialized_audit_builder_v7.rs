@@ -62,12 +62,15 @@ where
             ));
         }
         // Presence is derived from the current child's authenticated parent
-        // count, not from the parent's live/bootstrap bit.  A missing slot is
-        // therefore one literal all-zero 70-cell tuple, while a bootstrap
-        // proof remains a present slot with its own live cell equal to zero.
-        // This removes every unused parsed-instance witness, including the
-        // manifest/VK and accumulator cells that are not repeated in the
-        // transitive parent digest.
+        // count and must equal the parsed parent's live bit.  A missing slot
+        // therefore accepts only the dedicated all-zero null carrier, while a
+        // present slot accepts only a live, atomically bound parent pair.
+        ctx.constrain_equal(
+            &parent.present,
+            &parent.instance_cells[KAGEMUSHA_SERIALIZED_LIVE_SELECTOR_OFFSET_V7],
+        );
+        // Remove every unused parsed-instance witness, including manifest/VK
+        // and accumulator cells not repeated in the transitive digest.
         for value in &parent.instance_cells {
             let selected = range
                 .gate()
@@ -482,7 +485,7 @@ fn build_kagemusha_step_eq_circuit_serialized_v7(
     params: KagemushaStepCircuitParamsV7,
     public_inputs: &KagemushaSerializedPublicInputsV7<'_>,
     ep_output: &KagemushaScalarAuditOutputV4<halo2_proofs::halo2curves::pasta::EpAffine>,
-    mode: KagemushaStepPublicModeV4,
+    mode: KagemushaSerializedPublicModeV7,
     stage: KagemushaCircuitBuilderStageV5<'_>,
 ) -> Result<KagemushaStepEqCircuitV7, String> {
     use halo2_proofs::halo2curves::pasta::{EqAffine, Fp};
@@ -579,12 +582,10 @@ fn build_kagemusha_step_eq_circuit_serialized_v7(
     )?;
     match stage {
         KagemushaCircuitBuilderStageV5::Keygen => {
-            let role = if mode == KagemushaStepPublicModeV4::Bootstrap {
-                "StepEqBootstrap"
-            } else {
-                "StepEqLive"
-            };
-            validate_kagemusha_populated_builder_fit_v5(&mut step, &params.base, role)?;
+            // NullParent changes witness values only and deliberately shares
+            // the reviewed StepEq live graph, active-probe role, and telemetry
+            // envelope with Live.
+            validate_kagemusha_populated_builder_fit_v5(&mut step, &params.base, "StepEqLive")?;
         }
         KagemushaCircuitBuilderStageV5::Prover(break_points) => {
             validate_kagemusha_witness_builder_break_points_v5(
@@ -610,7 +611,7 @@ fn build_kagemusha_step_ep_circuit_serialized_v7(
     params: KagemushaStepCircuitParamsV7,
     public_inputs: &KagemushaSerializedPublicInputsV7<'_>,
     eq_output: &KagemushaScalarAuditOutputV4<halo2_proofs::halo2curves::pasta::EqAffine>,
-    mode: KagemushaStepPublicModeV4,
+    mode: KagemushaSerializedPublicModeV7,
     stage: KagemushaCircuitBuilderStageV5<'_>,
 ) -> Result<KagemushaStepEpCircuitV7, String> {
     use halo2_proofs::halo2curves::pasta::{EpAffine, Fq};
@@ -687,12 +688,10 @@ fn build_kagemusha_step_ep_circuit_serialized_v7(
     )?;
     match stage {
         KagemushaCircuitBuilderStageV5::Keygen => {
-            let role = if mode == KagemushaStepPublicModeV4::Bootstrap {
-                "StepEpBootstrap"
-            } else {
-                "StepEpLive"
-            };
-            validate_kagemusha_populated_builder_fit_v5(&mut step, &params.base, role)?;
+            // NullParent changes witness values only and deliberately shares
+            // the reviewed StepEp live graph, active-probe role, and telemetry
+            // envelope with Live.
+            validate_kagemusha_populated_builder_fit_v5(&mut step, &params.base, "StepEpLive")?;
         }
         KagemushaCircuitBuilderStageV5::Prover(break_points) => {
             validate_kagemusha_witness_builder_break_points_v5(
@@ -739,6 +738,96 @@ where
     Ok(sha2::Sha256::digest(encoded).into())
 }
 
+fn validate_kagemusha_serialized_vk_geometry_v7<C>(
+    verifying_key: &halo2_proofs::plonk::VerifyingKey<C>,
+    manifest: &super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
+    parity: KagemushaPastaCycleParityV1,
+) -> Result<(), String>
+where
+    C: halo2_proofs::halo2curves::CurveAffine,
+    C::ScalarExt: ff::Field,
+{
+    use halo2_proofs::plonk::Any;
+
+    manifest.validate()?;
+    let constraints = verifying_key.cs();
+    let (
+        role,
+        expected_phases,
+        expected_column,
+        expected_rank,
+        expected_degree,
+        expected_fixed,
+        expected_permutation,
+        expected_blinding,
+        expected_proof_bytes,
+    ) = match parity {
+        KagemushaPastaCycleParityV1::StepEq => (
+            "Eq",
+            &manifest.step_eq_advice_phases,
+            manifest.step_eq_serialized_column,
+            manifest.step_eq_phase_zero_rank,
+            manifest.step_eq_constraint_degree,
+            manifest.step_eq_fixed_columns,
+            manifest.step_eq_permutation_columns,
+            manifest.step_eq_blinding_factors,
+            manifest.step_eq_proof_bytes,
+        ),
+        KagemushaPastaCycleParityV1::StepEp => (
+            "Ep",
+            &manifest.step_ep_advice_phases,
+            manifest.step_ep_serialized_column,
+            manifest.step_ep_phase_zero_rank,
+            manifest.step_ep_constraint_degree,
+            manifest.step_ep_fixed_columns,
+            manifest.step_ep_permutation_columns,
+            manifest.step_ep_blinding_factors,
+            manifest.step_ep_proof_bytes,
+        ),
+    };
+    let actual_phases = constraints.advice_column_phase();
+    let selected = usize::try_from(expected_column)
+        .map_err(|_| format!("Kagemusha V7 {role} serialized column does not fit usize"))?;
+    let actual_rank = actual_phases
+        .get(..selected)
+        .ok_or_else(|| format!("Kagemusha V7 {role} serialized column is out of range"))?
+        .iter()
+        .filter(|phase| **phase == 0)
+        .count();
+    let selected_is_permuted_advice =
+        constraints
+            .permutation()
+            .get_columns()
+            .iter()
+            .any(|column| {
+                column.index() == selected && matches!(*column.column_type(), Any::Advice(_))
+            });
+    let actual_fixed = constraints
+        .num_fixed_columns()
+        .checked_add(constraints.num_selectors())
+        .ok_or_else(|| format!("Kagemusha V7 {role} fixed-polynomial count overflowed"))?;
+    let actual_proof_bytes = kagemusha_augmented_proof_size_bytes_v5(constraints, manifest.k)?;
+    if verifying_key.get_domain().k() != manifest.k
+        || constraints.num_instance_columns() != 1
+        || actual_phases.as_slice() != expected_phases.as_slice()
+        || selected.checked_add(1) != Some(actual_phases.len())
+        || u32::try_from(actual_rank).ok() != Some(expected_rank)
+        || !selected_is_permuted_advice
+        || u32::try_from(constraints.degree()).ok() != Some(expected_degree)
+        || u32::try_from(actual_fixed).ok() != Some(expected_fixed)
+        || u32::try_from(constraints.permutation().get_columns().len()).ok()
+            != Some(expected_permutation)
+        || u32::try_from(constraints.blinding_factors()).ok() != Some(expected_blinding)
+        || expected_blinding.checked_add(1) != Some(manifest.minimum_unusable_rows)
+        || actual_proof_bytes != expected_proof_bytes
+    {
+        return Err(format!(
+            "Kagemusha V7 {role} verifying-key geometry differs from the manifest"
+        ));
+    }
+    Ok(())
+}
+
 fn succinct_verify_kagemusha_serialized_eq_v7(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -776,13 +865,19 @@ fn succinct_verify_kagemusha_serialized_eq_v7(
 
     let authenticated_proof_bytes = usize::try_from(manifest.step_eq_proof_bytes)
         .map_err(|_| "Kagemusha V7 Eq proof size does not fit usize".to_owned())?;
-    if max_proof_bytes != authenticated_proof_bytes
+    if params.k() != manifest.k
+        || max_proof_bytes != authenticated_proof_bytes
         || proof.len() != authenticated_proof_bytes
         || instances.len() != 1
         || instances[0].len() != KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7
     {
         return Err("Kagemusha V7 Eq proof/instance shape is invalid".to_owned());
     }
+    validate_kagemusha_serialized_vk_geometry_v7(
+        verifying_key,
+        manifest,
+        KagemushaPastaCycleParityV1::StepEq,
+    )?;
     type Scheme = IpaAs<EqAffine, Bgh19>;
     type Transcript<S> = PoseidonTranscript<
         EqAffine,
@@ -886,13 +981,19 @@ fn succinct_verify_kagemusha_serialized_ep_v7(
 
     let authenticated_proof_bytes = usize::try_from(manifest.step_ep_proof_bytes)
         .map_err(|_| "Kagemusha V7 Ep proof size does not fit usize".to_owned())?;
-    if max_proof_bytes != authenticated_proof_bytes
+    if params.k() != manifest.k
+        || max_proof_bytes != authenticated_proof_bytes
         || proof.len() != authenticated_proof_bytes
         || instances.len() != 1
         || instances[0].len() != KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7
     {
         return Err("Kagemusha V7 Ep proof/instance shape is invalid".to_owned());
     }
+    validate_kagemusha_serialized_vk_geometry_v7(
+        verifying_key,
+        manifest,
+        KagemushaPastaCycleParityV1::StepEp,
+    )?;
     type Scheme = IpaAs<EpAffine, Bgh19>;
     type Transcript<S> = PoseidonTranscript<
         EpAffine,
@@ -976,20 +1077,115 @@ fn kagemusha_serialized_instance_u128_v7<F: ff::PrimeField + halo2_base::utils::
         .map_err(|_| "Kagemusha V7 public cell count drifted".to_owned())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn verify_kagemusha_serialized_atomic_pair_v7(
-    step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
-        halo2_proofs::halo2curves::pasta::EqAffine,
-    >,
-    step_eq_verifying_key: &halo2_proofs::plonk::VerifyingKey<
-        halo2_proofs::halo2curves::pasta::EqAffine,
-    >,
-    step_ep_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
-        halo2_proofs::halo2curves::pasta::EpAffine,
-    >,
-    step_ep_verifying_key: &halo2_proofs::plonk::VerifyingKey<
-        halo2_proofs::halo2curves::pasta::EpAffine,
-    >,
+fn validate_kagemusha_serialized_live_instance_snapshot_v7<
+    F: ff::PrimeField + halo2_base::utils::ScalarField,
+>(
+    instances: &[Vec<F>],
+    manifest: &super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
+    frozen_core_statement_sha256: [u8; 32],
+    expected_join: super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditPublicJoinV7,
+    mode: KagemushaSerializedPublicModeV7,
+    role: &str,
+) -> Result<[u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7], String> {
+    use super::kagemusha_serialized_audit_v7::{
+        kagemusha_serialized_bytes_to_chunks_v7, kagemusha_serialized_digest_word_chunks_v7,
+    };
+
+    validate_kagemusha_serialized_public_join_v7(&expected_join)?;
+    let cells = kagemusha_serialized_instance_u128_v7(instances)?;
+    if mode == KagemushaSerializedPublicModeV7::NullParent {
+        if cells != [0; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7] {
+            return Err(format!(
+                "Kagemusha V7 {role} null-parent instance column is not all zero"
+            ));
+        }
+        return Ok(cells);
+    }
+    let manifest_chunks = kagemusha_serialized_bytes_to_chunks_v7(manifest.sha256()?);
+    let statement_chunks = kagemusha_serialized_bytes_to_chunks_v7(frozen_core_statement_sha256);
+    let eq_vk_chunks = kagemusha_serialized_digest_word_chunks_v7(manifest.step_eq_vk_sha256);
+    let ep_vk_chunks = kagemusha_serialized_digest_word_chunks_v7(manifest.step_ep_vk_sha256);
+    let expected_join_cells = expected_join.cells();
+    let proof_step_count = cells[KAGEMUSHA_COMPACT_PROOF_STEP_COUNT_OFFSET_V5];
+    let parent_count = cells[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5];
+    if frozen_core_statement_sha256 == [0; 32]
+        || cells[KAGEMUSHA_COMPACT_PROFILE_OFFSET_V5]
+            != u128::from(KAGEMUSHA_SERIALIZED_PROFILE_VERSION_V7)
+        || proof_step_count == 0
+        || parent_count > 2
+        || (proof_step_count == 1) != (parent_count == 0)
+        || cells[KAGEMUSHA_SERIALIZED_LIVE_SELECTOR_OFFSET_V7] != 1
+        || cells[KAGEMUSHA_COMPACT_STATEMENT_DIGEST_OFFSET_V5
+            ..KAGEMUSHA_COMPACT_STATEMENT_DIGEST_OFFSET_V5 + 2]
+            != statement_chunks
+        || cells[KAGEMUSHA_COMPACT_MANIFEST_SHA256_OFFSET_V5
+            ..KAGEMUSHA_COMPACT_MANIFEST_SHA256_OFFSET_V5 + 2]
+            != manifest_chunks
+        || cells[KAGEMUSHA_COMPACT_STEP_EQ_PROTOCOL_SHA256_OFFSET_V5
+            ..KAGEMUSHA_COMPACT_STEP_EQ_PROTOCOL_SHA256_OFFSET_V5 + 2]
+            != eq_vk_chunks
+        || cells[KAGEMUSHA_COMPACT_STEP_EP_PROTOCOL_SHA256_OFFSET_V5
+            ..KAGEMUSHA_COMPACT_STEP_EP_PROTOCOL_SHA256_OFFSET_V5 + 2]
+            != ep_vk_chunks
+        || cells[KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
+            ..KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
+                + KAGEMUSHA_SERIALIZED_CURRENT_JOIN_CELLS_V7]
+            != expected_join_cells
+        || cells[KAGEMUSHA_SERIALIZED_PARENT_DIGEST_OFFSET_V7
+            ..KAGEMUSHA_SERIALIZED_PARENT_DIGEST_OFFSET_V7
+                + KAGEMUSHA_SERIALIZED_PARENT_DIGEST_CELLS_V7]
+            == [0; KAGEMUSHA_SERIALIZED_PARENT_DIGEST_CELLS_V7]
+    {
+        return Err(format!(
+            "Kagemusha V7 {role} live instance snapshot is not canonical"
+        ));
+    }
+    Ok(cells)
+}
+
+fn validate_kagemusha_serialized_instance_precommit_invariance_v7(
+    placeholder: &[u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7],
+    final_cells: &[u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7],
+    role: &str,
+) -> Result<(), String> {
+    for index in 0..KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7 {
+        let is_join = (KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
+            ..KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7
+                + KAGEMUSHA_SERIALIZED_CURRENT_JOIN_CELLS_V7)
+            .contains(&index);
+        if !is_join && placeholder[index] != final_cells[index] {
+            return Err(format!(
+                "Kagemusha V7 {role} placeholder/final public cell {index} drifted"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_kagemusha_serialized_pair_instance_snapshot_v7(
+    step_eq: &[u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7],
+    step_ep: &[u128; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7],
+    pass: &str,
+) -> Result<(), String> {
+    if step_eq[..KAGEMUSHA_SERIALIZED_COMMON_HEADER_CELLS_V7]
+        != step_ep[..KAGEMUSHA_SERIALIZED_COMMON_HEADER_CELLS_V7]
+        || step_eq[KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7..]
+            != step_ep[KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7..]
+    {
+        return Err(format!(
+            "Kagemusha V7 {pass} Eq/Ep public snapshots do not cross-match"
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KagemushaSerializedAtomicEnvelopeV7 {
+    join: super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditPublicJoinV7,
+    frozen_core_statement_sha256: [u8; 32],
+}
+
+fn validate_kagemusha_serialized_atomic_envelope_v7(
     manifest: &super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
     step_eq_proof: &[u8],
     step_ep_proof: &[u8],
@@ -997,11 +1193,9 @@ fn verify_kagemusha_serialized_atomic_pair_v7(
     step_ep_instances: &[Vec<Fq>],
     max_proof_bytes: usize,
     max_pair_bytes: usize,
-) -> Result<KagemushaSerializedVerifiedPairV7, String> {
+) -> Result<KagemushaSerializedAtomicEnvelopeV7, String> {
     use super::kagemusha_serialized_audit_v7::{
-        KagemushaSerializedAuditChallengeContextV7, KagemushaSerializedAuditPublicJoinV7,
-        kagemusha_serialized_audit_challenge_v7, kagemusha_serialized_bytes_to_chunks_v7,
-        kagemusha_serialized_exact_chunks_to_bytes_v7,
+        KagemushaSerializedAuditPublicJoinV7, kagemusha_serialized_exact_chunks_to_bytes_v7,
         kagemusha_serialized_sha256_word_chunks_to_bytes_v7,
     };
 
@@ -1010,7 +1204,13 @@ fn verify_kagemusha_serialized_atomic_pair_v7(
         .map_err(|_| "Kagemusha V7 Eq proof size does not fit usize".to_owned())?;
     let step_ep_proof_bytes = usize::try_from(manifest.step_ep_proof_bytes)
         .map_err(|_| "Kagemusha V7 Ep proof size does not fit usize".to_owned())?;
-    if max_proof_bytes != step_eq_proof_bytes
+    let absolute_pair_max = usize::try_from(
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
+    )
+    .map_err(|_| "Kagemusha V7 absolute pair bound does not fit usize".to_owned())?;
+    if max_pair_bytes == 0
+        || max_pair_bytes > absolute_pair_max
+        || max_proof_bytes != step_eq_proof_bytes
         || max_proof_bytes != step_ep_proof_bytes
         || step_eq_proof.len() != step_eq_proof_bytes
         || step_ep_proof.len() != step_ep_proof_bytes
@@ -1024,12 +1224,18 @@ fn verify_kagemusha_serialized_atomic_pair_v7(
     }
     let eq_cells = kagemusha_serialized_instance_u128_v7(step_eq_instances)?;
     let ep_cells = kagemusha_serialized_instance_u128_v7(step_ep_instances)?;
+    let proof_step_count = eq_cells[KAGEMUSHA_COMPACT_PROOF_STEP_COUNT_OFFSET_V5];
+    let parent_count = eq_cells[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5];
     if eq_cells[..KAGEMUSHA_SERIALIZED_COMMON_HEADER_CELLS_V7]
         != ep_cells[..KAGEMUSHA_SERIALIZED_COMMON_HEADER_CELLS_V7]
         || eq_cells[KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7..]
             != ep_cells[KAGEMUSHA_SERIALIZED_CURRENT_JOIN_OFFSET_V7..]
         || eq_cells[KAGEMUSHA_COMPACT_PROFILE_OFFSET_V5]
             != u128::from(KAGEMUSHA_SERIALIZED_PROFILE_VERSION_V7)
+        || eq_cells[KAGEMUSHA_SERIALIZED_LIVE_SELECTOR_OFFSET_V7] != 1
+        || proof_step_count == 0
+        || parent_count > 2
+        || (proof_step_count == 1) != (parent_count == 0)
     {
         return Err("Kagemusha V7 Eq/Ep public pair does not cross-match".to_owned());
     }
@@ -1065,6 +1271,58 @@ fn verify_kagemusha_serialized_atomic_pair_v7(
     {
         return Err("Kagemusha V7 public identity does not match its manifest".to_owned());
     }
+    let frozen_core_statement_sha256 = kagemusha_serialized_exact_chunks_to_bytes_v7(
+        eq_cells[KAGEMUSHA_COMPACT_STATEMENT_DIGEST_OFFSET_V5
+            ..KAGEMUSHA_COMPACT_STATEMENT_DIGEST_OFFSET_V5 + 2]
+            .try_into()
+            .expect("V7 statement has two chunks"),
+    );
+    if frozen_core_statement_sha256 == [0; 32] {
+        return Err("Kagemusha V7 frozen core statement is zero".to_owned());
+    }
+    Ok(KagemushaSerializedAtomicEnvelopeV7 {
+        join,
+        frozen_core_statement_sha256,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_kagemusha_serialized_atomic_pair_v7(
+    step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
+        halo2_proofs::halo2curves::pasta::EqAffine,
+    >,
+    step_eq_verifying_key: &halo2_proofs::plonk::VerifyingKey<
+        halo2_proofs::halo2curves::pasta::EqAffine,
+    >,
+    step_ep_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
+        halo2_proofs::halo2curves::pasta::EpAffine,
+    >,
+    step_ep_verifying_key: &halo2_proofs::plonk::VerifyingKey<
+        halo2_proofs::halo2curves::pasta::EpAffine,
+    >,
+    manifest: &super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
+    step_eq_proof: &[u8],
+    step_ep_proof: &[u8],
+    step_eq_instances: &[Vec<Fp>],
+    step_ep_instances: &[Vec<Fq>],
+    max_proof_bytes: usize,
+    max_pair_bytes: usize,
+) -> Result<KagemushaSerializedVerifiedPairV7, String> {
+    use super::kagemusha_serialized_audit_v7::{
+        KagemushaSerializedAuditChallengeContextV7, kagemusha_serialized_audit_challenge_v7,
+        kagemusha_serialized_bytes_to_chunks_v7,
+    };
+
+    let envelope = validate_kagemusha_serialized_atomic_envelope_v7(
+        manifest,
+        step_eq_proof,
+        step_ep_proof,
+        step_eq_instances,
+        step_ep_instances,
+        max_proof_bytes,
+        max_pair_bytes,
+    )?;
+    let join = envelope.join;
     let (step_eq, actual_eq_commitment) = succinct_verify_kagemusha_serialized_eq_v7(
         step_eq_params,
         step_eq_verifying_key,
@@ -1088,14 +1346,10 @@ fn verify_kagemusha_serialized_atomic_pair_v7(
             "Kagemusha V7 selected advice commitment differs from the public pair".to_owned(),
         );
     }
-    let frozen_statement = kagemusha_serialized_exact_chunks_to_bytes_v7(
-        eq_cells[KAGEMUSHA_COMPACT_STATEMENT_DIGEST_OFFSET_V5
-            ..KAGEMUSHA_COMPACT_STATEMENT_DIGEST_OFFSET_V5 + 2]
-            .try_into()
-            .expect("V7 statement has two chunks"),
-    );
-    let context =
-        KagemushaSerializedAuditChallengeContextV7::from_manifest(manifest, frozen_statement)?;
+    let context = KagemushaSerializedAuditChallengeContextV7::from_manifest(
+        manifest,
+        envelope.frozen_core_statement_sha256,
+    )?;
     let challenge = kagemusha_serialized_audit_challenge_v7(
         &context,
         actual_eq_commitment,
@@ -1108,6 +1362,80 @@ fn verify_kagemusha_serialized_atomic_pair_v7(
     // accumulator.  Atomic acceptance must also decide both opening claims;
     // returning the undecided accumulators as "verified" would leave the
     // polynomial-commitment relation unchecked at the terminal boundary.
+    let step_eq = super::kagemusha_accumulation::verify_and_decide_eq_accumulation_v4(
+        step_eq_params,
+        manifest.k,
+        step_eq,
+        None,
+        &KagemushaIpaAccumulationProofV4::initialization(manifest.k)?,
+    )?;
+    let step_ep = super::kagemusha_accumulation::verify_and_decide_ep_accumulation_v4(
+        step_ep_params,
+        manifest.k,
+        step_ep,
+        None,
+        &KagemushaIpaAccumulationProofV4::initialization(manifest.k)?,
+    )?;
+    Ok(KagemushaSerializedVerifiedPairV7 { step_eq, step_ep })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_kagemusha_serialized_null_parent_pair_v7(
+    step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
+        halo2_proofs::halo2curves::pasta::EqAffine,
+    >,
+    step_eq_verifying_key: &halo2_proofs::plonk::VerifyingKey<
+        halo2_proofs::halo2curves::pasta::EqAffine,
+    >,
+    step_ep_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
+        halo2_proofs::halo2curves::pasta::EpAffine,
+    >,
+    step_ep_verifying_key: &halo2_proofs::plonk::VerifyingKey<
+        halo2_proofs::halo2curves::pasta::EpAffine,
+    >,
+    manifest: &super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
+    step_eq_proof: &[u8],
+    step_ep_proof: &[u8],
+    step_eq_instances: &[Vec<Fp>],
+    step_ep_instances: &[Vec<Fq>],
+    max_proof_bytes: usize,
+    max_pair_bytes: usize,
+) -> Result<KagemushaSerializedVerifiedPairV7, String> {
+    manifest.validate()?;
+    let eq_cells = kagemusha_serialized_instance_u128_v7(step_eq_instances)?;
+    let ep_cells = kagemusha_serialized_instance_u128_v7(step_ep_instances)?;
+    let absolute_pair_max = usize::try_from(
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
+    )
+    .map_err(|_| "Kagemusha V7 absolute pair bound does not fit usize".to_owned())?;
+    if eq_cells != [0; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7]
+        || ep_cells != [0; KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7]
+        || max_pair_bytes == 0
+        || max_pair_bytes > absolute_pair_max
+        || step_eq_proof
+            .len()
+            .checked_add(step_ep_proof.len())
+            .filter(|length| *length <= max_pair_bytes)
+            .is_none()
+    {
+        return Err("Kagemusha V7 null-parent pair is not canonical".to_owned());
+    }
+    let (step_eq, _) = succinct_verify_kagemusha_serialized_eq_v7(
+        step_eq_params,
+        step_eq_verifying_key,
+        step_eq_proof,
+        step_eq_instances,
+        manifest,
+        max_proof_bytes,
+    )?;
+    let (step_ep, _) = succinct_verify_kagemusha_serialized_ep_v7(
+        step_ep_params,
+        step_ep_verifying_key,
+        step_ep_proof,
+        step_ep_instances,
+        manifest,
+        max_proof_bytes,
+    )?;
     let step_eq = super::kagemusha_accumulation::verify_and_decide_eq_accumulation_v4(
         step_eq_params,
         manifest.k,
@@ -1151,7 +1479,10 @@ fn create_kagemusha_serialized_eq_proof_v7(
     };
     use snark_verifier::{
         loader::native::NativeLoader,
-        system::halo2::transcript::halo2::{ChallengeScalar, PoseidonTranscript},
+        system::halo2::{
+            compile,
+            transcript::halo2::{ChallengeScalar, PoseidonTranscript},
+        },
     };
 
     if role_seed.iter().all(|byte| *byte == 0)
@@ -1161,6 +1492,25 @@ fn create_kagemusha_serialized_eq_proof_v7(
     {
         return Err("Kagemusha V7 Eq one-proof input/profile is invalid".to_owned());
     }
+    validate_kagemusha_serialized_vk_geometry_v7(
+        proving_key.get_vk(),
+        manifest,
+        KagemushaPastaCycleParityV1::StepEq,
+    )?;
+    let proving_protocol = compile(
+        params,
+        proving_key.get_vk(),
+        kagemusha_ipa_compile_config_v4(KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7),
+    );
+    if kagemusha_serialized_params_sha256_v7(params)? != manifest.step_eq_params_sha256
+        || kagemusha_compiled_protocol_identity_sha256(
+            &proving_protocol,
+            KagemushaPastaCycleParityV1::StepEq,
+        )? != manifest.step_eq_vk_sha256
+    {
+        return Err("Kagemusha V7 loaded Eq proving key is not manifest-bound".to_owned());
+    }
+    drop(proving_protocol);
     let selected = usize::try_from(manifest.step_eq_serialized_column)
         .map_err(|_| "Kagemusha V7 Eq serialized column does not fit usize".to_owned())?;
     let predicted = circuit.serialized_jobs.precommitment(
@@ -1270,7 +1620,10 @@ fn create_kagemusha_serialized_ep_proof_v7(
     };
     use snark_verifier::{
         loader::native::NativeLoader,
-        system::halo2::transcript::halo2::{ChallengeScalar, PoseidonTranscript},
+        system::halo2::{
+            compile,
+            transcript::halo2::{ChallengeScalar, PoseidonTranscript},
+        },
     };
 
     if role_seed.iter().all(|byte| *byte == 0)
@@ -1280,6 +1633,25 @@ fn create_kagemusha_serialized_ep_proof_v7(
     {
         return Err("Kagemusha V7 Ep one-proof input/profile is invalid".to_owned());
     }
+    validate_kagemusha_serialized_vk_geometry_v7(
+        proving_key.get_vk(),
+        manifest,
+        KagemushaPastaCycleParityV1::StepEp,
+    )?;
+    let proving_protocol = compile(
+        params,
+        proving_key.get_vk(),
+        kagemusha_ipa_compile_config_v4(KAGEMUSHA_SERIALIZED_PUBLIC_INSTANCE_CELLS_V7),
+    );
+    if kagemusha_serialized_params_sha256_v7(params)? != manifest.step_ep_params_sha256
+        || kagemusha_compiled_protocol_identity_sha256(
+            &proving_protocol,
+            KagemushaPastaCycleParityV1::StepEp,
+        )? != manifest.step_ep_vk_sha256
+    {
+        return Err("Kagemusha V7 loaded Ep proving key is not manifest-bound".to_owned());
+    }
+    drop(proving_protocol);
     let selected = usize::try_from(manifest.step_ep_serialized_column)
         .map_err(|_| "Kagemusha V7 Ep serialized column does not fit usize".to_owned())?;
     let predicted = circuit.serialized_jobs.precommitment(
@@ -1400,7 +1772,20 @@ struct KagemushaSerializedCreatedPairV7 {
         halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
     step_ep_verifying_key:
         halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EpAffine>,
+    step_eq_proving_key_size_bytes: u64,
+    step_ep_proving_key_size_bytes: u64,
+    step_eq_proving_key_sha256: [u8; 32],
+    step_ep_proving_key_sha256: [u8; 32],
     verified: KagemushaSerializedVerifiedPairV7,
+}
+
+struct KagemushaSerializedPreparedProvingKeyV7<C>
+where
+    C: halo2_proofs::halo2curves::CurveAffine,
+{
+    key: halo2_proofs::plonk::ProvingKey<C>,
+    size_bytes: u64,
+    sha256: [u8; 32],
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -1419,6 +1804,7 @@ fn create_kagemusha_serialized_atomic_pair_once_v7<LoadEqPk, LoadEpPk, BuildEq, 
     >,
     manifest: &super::kagemusha_serialized_audit_v7::KagemushaSerializedAuditManifestV7,
     frozen_core_statement_sha256: [u8; 32],
+    public_mode: KagemushaSerializedPublicModeV7,
     eq_coefficients: &[Fp],
     ep_coefficients: &[Fq],
     mut load_step_eq_proving_key: LoadEqPk,
@@ -1430,11 +1816,11 @@ fn create_kagemusha_serialized_atomic_pair_once_v7<LoadEqPk, LoadEpPk, BuildEq, 
 ) -> Result<KagemushaSerializedCreatedPairV7, String>
 where
     LoadEqPk: FnMut() -> Result<
-        halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+        KagemushaSerializedPreparedProvingKeyV7<halo2_proofs::halo2curves::pasta::EqAffine>,
         String,
     >,
     LoadEpPk: FnMut() -> Result<
-        halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EpAffine>,
+        KagemushaSerializedPreparedProvingKeyV7<halo2_proofs::halo2curves::pasta::EpAffine>,
         String,
     >,
     BuildEq: FnMut(
@@ -1452,9 +1838,23 @@ where
         group::{GroupEncoding as _, prime::PrimeCurveAffine as _},
         pasta::{EpAffine, EqAffine},
     };
+    use halo2_proofs::poly::commitment::Params as _;
     use snark_verifier::system::halo2::compile;
 
     manifest.validate()?;
+    if step_eq_params.k() != manifest.k || step_ep_params.k() != manifest.k {
+        return Err("Kagemusha V7 precommit ParamsIPA degree differs from the manifest".to_owned());
+    }
+    validate_kagemusha_serialized_vk_geometry_v7(
+        step_eq_precommit_verifying_key,
+        manifest,
+        KagemushaPastaCycleParityV1::StepEq,
+    )?;
+    validate_kagemusha_serialized_vk_geometry_v7(
+        step_ep_precommit_verifying_key,
+        manifest,
+        KagemushaPastaCycleParityV1::StepEp,
+    )?;
     let eq_protocol = compile(
         step_eq_params,
         step_eq_precommit_verifying_key,
@@ -1480,15 +1880,33 @@ where
     }
     drop(eq_protocol);
     drop(ep_protocol);
-    if eq_coefficients.len()
-        != usize::try_from(manifest.eq_coefficient_count)
-            .map_err(|_| "Kagemusha V7 Eq coefficient count does not fit usize".to_owned())?
-        || ep_coefficients.len()
-            != usize::try_from(manifest.ep_coefficient_count)
-                .map_err(|_| "Kagemusha V7 Ep coefficient count does not fit usize".to_owned())?
+    let eq_coefficient_count = usize::try_from(manifest.eq_coefficient_count)
+        .map_err(|_| "Kagemusha V7 Eq coefficient count does not fit usize".to_owned())?;
+    let ep_coefficient_count = usize::try_from(manifest.ep_coefficient_count)
+        .map_err(|_| "Kagemusha V7 Ep coefficient count does not fit usize".to_owned())?;
+    if eq_coefficients.len() != eq_coefficient_count
+        || ep_coefficients.len() != ep_coefficient_count
     {
         return Err("Kagemusha V7 host coefficient counts differ from the manifest".to_owned());
     }
+    let serialized_rows = |native: usize, reciprocal: usize| {
+        reciprocal
+            .checked_mul(2)
+            .and_then(|cells| 10_usize.checked_add(native)?.checked_add(cells))
+            .ok_or_else(|| "Kagemusha V7 serialized row count overflowed".to_owned())
+    };
+    let expected_step_eq_capacity = (
+        1,
+        eq_coefficient_count,
+        ep_coefficient_count,
+        serialized_rows(eq_coefficient_count, ep_coefficient_count)?,
+    );
+    let expected_step_ep_capacity = (
+        1,
+        ep_coefficient_count,
+        eq_coefficient_count,
+        serialized_rows(ep_coefficient_count, eq_coefficient_count)?,
+    );
     let (step_eq_seed, step_ep_seed) = kagemusha_fresh_serialized_role_seeds_v7()?;
     let placeholder = KagemushaSerializedAuditPublicJoinV7 {
         step_eq_commitment: kagemusha_serialized_bytes_to_chunks_v7(
@@ -1513,10 +1931,22 @@ where
     // Precommit Eq and Ep in separate populated-builder passes using only the
     // small authenticated VKs. No multi-GiB proving key is loaded until its
     // parity's final one-pass proof is ready to consume it.
-    let step_eq_commitment = {
-        let (circuit, _) = build_step_eq(placeholder)?;
+    let (step_eq_commitment, step_eq_prepass_capacity, step_eq_placeholder_cells) = {
+        let (circuit, instances) = build_step_eq(placeholder)?;
         if circuit.params.manifest != *manifest {
             return Err("Kagemusha V7 Eq prepass manifest drifted".to_owned());
+        }
+        let cells = validate_kagemusha_serialized_live_instance_snapshot_v7(
+            &instances,
+            manifest,
+            frozen_core_statement_sha256,
+            placeholder,
+            public_mode,
+            "Eq placeholder",
+        )?;
+        let capacity = circuit.serialized_jobs.capacity_profile()?;
+        if capacity != expected_step_eq_capacity {
+            return Err("Kagemusha V7 Eq prepass serialized counts drifted".to_owned());
         }
         let selected = usize::try_from(manifest.step_eq_serialized_column)
             .map_err(|_| "Kagemusha V7 Eq serialized column does not fit usize".to_owned())?;
@@ -1533,12 +1963,24 @@ where
             .expect("Pasta point encoding is 32 bytes");
         drop(circuit);
         halo2_proofs::release_allocator_slack();
-        bytes
+        (bytes, capacity, cells)
     };
-    let step_ep_commitment = {
-        let (circuit, _) = build_step_ep(placeholder)?;
+    let (step_ep_commitment, step_ep_prepass_capacity, step_ep_placeholder_cells) = {
+        let (circuit, instances) = build_step_ep(placeholder)?;
         if circuit.params.manifest != *manifest {
             return Err("Kagemusha V7 Ep prepass manifest drifted".to_owned());
+        }
+        let cells = validate_kagemusha_serialized_live_instance_snapshot_v7(
+            &instances,
+            manifest,
+            frozen_core_statement_sha256,
+            placeholder,
+            public_mode,
+            "Ep placeholder",
+        )?;
+        let capacity = circuit.serialized_jobs.capacity_profile()?;
+        if capacity != expected_step_ep_capacity {
+            return Err("Kagemusha V7 Ep prepass serialized counts drifted".to_owned());
         }
         let selected = usize::try_from(manifest.step_ep_serialized_column)
             .map_err(|_| "Kagemusha V7 Ep serialized column does not fit usize".to_owned())?;
@@ -1555,8 +1997,13 @@ where
             .expect("Pasta point encoding is 32 bytes");
         drop(circuit);
         halo2_proofs::release_allocator_slack();
-        bytes
+        (bytes, capacity, cells)
     };
+    validate_kagemusha_serialized_pair_instance_snapshot_v7(
+        &step_eq_placeholder_cells,
+        &step_ep_placeholder_cells,
+        "placeholder",
+    )?;
     let challenge_context = KagemushaSerializedAuditChallengeContextV7::from_manifest(
         manifest,
         frozen_core_statement_sha256,
@@ -1594,11 +2041,48 @@ where
     };
     validate_kagemusha_serialized_public_join_v7(&join)?;
 
-    let step_eq_proving_key = load_step_eq_proving_key()?;
+    // Consume the full Keygen graph to one authenticated PK (and stream its
+    // exact processed bytes) before allocating the final Prover graph.  The
+    // reviewed peak therefore contains PK + one graph, never two graphs.
+    let step_eq_prepared_key = load_step_eq_proving_key()?;
     let (step_eq_circuit, step_eq_instances) = build_step_eq(join)?;
+    if step_eq_circuit.params.manifest != *manifest {
+        return Err("Kagemusha V7 Eq final-pass manifest drifted".to_owned());
+    }
+    let step_eq_final_cells = validate_kagemusha_serialized_live_instance_snapshot_v7(
+        &step_eq_instances,
+        manifest,
+        frozen_core_statement_sha256,
+        join,
+        public_mode,
+        "Eq final",
+    )?;
+    validate_kagemusha_serialized_instance_precommit_invariance_v7(
+        &step_eq_placeholder_cells,
+        &step_eq_final_cells,
+        "Eq",
+    )?;
+    if step_eq_circuit.serialized_jobs.capacity_profile()? != step_eq_prepass_capacity {
+        return Err("Kagemusha V7 Eq placeholder/final serialized counts drifted".to_owned());
+    }
+    let step_eq_final_commitment = step_eq_circuit.serialized_jobs.precommitment(
+        step_eq_params,
+        step_eq_precommit_verifying_key,
+        usize::try_from(manifest.step_eq_serialized_column)
+            .map_err(|_| "Kagemusha V7 Eq serialized column does not fit usize".to_owned())?,
+        iroha_crypto::rng_from_seed_slice(&step_eq_seed.0),
+    )?;
+    let step_eq_final_commitment_bytes: [u8; 32] = step_eq_final_commitment
+        .to_bytes()
+        .as_ref()
+        .try_into()
+        .map_err(|_| "Kagemusha V7 Eq final precommitment is not 32 bytes".to_owned())?;
+    if step_eq_final_commitment_bytes != step_eq_commitment {
+        return Err("Kagemusha V7 Eq placeholder/final precommitment invariance failed".to_owned());
+    }
     let (step_eq_proof, step_eq_verifying_key) = create_kagemusha_serialized_eq_proof_v7(
         step_eq_params,
-        step_eq_proving_key,
+        step_eq_prepared_key.key,
         step_eq_circuit,
         &step_eq_instances,
         manifest,
@@ -1608,11 +2092,52 @@ where
     )?;
     halo2_proofs::release_allocator_slack();
 
-    let step_ep_proving_key = load_step_ep_proving_key()?;
+    // Eq proving consumed its PK and graph; only now prepare Ep, again before
+    // allocating the Ep Prover graph.
+    let step_ep_prepared_key = load_step_ep_proving_key()?;
     let (step_ep_circuit, step_ep_instances) = build_step_ep(join)?;
+    if step_ep_circuit.params.manifest != *manifest {
+        return Err("Kagemusha V7 Ep final-pass manifest drifted".to_owned());
+    }
+    let step_ep_final_cells = validate_kagemusha_serialized_live_instance_snapshot_v7(
+        &step_ep_instances,
+        manifest,
+        frozen_core_statement_sha256,
+        join,
+        public_mode,
+        "Ep final",
+    )?;
+    validate_kagemusha_serialized_instance_precommit_invariance_v7(
+        &step_ep_placeholder_cells,
+        &step_ep_final_cells,
+        "Ep",
+    )?;
+    validate_kagemusha_serialized_pair_instance_snapshot_v7(
+        &step_eq_final_cells,
+        &step_ep_final_cells,
+        "final",
+    )?;
+    if step_ep_circuit.serialized_jobs.capacity_profile()? != step_ep_prepass_capacity {
+        return Err("Kagemusha V7 Ep placeholder/final serialized counts drifted".to_owned());
+    }
+    let step_ep_final_commitment = step_ep_circuit.serialized_jobs.precommitment(
+        step_ep_params,
+        step_ep_precommit_verifying_key,
+        usize::try_from(manifest.step_ep_serialized_column)
+            .map_err(|_| "Kagemusha V7 Ep serialized column does not fit usize".to_owned())?,
+        iroha_crypto::rng_from_seed_slice(&step_ep_seed.0),
+    )?;
+    let step_ep_final_commitment_bytes: [u8; 32] = step_ep_final_commitment
+        .to_bytes()
+        .as_ref()
+        .try_into()
+        .map_err(|_| "Kagemusha V7 Ep final precommitment is not 32 bytes".to_owned())?;
+    if step_ep_final_commitment_bytes != step_ep_commitment {
+        return Err("Kagemusha V7 Ep placeholder/final precommitment invariance failed".to_owned());
+    }
     let (step_ep_proof, step_ep_verifying_key) = create_kagemusha_serialized_ep_proof_v7(
         step_ep_params,
-        step_ep_proving_key,
+        step_ep_prepared_key.key,
         step_ep_circuit,
         &step_ep_instances,
         manifest,
@@ -1622,19 +2147,36 @@ where
     )?;
     halo2_proofs::release_allocator_slack();
 
-    let verified = verify_kagemusha_serialized_atomic_pair_v7(
-        step_eq_params,
-        &step_eq_verifying_key,
-        step_ep_params,
-        &step_ep_verifying_key,
-        manifest,
-        &step_eq_proof,
-        &step_ep_proof,
-        &step_eq_instances,
-        &step_ep_instances,
-        max_proof_bytes,
-        max_pair_bytes,
-    )?;
+    let verified = match public_mode {
+        KagemushaSerializedPublicModeV7::Live => verify_kagemusha_serialized_atomic_pair_v7(
+            step_eq_params,
+            &step_eq_verifying_key,
+            step_ep_params,
+            &step_ep_verifying_key,
+            manifest,
+            &step_eq_proof,
+            &step_ep_proof,
+            &step_eq_instances,
+            &step_ep_instances,
+            max_proof_bytes,
+            max_pair_bytes,
+        )?,
+        KagemushaSerializedPublicModeV7::NullParent => {
+            verify_kagemusha_serialized_null_parent_pair_v7(
+                step_eq_params,
+                &step_eq_verifying_key,
+                step_ep_params,
+                &step_ep_verifying_key,
+                manifest,
+                &step_eq_proof,
+                &step_ep_proof,
+                &step_eq_instances,
+                &step_ep_instances,
+                max_proof_bytes,
+                max_pair_bytes,
+            )?
+        }
+    };
     Ok(KagemushaSerializedCreatedPairV7 {
         step_eq_proof,
         step_ep_proof,
@@ -1642,6 +2184,10 @@ where
         step_ep_instances,
         step_eq_verifying_key,
         step_ep_verifying_key,
+        step_eq_proving_key_size_bytes: step_eq_prepared_key.size_bytes,
+        step_ep_proving_key_size_bytes: step_ep_prepared_key.size_bytes,
+        step_eq_proving_key_sha256: step_eq_prepared_key.sha256,
+        step_ep_proving_key_sha256: step_ep_prepared_key.sha256,
         verified,
     })
 }

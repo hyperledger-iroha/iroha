@@ -405,7 +405,7 @@ fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
         .split("pub(super) struct PreparedLiveWalReplayPreAdmission<'a>")
         .nth(1)
         .expect("live WAL pre-admission token has one declaration")
-        .split("/// Move-only Validate projection sealed under its closed durable Store parent.")
+        .split("pub(super) struct PreparedDurableStoreValidateSuccessor")
         .next()
         .expect("Store-to-Validate token follows live WAL token");
     for required in [

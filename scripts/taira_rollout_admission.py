@@ -92,6 +92,8 @@ ADMISSION_MANIFEST_PATH = "taira-rollout-admission-v1.json"
 CONTROLLER_MANIFEST_PATH = "controller/authority-controller-v1.json"
 MACOS_CONTROLLER_FILES = (
     "configs/soranexus/taira/check_mcp_rollout.sh",
+    "configs/soranexus/taira/config.toml",
+    "configs/soranexus/taira/genesis.json",
     "configs/soranexus/taira/privacy_rollout_plan_v1.json",
     "scripts/build_privacy_v1_boi_handoff.py",
     "scripts/build_taira_public_v2_prerequisite_handoff.py",
@@ -101,6 +103,7 @@ MACOS_CONTROLLER_FILES = (
     "scripts/check_native_sdk_abi22_artifact.py",
     "scripts/close_taira_publication_handoff.py",
     "scripts/close_taira_qualification_handoff.py",
+    "scripts/compose_taira_nevo_reset_genesis.py",
     "scripts/compute_workspace_source_manifest.py",
     "scripts/deploy_taira_v21_reset.py",
     "scripts/deploy_taira_v21_reset_authority.py",

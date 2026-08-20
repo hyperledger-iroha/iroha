@@ -10,6 +10,7 @@ import os
 import re
 import stat
 import subprocess
+import unicodedata
 from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
@@ -56,6 +57,10 @@ GENESIS_EXPECTED_HASH_PLACEHOLDER = (
 )
 GENESIS_EXPECTED_HASH_RE = re.compile(r"[0-9a-f]{64}")
 TAIRA_CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
+# Sponsored onboarding is intentionally limited to the three application
+# dataspaces present in the reviewed Taira catalog. Public `universal` and
+# service-only `cbsi` identities require their own governed provisioning paths.
+TAIRA_ACCOUNT_ONBOARDING_DATASPACES = frozenset({"dpn", "is", "is2"})
 MIB = 1024 * 1024
 # First-release privacy admission permits one 9 MiB action per 10 MiB
 # transaction. Revision 4 caps the complete canonical consensus payload at
@@ -202,15 +207,23 @@ class RosterDefaults:
 
 
 @dataclass(frozen=True)
+class AccountOnboardingCredentialSecrets:
+    """Runtime-only token material for one scoped onboarding client."""
+
+    id: str
+    api_token: str
+    scope_dataspace: str
+
+
+@dataclass(frozen=True)
 class SharedSecrets:
     """Runtime-only shared secret material injected into rendered configs."""
 
     account_onboarding_authority: str | None = None
     account_onboarding_private_key: str | None = None
-    account_onboarding_api_token: str | None = None
-    account_onboarding_credential_id: str | None = None
-    account_onboarding_scope_domain: str | None = None
-    account_onboarding_scope_dataspace: str | None = None
+    account_onboarding_credentials: tuple[
+        AccountOnboardingCredentialSecrets, ...
+    ] = ()
     torii_faucet_authority: str | None = None
     torii_faucet_private_key: str | None = None
     kagemusha_commands_private_key: str | None = None
@@ -764,8 +777,8 @@ def _canonical_torii_origin(value: str, context: str) -> str:
     return f"https://{canonical_host}"
 
 
-def _blake3_token_hash(token: str, native_tool: Path | None = None) -> str:
-    """Return the canonical digest stored in account-onboarding config."""
+def _account_onboarding_token_bytes(token: str) -> bytes:
+    """Validate one runtime token without requiring the hashing dependency."""
 
     try:
         token_bytes = token.encode("ascii")
@@ -779,6 +792,13 @@ def _blake3_token_hash(token: str, native_tool: Path | None = None) -> str:
         raise ValueError(
             "onboarding token must contain only non-whitespace printable ASCII bytes"
         )
+    return token_bytes
+
+
+def _blake3_token_hash(token: str, native_tool: Path | None = None) -> str:
+    """Return the canonical digest stored in account-onboarding config."""
+
+    token_bytes = _account_onboarding_token_bytes(token)
     if native_tool is not None:
         if not native_tool.is_absolute():
             raise ValueError("native onboarding-token hash tool must be absolute")
@@ -850,7 +870,7 @@ def _blake3_token_hash(token: str, native_tool: Path | None = None) -> str:
         raise SystemExit(
             "install scripts/requirements.txt before rendering Taira bundles"
         ) from error
-    return f"blake3:{blake3.blake3(token.encode('utf-8')).hexdigest()}"
+    return f"blake3:{blake3.blake3(token_bytes).hexdigest()}"
 
 
 def _write_private_text(path: Path, value: str) -> None:
@@ -976,33 +996,77 @@ def _validate_account_onboarding_secrets(shared: SharedSecrets, context: str) ->
     fields = {
         "account_onboarding_authority": shared.account_onboarding_authority,
         "account_onboarding_private_key": shared.account_onboarding_private_key,
-        "account_onboarding_api_token": shared.account_onboarding_api_token,
-        "account_onboarding_credential_id": shared.account_onboarding_credential_id,
     }
-    scopes = [
-        shared.account_onboarding_scope_domain,
-        shared.account_onboarding_scope_dataspace,
-    ]
-    if any(value is not None for value in (*fields.values(), *scopes)):
+    if (
+        any(value is not None for value in fields.values())
+        or shared.account_onboarding_credentials
+    ):
         missing = [key for key, value in fields.items() if value is None]
+        if not shared.account_onboarding_credentials:
+            missing.append("account_onboarding_credentials")
         if missing:
             raise ValueError(
                 f"{context} account onboarding is incomplete; missing "
                 + ", ".join(missing)
             )
-        if sum(value is not None for value in scopes) != 1:
+
+        seen_ids: set[str] = set()
+        seen_tokens: set[str] = set()
+        configured_scopes: set[str] = set()
+        for credential in shared.account_onboarding_credentials:
+            if credential.id in seen_ids:
+                raise ValueError(
+                    f"{context} account onboarding credential id `{credential.id}` is duplicated"
+                )
+            seen_ids.add(credential.id)
+            if credential.api_token in seen_tokens:
+                raise ValueError(
+                    f"{context} account onboarding credentials must not reuse API tokens"
+                )
+            seen_tokens.add(credential.api_token)
+            configured_scopes.add(credential.scope_dataspace)
+            # Validate the runtime secret shape before any output directory is
+            # created. The digest is derived with the selected native helper,
+            # when supplied, immediately before rendering.
+            _account_onboarding_token_bytes(credential.api_token)
+        missing_required_scopes = sorted({"dpn", "is2"}.difference(configured_scopes))
+        if missing_required_scopes:
             raise ValueError(
-                f"{context} account onboarding must set exactly one of "
-                "account_onboarding_scope_domain or account_onboarding_scope_dataspace"
+                f"{context} account onboarding credentials must include distinct "
+                "credentials for the required `dpn` and `is2` dataspaces; missing "
+                + ", ".join(missing_required_scopes)
             )
-        if shared.account_onboarding_scope_domain is not None:
-            raise ValueError(
-                f"{context} BOI/Taira onboarding must use a deployed Taira dataspace, not a domain"
-            )
-        if shared.account_onboarding_scope_dataspace not in {"is", "is2"}:
-            raise ValueError(
-                f"{context} BOI/Taira onboarding dataspace must be exactly `is` or `is2`"
-            )
+
+
+def _validate_account_onboarding_catalog(
+    shared: SharedSecrets, template: dict[str, Any], context: str
+) -> None:
+    """Require every onboarding scope to exist in the rendered Taira catalog."""
+
+    if not shared.account_onboarding_credentials:
+        return
+    nexus = template.get("nexus")
+    catalog = nexus.get("dataspace_catalog") if isinstance(nexus, dict) else None
+    if not isinstance(catalog, list):
+        raise ValueError(
+            f"{context} must contain `nexus.dataspace_catalog` for onboarding scope validation"
+        )
+    aliases = {
+        entry.get("alias")
+        for entry in catalog
+        if isinstance(entry, dict) and isinstance(entry.get("alias"), str)
+    }
+    missing = sorted(
+        {
+            credential.scope_dataspace
+            for credential in shared.account_onboarding_credentials
+        }.difference(aliases)
+    )
+    if missing:
+        raise ValueError(
+            f"{context} account onboarding scopes are absent from "
+            "`nexus.dataspace_catalog`: " + ", ".join(missing)
+        )
 
 
 def _validate_mandatory_soracloud_runtime_signer(
@@ -1237,6 +1301,79 @@ def _optional_string_list(
     if len(set(normalized)) != len(normalized):
         raise ValueError(f"{context} field `{key}` must not contain duplicates")
     return tuple(normalized)
+
+
+def _account_onboarding_credentials(
+    payload: dict[str, Any], context: str
+) -> tuple[AccountOnboardingCredentialSecrets, ...]:
+    """Parse the explicit shared onboarding credential array."""
+
+    raw_credentials = payload.get("account_onboarding_credentials")
+    if raw_credentials is None:
+        return ()
+    if not isinstance(raw_credentials, list) or not raw_credentials:
+        raise ValueError(
+            f"{context} field `account_onboarding_credentials` must be a non-empty array"
+        )
+
+    credentials: list[AccountOnboardingCredentialSecrets] = []
+    expected_fields = {"id", "api_token", "scope_dataspace"}
+    for index, raw_credential in enumerate(raw_credentials, start=1):
+        credential_context = (
+            f"{context} account_onboarding_credentials entry #{index}"
+        )
+        if not isinstance(raw_credential, dict):
+            raise ValueError(f"{credential_context} must be a TOML table")
+        unknown_fields = sorted(set(raw_credential).difference(expected_fields))
+        if unknown_fields:
+            raise ValueError(
+                f"{credential_context} contains unknown fields: "
+                + ", ".join(unknown_fields)
+            )
+        missing_fields = sorted(expected_fields.difference(raw_credential))
+        if missing_fields:
+            raise ValueError(
+                f"{credential_context} is incomplete; missing "
+                + ", ".join(missing_fields)
+            )
+        values: dict[str, str] = {}
+        for field in expected_fields:
+            value = raw_credential[field]
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(
+                    f"{credential_context} field `{field}` must be an exact non-empty string"
+                )
+            values[field] = value
+
+        credential_id = values["id"]
+        if (
+            len(credential_id.encode("utf-8")) > 255
+            or unicodedata.normalize("NFC", credential_id) != credential_id
+            or any(
+                character.isspace() or unicodedata.category(character) == "Cc"
+                for character in credential_id
+            )
+            or any(character in "@#$" for character in credential_id)
+        ):
+            raise ValueError(
+                f"{credential_context} field `id` must be a canonical Iroha Name"
+            )
+
+        scope_dataspace = values["scope_dataspace"]
+        if scope_dataspace not in TAIRA_ACCOUNT_ONBOARDING_DATASPACES:
+            allowed = ", ".join(sorted(TAIRA_ACCOUNT_ONBOARDING_DATASPACES))
+            raise ValueError(
+                f"{credential_context} field `scope_dataspace` must name one of "
+                f"the reviewed Taira application dataspaces: {allowed}"
+            )
+        credentials.append(
+            AccountOnboardingCredentialSecrets(
+                id=credential_id,
+                api_token=values["api_token"],
+                scope_dataspace=scope_dataspace,
+            )
+        )
+    return tuple(credentials)
 
 
 def _validate_ed25519_public_key(value: str, context: str) -> None:
@@ -1493,14 +1630,21 @@ def load_secret_material(path: Path) -> SecretMaterial:
         raise ValueError(f"secrets file `{path}` field `shared` must be a TOML table")
     legacy_onboarding_fields = sorted(
         field
-        for field in ("torii_onboarding_authority", "torii_onboarding_private_key")
+        for field in (
+            "torii_onboarding_authority",
+            "torii_onboarding_private_key",
+            "account_onboarding_api_token",
+            "account_onboarding_credential_id",
+            "account_onboarding_scope_domain",
+            "account_onboarding_scope_dataspace",
+        )
         if field in shared_raw
     )
     if legacy_onboarding_fields:
         raise ValueError(
             f"secrets file `{path}` uses removed onboarding fields: "
             + ", ".join(legacy_onboarding_fields)
-            + "; use account_onboarding_* fields"
+            + "; use `[[shared.account_onboarding_credentials]]` entries"
         )
     removed_offline_enrollment_fields = sorted(
         field
@@ -1562,18 +1706,8 @@ def load_secret_material(path: Path) -> SecretMaterial:
         account_onboarding_private_key=_optional_string(
             shared_raw, "account_onboarding_private_key", f"secrets file `{path}`"
         ),
-        account_onboarding_api_token=_optional_string(
-            shared_raw, "account_onboarding_api_token", f"secrets file `{path}`"
-        ),
-        account_onboarding_credential_id=_optional_string(
-            shared_raw, "account_onboarding_credential_id", f"secrets file `{path}`"
-        ),
-        account_onboarding_scope_domain=_optional_string(
-            shared_raw, "account_onboarding_scope_domain", f"secrets file `{path}`"
-        ),
-        account_onboarding_scope_dataspace=_optional_string(
+        account_onboarding_credentials=_account_onboarding_credentials(
             shared_raw,
-            "account_onboarding_scope_dataspace",
             f"secrets file `{path}`",
         ),
         torii_faucet_authority=_optional_string(
@@ -2071,6 +2205,34 @@ def load_roster(
     return validators
 
 
+def _render_account_onboarding_credentials(
+    credentials: tuple[AccountOnboardingCredentialSecrets, ...],
+    token_hashes: dict[str, str],
+) -> list[str]:
+    """Render the complete structural Torii credential array without raw tokens."""
+
+    rendered: list[str] = []
+    for index, credential in enumerate(credentials):
+        try:
+            token_hash = token_hashes[credential.id]
+        except KeyError as error:
+            raise ValueError(
+                f"missing token hash for onboarding credential `{credential.id}`"
+            ) from error
+        if index:
+            rendered.append("")
+        rendered.extend(
+            [
+                "[[torii.account_onboarding.credentials]]",
+                f"id = {_quote_toml(credential.id)}",
+                "scope = { dataspace = "
+                f"{_quote_toml(credential.scope_dataspace)} }}",
+                f"token_hash = {_quote_toml(token_hash)}",
+            ]
+        )
+    return rendered
+
+
 def render_validator_config(
     template_text: str,
     validator: ValidatorEntry,
@@ -2079,7 +2241,7 @@ def render_validator_config(
     soranet_transport_private_key_file: Path,
     shared_secrets: SharedSecrets | None = None,
     onboarding_private_key_file: Path | None = None,
-    onboarding_token_hash: str | None = None,
+    onboarding_token_hashes: dict[str, str] | None = None,
     faucet_private_key_file: Path | None = None,
     kagemusha_commands_private_key_file: Path | None = None,
     streaming_identity_private_key_file: Path | None = None,
@@ -2104,10 +2266,13 @@ def render_validator_config(
     genesis_file_rewritten = False
     kagemusha_offline_section_seen = False
     receipt_signer_written = False
+    onboarding_credentials_written = False
+    skipping_onboarding_credential_template = False
     rendered: list[str] = []
     trusted_peers_lines = _render_trusted_peers(validators)
     trusted_peers_pop_lines = _render_trusted_peers_pop(validators)
     shared = shared_secrets or SharedSecrets()
+    resolved_onboarding_token_hashes = onboarding_token_hashes or {}
     if (kagemusha_release_policy_path is None) != (kagemusha_artifact_dir is None):
         raise ValueError(
             "Kagemusha release policy and artifact directory must be supplied together"
@@ -2127,6 +2292,24 @@ def render_validator_config(
             if stripped == "]":
                 skipping_array = None
             continue
+
+        if shared.account_onboarding_credentials:
+            if stripped == "[[torii.account_onboarding.credentials]]":
+                if not onboarding_credentials_written:
+                    rendered.extend(
+                        _render_account_onboarding_credentials(
+                            shared.account_onboarding_credentials,
+                            resolved_onboarding_token_hashes,
+                        )
+                    )
+                    onboarding_credentials_written = True
+                current_section = stripped
+                skipping_onboarding_credential_template = True
+                continue
+            if skipping_onboarding_credential_template:
+                if not stripped.startswith("["):
+                    continue
+                skipping_onboarding_credential_template = False
 
         if stripped.startswith("[[") or stripped.startswith("["):
             current_section = stripped
@@ -2311,41 +2494,6 @@ def render_validator_config(
             )
             continue
         if (
-            current_section == "[[torii.account_onboarding.credentials]]"
-            and stripped.startswith("id = ")
-            and shared.account_onboarding_credential_id is not None
-        ):
-            rendered.append(
-                f"id = {_quote_toml(shared.account_onboarding_credential_id)}"
-            )
-            continue
-        if (
-            current_section == "[[torii.account_onboarding.credentials]]"
-            and stripped.startswith("scope = ")
-            and (
-                shared.account_onboarding_scope_domain is not None
-                or shared.account_onboarding_scope_dataspace is not None
-            )
-        ):
-            if shared.account_onboarding_scope_domain is not None:
-                rendered.append(
-                    "scope = { domain = "
-                    f"{_quote_toml(shared.account_onboarding_scope_domain)} }}"
-                )
-            else:
-                rendered.append(
-                    "scope = { dataspace = "
-                    f"{_quote_toml(shared.account_onboarding_scope_dataspace or '')} }}"
-                )
-            continue
-        if (
-            current_section == "[[torii.account_onboarding.credentials]]"
-            and stripped.startswith("token_hash = ")
-            and onboarding_token_hash is not None
-        ):
-            rendered.append(f"token_hash = {_quote_toml(onboarding_token_hash)}")
-            continue
-        if (
             current_section == "[torii.faucet]"
             and stripped.startswith("authority = ")
             and shared.torii_faucet_authority is not None
@@ -2510,6 +2658,11 @@ def render_validator_config(
         raise ValueError(
             f"rendered config for `{validator.slug}` lacks the mandatory `[torii]` table"
         )
+    if shared.account_onboarding_credentials and not onboarding_credentials_written:
+        raise ValueError(
+            f"rendered config for `{validator.slug}` lacks the mandatory "
+            "`[[torii.account_onboarding.credentials]]` template"
+        )
     if genesis_file is not None and not genesis_file_rewritten:
         raise ValueError(
             f"rendered config for `{validator.slug}` lacks the mandatory "
@@ -2555,16 +2708,22 @@ def render_bundle(
         raise ValueError(
             "only must identify one validator in the canonical Taira roster"
         )
-    resolved_onboarding_token_hash: str | None = None
-    if (
-        secret_material is not None
-        and secret_material.shared.account_onboarding_api_token is not None
-    ):
-        resolved_onboarding_token_hash = _blake3_token_hash(
-            secret_material.shared.account_onboarding_api_token,
-            onboarding_token_hash_tool,
-        )
+    resolved_onboarding_token_hashes: dict[str, str] = {}
+    if secret_material is not None:
+        resolved_onboarding_token_hashes = {
+            credential.id: _blake3_token_hash(
+                credential.api_token,
+                onboarding_token_hash_tool,
+            )
+            for credential in secret_material.shared.account_onboarding_credentials
+        }
     template = _load_toml(base_config_path)
+    if secret_material is not None:
+        _validate_account_onboarding_catalog(
+            secret_material.shared,
+            template,
+            f"base config `{base_config_path}`",
+        )
     settlement = template.get("settlement", {})
     offline = settlement.get("offline", {}) if isinstance(settlement, dict) else {}
     managed_kagemusha_keys = (
@@ -2696,10 +2855,10 @@ def render_bundle(
                     runtime_dir / "onboarding-signer.key",
                     shared.account_onboarding_private_key,
                 )
-            if shared.account_onboarding_api_token is not None:
+            if shared.account_onboarding_credentials:
                 _write_private_text(
                     runtime_dir / "onboarding-token",
-                    shared.account_onboarding_api_token,
+                    shared.account_onboarding_credentials[0].api_token,
                 )
             if shared.torii_faucet_private_key is not None:
                 faucet_private_key_file = installed_runtime_dir / "faucet-signer.key"
@@ -2735,7 +2894,7 @@ def render_bundle(
                 soranet_transport_private_key_file=soranet_transport_private_key_file,
                 shared_secrets=secret_material.shared if secret_material else None,
                 onboarding_private_key_file=onboarding_private_key_file,
-                onboarding_token_hash=resolved_onboarding_token_hash,
+                onboarding_token_hashes=resolved_onboarding_token_hashes,
                 faucet_private_key_file=faucet_private_key_file,
                 kagemusha_commands_private_key_file=kagemusha_commands_private_key_file,
                 streaming_identity_private_key_file=streaming_identity_private_key_file,

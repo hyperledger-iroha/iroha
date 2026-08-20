@@ -3423,18 +3423,11 @@ fn fair_v2_ingress_required_capacity(
     else {
         return roster_len.checked_mul(5);
     };
-<<<<<<< HEAD
     roster_len.checked_mul(5).and_then(|required| {
         authenticated_non_validator_source_capacity
             .checked_mul(3)
             .and_then(|authenticated_sources| required.checked_add(authenticated_sources))
     })
-=======
-    iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
-        roster_len,
-        authenticated_non_validator_source_capacity,
-    )
->>>>>>> origin/optimizations
 }
 fn fair_v2_ingress_reserve_ordinary_lifecycle_ordinal(
     state: &FairV2IngressState,
@@ -3486,17 +3479,9 @@ fn fair_v2_ingress_required_byte_capacity(
     authenticated_non_validator_source_capacity: Option<usize>,
     source_byte_capacity: usize,
 ) -> Option<usize> {
-<<<<<<< HEAD
     roster_len
         .checked_add(authenticated_non_validator_source_capacity.unwrap_or(0))
         .and_then(|source_count| source_count.checked_mul(source_byte_capacity))
-=======
-    iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-        roster_len,
-        authenticated_non_validator_source_capacity.unwrap_or(0),
-        source_byte_capacity,
-    )
->>>>>>> origin/optimizations
 }
 fn fair_v2_ingress_compact_len_prefix_bytes(value: usize) -> Option<usize> {
     let value = u64::try_from(value).ok()?;
@@ -4922,7 +4907,7 @@ impl FairV2Ingress {
         }
         let retirement = bound.park_sealed_ingress(carriers)?;
 
-        let mut empty_lanes = state
+        let empty_lanes = state
             .roster
             .iter()
             .cloned()
@@ -4933,7 +4918,6 @@ impl FairV2Ingress {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        empty_lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
         state.lanes = empty_lanes;
         state.pending_wire_owners.clear();
         state.ready.clear();
@@ -6179,11 +6163,7 @@ impl FairV2Ingress {
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
     ) -> Result<Option<(InboundBlockMessage, FairV2IngressDequeueDisposition)>, String> {
-        self.try_recv_if_at_checked_classified(
-            Instant::now(),
-            true,
-            predicate,
-        )
+        self.try_recv_if_at_checked_classified(Instant::now(), true, predicate)
     }
     #[cfg(test)]
     fn try_recv_if_at(
@@ -6200,12 +6180,8 @@ impl FairV2Ingress {
         service_attempt_at: Instant,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
     ) -> Result<Option<InboundBlockMessage>, String> {
-        self.try_recv_if_at_checked_classified(
-            service_attempt_at,
-            false,
-            predicate,
-        )
-        .map(|selected| selected.map(|(inbound, _)| inbound))
+        self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)
+            .map(|selected| selected.map(|(inbound, _)| inbound))
     }
     fn try_recv_if_at_checked_classified(
         &self,
@@ -9087,13 +9063,13 @@ mod authoritative_runtime_gate_tests {
         }
         assert_eq!(
             super::fair_v2_ingress_required_capacity(0, None),
-            Some(1),
-            "the test-only anonymous geometry remains unchanged",
+            Some(0),
+            "an empty authenticated roster needs no hidden source lane",
         );
         assert_eq!(
             super::fair_v2_ingress_required_capacity(4, None),
-            Some(22),
-            "the test-only roster geometry remains unchanged",
+            Some(20),
+            "the roster-only geometry reserves five classes per validator",
         );
     }
     #[test]

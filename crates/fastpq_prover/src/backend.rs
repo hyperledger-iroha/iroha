@@ -64,8 +64,15 @@ pub const TRANSCRIPT_TAG_AIR_ROOTS: &str = "fastpq:v1:air_roots";
 pub const TRANSCRIPT_TAG_QUERY_INDEX: &str = "fastpq:v1:query_index";
 pub const TRANSCRIPT_TAG_BETA_PREFIX: &str = "fastpq:v1:beta";
 pub const TRANSCRIPT_TAG_FRI_LAYER_PREFIX: &str = "fastpq:v1:fri_layer";
+const AIR_BOOLEAN_RESIDUE_COUNT: usize = 8;
+const AIR_RELATION_RESIDUE_COUNT: usize = 4;
+const AIR_STABLE_RESIDUE_COUNT: usize = crate::trace::METADATA_COMMITMENT_LIMBS + 2;
 /// Number of V1 AIR composition challenges derived from the transcript.
-pub const AIR_COMPOSITION_ALPHA_COUNT: usize = 2;
+///
+/// Every constraint residue receives an independently derived coefficient. Reusing coefficients
+/// lets equal-and-opposite residues at the same reuse offset cancel for every transcript.
+pub const AIR_COMPOSITION_ALPHA_COUNT: usize =
+    AIR_BOOLEAN_RESIDUE_COUNT + AIR_RELATION_RESIDUE_COUNT + AIR_STABLE_RESIDUE_COUNT;
 /// Configuration for the FASTPQ backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
@@ -1031,23 +1038,27 @@ fn hash_air_composition_leaves_with_mode(values: &[u64], mode: ExecutionMode) ->
     }
     hash_with_domain_limb_batches(AIR_COMPOSITION_LEAF_DOMAIN, &messages, mode)
 }
-/// Evaluate the sampled FASTPQ AIR composition value for two adjacent rows.
-///
-/// # Errors
-/// Returns an error when the advertised column schema is missing mandatory columns or
-/// row widths do not match the schema.
-pub fn air_composition_value_for_rows(
+
+fn packed_column_value(column_names: &[String], row: &[u64], prefix: &str) -> u64 {
+    let mut value = 0u64;
+    let mut radix_power = FIELD_ONE;
+    let limb_radix = 1u64 << 56;
+    for limb in 0usize.. {
+        let name = format!("{prefix}{limb}");
+        let Some(index) = column_names.iter().position(|column| column == &name) else {
+            break;
+        };
+        value = add_mod(value, mul_mod(row[index], radix_power));
+        radix_power = mul_mod(radix_power, limb_radix);
+    }
+    value
+}
+
+fn air_constraint_residues_for_rows(
     column_names: &[String],
     current: &[u64],
     next: &[u64],
-    alphas: &[u64],
-) -> Result<u64> {
-    if alphas.len() != AIR_COMPOSITION_ALPHA_COUNT {
-        return Err(Error::AirChallengeCountMismatch {
-            expected: AIR_COMPOSITION_ALPHA_COUNT,
-            actual: alphas.len(),
-        });
-    }
+) -> Result<Vec<u64>> {
     if current.len() != column_names.len() || next.len() != column_names.len() {
         return Err(Error::AirOpeningMismatch {
             index: current.len(),
@@ -1073,19 +1084,7 @@ pub fn air_composition_value_for_rows(
         .collect::<Result<Vec<_>>>()?;
     let dsid = get("dsid")?;
     let slot = get("slot")?;
-    let value_old_0 = column_names
-        .iter()
-        .position(|column| column == "value_old_limb_0");
-    let value_new_0 = column_names
-        .iter()
-        .position(|column| column == "value_new_limb_0");
-    let mut acc = 0u64;
-    let mut idx = 0usize;
-    let absorb = |acc: &mut u64, idx: &mut usize, residue: u64| {
-        let coeff = alphas[*idx % AIR_COMPOSITION_ALPHA_COUNT];
-        *acc = add_mod(*acc, mul_mod(coeff, residue));
-        *idx = idx.saturating_add(1);
-    };
+    let mut residues = Vec::with_capacity(AIR_COMPOSITION_ALPHA_COUNT);
     for selector in [
         s_active,
         s_transfer,
@@ -1096,11 +1095,10 @@ pub fn air_composition_value_for_rows(
         s_meta_set,
         s_perm,
     ] {
-        absorb(
-            &mut acc,
-            &mut idx,
-            mul_mod(current[selector], sub_mod(current[selector], FIELD_ONE)),
-        );
+        residues.push(mul_mod(
+            current[selector],
+            sub_mod(current[selector], FIELD_ONE),
+        ));
     }
     let operation_sum = [
         s_transfer,
@@ -1112,33 +1110,59 @@ pub fn air_composition_value_for_rows(
     ]
     .into_iter()
     .fold(0u64, |sum, selector| add_mod(sum, current[selector]));
-    absorb(
-        &mut acc,
-        &mut idx,
-        sub_mod(current[s_active], operation_sum),
-    );
+    residues.push(sub_mod(current[s_active], operation_sum));
     let permission_sum = add_mod(current[s_role_grant], current[s_role_revoke]);
-    absorb(&mut acc, &mut idx, sub_mod(current[s_perm], permission_sum));
-    absorb(
-        &mut acc,
-        &mut idx,
-        mul_mod(next[s_active], sub_mod(FIELD_ONE, current[s_active])),
-    );
-    if let (Some(old), Some(new)) = (value_old_0, value_new_0) {
-        let numeric_selector = [s_transfer, s_mint, s_burn]
-            .into_iter()
-            .fold(0u64, |sum, selector| add_mod(sum, current[selector]));
-        let expected_delta = sub_mod(current[new], current[old]);
-        absorb(
-            &mut acc,
-            &mut idx,
-            mul_mod(numeric_selector, sub_mod(expected_delta, current[delta])),
-        );
-    }
+    residues.push(sub_mod(current[s_perm], permission_sum));
+    residues.push(mul_mod(
+        next[s_active],
+        sub_mod(FIELD_ONE, current[s_active]),
+    ));
+    let numeric_selector = [s_transfer, s_mint, s_burn]
+        .into_iter()
+        .fold(0u64, |sum, selector| add_mod(sum, current[selector]));
+    let value_old = packed_column_value(column_names, current, "value_old_limb_");
+    let value_new = packed_column_value(column_names, current, "value_new_limb_");
+    let expected_delta = sub_mod(value_new, value_old);
+    residues.push(mul_mod(
+        numeric_selector,
+        sub_mod(expected_delta, current[delta]),
+    ));
     for stable in metadata_hash_limbs.into_iter().chain([dsid, slot]) {
-        absorb(&mut acc, &mut idx, sub_mod(current[stable], next[stable]));
+        residues.push(sub_mod(current[stable], next[stable]));
     }
-    Ok(acc)
+    Ok(residues)
+}
+
+/// Evaluate the sampled FASTPQ AIR composition value for two adjacent rows.
+///
+/// # Errors
+/// Returns an error when the advertised column schema is missing mandatory columns, the
+/// challenge count differs from the residue count, or row widths do not match the schema.
+pub fn air_composition_value_for_rows(
+    column_names: &[String],
+    current: &[u64],
+    next: &[u64],
+    alphas: &[u64],
+) -> Result<u64> {
+    if alphas.len() != AIR_COMPOSITION_ALPHA_COUNT {
+        return Err(Error::AirChallengeCountMismatch {
+            expected: AIR_COMPOSITION_ALPHA_COUNT,
+            actual: alphas.len(),
+        });
+    }
+    let residues = air_constraint_residues_for_rows(column_names, current, next)?;
+    if residues.len() != AIR_COMPOSITION_ALPHA_COUNT {
+        return Err(Error::AirChallengeCountMismatch {
+            expected: AIR_COMPOSITION_ALPHA_COUNT,
+            actual: residues.len(),
+        });
+    }
+    Ok(alphas
+        .iter()
+        .zip(residues)
+        .fold(0u64, |acc, (&alpha, residue)| {
+            add_mod(acc, mul_mod(alpha, residue))
+        }))
 }
 /// Evaluate FASTPQ AIR composition values over all row openings.
 ///
@@ -1185,6 +1209,37 @@ fn air_row_at(columns: &[Vec<u64>], row_index: usize) -> Result<Vec<u64>> {
         })
         .collect()
 }
+
+fn ensure_base_trace_constraints(trace: &crate::trace::Trace) -> Result<()> {
+    let column_names = trace
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+    for row_index in 0..trace.padded_len {
+        let next_index = row_index
+            .checked_add(1)
+            .filter(|next| *next < trace.padded_len)
+            .unwrap_or(row_index);
+        let current = trace
+            .columns
+            .iter()
+            .map(|column| column.values[row_index])
+            .collect::<Vec<_>>();
+        let next = trace
+            .columns
+            .iter()
+            .map(|column| column.values[next_index])
+            .collect::<Vec<_>>();
+        let residues = air_constraint_residues_for_rows(&column_names, &current, &next)?;
+        if residues.len() != AIR_COMPOSITION_ALPHA_COUNT || residues.iter().any(|value| *value != 0)
+        {
+            return Err(Error::AirConstraintMismatch { index: row_index });
+        }
+    }
+    Ok(())
+}
+
 /// Open sampled AIR rows and composition values.
 ///
 /// # Errors
@@ -1917,104 +1972,224 @@ pub fn open_queries(evaluations: &[u64], indices: &[usize]) -> Result<Vec<(u32, 
     }
     Ok(openings)
 }
-impl Backend for StarkBackend {
+
+#[derive(Debug)]
+struct PreparedBatch {
+    trace_rows: u32,
+    trace_root: u64,
+    air_trace_root: u64,
+    air_composition_root: u64,
+    lde_root: u64,
+    lde_domain_size: u32,
+    lookup_grand_product: u64,
+    gamma: u64,
+    alphas: Vec<u64>,
+    lde_columns: Vec<Vec<u64>>,
+    lde_values: Vec<u64>,
+    lde_hashes: Vec<u64>,
+    air_trace_leaves: Vec<u64>,
+    air_composition_values: Vec<u64>,
+    air_composition_leaves: Vec<u64>,
+    transcript: Transcript,
+}
+
+/// Batch-derived commitments which a proof is required to advertise exactly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BatchDerivedCommitments {
+    pub(crate) trace_root: u64,
+    pub(crate) air_trace_root: u64,
+    pub(crate) air_composition_root: u64,
+    pub(crate) lookup_root: u64,
+    pub(crate) lde_domain_size: u32,
+    pub(crate) lookup_grand_product: u64,
+}
+
+fn prepare_batch(
+    params: &StarkParameterSet,
+    batch: &TransitionBatch,
+    public_io: &PublicIO,
+    protocol_version: u16,
+    params_version: u16,
+    transcript_trace_root: Option<u64>,
+) -> Result<PreparedBatch> {
+    if params.name != batch.parameter {
+        return Err(Error::ParameterMismatch {
+            expected: params.name.to_string(),
+            actual: batch.parameter.clone(),
+        });
+    }
+    let trace = build_trace(batch)?;
+    ensure_base_trace_constraints(&trace)?;
+    let column_names = trace
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+    let planner = Planner::new(params);
+    let canonical_mode = ExecutionMode::Cpu;
+    let poseidon_policy = PoseidonPipelinePolicy::for_mode(canonical_mode);
+    let polynomial_data = derive_polynomial_data(&trace, &planner, canonical_mode);
+    let transfer_plan = polynomial_data.transfer_plan().clone();
+    if transfer_plan.total_deltas() > 0 {
+        tracing::debug!(
+            target: "fastpq::transfer",
+            batches = transfer_plan.batch_count(),
+            deltas = transfer_plan.total_deltas(),
+            estimated_rows = transfer_plan.estimated_row_budget(),
+            "transfer gadget witnesses planned"
+        );
+    }
+    let column_digests = hash_columns_from_coefficients(
+        &trace,
+        &polynomial_data.coefficients,
+        &planner,
+        canonical_mode,
+        poseidon_policy,
+    );
+    let derived_trace_root =
+        merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
+    let trace_root = transcript_trace_root.unwrap_or(derived_trace_root);
+    let lde_columns = polynomial_data.into_lde_columns();
+    let lde_rows = hash_trace_rows_with_mode(&lde_columns, canonical_mode);
+    let lde_values = extend_row_hashes(&planner, canonical_mode, lde_rows, trace.padded_len);
+    let lde_domain_size =
+        u32::try_from(lde_values.len()).map_err(|_| Error::TraceLengthOverflow {
+            rows: lde_values.len(),
+        })?;
+    let lde_hashes = hash_lde_leaves_with_mode(&lde_values, params.fri.arity, canonical_mode)?;
+    let lde_root = merkle_root_with_mode(&lde_hashes, canonical_mode);
+    let air_trace_leaves = hash_air_trace_rows_with_mode(&lde_columns, canonical_mode)?;
+    let air_trace_root = merkle_root_with_mode(&air_trace_leaves, canonical_mode);
+    let mut transcript = Transcript::initialise(
+        public_io,
+        params.name,
+        protocol_version,
+        params_version,
+        TRANSCRIPT_TAG_INIT,
+    )?;
+    transcript.append_message(
+        TRANSCRIPT_TAG_ROOTS,
+        &[lde_root.to_le_bytes(), trace_root.to_le_bytes()].concat(),
+    );
+    let gamma = transcript.challenge_field(TRANSCRIPT_TAG_GAMMA);
+    let selector_index =
+        column_index(&trace, "s_perm").ok_or_else(|| Error::MissingColumn("s_perm".to_string()))?;
+    let witness_index = column_index(&trace, "perm_hash")
+        .ok_or_else(|| Error::MissingColumn("perm_hash".to_string()))?;
+    let lookup_grand_product = compute_lookup_grand_product(
+        &lde_columns[selector_index],
+        &lde_columns[witness_index],
+        gamma,
+    );
+    let mut alphas = Vec::with_capacity(AIR_COMPOSITION_ALPHA_COUNT);
+    for idx in 0..AIR_COMPOSITION_ALPHA_COUNT {
+        let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
+        alphas.push(transcript.challenge_field(&tag));
+    }
+    let next_step = usize::try_from(params.fri.blowup_factor)
+        .expect("FRI blowup factor fits usize")
+        .max(1);
+    let air_composition_values =
+        air_composition_values(&column_names, &lde_columns, &alphas, next_step)?;
+    let air_composition_leaves =
+        hash_air_composition_leaves_with_mode(&air_composition_values, canonical_mode)?;
+    let air_composition_root = merkle_root_with_mode(&air_composition_leaves, canonical_mode);
+    transcript.append_message(
+        TRANSCRIPT_TAG_AIR_ROOTS,
+        &[
+            air_trace_root.to_le_bytes(),
+            air_composition_root.to_le_bytes(),
+        ]
+        .concat(),
+    );
+    transcript.append_message(LOOKUP_PRODUCT_DOMAIN, &lookup_grand_product.to_le_bytes());
+    let trace_rows =
+        u32::try_from(trace.rows).map_err(|_| Error::TraceLengthOverflow { rows: trace.rows })?;
+    Ok(PreparedBatch {
+        trace_rows,
+        trace_root,
+        air_trace_root,
+        air_composition_root,
+        lde_root,
+        lde_domain_size,
+        lookup_grand_product,
+        gamma,
+        alphas,
+        lde_columns,
+        lde_values,
+        lde_hashes,
+        air_trace_leaves,
+        air_composition_values,
+        air_composition_leaves,
+        transcript,
+    })
+}
+
+/// Recompute every proof-carried root and accumulator that is deterministic from the batch.
+pub(crate) fn derive_batch_commitments(
+    params: &StarkParameterSet,
+    batch: &TransitionBatch,
+    public_io: &PublicIO,
+    protocol_version: u16,
+    params_version: u16,
+) -> Result<BatchDerivedCommitments> {
+    let prepared = prepare_batch(
+        params,
+        batch,
+        public_io,
+        protocol_version,
+        params_version,
+        None,
+    )?;
+    Ok(BatchDerivedCommitments {
+        trace_root: prepared.trace_root,
+        air_trace_root: prepared.air_trace_root,
+        air_composition_root: prepared.air_composition_root,
+        lookup_root: prepared.lde_root,
+        lde_domain_size: prepared.lde_domain_size,
+        lookup_grand_product: prepared.lookup_grand_product,
+    })
+}
+
+impl StarkBackend {
     #[allow(clippy::too_many_lines)]
-    fn prove(
+    fn prove_inner(
         &self,
         batch: &TransitionBatch,
         public_io: &PublicIO,
         protocol_version: u16,
         params_version: u16,
+        transcript_trace_root: Option<u64>,
     ) -> Result<BackendArtifact> {
-        if self.config.params.name != batch.parameter {
-            return Err(Error::ParameterMismatch {
-                expected: self.config.params.name.to_string(),
-                actual: batch.parameter.clone(),
-            });
-        }
-        let trace = build_trace(batch)?;
-        let column_names: Vec<String> = trace
-            .columns
-            .iter()
-            .map(|column| column.name.clone())
-            .collect();
-        let planner = Planner::new(&self.config.params);
-        let canonical_mode = ExecutionMode::Cpu;
-        let poseidon_policy = PoseidonPipelinePolicy::for_mode(canonical_mode);
-        let mut polynomial_data = derive_polynomial_data(&trace, &planner, canonical_mode);
-        let transfer_plan = polynomial_data.transfer_plan().clone();
-        if transfer_plan.total_deltas() > 0 {
-            tracing::debug!(
-                target: "fastpq::transfer",
-                batches = transfer_plan.batch_count(),
-                deltas = transfer_plan.total_deltas(),
-                estimated_rows = transfer_plan.estimated_row_budget(),
-                "transfer gadget witnesses planned"
-            );
-        }
-        let column_digests = hash_columns_from_coefficients(
-            &trace,
-            &polynomial_data.coefficients,
-            &planner,
-            canonical_mode,
-            poseidon_policy,
-        );
-        let trace_root =
-            merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
-        let lde_columns = polynomial_data.lde_columns();
-        let lde_rows = hash_trace_rows_with_mode(lde_columns, canonical_mode);
-        let lde_values = extend_row_hashes(&planner, canonical_mode, lde_rows, trace.padded_len);
-        let lde_domain_size =
-            u32::try_from(lde_values.len()).map_err(|_| Error::TraceLengthOverflow {
-                rows: lde_values.len(),
-            })?;
-        let lde_hashes =
-            hash_lde_leaves_with_mode(&lde_values, self.config.params.fri.arity, canonical_mode)?;
-        let lde_root = merkle_root_with_mode(&lde_hashes, canonical_mode);
-        let air_trace_leaves = hash_air_trace_rows_with_mode(lde_columns, canonical_mode)?;
-        let air_trace_root = merkle_root_with_mode(&air_trace_leaves, canonical_mode);
-        let mut transcript = Transcript::initialise(
+        let PreparedBatch {
+            trace_rows,
+            trace_root,
+            air_trace_root,
+            air_composition_root,
+            lde_root,
+            lde_domain_size,
+            lookup_grand_product,
+            gamma,
+            alphas,
+            lde_columns,
+            lde_values,
+            lde_hashes,
+            air_trace_leaves,
+            air_composition_values,
+            air_composition_leaves,
+            mut transcript,
+        } = prepare_batch(
+            &self.config.params,
+            batch,
             public_io,
-            self.config.params.name,
             protocol_version,
             params_version,
-            TRANSCRIPT_TAG_INIT,
+            transcript_trace_root,
         )?;
-        transcript.append_message(
-            TRANSCRIPT_TAG_ROOTS,
-            &[lde_root.to_le_bytes(), trace_root.to_le_bytes()].concat(),
-        );
-        let gamma = transcript.challenge_field(TRANSCRIPT_TAG_GAMMA);
-        let selector_index = column_index(&trace, "s_perm")
-            .ok_or_else(|| Error::MissingColumn("s_perm".to_string()))?;
-        let witness_index = column_index(&trace, "perm_hash")
-            .ok_or_else(|| Error::MissingColumn("perm_hash".to_string()))?;
-        let selector_values = &lde_columns[selector_index];
-        let witness_values = &lde_columns[witness_index];
-        let lookup_grand_product =
-            compute_lookup_grand_product(selector_values, witness_values, gamma);
-        let mut alphas = Vec::with_capacity(AIR_COMPOSITION_ALPHA_COUNT);
-        for idx in 0..AIR_COMPOSITION_ALPHA_COUNT {
-            let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
-            alphas.push(transcript.challenge_field(&tag));
-        }
+        let canonical_mode = ExecutionMode::Cpu;
         let next_step = usize::try_from(self.config.params.fri.blowup_factor)
             .expect("FRI blowup factor fits usize")
             .max(1);
-        let air_composition_values =
-            air_composition_values(&column_names, lde_columns, &alphas, next_step)?;
-        let air_composition_leaves =
-            hash_air_composition_leaves_with_mode(&air_composition_values, canonical_mode)?;
-        let air_composition_root = merkle_root_with_mode(&air_composition_leaves, canonical_mode);
-        transcript.append_message(
-            TRANSCRIPT_TAG_AIR_ROOTS,
-            &[
-                air_trace_root.to_le_bytes(),
-                air_composition_root.to_le_bytes(),
-            ]
-            .concat(),
-        );
-        transcript.append_message(LOOKUP_PRODUCT_DOMAIN, &lookup_grand_product.to_le_bytes());
         let (fri_layer_values, fri_layers, fri_betas) = fold_with_fri_opening_layers(
             &air_composition_values,
             self.config.params.fri.arity,
@@ -2038,7 +2213,7 @@ impl Backend for StarkBackend {
             canonical_mode,
         )?;
         let air_openings = open_air_constraint_openings_with_mode(
-            lde_columns,
+            &lde_columns,
             &air_trace_leaves,
             &air_composition_values,
             &air_composition_leaves,
@@ -2052,8 +2227,6 @@ impl Backend for StarkBackend {
             self.config.params.fri.arity,
             canonical_mode,
         )?;
-        let trace_rows = u32::try_from(trace.rows)
-            .map_err(|_| Error::TraceLengthOverflow { rows: trace.rows })?;
         Ok(BackendArtifact {
             parameter: self.config.params.name.to_string(),
             trace_rows,
@@ -2075,6 +2248,36 @@ impl Backend for StarkBackend {
             air_openings,
             fri_query_openings,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prove_with_transcript_trace_root(
+        &self,
+        batch: &TransitionBatch,
+        public_io: &PublicIO,
+        protocol_version: u16,
+        params_version: u16,
+        trace_root: u64,
+    ) -> Result<BackendArtifact> {
+        self.prove_inner(
+            batch,
+            public_io,
+            protocol_version,
+            params_version,
+            Some(trace_root),
+        )
+    }
+}
+
+impl Backend for StarkBackend {
+    fn prove(
+        &self,
+        batch: &TransitionBatch,
+        public_io: &PublicIO,
+        protocol_version: u16,
+        params_version: u16,
+    ) -> Result<BackendArtifact> {
+        self.prove_inner(batch, public_io, protocol_version, params_version, None)
     }
 }
 #[derive(Debug, Clone)]
@@ -2349,15 +2552,20 @@ mod tests {
     fn sample_batch(rows: usize) -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         for idx in 0..rows {
-            let key = format!("asset/xor/account/{idx:04}").into_bytes();
+            let key = format!("asset/xor/account-{idx:04}").into_bytes();
             let idx_u64 = u64::try_from(idx).expect("sample batch index fits u64");
             let pre = idx_u64.to_le_bytes().to_vec();
-            let post = idx_u64.wrapping_add(1).to_le_bytes().to_vec();
             let op = if idx % 2 == 0 {
                 OperationKind::Mint
             } else {
                 OperationKind::Burn
             };
+            let post_value = if matches!(&op, OperationKind::Burn) {
+                idx_u64 - 1
+            } else {
+                idx_u64.wrapping_add(1)
+            };
+            let post = post_value.to_le_bytes().to_vec();
             batch.push(StateTransition::new(key, pre, post, op));
         }
         batch.sort();
@@ -2463,7 +2671,9 @@ mod tests {
             .iter()
             .map(|column| column.values[0])
             .collect::<Vec<_>>();
-        let alphas = [3, 5];
+        let alphas = (1..=AIR_COMPOSITION_ALPHA_COUNT)
+            .map(|alpha| u64::try_from(alpha).expect("AIR challenge index fits u64"))
+            .collect::<Vec<_>>();
         assert_eq!(
             air_composition_value_for_rows(&column_names, &current, &current, &alphas)
                 .expect("valid row composition"),
@@ -2484,6 +2694,72 @@ mod tests {
                 "AIR must reject instability in {name}"
             );
         }
+    }
+    #[test]
+    fn base_trace_constraint_check_rejects_non_boolean_selector() {
+        let mut trace = build_trace(&sample_batch(2)).expect("trace");
+        let selector = trace
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "s_active")
+            .expect("active selector column");
+        selector.values[0] = 2;
+        let err = ensure_base_trace_constraints(&trace).unwrap_err();
+        assert!(matches!(err, Error::AirConstraintMismatch { index: 0 }));
+    }
+    #[test]
+    fn base_trace_delta_constraint_reconstructs_every_packed_value_limb() {
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let before = (1u64 << 56) - 2;
+        let after = (1u64 << 56) + 3;
+        batch.push(StateTransition::new(
+            b"asset/xor/account-multi-limb".to_vec(),
+            before.to_le_bytes().to_vec(),
+            after.to_le_bytes().to_vec(),
+            OperationKind::Mint,
+        ));
+        let trace = build_trace(&batch).expect("trace");
+        ensure_base_trace_constraints(&trace).expect("multi-limb delta must satisfy the AIR");
+    }
+    #[test]
+    fn air_independent_challenges_prevent_same_parity_residue_cancellation() {
+        let trace = build_trace(&sample_batch(2)).expect("trace");
+        let column_names = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+        let current = trace
+            .columns
+            .iter()
+            .map(|column| column.values[0])
+            .collect::<Vec<_>>();
+        let first = column_names
+            .iter()
+            .position(|column| column == "metadata_hash_limb_0")
+            .expect("first metadata commitment limb");
+        let third = column_names
+            .iter()
+            .position(|column| column == "metadata_hash_limb_2")
+            .expect("third metadata commitment limb");
+        let mut next = current.clone();
+        next[first] = sub_mod(current[first], FIELD_ONE);
+        next[third] = add_mod(current[third], FIELD_ONE);
+
+        let legacy_same_parity_sum = add_mod(
+            mul_mod(3, FIELD_ONE),
+            mul_mod(3, GOLDILOCKS_MODULUS - FIELD_ONE),
+        );
+        assert_eq!(legacy_same_parity_sum, 0);
+        let alphas = (1..=AIR_COMPOSITION_ALPHA_COUNT)
+            .map(|alpha| u64::try_from(alpha).expect("AIR challenge index fits u64"))
+            .collect::<Vec<_>>();
+        assert_ne!(
+            air_composition_value_for_rows(&column_names, &current, &next, &alphas)
+                .expect("AIR composition"),
+            0,
+            "distinct coefficients must expose equal-and-opposite residues at old reuse offsets"
+        );
     }
     #[test]
     fn lde_row_hashes_match_cpu_reference_for_trace_shape() {

@@ -386,19 +386,9 @@ impl RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
         (self.failure, self.prepared)
     }
 }
-/// Why a selector could not be consumed into one storage-worker command.
-#[derive(Debug)]
-#[allow(variant_size_differences)]
-pub(crate) enum CertifiedFetchBodyPersistencePreparationFailure {
-    /// The selected occurrence did not retain exact certified-Fetch authority.
-    Selector(CertifiedFetchReadyPublicationError),
-    /// The executor changed before the selector's final equality re-probe.
-    Executor(EffectTransportError),
-}
 /// Ownership-preserving Phase-A preparation failure.
 #[must_use = "the unchanged selector remains available for retry or drop"]
 pub(crate) struct CertifiedFetchBodyPersistencePreparationError {
-    _failure: CertifiedFetchBodyPersistencePreparationFailure,
     prepared: PreparedLifecycleIngressSelector,
 }
 impl CertifiedFetchBodyPersistencePreparationError {
@@ -2094,7 +2084,7 @@ impl LifecycleCoordinator {
             PreparedCertifiedFetchReadyTransition::Stutter(_) => {}
         }
         executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated);
-        let _disposition = service_prepared.commit(operation.permit());
+        service_prepared.commit(operation.permit());
         work_ack.commit();
         if let Err(error) =
             ingress.mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)
@@ -2559,55 +2549,29 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     {
         let ready = match prepared.selected_certified_fetch_ready_authority() {
             Ok(ready) => ready,
-            Err(failure) => {
-                return Err(CertifiedFetchBodyPersistencePreparationError {
-                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(failure),
-                    prepared,
-                });
+            Err(_failure) => {
+                return Err(CertifiedFetchBodyPersistencePreparationError { prepared });
             }
         };
         let revalidated = {
             let Some(family) = prepared.claimed_response_families.get(&ready.request_hash) else {
-                return Err(CertifiedFetchBodyPersistencePreparationError {
-                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
-                        CertifiedFetchReadyPublicationError::SelectedOccurrenceNotClaimedResponse,
-                    ),
-                    prepared,
-                });
+                return Err(CertifiedFetchBodyPersistencePreparationError { prepared });
             };
             let Some((response, responder)) = family.authenticated_response() else {
-                return Err(CertifiedFetchBodyPersistencePreparationError {
-                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
-                        CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
-                    ),
-                    prepared,
-                });
+                return Err(CertifiedFetchBodyPersistencePreparationError { prepared });
             };
             let Some(candidate) = family.candidate.ordinary() else {
-                return Err(CertifiedFetchBodyPersistencePreparationError {
-                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
-                        CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
-                    ),
-                    prepared,
-                });
+                return Err(CertifiedFetchBodyPersistencePreparationError { prepared });
             };
             self.revalidate_certified_response_priority_candidate(candidate, response, responder)
         };
         match revalidated {
             Ok(true) => {}
             Ok(false) => {
-                return Err(CertifiedFetchBodyPersistencePreparationError {
-                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
-                        CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
-                    ),
-                    prepared,
-                });
+                return Err(CertifiedFetchBodyPersistencePreparationError { prepared });
             }
-            Err(failure) => {
-                return Err(CertifiedFetchBodyPersistencePreparationError {
-                    _failure: CertifiedFetchBodyPersistencePreparationFailure::Executor(failure),
-                    prepared,
-                });
+            Err(_failure) => {
+                return Err(CertifiedFetchBodyPersistencePreparationError { prepared });
             }
         }
         let family = prepared
@@ -2621,12 +2585,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             candidate,
         } = family;
         let PreparedCertifiedResponseCandidate::Ordinary(candidate) = candidate else {
-            return Err(CertifiedFetchBodyPersistencePreparationError {
-                _failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
-                    CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
-                ),
-                prepared,
-            });
+            return Err(CertifiedFetchBodyPersistencePreparationError { prepared });
         };
         let work_id = candidate.work_id();
         let authenticated = candidate.into_authenticated_response();

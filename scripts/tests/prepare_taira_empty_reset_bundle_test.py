@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -45,6 +46,12 @@ def test_isolated_cli_loads_only_its_trusted_sibling_modules(
     assert "--kagami" not in result.stdout
     assert "--onboarding-token-hash-tool" in result.stdout
     assert "--source-bundle-sha256" in result.stdout
+    assert "--local-testnet-reviewed-input-dir" in result.stdout
+    assert "--local-testnet-reviewed-inputs-sha256" in result.stdout
+    assert "--local-testnet-source-closure-sha256" in result.stdout
+    assert "--local-testnet-python-sha256" in result.stdout
+    assert "--operator-status-client" in result.stdout
+    assert "--trusted-operator-status-client-sha256" in result.stdout
     assert "--kagemusha-release-root" in result.stdout
     assert "--kagemusha-activation-authority" in result.stdout
 
@@ -337,6 +344,7 @@ def _privacy_release(
             + b'"\nexpected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"\n'
         ),
         "genesis.json": reset_bundle.canonical_json_bytes(genesis),
+        "nevo-reset.review.json": b'{"review":true}\n',
         "bootle_lantern_broker_public.json": b'{"broker":true}\n',
     }
     rows: dict[str, object] = {}
@@ -557,6 +565,14 @@ def _prepare_args(
     if not token_hash_tool.exists():
         _write_private(token_hash_tool, b"fake native token hash tool")
         token_hash_tool.chmod(0o700)
+    native_genesis_verifier = private / "native-genesis-verifier"
+    if not native_genesis_verifier.exists():
+        _write_private(native_genesis_verifier, b"fake native genesis verifier")
+        native_genesis_verifier.chmod(0o700)
+    operator_status_client = private / "taira_operator_status"
+    if not operator_status_client.exists():
+        _write_private(operator_status_client, b"fake native operator status client")
+        operator_status_client.chmod(0o700)
     controller_manifest = private / "authority-controller-v1.json"
     if not controller_manifest.exists():
         _write_private(controller_manifest, b'{"test":"controller"}\n')
@@ -565,11 +581,23 @@ def _prepare_args(
         source_bundle=source,
         source_bundle_sha256=reset_bundle.source_bundle_sha256(source),
         privacy_release_dir=privacy,
+        local_testnet_reviewed_input_dir=None,
+        local_testnet_reviewed_inputs_sha256=None,
+        local_testnet_source_closure_sha256=None,
+        local_testnet_python_sha256=None,
         genesis_external_signer=genesis_signer,
         trusted_genesis_external_signer_sha256=reset_bundle.sha256(genesis_signer),
         authenticated_tool_controller=tool_controller,
         trusted_authenticated_tool_controller_sha256=reset_bundle.sha256(
             tool_controller
+        ),
+        genesis_native_verifier=native_genesis_verifier,
+        trusted_genesis_native_verifier_sha256=reset_bundle.sha256(
+            native_genesis_verifier
+        ),
+        operator_status_client=operator_status_client,
+        trusted_operator_status_client_sha256=reset_bundle.sha256(
+            operator_status_client
         ),
         onboarding_token_hash_tool=token_hash_tool,
         output_bundle=private / "output",
@@ -599,6 +627,184 @@ def _trust_test_controller(
         "verify",
         lambda *_args, **_kwargs: {"verified": True},
     )
+    monkeypatch.setattr(
+        reset_bundle,
+        "_validate_authenticated_nevo_release",
+        lambda _payloads: {
+            "schema": "iroha.taira.nevo-reset-review.v1",
+            "public_inputs_sha256": "91" * 32,
+            "unsigned_genesis_sha256": "92" * 32,
+            "public_identities": {
+                "onboarding_authority_account_id": "reviewed-onboarding",
+                "api_signer_account_id": "reviewed-api",
+                "dpn_inori_account_id": "reviewed-inori",
+                "dpn_epr_guard_account_id": "reviewed-guard",
+            },
+            "credential_hash_bindings": [
+                {
+                    "scope": {"dataspace": "is2"},
+                    "token_hash": "blake3:" + "93" * 32,
+                },
+                {
+                    "scope": {"dataspace": "dpn"},
+                    "token_hash": "blake3:" + "94" * 32,
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        reset_bundle,
+        "_validate_rendered_nevo_bindings",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        reset_bundle,
+        "_verify_signed_genesis",
+        lambda **kwargs: {
+            "schema": "iroha.kagami.prepared-genesis-verification.v2",
+            "status": "verified",
+            "reviewed_manifest_sha256": reset_bundle.sha256(
+                kwargs["reviewed_manifest"]
+            ),
+            "validator_roster_sha256": reset_bundle.sha256(
+                kwargs["validator_roster"]
+            ),
+            "bound_manifest_sha256": reset_bundle.sha256(
+                kwargs["bound_manifest"]
+            ),
+            "pre_sign_manifest_sha256": reset_bundle.sha256(
+                kwargs["pre_sign_manifest"]
+            ),
+            "signed_genesis_sha256": reset_bundle.sha256(
+                kwargs["signed_genesis"]
+            ),
+            "peer_config_sha256": [
+                reset_bundle.sha256(path) for path in kwargs["peer_configs"]
+            ],
+            "peer_config_set_sha256": reset_bundle._ordered_sha256_set(
+                [reset_bundle.sha256(path) for path in kwargs["peer_configs"]]
+            ),
+            "genesis_public_key": kwargs["genesis_public_key"],
+            "expected_hash": kwargs["expected_hash"],
+            "validator_count": reset_bundle.PEER_COUNT,
+            "reviewed_transform_passed": True,
+            "allowed_transform_passed": True,
+            "staged_context_passed": True,
+            "full_core_validation_passed": True,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "duplicate_tool",
+    (
+        "genesis_external_signer",
+        "authenticated_tool_controller",
+        "genesis_native_verifier",
+        "operator_status_client",
+    ),
+)
+def test_prepare_requires_every_authenticated_tool_to_be_distinct(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    duplicate_tool: str,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    source = private / "source"
+    _source_reset(source)
+    signer = private / "external-genesis-signer"
+    _write_private(signer, b"fake external signer")
+    signer.chmod(0o700)
+    args = _prepare_args(private, source, private / "privacy", signer)
+    _trust_test_controller(args, monkeypatch)
+    args.onboarding_token_hash_tool = getattr(args, duplicate_tool)
+
+    with pytest.raises(RuntimeError, match="must be distinct"):
+        reset_bundle.prepare(args)
+
+    assert not args.output_bundle.exists()
+
+
+def test_native_verifier_binds_review_roster_and_all_four_peer_configs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    verifier = private / "kagami"
+    _write_private(verifier, b"fake pinned verifier")
+    verifier.chmod(0o700)
+    reviewed = private / "genesis.reviewed.json"
+    roster = private / "validator-roster.toml"
+    bound = private / "genesis.json"
+    pre_sign = private / "genesis.pre-sign.json"
+    signed = private / "genesis.signed.nrt"
+    for path, body in (
+        (reviewed, b'{"reviewed":true}\n'),
+        (roster, b"[[validators]]\n"),
+        (bound, b'{"bound":true}\n'),
+        (pre_sign, b'{"rendered":true}\n'),
+        (signed, b"signed-wire"),
+    ):
+        _write_private(path, body)
+    peer_configs = []
+    for slug in reset_bundle.SLUGS:
+        config = private / slug / "config.toml"
+        _mkdir_private(config.parent)
+        _write_private(config, f"slug = '{slug}'\n".encode())
+        peer_configs.append(config)
+    peer_digests = [reset_bundle.sha256(path) for path in peer_configs]
+    receipt = {
+        "schema": "iroha.kagami.prepared-genesis-verification.v2",
+        "status": "verified",
+        "reviewed_manifest_sha256": reset_bundle.sha256(reviewed),
+        "validator_roster_sha256": reset_bundle.sha256(roster),
+        "bound_manifest_sha256": reset_bundle.sha256(bound),
+        "pre_sign_manifest_sha256": reset_bundle.sha256(pre_sign),
+        "signed_genesis_sha256": reset_bundle.sha256(signed),
+        "peer_config_sha256": peer_digests,
+        "peer_config_set_sha256": reset_bundle._ordered_sha256_set(peer_digests),
+        "genesis_public_key": "ed0120" + "11" * 32,
+        "expected_hash": "22" * 32,
+        "validator_count": reset_bundle.PEER_COUNT,
+        "reviewed_transform_passed": True,
+        "allowed_transform_passed": True,
+        "staged_context_passed": True,
+        "full_core_validation_passed": True,
+    }
+    captured: list[str] = []
+
+    def fake_run(command, **kwargs):  # type: ignore[no-untyped-def]
+        captured.extend(command)
+        kwargs["stdout"].write(reset_bundle.canonical_json_bytes(receipt))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(reset_bundle.subprocess, "run", fake_run)
+    assert (
+        reset_bundle._verify_signed_genesis(
+            native_verifier=verifier,
+            trusted_native_verifier_sha256=reset_bundle.sha256(verifier),
+            reviewed_manifest=reviewed,
+            validator_roster=roster,
+            bound_manifest=bound,
+            pre_sign_manifest=pre_sign,
+            signed_genesis=signed,
+            peer_configs=peer_configs,
+            genesis_public_key=str(receipt["genesis_public_key"]),
+            expected_hash=str(receipt["expected_hash"]),
+            temporary_root=private,
+        )
+        == receipt
+    )
+    assert captured.count("--peer-config") == reset_bundle.PEER_COUNT
+    assert captured[captured.index("--reviewed-manifest") + 1] == str(reviewed)
+    assert captured[captured.index("--validator-roster") + 1] == str(roster)
+    assert [
+        captured[index + 1]
+        for index, value in enumerate(captured)
+        if value == "--peer-config"
+    ] == [str(path) for path in peer_configs]
 
 
 def test_private_file_guard_rejects_symlink_hardlink_and_permissive_mode(
@@ -835,6 +1041,247 @@ def test_authenticated_privacy_snapshot_rejects_dpn_only_mismatch(
             cargo_lock_sha256="cd" * 32,
             workspace_source_manifest_sha256="ef" * 32,
         )
+
+
+def _local_reviewed_inputs(root: Path) -> None:
+    _mkdir_private(root)
+    fixture = (
+        SCRIPT.parent.parent
+        / "crates/iroha_kagami/tests/fixtures/taira_nevo_v2"
+    )
+    payloads = {
+        "privacy_bootstrap_plan.json": (
+            reset_bundle.nevo_composer.REPO_ROOT
+            / "configs/soranexus/taira/privacy_bootstrap_plan.json"
+        ).read_bytes(),
+        "config.toml": (
+            reset_bundle.nevo_composer.REPO_ROOT
+            / "configs/soranexus/taira/config.toml"
+        ).read_bytes(),
+        "genesis.json": (fixture / "unsigned-genesis.json").read_bytes(),
+        "nevo-reset.review.json": (fixture / "review.json").read_bytes(),
+    }
+    for name, payload in payloads.items():
+        _write_private(root / name, payload)
+
+
+def test_local_testnet_reviewed_inputs_are_explicitly_unprivileged_and_pinned(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "local-reviewed"
+    _local_reviewed_inputs(root)
+    payloads, inspected, digest = reset_bundle._inspect_local_testnet_reviewed_inputs(
+        root,
+        source_commit="ab" * 20,
+        dpn_validator_release_commit=DPN_COMMIT,
+        cargo_lock_sha256="cd" * 32,
+        workspace_source_manifest_sha256="ef" * 32,
+    )
+    loaded, manifest, observed = reset_bundle._load_local_testnet_reviewed_inputs(
+        root,
+        expected_sha256=digest,
+        source_commit="ab" * 20,
+        dpn_validator_release_commit=DPN_COMMIT,
+        cargo_lock_sha256="cd" * 32,
+        workspace_source_manifest_sha256="ef" * 32,
+    )
+    assert loaded == payloads
+    assert manifest == inspected
+    assert observed == digest
+    assert manifest["schema"] == reset_bundle.LOCAL_REVIEW_SCHEMA
+    assert manifest["authority_claim"] == "none-user-authorized-same-host-testnet"
+    assert "authority" not in manifest
+    assert set(manifest["privacy_inputs"]) == set(
+        reset_bundle.LOCAL_TESTNET_REVIEWED_INPUTS
+    )
+    assert "bootle_lantern_broker_public.json" not in loaded
+
+
+def test_local_testnet_reviewed_inputs_reject_post_inspection_mutation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "local-reviewed"
+    _local_reviewed_inputs(root)
+    _, _, digest = reset_bundle._inspect_local_testnet_reviewed_inputs(
+        root,
+        source_commit="ab" * 20,
+        dpn_validator_release_commit=DPN_COMMIT,
+        cargo_lock_sha256="cd" * 32,
+        workspace_source_manifest_sha256="ef" * 32,
+    )
+    with pytest.raises(RuntimeError, match="operator-inspected identity"):
+        reset_bundle._load_local_testnet_reviewed_inputs(
+            root,
+            expected_sha256="00" * 32,
+            source_commit="ab" * 20,
+            dpn_validator_release_commit=DPN_COMMIT,
+            cargo_lock_sha256="cd" * 32,
+            workspace_source_manifest_sha256="ef" * 32,
+        )
+    _write_private(root / "genesis.json", b'{"mutated":true}\n')
+    with pytest.raises(RuntimeError, match="invalid NEVO review"):
+        reset_bundle._load_local_testnet_reviewed_inputs(
+            root,
+            expected_sha256=digest,
+            source_commit="ab" * 20,
+            dpn_validator_release_commit=DPN_COMMIT,
+            cargo_lock_sha256="cd" * 32,
+            workspace_source_manifest_sha256="ef" * 32,
+        )
+
+
+def test_local_testnet_reviewed_inputs_reject_synthetic_authority_manifest(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "local-reviewed"
+    _local_reviewed_inputs(root)
+    _write_private(root / "authenticated-privacy-release-v1.json", b"{}\n")
+    with pytest.raises(RuntimeError, match="exactly four files"):
+        reset_bundle._inspect_local_testnet_reviewed_inputs(
+            root,
+            source_commit="ab" * 20,
+            dpn_validator_release_commit=DPN_COMMIT,
+            cargo_lock_sha256="cd" * 32,
+            workspace_source_manifest_sha256="ef" * 32,
+        )
+
+
+def test_local_testnet_reviewed_inputs_reject_finalized_or_broker_inputs(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "local-reviewed"
+    _local_reviewed_inputs(root)
+    _write_private(root / "privacy_bootstrap_plan.json", b'{"network_id":"final"}\n')
+    with pytest.raises(RuntimeError, match="staging source template"):
+        reset_bundle._inspect_local_testnet_reviewed_inputs(
+            root,
+            source_commit="ab" * 20,
+            dpn_validator_release_commit=DPN_COMMIT,
+            cargo_lock_sha256="cd" * 32,
+            workspace_source_manifest_sha256="ef" * 32,
+        )
+
+    _local_reviewed_inputs(root)
+    _write_private(root / "bootle_lantern_broker_public.json", b"{}\n")
+    with pytest.raises(RuntimeError, match="exactly four files"):
+        reset_bundle._inspect_local_testnet_reviewed_inputs(
+            root,
+            source_commit="ab" * 20,
+            dpn_validator_release_commit=DPN_COMMIT,
+            cargo_lock_sha256="cd" * 32,
+            workspace_source_manifest_sha256="ef" * 32,
+        )
+
+
+def test_local_testnet_source_closure_is_exact_and_operator_inspectable(
+    tmp_path: Path,
+) -> None:
+    from scripts import deploy_taira_user_launchagent_reset as user_reset
+
+    manifest, digest = reset_bundle.local_testnet_source_closure()
+    assert manifest["schema"] == reset_bundle.LOCAL_TESTNET_SOURCE_CLOSURE_SCHEMA
+    assert [row["path"] for row in manifest["files"]] == list(
+        reset_bundle.LOCAL_TESTNET_SOURCE_CLOSURE_FILES
+    )
+    assert hashlib.sha256(
+        reset_bundle.canonical_json_bytes(manifest)
+    ).hexdigest() == digest
+    consumer_manifest, consumer_digest = user_reset.local_testnet_source_closure()
+    assert consumer_manifest == manifest
+    assert consumer_digest == digest
+
+    inspector = SCRIPT.with_name("inspect_taira_local_reset_source_closure.py")
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", str(inspector), "--digest-only"],
+        cwd=SCRIPT.parent.parent,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{digest}\n"
+
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    staged = private / "source-closure"
+    staged_result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-S",
+            str(inspector),
+            "--stage-root",
+            str(staged),
+        ],
+        cwd=SCRIPT.parent.parent,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert staged_result.returncode == 0, staged_result.stderr
+    staged_manifest = json.loads(staged_result.stdout)
+    assert staged_manifest == {**manifest, "sha256": digest}
+    assert stat.S_IMODE(staged.stat().st_mode) == 0o700
+    staged_inspector = staged / "scripts/inspect_taira_local_reset_source_closure.py"
+    isolated = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-S",
+            str(staged_inspector),
+            "--digest-only",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert isolated.returncode == 0, isolated.stderr
+    assert isolated.stdout == f"{digest}\n"
+
+    reviewed = private / "reviewed-inputs"
+    _local_reviewed_inputs(reviewed)
+    _, _, reviewed_digest = reset_bundle._inspect_local_testnet_reviewed_inputs(
+        reviewed,
+        source_commit="ab" * 20,
+        dpn_validator_release_commit=DPN_COMMIT,
+        cargo_lock_sha256="cd" * 32,
+        workspace_source_manifest_sha256="ef" * 32,
+    )
+    python_digest = reset_bundle.stable_hash_path(
+        reset_bundle.LOCAL_TESTNET_PYTHON.resolve(strict=True)
+    ).sha256
+    reviewed_inspector = staged / "scripts/inspect_taira_local_reviewed_inputs.py"
+    inspected = subprocess.run(
+        [
+            str(reset_bundle.LOCAL_TESTNET_PYTHON),
+            "-I",
+            "-B",
+            "-S",
+            str(reviewed_inspector),
+            "--reviewed-input-dir",
+            str(reviewed),
+            "--source-commit",
+            "ab" * 20,
+            "--dpn-validator-release-commit",
+            DPN_COMMIT,
+            "--cargo-lock-sha256",
+            "cd" * 32,
+            "--workspace-source-manifest-sha256",
+            "ef" * 32,
+            "--local-testnet-source-closure-sha256",
+            digest,
+            "--local-testnet-python-sha256",
+            python_digest,
+            "--digest-only",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert inspected.returncode == 0, inspected.stderr
+    assert inspected.stdout == f"{reviewed_digest}\n"
 
 
 def test_source_reset_snapshot_rejects_any_post_review_byte_mutation(
@@ -2002,6 +2449,69 @@ def test_prepare_refuses_invalid_first_pass_before_using_external_signer(
 
     signer.assert_not_called()
     assert not args.output_bundle.exists()
+
+
+def test_local_reset_requires_all_rendered_privacy_issuers_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "bundle"
+    expected_hash = "ab" * 32
+    expected_hash_literal = reset_bundle.renderer._format_literal(
+        "hash", expected_hash.upper()
+    )
+    projections: dict[Path, dict[str, object]] = {}
+    for slug in reset_bundle.SLUGS:
+        config_path = output / "rendered" / slug / "config.toml"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_bytes(f"{slug}\n".encode())
+        issuer = {
+            "enabled": False,
+            "state_dir": str(
+                output
+                / "rendered"
+                / slug
+                / "runtime/privacy/bootle-lantern/issuer"
+            ),
+            "max_inflight": 2,
+            "authorization_lifetime_blocks": 300,
+            "max_records": 4096,
+            "max_total_bytes": 13_557_760,
+            "terminal_retention_blocks": 4096,
+        }
+        projections[config_path] = {
+            "genesis": {
+                "file": str(output / "genesis.signed.nrt"),
+                "expected_hash": expected_hash_literal,
+            },
+            "torii": {"privacy_bootle_lantern_issuer": issuer},
+            "nexus": {
+                "registry": {
+                    "manifest_directory": str(output / "rendered" / slug / "manifests"),
+                    "cache_directory": str(output / "rendered" / slug / "manifests"),
+                }
+            },
+        }
+    monkeypatch.setattr(
+        reset_bundle,
+        "_privacy_projection",
+        lambda path: projections[path],
+    )
+
+    hashes = reset_bundle._validate_rendered_configs(
+        output,
+        expected_hash,
+        designated_privacy_issuer_enabled=False,
+    )
+    assert set(hashes) == set(reset_bundle.SLUGS)
+
+    first = output / "rendered" / reset_bundle.SLUGS[0] / "config.toml"
+    projections[first]["torii"]["privacy_bootle_lantern_issuer"]["enabled"] = True
+    with pytest.raises(RuntimeError, match="selected reset mode"):
+        reset_bundle._validate_rendered_configs(
+            output,
+            expected_hash,
+            designated_privacy_issuer_enabled=False,
+        )
 
 
 if __name__ == "__main__":

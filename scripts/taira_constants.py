@@ -10,3 +10,26 @@ NETWORK_ID = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0
 CHAIN_DISCRIMINANT = 369
 PEER_COUNT = 4
 SLUGS = tuple(f"taira-validator-{index}" for index in range(1, PEER_COUNT + 1))
+
+
+def network_id_from_genesis_hash(genesis_hash: str) -> str:
+    """Return the canonical CRC-bound NetworkId for one reset genesis hash."""
+
+    if (
+        not isinstance(genesis_hash, str)
+        or len(genesis_hash) != 64
+        or genesis_hash != genesis_hash.lower()
+        or genesis_hash == "0" * 64
+        or any(character not in "0123456789abcdef" for character in genesis_hash)
+    ):
+        raise ValueError("genesis hash must be one nonzero lowercase 32-byte digest")
+    body = genesis_hash.upper()
+    crc = 0xFFFF
+    for byte in b"hash:" + body.encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return f"hash:{body}#{crc:04X}"

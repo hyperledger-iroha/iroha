@@ -312,13 +312,8 @@ fn commit_barrier_owns_hash_until_plan_reconciliation() {
     let dir = tempdir().expect("tempdir");
     let queue = Queue::test(config_factory(), &time_source);
     install_globally_certified_test_reservation_journals(&queue, &dir);
-<<<<<<< HEAD
-    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
-    let hash = transaction.hash_as_entrypoint();
-=======
     let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
-    let hash = transaction.hash();
->>>>>>> origin/optimizations
+    let hash = transaction.hash_as_entrypoint();
     let key = persist_unreconciled_commit_barrier(
         &queue,
         &state,
@@ -487,19 +482,11 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
     let dir = tempdir().expect("tempdir");
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     install_globally_certified_test_reservation_journals(&queue, &dir);
-<<<<<<< HEAD
-    let selected = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let selected = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
     let selected_hash = selected.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, selected);
-    let unrelated = accepted_unique_entrypoint_tx_by_someone(&time_source);
-    let unrelated_hash = unrelated.hash_as_entrypoint();
-=======
-    let selected = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
-    let selected_hash = selected.hash();
-    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, selected);
     let unrelated = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
-    let unrelated_hash = unrelated.hash();
->>>>>>> origin/optimizations
+    let unrelated_hash = unrelated.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
     let reached = Arc::new(Barrier::new(2));
     let resume = Arc::new(Barrier::new(2));

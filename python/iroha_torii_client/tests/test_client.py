@@ -933,11 +933,9 @@ def test_sorafs_orderbook_read_helpers_build_paths_and_normalize_payloads() -> N
         "limit": 25,
     }
     assert session.calls[0]["headers"]["X-Trace"] == "book"
-
     trades = client.list_sorafs_orderbook_trades()
     assert trades["trades"]["trades"][0]["trade_id"] == fixed(0x22)
     assert session.calls[1]["url"].endswith("/v1/sorafs/orderbook/trades")
-
     channels = client.list_sorafs_orderbook_channels()
     assert channels["channels"]["channels"][0]["provider_id"] == fixed(0x55)
     assert channels["channels"]["channels"][0]["status"] == {
@@ -945,11 +943,9 @@ def test_sorafs_orderbook_read_helpers_build_paths_and_normalize_payloads() -> N
         "value": None,
     }
     assert session.calls[2]["url"].endswith("/v1/sorafs/orderbook/channels")
-
     receipts = client.list_sorafs_orderbook_receipts()
     assert receipts["receipts"]["receipts"][0]["receipt_id"] == fixed(0x44)
     assert session.calls[3]["url"].endswith("/v1/sorafs/orderbook/receipts")
-
     events = client.list_sorafs_orderbook_events(
         expected_finalized_height=42,
         expected_finalized_block_hash_hex=anchor_hex,
@@ -2075,9 +2071,7 @@ def test_list_peers_returns_typed_records() -> None:
         session=session,
         operator_signing_context=_operator_context(),
     )
-
     peers = client.list_peers()
-
     assert len(peers) == 2
     assert peers[0].address == "127.0.0.1:1337"
     assert peers[0].public_key_hex == "ed01"
@@ -2253,7 +2247,6 @@ def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
             f"{CANONICAL_OWNER}/retail",
             canonical_auth=auth,
         )
-
 
 
 def test_call_contract_posts_selector_payload_and_parses_response() -> None:
@@ -3107,7 +3100,6 @@ def test_list_telemetry_peers_info_parses_payload() -> None:
         )
     )
     client = ToriiClient("http://node.test", session=session)
-
     peers = client.list_telemetry_peers_info()
 
     assert len(peers) == 1
@@ -3444,7 +3436,6 @@ def test_get_node_capabilities_parses_snapshot() -> None:
     assert capabilities.crypto.sm.acceleration.neon_sm3 is True
     assert capabilities.crypto.curves.registry_version == 2
     assert capabilities.crypto.curves.allowed_curve_bitmap == [32770]
-
 
 
 def test_contract_helpers_against_mock_server() -> None:
@@ -5110,7 +5101,6 @@ def test_mock_server_rejects_retired_global_sumeragi_routes(method: str, path: s
         assert response.status_code == 404
     finally:
         server.stop()
-
 
 
 def test_get_runtime_abi_active_parses_payload() -> None:

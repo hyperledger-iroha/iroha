@@ -3894,11 +3894,9 @@ type CryptoRuntimeNamespaceExport =
   | "verifyEd25519"
   | "verifySm2";
 
-
 export const Torii: IrohaJsRuntimeNamespace<ToriiRuntimeNamespaceExport>;
 export const Norito: IrohaJsRuntimeNamespace<NoritoRuntimeNamespaceExport>;
 export const Crypto: IrohaJsRuntimeNamespace<CryptoRuntimeNamespaceExport>;
-
 export interface SoranetPuzzleParamsSnapshot {
   memoryKib: number;
   timeCost: number;

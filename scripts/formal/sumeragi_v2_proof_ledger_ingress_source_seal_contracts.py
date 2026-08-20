@@ -9,7 +9,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
+        "a6d4a56fb74fe95a5d681e9899df1865ee83741e47685e4c4681cd2b4c5e2526"
     ),
     "fair_v2_ingress_required_capacity": (
         "b3786ae53f4632d7035fc68d122a7dc542df6d26d2cc00ece1f6681840045105"
@@ -750,10 +750,10 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "a49c580b3629511260af545ce2d5b5916dd63f20a61a7ddba50d77b4d8f6a908"
     ),
     "try_recv_if_at_checked": (
-        "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
+        "7b3b4b907715d56dba2dcc36dee64db07ef61cd7a456d039e24146cf4d60d20d"
     ),
     "try_recv_if_at_checked_classified": (
-        "8867eda9f132eefd0510e3aa1cc70fad7ed02b27df25deec9c7f35046a339f32"
+        "5f6184b1089ce6fee2ccb7f1ad8dadc5d47b8b017dfec383f7211eaec6fe9060"
     ),
     "dequeue_selected_locked": (
         "2916aa1e30fb8e0894728d7e241b87b26fbc6ecfc54ccf23d010b1b5b943ddd0"
@@ -777,18 +777,18 @@ _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 = {
         "2df7516317611dcc3fc0f959cca1e80a7b6aa3670a90d2add798f744cfebbd4c"
     ),
     "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit": (
-        "da01b212e5b3db1163c100f1088e943c074aa124c2f225a4c068052d79e499f9"
+        "ea093accfdb33740bc7f21e9c26b17e74a1d7600c885ff45a5718caed8cb457a"
     ),
     "locked_publication_fence_serializes_unrelated_append_and_preserves_it": (
-        "3f863e16e284ffd980a06b45cd16d3ee4cfd4559a8f7ff23687a55d32ff7481b"
+        "c88fcd11bd701f1a67ffc441fe1cc4bdc08f9be32e5a8270373ea83335a6131f"
     ),
     "dropping_locked_publication_fence_releases_producer_without_dequeue": (
-        "4375aa5205367018773fec586aefb2c44940f502e6de1ae94b8e6e221a350d6f"
+        "a31983eba320245b25089ebfcbc6fbd5a5c024fc76b81946329510cf9177e687"
     ),
 }
 
 _TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
-    "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier": (
-        "394810ab62d382e3016e5a6c88660778c34beca86d0804b567a74be47f8694d5"
+    "ordinary_selector_preserves_certified_response_before_timeout_vote": (
+        "b55aca5b506f5394f02da001467ed2f2f6465625e82d9e4cb09642391c349a49"
     ),
 }

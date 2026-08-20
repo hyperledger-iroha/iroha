@@ -1486,7 +1486,7 @@ fn prove_lane_relay_envelope(
     )
     .wrap_err("bind lane relay AXT batch")?;
     let proof = prover_from_config(fastpq)?
-        .prove(&batch)
+        .prove_axt_bound(&batch, &binding)
         .wrap_err("prove lane relay AXT batch")?;
     let proof_blob = fastpq_prover::axt_proof_blob_from_bound_batch(
         &batch,
@@ -1586,7 +1586,7 @@ fn prove_fee_sponsor_vault_allocation(
     )
     .wrap_err("bind fee sponsor vault allocation AXT batch")?;
     let proof = prover_from_config(fastpq)?
-        .prove(&batch)
+        .prove_axt_bound(&batch, &binding)
         .wrap_err("prove fee sponsor vault allocation AXT batch")?;
     fastpq_prover::axt_proof_blob_from_bound_batch(
         &batch,

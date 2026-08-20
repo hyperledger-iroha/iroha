@@ -384,9 +384,9 @@ fn production_leader_wire_binding_parks_queued_carriers_atomically_before_unbind
         },
     ));
     ingress
-        .try_push(InboundBlockMessage::new(
+        .try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(timeout_vote),
-            Some(validator.clone()),
+            validator.clone(),
         ))
         .expect("queue one durable productive carrier");
     let unbound_chunk = wire::ConsensusMessageV2::new(
@@ -401,9 +401,9 @@ fn production_leader_wire_binding_parks_queued_carriers_atomically_before_unbind
         }),
     );
     ingress
-        .try_push(InboundBlockMessage::new(
+        .try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(unbound_chunk),
-            Some(validator.clone()),
+            validator.clone(),
         ))
         .expect("queue one proofless producer carrier");
     assert_eq!(ingress.snapshot_at(Instant::now()).depth, 2);
@@ -1503,8 +1503,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "BlockSignaturePolicy::GenesisAuthority(",
             "WalRecordV2::Decision(decision.clone())",
             "let mut launched = owner",
-            "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",
-            "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
+            "ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)",
+            "ProductionCompletionDispatchV1::ApplyQueued",
             "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
             "let mut activated = launched",
             "lifecycle_run_inner::finalize_lifecycle_height(",
@@ -2184,7 +2184,7 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
 fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit() {
     let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
     let dispatch = scheduler
-        .split_once("fn dispatch_recovered_completion_with_runner_debt(")
+        .split_once("fn dispatch_completion_with_runner_debt(")
         .expect("recovered Completion has one composite dispatch transaction")
         .1
         .split_once(
@@ -2270,7 +2270,7 @@ fn ordinary_certified_body_pipeline_has_no_retained_compatibility_carrier() {
         (effects, "retained_certified_body_response"),
         (
             effects,
-            "accept_certified_body_response_with_ingress_ownership",
+            concat!("accept_certified_body_", "response_with_ingress_ownership"),
         ),
         (runtime, "retained_response_predecessor_target_ordinal"),
         (runtime, "retained_response_predecessor_retry_attempted"),
@@ -2283,9 +2283,13 @@ fn ordinary_certified_body_pipeline_has_no_retained_compatibility_carrier() {
         );
     }
     assert!(
-        ordinary_consumer.contains("certified body response bypassed its lifecycle Fetch owner")
+        ordinary_consumer.contains("retired certified body response outside lifecycle selection")
     );
-    assert!(!ordinary_consumer.contains("accept_certified_body_response("));
+    assert!(
+        ordinary_consumer
+            .contains("a selected fetch response must instead complete through lifecycle")
+    );
+    assert!(!ordinary_consumer.contains(concat!("accept_certified_body_", "response(")));
     assert!(turn_driver.contains("drive_certified_fetch_ingress_selector(selector, runner)"));
     assert!(turn_driver.contains("complete_certified_fetch_body_persistence("));
 }

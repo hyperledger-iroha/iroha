@@ -5815,6 +5815,32 @@ impl MergeSidecarTransport {
             false,
         )
     }
+    /// Register ordinary validation work under lifecycle ownership.
+    ///
+    /// This retains the same durable carrier across executor cleanup without
+    /// borrowing the capacity priority reserved for a decided Apply.
+    pub(crate) fn defer_lifecycle_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        reference: CertifiedMergeLedgerReference,
+        requester: &PeerId,
+        committed_height: u64,
+        now: Instant,
+    ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
+        self.defer_block_with_priority(
+            block_hash,
+            height,
+            view,
+            reference,
+            requester,
+            committed_height,
+            now,
+            InboundPriority::Ordinary,
+            true,
+        )
+    }
     /// Register a lifecycle-owned decided carrier in reserved capacity.
     ///
     /// Unlike executor-owned decided work, this exact carrier is not named by
