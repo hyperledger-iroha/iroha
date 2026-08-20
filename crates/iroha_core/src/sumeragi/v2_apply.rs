@@ -4137,10 +4137,16 @@ impl V2ApplyService {
     ) -> Result<(), V2ApplyError> {
         let queue_retirement_observer = self.queue.lock_lane_retirement_observer();
         let _lifecycle_guard = self.state.lock_lane_lifecycle_work_admission();
-        let Some((lane_id, dataspace_id, lane_incarnation)) = state_block
-            .prospective_autoscale_retirement_binding(block)
-            .map_err(|error| V2ApplyError::Validation(error.to_string()))?
-        else {
+        let pending_binding = state_block
+            .pending_autoscale_retirement_binding()
+            .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+        let binding = match pending_binding {
+            Some(binding) => Some(binding),
+            None => state_block
+                .prospective_autoscale_retirement_binding(block)
+                .map_err(|error| V2ApplyError::Validation(error.to_string()))?,
+        };
+        let Some((lane_id, dataspace_id, lane_incarnation)) = binding else {
             return Ok(());
         };
         Self::validate_autoscale_retirement_queue_binding(

@@ -2266,16 +2266,22 @@ fn ordinary_certified_body_pipeline_has_no_retained_compatibility_carrier() {
     let turn_driver = include_str!("v2_lifecycle_turn_driver.rs");
 
     for (source, forbidden) in [
-        (effects, "RetainedCertifiedBodyResponse"),
-        (effects, "retained_certified_body_response"),
+        (effects, concat!("RetainedCertifiedBody", "Response")),
+        (effects, concat!("retained_certified_body_", "response")),
         (
             effects,
             concat!("accept_certified_body_", "response_with_ingress_ownership"),
         ),
         (runtime, "retained_response_predecessor_target_ordinal"),
         (runtime, "retained_response_predecessor_retry_attempted"),
-        (run_inner, "service_retained_certified_response"),
-        (run_inner, "retry_retained_certified_body_response"),
+        (
+            run_inner,
+            concat!("service_retained_certified_", "response"),
+        ),
+        (
+            run_inner,
+            concat!("retry_retained_certified_body_", "response"),
+        ),
     ] {
         assert!(
             !source.contains(forbidden),

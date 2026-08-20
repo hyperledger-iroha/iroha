@@ -341,7 +341,6 @@ pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str 
     }
 }
 const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
-const LOCALNET_CHAIN_ID_ENV: &str = "IROHA_LOCALNET_CHAIN_ID";
 pub(crate) const GENESIS_SEED: &[u8; 7] = b"genesis";
 const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:soranet-transport:v1|";
 const STREAMING_IDENTITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:streaming-identity:v1|";
@@ -571,6 +570,12 @@ const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
 const LOCALNET_CLIENT_STATUS_TIMEOUT_MS: u64 = 300_000;
 /// Default Kura fsync mode for localnet (performance-oriented).
 const LOCALNET_KURA_FSYNC_MODE: &str = "batched";
+/// Aggregate Nexus storage cap for each disposable localnet peer (1 GiB).
+///
+/// Production nodes derive a filesystem-aware budget with reserved headroom. A generated
+/// localnet owns short-lived storage under its output directory, so an explicit small cap avoids
+/// applying that host-wide production policy to a throwaway network.
+const LOCALNET_NEXUS_STORAGE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 /// Ed25519 signature batch size for perf-profile localnets (0 disables batching).
 const LOCALNET_SIGNATURE_BATCH_MAX_ED25519: usize = 64;
 /// Logger filter for perf-profile localnets to avoid per-transaction log floods.
@@ -869,6 +874,9 @@ pub struct Args {
     /// custody; use `--seed` only for reproducible development fixtures.
     #[arg(long, conflicts_with = "seed")]
     fresh_random_keys: bool,
+    /// Canonical chain identifier written into genesis, peer configs, and the client config.
+    #[arg(long, value_name = "CHAIN_ID", default_value = DEFAULT_CHAIN_ID)]
+    chain_id: String,
     /// Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS).
     /// Requires at least 4 peers.
     #[arg(long, value_enum, value_name = "PROFILE")]
@@ -960,6 +968,7 @@ impl<T: Write> RunArgs<T> for Args {
             assets.push(requested_localnet_asset_spec(&asset_definition_id)?);
         }
         let fresh_random_keys = self.fresh_random_keys;
+        let chain_id = self.chain_id;
         let seed = if fresh_random_keys {
             Some(fresh_localnet_seed()?)
         } else {
@@ -980,7 +989,7 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             block_cadence_ms: self.block_cadence_ms,
         };
-        let outcome = generate_localnet_inner(&opts, writer, fresh_random_keys);
+        let outcome = generate_localnet_inner(&opts, writer, fresh_random_keys, Some(&chain_id));
         if fresh_random_keys && let Some(seed) = opts.seed.as_mut() {
             seed.zeroize();
         }
@@ -1054,7 +1063,7 @@ struct BlsEntry {
 /// # Errors
 /// Returns an error if port ranges are invalid or if config, genesis, or script files cannot be written.
 pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWriter<T>) -> Outcome {
-    generate_localnet_inner(opts, writer, false)
+    generate_localnet_inner(opts, writer, false, None)
 }
 #[allow(clippy::too_many_lines)]
 fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
@@ -1157,6 +1166,7 @@ fn generate_localnet_inner<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
     redact_seed_metadata: bool,
+    chain_id: Option<&str>,
 ) -> Outcome {
     init_instruction_registry();
     let hosts = validate_localnet_options(opts)?;
@@ -1178,7 +1188,7 @@ fn generate_localnet_inner<T: Write>(
     tui::status("Copying rANS tables");
     let rans_tables_path = copy_rans_tables(&out_dir)?;
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
-    let chain_id = configured_chain_id();
+    let chain_id = resolve_localnet_chain_id(chain_id)?;
     let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
     // Keep every account literal and permission payload emitted by this localnet
     // generation scoped to the selected chain.  Applying the guard only while
@@ -2083,12 +2093,15 @@ fn localnet_public_validator_lanes(sora_profile: Option<SoraProfile>) -> Vec<Lan
     }
     lanes
 }
-fn configured_chain_id() -> String {
-    std::env::var(LOCALNET_CHAIN_ID_ENV)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_CHAIN_ID.to_owned())
+fn resolve_localnet_chain_id(configured: Option<&str>) -> Result<String> {
+    let chain_id = configured.unwrap_or(DEFAULT_CHAIN_ID).trim();
+    if chain_id.is_empty() {
+        return Err(eyre!("`--chain-id` must not be empty"));
+    }
+    chain_id
+        .parse::<ChainId>()
+        .wrap_err("`--chain-id` must be canonical")?;
+    Ok(chain_id.to_owned())
 }
 #[derive(Clone, Copy)]
 struct RenderPeerFeatures<'a> {
@@ -2294,6 +2307,17 @@ fn render_peer_config(
     );
     sumeragi.insert("keys".into(), Value::Table(keys));
     let mut nexus = Table::new();
+    if npos_bootstrap {
+        let mut storage = Table::new();
+        storage.insert(
+            "local_budget_bytes".into(),
+            Value::Integer(
+                i64::try_from(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES)
+                    .expect("localnet Nexus storage budget fits i64"),
+            ),
+        );
+        nexus.insert("storage".into(), Value::Table(storage));
+    }
     let mut fusion = Table::new();
     fusion.insert(
         "exit_teu".into(),
@@ -5095,109 +5119,7 @@ mod tests {
         io::BufWriter,
         path::{Path, PathBuf},
     };
-    #[test]
-    fn localnet_uses_a_durable_fsync_policy() {
-        assert_eq!(
-            LOCALNET_KURA_FSYNC_MODE.parse::<FsyncMode>().unwrap(),
-            FsyncMode::Batched
-        );
-        assert!("off".parse::<FsyncMode>().is_err());
-    }
-    #[cfg(unix)]
-    #[test]
-    fn owner_only_localnet_writer_sets_mode_before_write_and_refuses_overwrite() {
-        let temp = tempfile::tempdir().expect("make private writer temp dir");
-        let path = temp.path().join("peer0.toml");
-        write_owner_only_localnet_file(&path, b"private_key = 'secret'\n")
-            .expect("write owner-only config");
-        let mode = fs::metadata(&path)
-            .expect("owner-only config metadata")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600);
-        let error = write_owner_only_localnet_file(&path, b"private_key = 'replacement'\n")
-            .expect_err("owner-only writer must not overwrite an existing config");
-        assert!(error.to_string().contains("create owner-only file"));
-        assert_eq!(
-            fs::read_to_string(path).expect("read preserved owner-only config"),
-            "private_key = 'secret'\n"
-        );
-    }
-    #[test]
-    fn genesis_key_files_are_canonical_consistent_and_non_overwriting() {
-        let temp = tempfile::tempdir().expect("make genesis key temp dir");
-        let public_path = temp.path().join(GENESIS_PUBLIC_KEY_FILE);
-        let private_path = temp.path().join(GENESIS_PRIVATE_KEY_FILE);
-        let (public_key, private_key) =
-            KeyPair::try_from_seed(vec![41_u8; 32], iroha_crypto::Algorithm::Ed25519)
-                .expect("derive fixture genesis key")
-                .into_parts();
-        let private_key = ExposedPrivateKey(private_key);
-        write_genesis_key_files(
-            &public_path,
-            &private_path,
-            &public_key,
-            &private_key,
-            false,
-        )
-        .expect("write genesis key files");
-        let public_record = fs::read_to_string(&public_path).expect("read public key file");
-        assert_eq!(public_record, format!("{public_key}\n"));
-        let private_record = fs::read_to_string(&private_path).expect("read private key file");
-        assert_eq!(
-            private_record,
-            format!(
-                "{}\n",
-                private_key
-                    .try_to_multihash_string()
-                    .expect("canonical private key")
-            )
-        );
-        let reconstructed = KeyPair::from_private_key(private_key.0.clone())
-            .expect("derive public key from private file");
-        assert_eq!(reconstructed.public_key(), &public_key);
-        #[cfg(unix)]
-        assert_eq!(
-            fs::metadata(&private_path)
-                .expect("private key metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-        assert!(
-            write_genesis_key_files(
-                &public_path,
-                &private_path,
-                &public_key,
-                &private_key,
-                false,
-            )
-            .is_err(),
-            "existing genesis key custody must never be overwritten"
-        );
-    }
-    #[test]
-    fn raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed() {
-        let chain_id = ChainId::from("pk3");
-        let genesis = generate_raw_genesis(
-            REAL_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            SumeragiConsensusMode::Npos,
-            chain_id.as_str(),
-        )
-        .expect("generate NPoS localnet genesis");
-        let parameters = genesis
-            .effective_parameters()
-            .expect("generated NPoS genesis parameters");
-        let npos = parameters
-            .custom()
-            .get(&SumeragiNposParameters::parameter_id())
-            .and_then(SumeragiNposParameters::from_custom_parameter)
-            .expect("generated NPoS parameters");
-        assert_eq!(npos.epoch_seed(), localnet_npos_epoch_seed(&chain_id));
-        assert_ne!(npos.epoch_seed(), [0; 32]);
-    }
+    include!("localnet/runtime_artifact_tests.rs");
     fn localnet_genesis_for_opts(opts: &LocalnetOptions) -> RawGenesisTransaction {
         localnet_genesis_for_opts_and_client(opts, &localnet_client_account_id())
     }
@@ -5720,7 +5642,7 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let mut command_output = BufWriter::new(Vec::new());
-        generate_localnet_inner(&opts, &mut command_output, true)
+        generate_localnet_inner(&opts, &mut command_output, true, None)
             .expect("generate fresh-custody localnet files");
         let command_output = String::from_utf8(
             command_output
@@ -7115,6 +7037,18 @@ mod tests {
             .and_then(toml::Value::as_table)
             .expect("nexus table");
         assert_eq!(
+            nexus
+                .get("storage")
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("local_budget_bytes"))
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES)
+                    .expect("localnet Nexus storage budget fits i64")
+            ),
+            "nexus localnet should use an explicit disposable storage budget"
+        );
+        assert_eq!(
             nexus.get("lane_count").and_then(toml::Value::as_integer),
             Some(LOCALNET_NEXUS_ALIAS_LANE_COUNT),
             "nexus profile should declare explicit alias-aware lane count"
@@ -7300,6 +7234,29 @@ mod tests {
             .is_err(),
             "private dataspace selection must reject the public Nexus profile"
         );
+    }
+    #[test]
+    fn localnet_cli_accepts_an_explicit_canonical_chain_id() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct TestArgs {
+            #[command(flatten)]
+            localnet: Args,
+        }
+        let parsed = TestArgs::try_parse_from([
+            "kagami-localnet-test",
+            "--out-dir",
+            "/tmp/kagami-localnet-test",
+            "--chain-id",
+            "fc56984b-2be7-431d-840e-21514d1883f0",
+        ])
+        .expect("parse explicit localnet chain id");
+        assert_eq!(
+            resolve_localnet_chain_id(Some(&parsed.localnet.chain_id))
+                .expect("resolve explicit localnet chain id"),
+            "fc56984b-2be7-431d-840e-21514d1883f0"
+        );
+        assert!(resolve_localnet_chain_id(Some("   ")).is_err());
     }
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -8916,6 +8873,10 @@ mod tests {
             !nexus.contains_key("enabled"),
             "generated configs must not expose the retired Nexus availability switch"
         );
+        assert!(
+            nexus.get("storage").is_none(),
+            "disabled nexus localnet should not emit a storage budget"
+        );
     }
     #[test]
     #[allow(clippy::too_many_lines)] // End-to-end config assertions are kept together for this localnet scenario.
@@ -8954,6 +8915,18 @@ mod tests {
         assert!(
             !nexus.contains_key("enabled"),
             "generated configs must rely on mandatory Nexus"
+        );
+        assert_eq!(
+            nexus
+                .get("storage")
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("local_budget_bytes"))
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES)
+                    .expect("localnet Nexus storage budget fits i64")
+            ),
+            "npos iroha3 localnet should use an explicit disposable storage budget"
         );
         let gas_account_id = account_id_runtime_literal(&gas_account_id, None);
         let staking = nexus

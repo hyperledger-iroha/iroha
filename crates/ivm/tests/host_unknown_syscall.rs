@@ -180,7 +180,7 @@ fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(100_u64)),
         },
     };

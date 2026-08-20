@@ -583,8 +583,8 @@ trusted runtime contract, not shared production state. Production source seals
 establish the narrower structural facts—one serialized height loop, bounded
 service batches, watchdog polling, and finite `IDLE_POLL` waits—but do not turn
 host scheduling or operation latency into a code-proved proposition.
-The production source seal additionally checks the unwired lifecycle activation
-type state: fail-stop admission precedes clock arming, status projection,
+The production source seal additionally checks the consuming lifecycle activation
+state: fail-stop admission precedes clock arming, status projection,
 observer installation, exact ingress/status publication, and readiness release;
 CompleteTip publication consumes its retained predecessor retirement. This is
 paired with a source-sealed consuming finalization chain which closes readiness
@@ -593,7 +593,7 @@ the safety WAL through the existing durable output handoff, retires it only
 after that handoff, then refreshes Serve state and publishes
 all-row LedgerV1 retirement through opaque coordinator-owning tokens before
 clean shutdown. This is not a new mechanized liveness theorem, and the
-serialized runner still needs to mint these states in the atomic cutover.
+serialized runner mints and drives these states only through the atomic cutover.
 
 **Lemma 7 (generation- and consumer-scoped locked-vote delivery).** Clearing a
 volatile vote pool cannot orphan the exact durable locked Commit intent.
@@ -1403,23 +1403,36 @@ alter any proof-coverage status, promote a ledger obligation, or change
 `machine_checked_completion`.
 
 A separate source-sealed applied-phase admission matrix contains one model and
-six configurations. The TLA+ matrix deliberately covers the evidence-bearing
-`BodyStored` and `ValidationSucceeded` phases; five mutants allocate a new
-post-apply ordinal, retain a physical owner after apply, coalesce conflicting
-validation evidence, hide a malformed callback behind stale-tag coalescing, or
-admit a well-formed stale callback as current. The seal binds those cases to
+six configurations. The TLA+ matrix deliberately covers the surviving
+evidence-bearing `BodyStored` phase; five mutants allocate a new post-apply
+ordinal, retain a physical owner after apply, coalesce conflicting storage
+payload or owner evidence, hide a malformed callback behind stale-tag
+coalescing, or admit a well-formed stale callback as current. The seal binds those cases to
 `preflight_runtime_command_admission`, both serialized enqueue paths, and the
 matching Busy-owner regression. Production validates the complete callback
-before treating a stale incarnation as a stutter, reports conflicting
-validation evidence or polarity as fail-closed, and suppresses an exact applied
+before treating a stale incarnation as a stutter, reports conflicting storage
+payload or owner evidence as fail-closed, and suppresses an exact applied
 retry before constructing a tagged command or allocating an admission ordinal.
 The source seal separately pins a Rust regression for exact post-apply
-suppression of `BodyAvailable`, `BodyStored`, `ValidationSucceeded`, and
-`SignatureCompleted`; it makes no conflicting-evidence or Busy-owner claim for
-the first or last of those phases. Busy, unapplied callbacks in the two modeled
-phases retain exactly one serviceable owner. This finite model is mutation
+suppression of `BodyAvailable` and `BodyStored`; it makes no
+conflicting-evidence or Busy-owner claim for `BodyAvailable`. Busy, unapplied
+`BodyStored` callbacks retain exactly one serviceable owner. This finite model is mutation
 evidence only; it does not establish crash/restart refinement or promote a
 proof-ledger obligation.
+
+A separate source-sealed durable Validate lifecycle matrix contains one model
+and six configurations. The repaired case joins scheduler-owned Ready-to-Waiting
+dispatch to worker execution and the turn driver's exact guarded completion;
+retains an exact missing-sidecar registration on the same row and ordinal;
+requires the rejected-result output reservation before claim; reconstructs
+mandatory replay authority for every modeled origin after restart; and stops
+on an ambiguous error after LedgerV1 fsync. Five single-cut mutants break those
+properties independently and must fail at their named invariants with their
+action-coverage witnesses. The source seal binds the finite states to the real
+scheduler, worker, turn-driver, sidecar, recovery, replay-authority, and report
+publication seams, and the formal CI gate invokes the runner explicitly. This
+bounded TLC mutation evidence neither proves the unbounded runtime nor promotes
+a deductive proof-ledger obligation.
 
 A separate source-sealed post-Decision timeout/TC matrix contains one model
 and nine configurations. The repaired deterministic trace completes with TLC
@@ -1613,7 +1626,7 @@ noncanonical autonomous-output retirement, and the ordinary plus record-backed
 autonomous predecessor-durability regressions yield the
 current 864-test, 43-module inventory. The complete source-sealed
 pre-network corridor
-contains 91 legs. Six source-
+contains 84 legs. Six source-
 sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
@@ -1683,7 +1696,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
+`23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad`.
 The separate source-sealed G-UNIT inventory contains 522 focused tests,
 including 316 `iroha_core` tests. Its 523-line
 canonical TSV has SHA-256
@@ -1725,7 +1738,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 91 legs, including the governance-unlock audit module, the autonomous
+now has 84 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
@@ -1733,7 +1746,7 @@ geometry modules, and source-sealed command-success legs. Its finality, offline
 compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the forty-three-module, ninety-one-leg corridor. It
+tests are not claimed by the 43-module, 84-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
@@ -1837,5 +1850,4 @@ does not promote any changed obligation.
 Fresh current-source asynchronous-liveness proof evidence remains outstanding.
 A fresh
 pinned strict whole-module aggregate release TLAPS run, the clean source-sealed
-release gate, the release-profile 100,000-height chaos rerun, and the 24-hour
-Taira-profile soak remain pending.
+release gate, and the release-profile 100,000-height chaos rerun remain pending.

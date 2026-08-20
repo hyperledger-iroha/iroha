@@ -15595,7 +15595,7 @@ def pop_credentials_production_surface_errors(
             errors.append(f"PoP route helper must contain exactly one {marker}")
 
     mounted = re.findall(
-        r"pop_post!\(\s*([A-Z0-9_]+),\s*"
+        r"([A-Z0-9_]+)\s*=>\s*limited_protocol_handshake_post\(\s*"
         r"sorafs::pop_api::([a-z0-9_]+),\s*"
         r"sorafs::pop_api::([A-Z0-9_]+)\s*\);",
         torii,

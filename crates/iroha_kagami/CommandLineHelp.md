@@ -144,6 +144,9 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `--fresh-random-keys` — Generate every private key from a fresh OS-random, process-local seed.
 
    The seed is never accepted through argv, written to the generated bundle, or printed. This mode is intended for real first-release custody; use `--seed` only for reproducible development fixtures.
+* `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
+
+  Default value: `00000000-0000-0000-0000-000000000000`
 * `--sora-profile <PROFILE>` — Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS). Requires at least 4 peers
 
   Possible values: `dataspace`, `nexus`

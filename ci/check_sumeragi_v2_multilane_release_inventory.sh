@@ -19,13 +19,9 @@ readonly cargo_cache_cli_component="scripts/copy_sumeragi_v2_release_cargo_cache
 readonly cargo_cache_ack_component="scripts/copy_sumeragi_v2_release_cargo_cache_validation_ack.py"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
 readonly sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
-readonly sdk_source_closure_resolver="ci/resolve_sumeragi_v2_sdk_source_closure.py"
-readonly sdk_source_closure_manifest="ci/sumeragi_v2_sdk_source_closure.json"
 readonly js_sdk_diagnostics_test="javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"
 readonly grouped_fixture="fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly closure_ledger="specs/sumeragi_v2_multilane_closure_ledger.md"
-readonly current_roadmap="roadmap.md"
-readonly current_status="status.md"
 readonly release_receipt_writer="scripts/write_sumeragi_v2_release_receipt.py"
 readonly release_receipt_component="scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"
 readonly release_receipt_corridor_component="scripts/write_sumeragi_v2_release_receipt_corridor_log.py"
@@ -48,10 +44,6 @@ readonly formal_gate="ci/check_sumeragi_formal.sh"
 readonly verus_runner="scripts/verify_sumeragi_v2.sh"
 readonly replay_runner="scripts/formal/check_sumeragi_v2_replay_trace.sh"
 readonly chaos_runner="scripts/run_sumeragi_v2_100k_chaos.sh"
-readonly taira_runner="scripts/run_taira_v2_24h_soak.sh"
-readonly taira_strict_restart_source="integration_tests/tests/taira_public_localnet/strict_restart.rs"
-readonly taira_strict_restart_test="taira_localnet_restart_catchup_behavior"
-readonly taira_strict_restart_qualified_test="taira_public_localnet::strict_restart::${taira_strict_restart_test}"
 readonly kura_source="crates/iroha_core/src/kura.rs"
 readonly test_network_source="crates/iroha_test_network/src/lib.rs"
 readonly autoscale_test="nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
@@ -153,27 +145,10 @@ require_exact_digest_occurrences() {
   fi
 }
 
-readonly sdk_closure_digest_documentation_policy="Mutable documentation does not embed SDK suite-source digests: the executable resolver derives them during immutable-candidate freeze/replay, and the release receipt binds the result."
-for sdk_closure_document in "$closure_ledger" "$current_roadmap" "$current_status"; do
-  require_exact_fragment \
-    "$sdk_closure_document" \
-    "$sdk_closure_digest_documentation_policy" \
-    1
-done
-
 require_nonignored_test "$autoscale_file" "$autoscale_test"
 require_nonignored_test "$autoscale_file" "$autoscale_restart_test"
 require_nonignored_test "$autoscale_file" "$autoscale_drain_test"
 require_nonignored_test "$native_file" "$native_test"
-require_nonignored_test "$taira_strict_restart_source" "$taira_strict_restart_test"
-
-require_exact_token \
-  "$release_runner" \
-  "  ${taira_strict_restart_qualified_test}"
-require_exact_token \
-  "$release_receipt_writer" \
-  "    \"${taira_strict_restart_qualified_test}\","
-
 if [[ ! -f "$release_receipt_component" || -L "$release_receipt_component" ]]; then
   echo "release receipt formal-artifact component must be a regular non-symlink file" >&2
   exit 1
@@ -244,7 +219,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=91"
+  "  readonly expected_corridor_leg_count=84"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -1038,8 +1013,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "c9972f55a17acbdcfacda42e3ca152d9"
-    "705ec4e0f188a561f0c28990468ffe97"
+    "23325cb037bc930c7503986845dbb258"
+    "91ef80af6f08092533b1e0e1d8233fad"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -1329,7 +1304,6 @@ preflight_labels = (
     "multilane-scaling",
     "proof-fidelity",
     "formal-launcher",
-    "taira-soak",
 )
 for label in preflight_labels:
     before_token = f'release_gate_boundary "preflight-{label}:before"'
@@ -1691,7 +1665,6 @@ python3 -I -S - \
   "$verus_runner" \
   "$replay_runner" \
   "$chaos_runner" \
-  "$taira_runner" \
   "$launcher" \
   "$release_receipt_writer" \
   "$release_receipt_gate_component" \
@@ -1787,11 +1760,6 @@ expected_edges = (
         'source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"',
     ),
     (
-        "scripts/run_taira_v2_24h_soak.sh",
-        "scripts/sumeragi_v2_release_process_policy.sh",
-        'source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"',
-    ),
-    (
         "ci/check_nexus_cross_dataspace_localnet.sh",
         "scripts/sumeragi_v2_prebuilt_bundle.sh",
         'source "${REPO_ROOT}/scripts/sumeragi_v2_prebuilt_bundle.sh"',
@@ -1842,11 +1810,6 @@ expected_edges = (
         'source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"',
     ),
     (
-        "scripts/run_taira_v2_24h_soak.sh",
-        "scripts/sumeragi_v2_prebuilt_bundle.sh",
-        'source "${REPO_ROOT}/scripts/sumeragi_v2_prebuilt_bundle.sh"',
-    ),
-    (
         "scripts/sumeragi_v2_prebuilt_bundle.sh",
         "scripts/sumeragi_v2_prebuilt_bundle.py",
         'local prebuilt_helper="${prebuilt_repo_root}/scripts/sumeragi_v2_prebuilt_bundle.py"',
@@ -1885,11 +1848,6 @@ expected_edges = (
         "scripts/run_sumeragi_v2_release_gates.sh",
         "scripts/run_sumeragi_v2_100k_chaos.sh",
         "bash scripts/run_sumeragi_v2_100k_chaos.sh",
-    ),
-    (
-        "scripts/run_sumeragi_v2_release_gates.sh",
-        "scripts/run_taira_v2_24h_soak.sh",
-        "bash scripts/run_taira_v2_24h_soak.sh",
     ),
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
@@ -1937,7 +1895,6 @@ guarded_cargo_scripts = (
     "scripts/run_sumeragi_v2_release_gates.sh",
     "scripts/run_sumeragi_v2_seed_matrix.sh",
     "scripts/formal/run_sumeragi_v2_harness.sh",
-    "scripts/run_taira_v2_24h_soak.sh",
     "scripts/run_nexus_cross_dataspace_atomic_swap.sh",
     "ci/check_nexus_cross_dataspace_localnet.sh",
     "ci/check_nexus_cross_lane_proofs.sh",
@@ -2062,11 +2019,6 @@ for script in guarded_cargo_scripts:
 
 entry_root_contracts = (
     (
-        "scripts/run_taira_v2_24h_soak.sh",
-        'require_disjoint_release_roots "$REPO_ROOT"',
-        'release_gate_boundary "taira:entry"',
-    ),
-    (
         "scripts/run_sumeragi_v2_formal_release.sh",
         'require_disjoint_release_roots "$repo_root"',
         'release_gate_boundary "formal-release:entry"',
@@ -2153,7 +2105,6 @@ for script, source in sources.items():
 for script in (
     "scripts/run_sumeragi_v2_release_gates.sh",
     "scripts/run_sumeragi_v2_seed_matrix.sh",
-    "scripts/run_taira_v2_24h_soak.sh",
 ):
     source = sources[script]
     for token in (
@@ -2649,13 +2600,6 @@ grouped_fixture_sha256="$(bash "$grouped_parity_harness" --fixture-sha256)"
 grouped_suite_source_manifest_sha256="$(
   bash "$grouped_parity_harness" --suite-source-manifest-sha256
 )"
-resolver_grouped_suite_source_manifest_sha256="$(
-  python3 -I -S "$sdk_source_closure_resolver" \
-    --root "$repo_root" \
-    --manifest "$sdk_source_closure_manifest" \
-    --suite native-amx-v2-grouped \
-    --manifest-sha256
-)"
 receipt_suite_source_manifest_sha256="$(
   python3 -I -S - "$repo_root" <<'PY'
 from pathlib import Path
@@ -2674,11 +2618,9 @@ PY
 )"
 if [[ ! "$grouped_fixture_sha256" =~ ^[0-9a-f]{64}$ \
   || ! "$grouped_suite_source_manifest_sha256" =~ ^[0-9a-f]{64}$ \
-  || "$resolver_grouped_suite_source_manifest_sha256" \
-    != "$grouped_suite_source_manifest_sha256" \
   || "$receipt_suite_source_manifest_sha256" \
     != "$grouped_suite_source_manifest_sha256" ]]; then
-  echo "grouped Native AMX V2 fixture/resolver/receipt source binding is invalid" >&2
+  echo "grouped Native AMX V2 fixture/suite source binding is invalid" >&2
   exit 1
 fi
 require_exact_digest_occurrences \
@@ -2686,16 +2628,14 @@ require_exact_digest_occurrences \
   "$grouped_fixture_sha256" \
   2 \
   "grouped Native AMX V2 fixture SHA-256"
+require_exact_digest_occurrences \
+  "$closure_ledger" \
+  "$grouped_suite_source_manifest_sha256" \
+  2 \
+  "grouped Native AMX V2 suite-source manifest SHA-256"
 
 sdk_diagnostics_suite_source_manifest_sha256="$(
   bash "$sdk_diagnostics_harness" --suite-source-manifest-sha256
-)"
-resolver_sdk_diagnostics_suite_source_manifest_sha256="$(
-  python3 -I -S "$sdk_source_closure_resolver" \
-    --root "$repo_root" \
-    --manifest "$sdk_source_closure_manifest" \
-    --suite sumeragi-v2-sdk-diagnostics \
-    --manifest-sha256
 )"
 receipt_sdk_diagnostics_suite_source_manifest_sha256="$(
   python3 -I -S - "$repo_root" <<'PY'
@@ -2714,24 +2654,16 @@ print(
 PY
 )"
 if [[ ! "$sdk_diagnostics_suite_source_manifest_sha256" =~ ^[0-9a-f]{64}$ \
-  || "$resolver_sdk_diagnostics_suite_source_manifest_sha256" \
-    != "$sdk_diagnostics_suite_source_manifest_sha256" \
   || "$receipt_sdk_diagnostics_suite_source_manifest_sha256" \
     != "$sdk_diagnostics_suite_source_manifest_sha256" ]]; then
-  echo "Sumeragi v2 SDK diagnostics resolver/receipt source binding is invalid" >&2
+  echo "Sumeragi v2 SDK diagnostics suite source binding is invalid" >&2
   exit 1
 fi
-
-for sdk_closure_document in "$closure_ledger" "$current_roadmap"; do
-  for sdk_closure_digest in \
-    "$grouped_suite_source_manifest_sha256" \
-    "$sdk_diagnostics_suite_source_manifest_sha256"; do
-    if grep -Fq -- "$sdk_closure_digest" "$sdk_closure_document"; then
-      echo "${sdk_closure_document} must derive SDK suite-source digests at freeze/replay instead of embedding mutable values" >&2
-      exit 1
-    fi
-  done
-done
+require_exact_digest_occurrences \
+  "$closure_ledger" \
+  "$sdk_diagnostics_suite_source_manifest_sha256" \
+  2 \
+  "Sumeragi v2 SDK diagnostics suite-source manifest SHA-256"
 
 if [[ "$(grep -Fxc -- '      --multilane-four-peer-release' "$release_runner" || true)" != 1 ]]; then
   echo "production release runner must invoke the mandatory four-peer launcher exactly once" >&2
@@ -2770,4 +2702,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 91 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 43 modules, exact 522/522 G-UNIT (316 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 84 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 43 modules, exact 522/522 G-UNIT (316 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

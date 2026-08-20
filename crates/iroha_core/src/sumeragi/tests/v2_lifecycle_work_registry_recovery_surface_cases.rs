@@ -167,7 +167,7 @@ fn recovered_wal_sign_open_is_opaque_precommit_checked_and_runner_inert() {
     }
 }
 #[test]
-fn durable_validate_async_handoff_surface_is_move_only_scheduler_free_and_inert() {
+fn durable_validate_async_handoff_surface_is_move_only_and_scheduler_owned() {
     let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
@@ -271,9 +271,9 @@ fn durable_validate_async_handoff_surface_is_move_only_scheduler_free_and_inert(
         .split("pub(super) fn reattach_durable_validate_execution(")
         .nth(1)
         .expect("detached Validate has one reattachment method")
-        .split("pub(super) fn borrow_for_lease(")
+        .split("pub(super) fn prepare_executed_durable_validate_completion(")
         .next()
-        .expect("generic borrow follows detached Validate reattachment");
+        .expect("full-dispatch completion follows detached Validate reattachment");
     for required in [
         "ConcreteWorkAddress::new",
         "work.validates_at(request.address)",
@@ -316,15 +316,22 @@ fn durable_validate_async_handoff_surface_is_move_only_scheduler_free_and_inert(
         include_str!("../v2_lifecycle_selector.rs"),
         include_str!("../v2_lifecycle_coordinator.rs"),
         include_str!("../v2_effects.rs"),
-        include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
     ] {
         assert!(!caller_source.contains("DetachedDurableValidateExecution"));
         assert!(!caller_source.contains("reattach_durable_validate_execution"));
     }
+    let scheduler = include_str!("../v2_lifecycle_scheduler_inputs.rs");
+    let worker = include_str!("../v2_worker_completion.rs");
+    let turn_driver = include_str!("../v2_lifecycle_turn_driver.rs");
+    assert!(scheduler.contains(".begin_durable_validate_dispatch("));
+    assert!(worker.contains("V2IoCommand::LifecycleValidate(task)"));
+    assert!(worker.contains("task.dispatch"));
+    assert!(worker.contains(".validate_candidate(&context, body)"));
+    assert!(turn_driver.contains(".complete_durable_validate_dispatch("));
 }
 #[test]
-fn durable_validate_wait_dispatch_is_move_only_single_entry_and_unwired() {
+fn durable_validate_wait_dispatch_is_move_only_and_scheduler_owned() {
     let registry_source = reviewed_lifecycle_work_registry_source_for_test();
     let registry_production = registry_source
         .split("\n#[cfg(test)]\nmod tests {")
@@ -370,7 +377,12 @@ fn durable_validate_wait_dispatch_is_move_only_single_entry_and_unwired() {
         .split_once("// DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_END")
         .expect("wait-dispatch implementation ends")
         .0;
-    assert_eq!(implementation.matches("pub(super) fn execute").count(), 1);
+    assert_eq!(
+        implementation
+            .matches("pub(in crate::sumeragi) fn execute")
+            .count(),
+        1
+    );
     assert!(implementation.contains("request.execute(body_store, validator)"));
     assert!(implementation.contains("Err((error, Self { request, wake }))"));
     for forbidden in [
@@ -389,9 +401,10 @@ fn durable_validate_wait_dispatch_is_move_only_single_entry_and_unwired() {
         );
     }
     assert_eq!(
-        registry_production.matches("pub(super) fn execute").count(),
-        1,
-        "the outer dispatch must be the sole externally visible validation execution path"
+        implementation
+            .matches("request.execute(body_store, validator)")
+            .count(),
+        1
     );
     assert_eq!(
         registry_production
@@ -534,27 +547,61 @@ fn durable_validate_wait_dispatch_is_move_only_single_entry_and_unwired() {
         include_str!("../v2_lifecycle_selector.rs"),
         include_str!("../v2_lifecycle_coordinator.rs"),
         include_str!("../v2_effects.rs"),
-        include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
     ] {
         assert!(!caller_source.contains("begin_durable_validate_dispatch"));
-        assert!(!caller_source.contains("DurableValidateDispatch"));
     }
+    let scheduler = include_str!("../v2_lifecycle_scheduler_inputs.rs");
+    let worker = include_str!("../v2_worker_completion.rs");
+    let turn_driver = include_str!("../v2_lifecycle_turn_driver.rs");
+    for required in [
+        ".select_validate(ordinal)",
+        ".begin_durable_validate_dispatch(&mut self.registry, lease, &self.verified)",
+        "reservation.preflight(&dispatch)",
+        "reservation.commit(dispatch)",
+    ] {
+        assert!(
+            scheduler.contains(required),
+            "scheduler-owned Validate dispatch omitted {required}"
+        );
+    }
+    for required in [
+        "V2IoCommand::LifecycleValidate(task)",
+        "task.dispatch",
+        ".validate_candidate(&context, body)",
+        "V2IoCompletion::LifecycleValidate(Box::new(",
+        ".complete_lifecycle_validate(",
+    ] {
+        assert!(
+            worker.contains(required),
+            "worker-owned Validate execution omitted {required}"
+        );
+    }
+    assert!(turn_driver.contains("PendingLifecycleCompletionV1::take_validate("));
+    assert!(turn_driver.contains(".complete_durable_validate_dispatch("));
 }
 #[test]
-fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
+fn durable_validate_volatile_completion_is_atomic_move_only_and_scheduler_owned() {
     let registry_source = reviewed_lifecycle_work_registry_source_for_test();
     let registry_production = registry_source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("registry has one production prefix");
-    let carrier = registry_production
+    let carrier_declaration = registry_production
         .split("struct DurableValidateCompletion {")
         .nth(1)
         .expect("Validate completion carrier has one declaration")
-        .split("/// Closed, move-only replay-evidence preflight for one directly signed effect.")
+        .split("impl DurableValidateCompletion {")
         .next()
-        .expect("direct signed replay preflight follows Validate completion carrier");
+        .expect("Validate completion implementation follows its declaration");
+    let carrier_validation = registry_production
+        .split("impl DurableValidateCompletion {")
+        .nth(1)
+        .expect("Validate completion carrier has one validator")
+        .split("// DURABLE_VALIDATE_COMPLETION_CARRIER_END")
+        .next()
+        .expect("Validate completion carrier end marker follows its validation");
+    let carrier = [carrier_declaration, carrier_validation].concat();
     for required in [
         "address: ConcreteWorkAddress",
         "incumbent: DurableValidateBody",
@@ -630,8 +677,8 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         .checked_sub(fixture_helper_uses)
         .expect("test-only helper calls are part of the reviewed expanded source");
     assert_eq!(
-        production_helper_uses, 8,
-        "the shared helper definition and seven production consumers must remain exact"
+        production_helper_uses, 6,
+        "the shared helper definition and five production consumers must remain exact"
     );
     let declarations = registry_production
         .split_once("// DURABLE_VALIDATE_VOLATILE_COMPLETION_DECLARATIONS_BEGIN")
@@ -661,7 +708,7 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         );
     }
     for move_only in [
-        "pub(super) struct DeferredDurableValidateDispatch",
+        "pub(in crate::sumeragi) struct DeferredDurableValidateDispatch",
         "pub(super) struct PreparedExecutedDurableValidateCompletion<'a>",
         "pub(super) struct StagedDurableValidateCompletion<'a>",
     ] {
@@ -703,7 +750,7 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         "ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)",
         "impl Drop for StagedDurableValidateCompletion<'_>",
         "drop(self.restore())",
-        "pub(super) fn missing_reference",
+        "pub(in crate::sumeragi) fn missing_reference",
     ] {
         assert!(
             implementation.contains(required),
@@ -850,11 +897,26 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         include_str!("../v2_lifecycle_selector.rs"),
         include_str!("../v2_lifecycle_coordinator.rs"),
         include_str!("../v2_effects.rs"),
-        include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
     ] {
         assert!(!caller_source.contains("complete_durable_validate_dispatch"));
-        assert!(!caller_source.contains("DurableValidateCompletionPublication"));
+    }
+    let scheduler = include_str!("../v2_lifecycle_scheduler_inputs.rs");
+    let worker = include_str!("../v2_worker_completion.rs");
+    let turn_driver = include_str!("../v2_lifecycle_turn_driver.rs");
+    assert!(scheduler.contains("reservation.commit(dispatch)"));
+    assert!(worker.contains("V2IoCompletion::LifecycleValidate(Box::new("));
+    for required in [
+        "PendingLifecycleCompletionV1::take_validate(",
+        "completion.into_publication_parts()",
+        ".complete_durable_validate_dispatch(",
+        "ack.acknowledge_after_publication()",
+        "PreparedLifecycleValidateCompletionV1::from_publication_parts(dispatch, ack)",
+    ] {
+        assert!(
+            turn_driver.contains(required),
+            "turn-driver Validate settlement omitted {required}"
+        );
     }
 }
 #[test]
@@ -1097,17 +1159,17 @@ fn recovered_decision_apply_scheduler_attestation_stays_closed_and_io_bounded() 
 }
 #[test]
 fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallible() {
-    let registry = [
-        include_str!("../v2_lifecycle_work_registry_validate_recovery.rs"),
-        include_str!("../v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"),
-    ]
-    .concat();
+    let registry = reviewed_lifecycle_work_registry_source_for_test();
     let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let executor = include_str!("../v2_effects.rs");
     let launch = include_str!("../v2_lifecycle_launch.rs");
     let turn_driver = include_str!("../v2_lifecycle_turn_driver.rs");
-    let worker = include_str!("../v2_worker.rs");
+    let worker = include_str!("../v2_worker.rs").replacen(
+        "include!(\"v2_worker_services_impl.rs\");\n",
+        include_str!("../v2_worker_services_impl.rs"),
+        1,
+    );
     let lane = include_str!("../v2_lane_work.rs");
     let completion_projection = adapter
         .split_once("pub(in crate::sumeragi) fn project_recovered_apply_completion(")

@@ -1172,7 +1172,7 @@ fn overlay_v2_effect_status(
     if effect_status.pending_stores != 0 {
         status.liveness.work.body_store = SumeragiV2LocalWorkStage::Running;
     }
-    if effect_status.pending_validations != 0 || effect_status.deferred_validation_merge_work != 0 {
+    if effect_status.pending_validations != 0 {
         status.liveness.work.validation = SumeragiV2LocalWorkStage::Running;
     }
     if effect_status.pending_applications != 0 || effect_status.deferred_application_merge_work != 0
@@ -2242,9 +2242,7 @@ mod v2_liveness_watchdog_tests {
             pending_fetches: 0,
             pending_stores: 0,
             pending_validations: 0,
-            deferred_validation_merge_work: 0,
             deferred_application_merge_work: 0,
-            deferred_merge_work: 0,
             pending_applications: 0,
             ready_bodies: 0,
             ready_body_bytes: 0,
@@ -3464,7 +3462,6 @@ mod v2_liveness_watchdog_tests {
         let mut effects = effect_status(Duration::from_secs(1), started_at);
         effects.pending_applications = 1;
         effects.deferred_application_merge_work = 1;
-        effects.deferred_merge_work = 1;
         set_v2_effect_status(effects);
         let observed = v2_status_at(started_at + Duration::from_secs(2)).expect("v2 status");
         assert_eq!(

@@ -67,7 +67,9 @@ use crate::{
         serviced_candidate_store::{LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate},
         v2_apply::RecoveredDecisionApplyWorkerResultV1,
         v2_context::AuthenticatedGenesisBodyV1,
-        v2_effects::{EffectQueueConfig, PostFinalityCleanupOutcome, V2EffectExecutor},
+        v2_effects::{
+            EffectExecutorError, EffectQueueConfig, PostFinalityCleanupOutcome, V2EffectExecutor,
+        },
         v2_lane_work::{
             MergeSidecarDeferralDisposition, RetainedMergeSidecars, V2LaneWorkAdapter,
             V2LaneWorkError,
@@ -1535,6 +1537,41 @@ pub(in crate::sumeragi) enum ProductionLifecycleLaunchErrorV1 {
     #[error("launched lifecycle stack lost exact process ownership")]
     OwnershipMismatch,
 }
+
+/// Settle at most one owner-held cold output through the live guarded service.
+///
+/// A structural or LedgerV1 publication failure closes output admission for
+/// restart. Service failures are already closed by the executor bridge.
+pub(in crate::sumeragi) fn settle_one_recovered_lifecycle_output(
+    owner: &mut ProductionLifecycleOwnerV1,
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    services: &mut ProductionV2Services,
+) -> Result<bool, EffectExecutorError> {
+    match owner.settle_next_recovered_lifecycle_output(|effect| {
+        executor.execute_recovered_lifecycle_output_service(effect, services)
+    }) {
+        Ok(super::open::RecoveredLifecycleOutputSettlementV1::Completed) => Ok(true),
+        Ok(
+            super::open::RecoveredLifecycleOutputSettlementV1::Empty
+            | super::open::RecoveredLifecycleOutputSettlementV1::Deferred,
+        ) => Ok(false),
+        Err(super::open::RecoveredLifecycleOutputSettlementErrorV1::Service(error)) => Err(error),
+        Err(super::open::RecoveredLifecycleOutputSettlementErrorV1::InvalidAuthority(reason)) => {
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            Err(EffectExecutorError::Contract(reason.to_owned()))
+        }
+        Err(super::open::RecoveredLifecycleOutputSettlementErrorV1::Durability) => {
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            Err(EffectExecutorError::Contract(
+                "recovered lifecycle output terminal publication failed".to_owned(),
+            ))
+        }
+    }
+}
 /// Fail-stop failure while crossing the one-shot live-height boundary.
 #[derive(Debug, Error)]
 #[must_use = "failed lifecycle activation requires process restart"]
@@ -2035,6 +2072,7 @@ impl ActivatedProductionLifecycleV1 {
     ) -> Result<FinalizedProductionLifecycleRolloverV1, ProductionLifecycleFinalizationErrorV1>
     {
         if !self.launched.executor.ready_to_finish()
+            || self.launched.owner.has_recovered_lifecycle_outputs()
             || self.launched.pending_kura_apply_replay.is_some()
             || self.launched.recovered_local_proposal_attempt.is_some()
             || self.launched.pending_lifecycle_completion.is_some()
@@ -2297,6 +2335,7 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             verified,
             coordinator,
             registry,
+            recovered_lifecycle_outputs,
             mut payload_store,
             serve_payloads,
             body_store,
@@ -2306,6 +2345,12 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             adapter_startup,
             timeout_supersession_successor: _,
         } = owner;
+        debug_assert!(
+            recovered_lifecycle_outputs
+                .as_ref()
+                .is_none_or(super::open::PreparedLifecycleOutputRecoveryV1::is_empty)
+        );
+        drop(recovered_lifecycle_outputs);
         let kura_binding = kura_binding.ok_or_else(|| {
             ProductionLifecycleFinalizationErrorV1::RetirementCensus(
                 "finalized lifecycle owner lost its recovered Kura binding".to_owned(),
@@ -2543,7 +2588,7 @@ impl ProductionLifecycleOwnerV1 {
                 )
             })?
             .decided_subject();
-        let services = ProductionV2Services::start_with_apply_service(
+        let mut services = ProductionV2Services::start_with_apply_service(
             super::ProductionLifecycleApplyServiceLaunchPermitV1 {
                 _seal: super::ProductionLifecycleApplyServiceLaunchPermitSealV1,
             },
@@ -2577,6 +2622,9 @@ impl ProductionLifecycleOwnerV1 {
         {
             return Err(ProductionLifecycleLaunchErrorV1::OwnershipMismatch);
         }
+        while settle_one_recovered_lifecycle_output(&mut self, &mut executor, &mut services)
+            .map_err(ProductionLifecycleLaunchErrorV1::Executor)?
+        {}
         self.body_store_identity = Some(body_store_identity);
         construction.complete();
         Ok(Box::new(LaunchedProductionLifecycleV1 {

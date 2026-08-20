@@ -12,7 +12,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 PROMOTION_WORKFLOW = ROOT / ".github/workflows/promote_kagemusha_v4.yml"
-TAIRA_WORKFLOW = ROOT / ".github/workflows/publish_taira_validator.yml"
 READINESS_GATE = ROOT / "ci/check_kagemusha_production_readiness.sh"
 READINESS_SOURCE_CONTRACT = (
     ROOT / "ci/check_kagemusha_production_readiness_source_contract.py"
@@ -1075,22 +1074,3 @@ def test_promotion_gate_reconstructs_the_projection_from_every_signed_input() ->
         assert argument in promotion
     assert "source-projection reconstruction receipt differs from the signed inputs" in promotion
     assert "manifest build tools differ from the authenticated execution policy" in promotion
-
-
-def test_both_protected_taira_macos_hosts_requalify_before_controller_use() -> None:
-    """A build-host result cannot substitute for qualification on protected hosts."""
-
-    source = TAIRA_WORKFLOW.read_text(encoding="utf-8")
-    qualification = source.split("  macos-secret-free-qualification:\n", 1)[1].split(
-        "  macos-candidate-authority:\n", 1
-    )[0]
-    deploy = source.split("  macos-deploy:\n", 1)[1].split(
-        "  macos-publish:\n", 1
-    )[0]
-    for job in (qualification, deploy):
-        install = job.index("/usr/bin/install -o root -g wheel -m 0555")
-        identity = job.index("installed authenticated-tool controller identity is invalid")
-        qualify = job.index("qualify-host-v1")
-        protected_use = job.index("prepare-reset --")
-        assert install < identity < qualify < protected_use
-        assert "authenticated-tool-controller: macOS host qualification passed" in job

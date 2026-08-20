@@ -1180,8 +1180,10 @@ fn parse_world(
     let viral_binding_claims = take_required(&mut map, "viral_binding_claims")?;
     let viral_escrows = take_required(&mut map, "viral_escrows")?;
     let viral_bonus_paid = take_required(&mut map, "viral_bonus_paid")?;
-    let axt_policies = take_required(&mut map, "axt_policies")?;
-    let axt_handle_counters = take_required(&mut map, "axt_handle_counters")?;
+    let axt_policies: Storage<DataSpaceId, AxtPolicyEntry> =
+        take_required(&mut map, "axt_policies")?;
+    let axt_handle_counters: Storage<DataSpaceId, AxtHandleCounterRecord> =
+        take_required(&mut map, "axt_handle_counters")?;
     {
         let counters = axt_handle_counters.view();
         for (_, record) in counters.iter() {
@@ -1193,19 +1195,42 @@ fn parse_world(
                 })?;
         }
     }
-    let axt_replay_ledger = take_required(&mut map, "axt_replay_ledger")?;
+    let axt_asset_incarnations: Storage<AssetDefinitionId, AxtAssetIncarnationV1> =
+        take_required(&mut map, "axt_asset_incarnations")?;
     {
-        let ledger = axt_replay_ledger.view();
-        for (key, record) in ledger.iter() {
-            record
-                .validate_for_key(key)
+        let definitions = asset_definitions.view();
+        let incarnations = axt_asset_incarnations.view();
+        for (asset_definition_id, incarnation) in incarnations.iter() {
+            incarnation
+                .validate()
                 .map_err(|error| json::Error::InvalidField {
-                    field: "world.axt_replay_ledger".to_owned(),
+                    field: "world.axt_asset_incarnations".to_owned(),
                     message: error.to_string(),
                 })?;
+            if definitions.get(asset_definition_id).is_none() {
+                return Err(json::Error::InvalidField {
+                    field: "world.axt_asset_incarnations".to_owned(),
+                    message: format!(
+                        "AXT incarnation references unregistered asset definition {asset_definition_id}"
+                    ),
+                });
+            }
+        }
+        for (asset_definition_id, _) in definitions.iter() {
+            if incarnations.get(asset_definition_id).is_none() {
+                return Err(json::Error::InvalidField {
+                    field: "world.axt_asset_incarnations".to_owned(),
+                    message: format!(
+                        "registered asset definition {asset_definition_id} has no AXT incarnation"
+                    ),
+                });
+            }
         }
     }
-    let axt_handle_budget_ledger = take_required(&mut map, "axt_handle_budget_ledger")?;
+    let axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord> =
+        take_required(&mut map, "axt_replay_ledger")?;
+    let axt_handle_budget_ledger: Storage<AxtHandleBudgetKey, AxtHandleBudgetRecord> =
+        take_required(&mut map, "axt_handle_budget_ledger")?;
     {
         let ledger = axt_handle_budget_ledger.view();
         for (key, record) in ledger.iter() {
@@ -1214,6 +1239,34 @@ fn parse_world(
                 .map_err(|error| json::Error::InvalidField {
                     field: "world.axt_handle_budget_ledger".to_owned(),
                     message: error.to_string(),
+                })?;
+        }
+    }
+    {
+        let replay_ledger = axt_replay_ledger.view();
+        let budget_ledger = axt_handle_budget_ledger.view();
+        for (key, record) in replay_ledger.iter() {
+            record
+                .validate_for_key(key)
+                .map_err(|error| json::Error::InvalidField {
+                    field: "world.axt_replay_ledger".to_owned(),
+                    message: error.to_string(),
+                })?;
+            let budget_record =
+                budget_ledger
+                    .get(&record.budget_key)
+                    .ok_or_else(|| json::Error::InvalidField {
+                        field: "world.axt_replay_ledger".to_owned(),
+                        message: "AXT replay record references a missing permanent budget family"
+                            .to_owned(),
+                    })?;
+            budget_record
+                .validate_for_key(&record.budget_key)
+                .map_err(|error| json::Error::InvalidField {
+                    field: "world.axt_replay_ledger".to_owned(),
+                    message: format!(
+                        "AXT replay record references invalid budget evidence: {error}"
+                    ),
                 })?;
         }
     }
@@ -1243,18 +1296,32 @@ fn parse_world(
                     ),
                 });
             }
+            let expected_generation =
+                counter.map_or(0, AxtHandleCounterRecord::authorization_generation);
+            if policy.active_handle_era != expected_generation {
+                return Err(json::Error::InvalidField {
+                    field: "world.axt_handle_counters".to_owned(),
+                    message: format!(
+                        "AXT policy generation {} for dataspace {} disagrees with permanent ratchet {}",
+                        policy.active_handle_era,
+                        dataspace.as_u64(),
+                        expected_generation
+                    ),
+                });
+            }
         }
         let replay = axt_replay_ledger.view();
         for (key, _) in replay.iter() {
-            let counter = counters
-                .get(&key.asset_dsid)
-                .ok_or_else(|| json::Error::InvalidField {
-                    field: "world.axt_handle_counters".to_owned(),
-                    message: format!(
-                        "AXT replay key for dataspace {} has no permanent counter ratchet",
-                        key.asset_dsid.as_u64()
-                    ),
-                })?;
+            let counter =
+                counters
+                    .get(&key.asset_dsid)
+                    .ok_or_else(|| json::Error::InvalidField {
+                        field: "world.axt_handle_counters".to_owned(),
+                        message: format!(
+                            "AXT replay key for dataspace {} has no permanent counter ratchet",
+                            key.asset_dsid.as_u64()
+                        ),
+                    })?;
             if counter.next() <= key.sub_nonce {
                 return Err(json::Error::InvalidField {
                     field: "world.axt_handle_counters".to_owned(),
@@ -1265,24 +1332,45 @@ fn parse_world(
                     ),
                 });
             }
+            if counter.authorization_generation() < key.handle_era {
+                return Err(json::Error::InvalidField {
+                    field: "world.axt_handle_counters".to_owned(),
+                    message: format!(
+                        "AXT replay-key generation {} exceeds permanent ratchet generation {}",
+                        key.handle_era,
+                        counter.authorization_generation()
+                    ),
+                });
+            }
         }
         let budgets = axt_handle_budget_ledger.view();
         for (key, _) in budgets.iter() {
-            let counter = counters
-                .get(&key.asset_dsid())
-                .ok_or_else(|| json::Error::InvalidField {
-                    field: "world.axt_handle_counters".to_owned(),
-                    message: format!(
-                        "AXT budget family for dataspace {} has no permanent counter ratchet",
-                        key.asset_dsid().as_u64()
-                    ),
-                })?;
-            if counter.next() <= AxtHandleCounterRecord::initial().next() {
+            let counter =
+                counters
+                    .get(&key.asset_dsid())
+                    .ok_or_else(|| json::Error::InvalidField {
+                        field: "world.axt_handle_counters".to_owned(),
+                        message: format!(
+                            "AXT budget family for dataspace {} has no permanent counter ratchet",
+                            key.asset_dsid().as_u64()
+                        ),
+                    })?;
+            if counter.next() <= AxtHandleCounterRecord::initial(0).next() {
                 return Err(json::Error::InvalidField {
                     field: "world.axt_handle_counters".to_owned(),
                     message: format!(
                         "AXT budget family for dataspace {} has an unadvanced permanent ratchet",
                         key.asset_dsid().as_u64()
+                    ),
+                });
+            }
+            if key.authorization_generation() > counter.authorization_generation() {
+                return Err(json::Error::InvalidField {
+                    field: "world.axt_handle_counters".to_owned(),
+                    message: format!(
+                        "AXT budget-family generation {} exceeds permanent ratchet generation {}",
+                        key.authorization_generation(),
+                        counter.authorization_generation()
                     ),
                 });
             }
@@ -1612,6 +1700,7 @@ fn parse_world(
         space_directory_manifests: Storage::default(),
         axt_policies,
         axt_handle_counters,
+        axt_asset_incarnations,
         axt_replay_ledger,
         axt_handle_budget_ledger,
         sccp_registry,

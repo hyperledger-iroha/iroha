@@ -97,7 +97,7 @@ impl JsonKeyCodec for crate::nexus::AxtHandleReplayKey {
 
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
-        let decoded = norito::json::JsonDeserialize::json_deserialize(&mut parser)?;
+        let decoded: Self = norito::json::JsonDeserialize::json_deserialize(&mut parser)?;
         let mut canonical = String::new();
         norito::json::JsonSerialize::json_serialize(&decoded, &mut canonical);
         if canonical != encoded {
@@ -105,6 +105,9 @@ impl JsonKeyCodec for crate::nexus::AxtHandleReplayKey {
                 "AXT handle replay key must use canonical JSON".into(),
             ));
         }
+        decoded.validate().map_err(|error| {
+            json::Error::Message(format!("invalid AXT handle replay key: {error}"))
+        })?;
         Ok(decoded)
     }
 }

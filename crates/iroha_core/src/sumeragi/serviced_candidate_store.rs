@@ -5084,30 +5084,5 @@ mod tests {
                 .expect("restore bounded terminal table");
         assert_eq!(restored.producer_continuations, continuations);
     }
-    #[test]
-    fn one_logical_candidate_cannot_resurrect_at_another_bounded_address() {
-        let directory = TempDir::new().expect("temporary directory");
-        let context = context();
-        let wal = directory.path().join("logical-resurrection.wal");
-        let (store, _) =
-            ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2)
-                .expect("open two-slot fixture");
-        let first = terminal_continuation_at_view(&context, 1, 1, 2, 1, 1);
-        let mut continuations = BTreeMap::new();
-        store
-            .reserve_producer_continuation(&mut continuations, first.clone())
-            .expect("reserve original logical candidate");
-        let mut resurrected = first;
-        resurrected.identity.lifecycle_slot = 2;
-        resurrected.identity.admission_ordinal = 2;
-        resurrected.identity.causal_lifecycle_key = Hash::new(b"forged second lifecycle");
-        assert!(
-            store
-                .reserve_producer_continuation(&mut continuations, resurrected)
-                .is_err(),
-            "the same drained logical candidate cannot acquire a second address"
-        );
-        assert_eq!(continuations.len(), 1);
-    }
-    include!("serviced_candidate_store/snapshot_path_and_rollover_tests.rs");
+    include!("serviced_candidate_store_tail_tests.rs");
 }

@@ -3921,7 +3921,6 @@ pub(crate) enum FairV2IngressDequeueDisposition {
     RetireObsolete,
 }
 include!("fair_v2_ingress_selector.rs");
-
 fn select_fair_v2_ingress_candidate<T>(
     candidates: &[Vec<T>],
     projection: impl Fn(&T) -> (u64, FairV2IngressQueueGateVerdict, bool),
@@ -8986,6 +8985,7 @@ mod authoritative_runtime_gate_tests {
             rollover_ordinal
         );
     }
+    include!("tests/mod_authoritative_runtime_gate_09_checked_dequeue.rs");
     include!("tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs");
     #[test]
     fn fair_v2_ingress_production_message_capacity_delegates_to_config_geometry() {

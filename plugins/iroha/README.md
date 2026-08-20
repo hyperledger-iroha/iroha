@@ -97,12 +97,7 @@ Those values are runtime-only inputs:
 - prefer read-only queries until the user clearly asks to mutate live state
 
 When live Taira writes fail with `route_unavailable`, treat that as an ingress
-or authoritative-peer deployment issue and rerun
-`configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org --write-config <runtime-only client.toml>`
-or the exact public Torii root under test rather than debugging the plugin
-surface first. If the deploy still relies on hand-edited validator configs,
-rebuild them from
-`configs/soranexus/taira/validator_roster.example.toml` plus
-`configs/soranexus/taira/validator_secrets.example.toml` with
-`python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`
-before cutting traffic again.
+or authoritative-peer deployment issue and run the same-revision compiled
+`iroha taira doctor` against the exact public Torii root before debugging the
+plugin surface. Use `iroha taira write-canary` only with explicitly authorized,
+runtime-only signing inputs.

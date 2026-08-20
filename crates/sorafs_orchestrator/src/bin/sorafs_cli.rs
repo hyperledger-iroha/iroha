@@ -132,6 +132,16 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::runtime::Runtime;
+macro_rules! insert_value {
+    ($map:ident[$key:literal] = $value:expr) => {
+        $map.insert($key.into(), Value::from($value))
+    };
+}
+macro_rules! insert_json {
+    ($map:ident[$key:literal] = $value:expr) => {
+        $map.insert($key.into(), $value)
+    };
+}
 const SORAFS_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 use url::{Url, form_urlencoded::Serializer};
 const DEFAULT_CHUNKER_HANDLE: &str = "sorafs.sf1@1.0.0";
@@ -705,78 +715,40 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         &manifest_json_path,
     );
     let mut receipt = Map::new();
-    receipt.insert("name".into(), Value::from(deploy_name.clone()));
-    receipt.insert(
-        "payload_path".into(),
-        Value::from(payload_path.display().to_string()),
-    );
-    receipt.insert(
-        "client_config_path".into(),
-        Value::from(client_config_path.display().to_string()),
-    );
-    receipt.insert("torii_url".into(), Value::from(torii_url.clone()));
-    receipt.insert("out_dir".into(), Value::from(out_dir.display().to_string()));
-    receipt.insert(
-        "receipt_path".into(),
-        Value::from(receipt_path.display().to_string()),
-    );
+    insert_value!(receipt["name"] = deploy_name.clone());
+    insert_value!(receipt["payload_path"] = payload_path.display().to_string());
+    insert_value!(receipt["client_config_path"] = client_config_path.display().to_string());
+    insert_value!(receipt["torii_url"] = torii_url.clone());
+    insert_value!(receipt["out_dir"] = out_dir.display().to_string());
+    insert_value!(receipt["receipt_path"] = receipt_path.display().to_string());
     let artifacts = match artifacts {
         Ok(artifacts) => artifacts,
         Err(err) => {
             errors.push(err);
-            receipt.insert("success".into(), Value::from(false));
-            receipt.insert(
-                "errors".into(),
-                Value::Array(errors.iter().cloned().map(Value::from).collect()),
+            insert_value!(receipt["success"] = false);
+            insert_json!(
+                receipt["errors"] = Value::Array(errors.iter().cloned().map(Value::from).collect())
             );
             write_deploy_receipt_and_stdout(&receipt_path, &Value::Object(receipt))?;
             return Err("deploy failed while building local artifacts".to_string());
         }
     };
-    receipt.insert(
-        "cid_hex".into(),
-        Value::from(artifacts.root_cid_hex.clone()),
-    );
-    receipt.insert(
-        "cid_base32".into(),
-        Value::from(artifacts.root_cid_base32.clone()),
-    );
-    receipt.insert(
-        "manifest_digest_hex".into(),
-        Value::from(artifacts.manifest_digest_hex.clone()),
-    );
-    receipt.insert(
-        "payload_digest_blake3_hex".into(),
-        Value::from(artifacts.payload_digest_hex.clone()),
-    );
-    receipt.insert(
-        "payload_bytes".into(),
-        Value::from(artifacts.manifest.content_length),
-    );
-    receipt.insert("payload_kind".into(), Value::from(artifacts.payload_kind));
+    insert_value!(receipt["cid_hex"] = artifacts.root_cid_hex.clone());
+    insert_value!(receipt["cid_base32"] = artifacts.root_cid_base32.clone());
+    insert_value!(receipt["manifest_digest_hex"] = artifacts.manifest_digest_hex.clone());
+    insert_value!(receipt["payload_digest_blake3_hex"] = artifacts.payload_digest_hex.clone());
+    insert_value!(receipt["payload_bytes"] = artifacts.manifest.content_length);
+    insert_value!(receipt["payload_kind"] = artifacts.payload_kind);
     let mut artifact_paths = Map::new();
-    artifact_paths.insert("car".into(), Value::from(car_path.display().to_string()));
-    artifact_paths.insert(
-        "plan_json".into(),
-        Value::from(plan_path.display().to_string()),
+    insert_value!(artifact_paths["car"] = car_path.display().to_string());
+    insert_value!(artifact_paths["plan_json"] = plan_path.display().to_string());
+    insert_value!(artifact_paths["pack_summary_json"] = pack_summary_path.display().to_string());
+    insert_value!(artifact_paths["manifest_to"] = manifest_path.display().to_string());
+    insert_value!(artifact_paths["manifest_json"] = manifest_json_path.display().to_string());
+    insert_value!(
+        artifact_paths["pin_register_response"] = register_response_path.display().to_string()
     );
-    artifact_paths.insert(
-        "pack_summary_json".into(),
-        Value::from(pack_summary_path.display().to_string()),
-    );
-    artifact_paths.insert(
-        "manifest_to".into(),
-        Value::from(manifest_path.display().to_string()),
-    );
-    artifact_paths.insert(
-        "manifest_json".into(),
-        Value::from(manifest_json_path.display().to_string()),
-    );
-    artifact_paths.insert(
-        "pin_register_response".into(),
-        Value::from(register_response_path.display().to_string()),
-    );
-    receipt.insert("artifacts".into(), Value::Object(artifact_paths));
+    insert_json!(receipt["artifacts"] = Value::Object(artifact_paths));
     let authority = AccountId::new(client_config.public_key.clone());
     let authority_literal =
         authority_payload_literal(&authority, Some(client_config.chain_discriminant))?;
@@ -790,29 +762,19 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     };
     let registration = submit_pin_register(&submit_request, &artifacts.manifest, None);
     let mut registration_summary = Map::new();
-    registration_summary.insert("authority".into(), Value::from(authority_literal));
-    registration_summary.insert(
-        "response_path".into(),
-        Value::from(register_response_path.display().to_string()),
+    insert_value!(registration_summary["authority"] = authority_literal);
+    insert_value!(
+        registration_summary["response_path"] = register_response_path.display().to_string()
     );
     let paid_pin_fee = match registration {
         Ok(response) => {
             write_bytes(&register_response_path, &response.response_bytes)?;
             let registration_ok = response.status.is_success();
-            registration_summary.insert(
-                "status".into(),
-                Value::from(response.status.as_u16() as u64),
-            );
-            registration_summary.insert("endpoint".into(), Value::from(response.endpoint_used));
-            registration_summary.insert(
-                "endpoint_requested".into(),
-                Value::from(response.endpoint_requested),
-            );
-            registration_summary.insert(
-                "submission_mode".into(),
-                Value::from(response.submission_mode),
-            );
-            registration_summary.insert("success".into(), Value::from(registration_ok));
+            insert_value!(registration_summary["status"] = response.status.as_u16() as u64);
+            insert_value!(registration_summary["endpoint"] = response.endpoint_used);
+            insert_value!(registration_summary["endpoint_requested"] = response.endpoint_requested);
+            insert_value!(registration_summary["submission_mode"] = response.submission_mode);
+            insert_value!(registration_summary["success"] = registration_ok);
             let paid_pin_fee = paid_pin_fee_from_register_response(&response.response_value);
             if !registration_ok {
                 let body = String::from_utf8_lossy(&response.response_bytes);
@@ -824,14 +786,14 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             paid_pin_fee
         }
         Err(err) => {
-            registration_summary.insert("success".into(), Value::from(false));
-            registration_summary.insert("error".into(), Value::from(err.clone()));
+            insert_value!(registration_summary["success"] = false);
+            insert_value!(registration_summary["error"] = err.clone());
             errors.push(err);
             Value::Null
         }
     };
-    receipt.insert("registration".into(), Value::Object(registration_summary));
-    receipt.insert("paid_pin_fee".into(), paid_pin_fee);
+    insert_json!(receipt["registration"] = Value::Object(registration_summary));
+    insert_json!(receipt["paid_pin_fee"] = paid_pin_fee);
     let discovery = if peer_discovery_enabled {
         discover_publish_peers(&client, &torii_base_url)
     } else {
@@ -845,31 +807,29 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         .or(discovery.gateway_base_url.clone())
         .unwrap_or_else(|| torii_url.clone());
     let mut discovery_json = Map::new();
-    discovery_json.insert("enabled".into(), Value::from(peer_discovery_enabled));
-    discovery_json.insert(
-        "gateway_base_url".into(),
-        discovery
+    insert_value!(discovery_json["enabled"] = peer_discovery_enabled);
+    insert_json!(
+        discovery_json["gateway_base_url"] = discovery
             .gateway_base_url
             .as_ref()
-            .map_or(Value::Null, |url| Value::from(url.clone())),
+            .map_or(Value::Null, |url| Value::from(url.clone()))
     );
     if let Some(status) = discovery.status {
-        discovery_json.insert("status".into(), Value::from(status as u64));
+        insert_value!(discovery_json["status"] = status as u64);
     }
     if let Some(err) = discovery.error.as_ref() {
-        discovery_json.insert("warning".into(), Value::from(err.clone()));
+        insert_value!(discovery_json["warning"] = err.clone());
     }
-    receipt.insert("peer_discovery".into(), Value::Object(discovery_json));
-    receipt.insert(
-        "provider_ingest".into(),
-        Value::Object(Map::from_iter([
+    insert_json!(receipt["peer_discovery"] = Value::Object(discovery_json));
+    insert_json!(
+        receipt["provider_ingest"] = Value::Object(Map::from_iter([
             (
                 "state".into(),
                 Value::from("awaiting_finalized_provider_assignment"),
             ),
             ("queued".into(), Value::from(false)),
             ("direct_http_ingest".into(), Value::from(false)),
-        ])),
+        ]))
     );
     let gateway_verification = verify_gateway_deploy(
         &client,
@@ -882,17 +842,16 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let cid_url = gateway_url_for_cid(&gateway_base_url, &artifacts.root_cid_base32)?;
-    receipt.insert("gateway_base_url".into(), Value::from(gateway_base_url));
-    receipt.insert("cid_base32_url".into(), Value::from(cid_url));
-    receipt.insert("gateway_verification".into(), gateway_verification);
+    insert_value!(receipt["gateway_base_url"] = gateway_base_url);
+    insert_value!(receipt["cid_base32_url"] = cid_url);
+    insert_json!(receipt["gateway_verification"] = gateway_verification);
     if !gateway_success {
         errors.push("gateway verification failed".to_string());
     }
     let success = errors.is_empty();
-    receipt.insert("success".into(), Value::from(success));
-    receipt.insert(
-        "errors".into(),
-        Value::Array(errors.iter().cloned().map(Value::from).collect()),
+    insert_value!(receipt["success"] = success);
+    insert_json!(
+        receipt["errors"] = Value::Array(errors.iter().cloned().map(Value::from).collect())
     );
     write_deploy_receipt_and_stdout(&receipt_path, &Value::Object(receipt))?;
     if success {
@@ -1360,13 +1319,10 @@ fn verify_gateway_deploy(
         .iter()
         .all(|check| check.get("success").and_then(Value::as_bool) == Some(true));
     let mut map = Map::new();
-    map.insert("success".into(), Value::from(success));
-    map.insert(
-        "gateway_base_url".into(),
-        Value::from(gateway_base_url.to_string()),
-    );
-    map.insert("root_url".into(), Value::from(root_url));
-    map.insert("checks".into(), Value::Array(checks));
+    insert_value!(map["success"] = success);
+    insert_value!(map["gateway_base_url"] = gateway_base_url.to_string());
+    insert_value!(map["root_url"] = root_url);
+    insert_json!(map["checks"] = Value::Array(checks));
     Value::Object(map)
 }
 fn fetch_gateway_check(
@@ -1376,25 +1332,19 @@ fn fetch_gateway_check(
     expectation: &GatewayExpectation,
 ) -> Value {
     let mut map = Map::new();
-    map.insert("path".into(), Value::from(label.to_string()));
-    map.insert("url".into(), Value::from(url.to_string()));
-    map.insert("expected_bytes".into(), Value::from(expectation.bytes));
-    map.insert(
-        "expected_blake3_hex".into(),
-        Value::from(expectation.blake3_hex.clone()),
-    );
+    insert_value!(map["path"] = label.to_string());
+    insert_value!(map["url"] = url.to_string());
+    insert_value!(map["expected_bytes"] = expectation.bytes);
+    insert_value!(map["expected_blake3_hex"] = expectation.blake3_hex.clone());
     match client.get(url).send() {
         Ok(response) => {
             let status = response.status();
             let bytes = match response.bytes() {
                 Ok(bytes) => bytes,
                 Err(err) => {
-                    map.insert("status".into(), Value::from(status.as_u16() as u64));
-                    map.insert("success".into(), Value::from(false));
-                    map.insert(
-                        "error".into(),
-                        Value::from(format!("failed to read gateway response: {err}")),
-                    );
+                    insert_value!(map["status"] = status.as_u16() as u64);
+                    insert_value!(map["success"] = false);
+                    insert_value!(map["error"] = format!("failed to read gateway response: {err}"));
                     return Value::Object(map);
                 }
             };
@@ -1402,19 +1352,16 @@ fn fetch_gateway_check(
             let actual_hash = hex_encode(blake3_hash(&bytes).as_bytes());
             let length_ok = expectation.bytes == actual;
             let hash_ok = expectation.blake3_hex == actual_hash;
-            map.insert("status".into(), Value::from(status.as_u16() as u64));
-            map.insert("actual_bytes".into(), Value::from(actual));
-            map.insert("actual_blake3_hex".into(), Value::from(actual_hash));
-            map.insert("length_ok".into(), Value::from(length_ok));
-            map.insert("hash_ok".into(), Value::from(hash_ok));
-            map.insert(
-                "success".into(),
-                Value::from(status == StatusCode::OK && length_ok && hash_ok),
-            );
+            insert_value!(map["status"] = status.as_u16() as u64);
+            insert_value!(map["actual_bytes"] = actual);
+            insert_value!(map["actual_blake3_hex"] = actual_hash);
+            insert_value!(map["length_ok"] = length_ok);
+            insert_value!(map["hash_ok"] = hash_ok);
+            insert_value!(map["success"] = status == StatusCode::OK && length_ok && hash_ok);
         }
         Err(err) => {
-            map.insert("success".into(), Value::from(false));
-            map.insert("error".into(), Value::from(err.to_string()));
+            insert_value!(map["success"] = false);
+            insert_value!(map["error"] = err.to_string());
         }
     }
     Value::Object(map)
@@ -1448,13 +1395,13 @@ fn gateway_url_for_file(
 fn paid_pin_fee_from_register_response(response: &Value) -> Value {
     let mut map = Map::new();
     if let Some(value) = response.get("pin_fee_nano") {
-        map.insert("pin_fee_nano".into(), value.clone());
+        insert_json!(map["pin_fee_nano"] = value.clone());
     }
     if let Some(value) = response.get("pin_fee_asset_id") {
-        map.insert("pin_fee_asset_id".into(), value.clone());
+        insert_json!(map["pin_fee_asset_id"] = value.clone());
     }
     if let Some(value) = response.get("pin_fee_treasury_account_id") {
-        map.insert("pin_fee_treasury_account_id".into(), value.clone());
+        insert_json!(map["pin_fee_treasury_account_id"] = value.clone());
     }
     if map.is_empty() {
         Value::Null
@@ -1879,103 +1826,60 @@ fn parse_taikai_digest_hex(value: &str, flag: &str) -> Result<[u8; 32], String> 
 }
 fn render_taikai_summary_value(inputs: &TaikaiBundleInputs, summary: &BundleSummary) -> Value {
     let mut ingest = Map::new();
-    ingest.insert("event_id".into(), Value::from(inputs.event_id.clone()));
-    ingest.insert("stream_id".into(), Value::from(inputs.stream_id.clone()));
-    ingest.insert(
-        "rendition_id".into(),
-        Value::from(inputs.rendition_id.clone()),
-    );
-    ingest.insert(
-        "segment_sequence".into(),
-        Value::from(inputs.segment_sequence),
-    );
-    ingest.insert(
-        "segment_start_pts".into(),
-        Value::from(inputs.segment_start_pts),
-    );
-    ingest.insert(
-        "segment_duration".into(),
-        Value::from(inputs.segment_duration),
-    );
-    ingest.insert(
-        "wallclock_unix_ms".into(),
-        Value::from(inputs.wallclock_unix_ms),
-    );
-    ingest.insert(
-        "manifest_hash".into(),
-        Value::from(inputs.manifest_hash_hex.clone()),
-    );
-    ingest.insert(
-        "storage_ticket".into(),
-        Value::from(inputs.storage_ticket_hex.clone()),
-    );
+    insert_value!(ingest["event_id"] = inputs.event_id.clone());
+    insert_value!(ingest["stream_id"] = inputs.stream_id.clone());
+    insert_value!(ingest["rendition_id"] = inputs.rendition_id.clone());
+    insert_value!(ingest["segment_sequence"] = inputs.segment_sequence);
+    insert_value!(ingest["segment_start_pts"] = inputs.segment_start_pts);
+    insert_value!(ingest["segment_duration"] = inputs.segment_duration);
+    insert_value!(ingest["wallclock_unix_ms"] = inputs.wallclock_unix_ms);
+    insert_value!(ingest["manifest_hash"] = inputs.manifest_hash_hex.clone());
+    insert_value!(ingest["storage_ticket"] = inputs.storage_ticket_hex.clone());
     if let Some(latency) = inputs.ingest_latency_ms {
-        ingest.insert("ingest_latency_ms".into(), Value::from(latency));
+        insert_value!(ingest["ingest_latency_ms"] = latency);
     }
     if let Some(drift) = inputs.live_edge_drift_ms {
-        ingest.insert("live_edge_drift_ms".into(), Value::from(drift));
+        insert_value!(ingest["live_edge_drift_ms"] = drift);
     }
     if let Some(node) = inputs.ingest_node_id.as_ref() {
-        ingest.insert("ingest_node_id".into(), Value::from(node.clone()));
+        insert_value!(ingest["ingest_node_id"] = node.clone());
     }
     let mut track = Map::new();
-    track.insert("kind".into(), Value::from(inputs.track_kind.clone()));
-    track.insert("codec".into(), Value::from(inputs.codec.clone()));
-    track.insert("bitrate_kbps".into(), Value::from(inputs.bitrate_kbps));
+    insert_value!(track["kind"] = inputs.track_kind.clone());
+    insert_value!(track["codec"] = inputs.codec.clone());
+    insert_value!(track["bitrate_kbps"] = inputs.bitrate_kbps);
     if let Some(resolution) = inputs.resolution.as_ref() {
-        track.insert("resolution".into(), Value::from(resolution.clone()));
+        insert_value!(track["resolution"] = resolution.clone());
     }
     if let Some(layout) = inputs.audio_layout.as_ref() {
-        track.insert("audio_layout".into(), Value::from(layout.clone()));
+        insert_value!(track["audio_layout"] = layout.clone());
     }
     let mut car = Map::new();
-    car.insert(
-        "cid_multibase".into(),
-        Value::from(summary.car_pointer.cid_multibase.clone()),
+    insert_value!(car["cid_multibase"] = summary.car_pointer.cid_multibase.clone());
+    insert_value!(
+        car["digest_blake3_hex"] = hex::encode(summary.car_pointer.car_digest.as_bytes())
     );
-    car.insert(
-        "digest_blake3_hex".into(),
-        Value::from(hex::encode(summary.car_pointer.car_digest.as_bytes())),
-    );
-    car.insert(
-        "size_bytes".into(),
-        Value::from(summary.car_pointer.car_size_bytes),
-    );
+    insert_value!(car["size_bytes"] = summary.car_pointer.car_size_bytes);
     let mut chunk = Map::new();
-    chunk.insert(
-        "root_blake3_hex".into(),
-        Value::from(hex::encode(summary.chunk_root.as_bytes())),
-    );
-    chunk.insert("count".into(), Value::from(summary.chunk_count));
+    insert_value!(chunk["root_blake3_hex"] = hex::encode(summary.chunk_root.as_bytes()));
+    insert_value!(chunk["count"] = summary.chunk_count);
     let mut outputs = Map::new();
-    outputs.insert(
-        "car_out".into(),
-        Value::from(summary.car_out.display().to_string()),
-    );
-    outputs.insert(
-        "envelope_out".into(),
-        Value::from(summary.envelope_out.display().to_string()),
-    );
+    insert_value!(outputs["car_out"] = summary.car_out.display().to_string());
+    insert_value!(outputs["envelope_out"] = summary.envelope_out.display().to_string());
     if let Some(path) = summary.indexes_out.as_ref() {
-        outputs.insert(
-            "indexes_out".into(),
-            Value::from(path.display().to_string()),
-        );
+        insert_value!(outputs["indexes_out"] = path.display().to_string());
     }
     if let Some(path) = summary.ingest_metadata_out.as_ref() {
-        outputs.insert(
-            "ingest_metadata_out".into(),
-            Value::from(path.display().to_string()),
-        );
+        insert_value!(outputs["ingest_metadata_out"] = path.display().to_string());
     }
     let mut root = Map::new();
-    root.insert("ingest".into(), Value::Object(ingest));
-    root.insert("track".into(), Value::Object(track));
-    root.insert("car".into(), Value::Object(car));
-    root.insert("chunk".into(), Value::Object(chunk));
-    root.insert("outputs".into(), Value::Object(outputs));
+    insert_json!(root["ingest"] = Value::Object(ingest));
+    insert_json!(root["track"] = Value::Object(track));
+    insert_json!(root["car"] = Value::Object(car));
+    insert_json!(root["chunk"] = Value::Object(chunk));
+    insert_json!(root["outputs"] = Value::Object(outputs));
     if let Ok(value) = to_value(&summary.indexes) {
-        root.insert("indexes".into(), value);
+        insert_json!(root["indexes"] = value);
     }
     Value::Object(root)
 }
@@ -2760,63 +2664,46 @@ fn render_summary(
         .try_chunk_fetch_specs()
         .map_err(|err| format!("failed to validate chunk fetch plan: {err}"))?;
     let mut obj = Map::new();
-    obj.insert("chunker_handle".into(), Value::from(handle));
-    obj.insert(
-        "chunker_profile_id".into(),
-        Value::from(descriptor.id.0 as u64),
-    );
-    obj.insert(
-        "chunker_profile_canonical".into(),
-        Value::from(format!(
+    insert_value!(obj["chunker_handle"] = handle);
+    insert_value!(obj["chunker_profile_id"] = descriptor.id.0 as u64);
+    insert_value!(
+        obj["chunker_profile_canonical"] = format!(
             "{}.{}@{}",
             descriptor.namespace, descriptor.name, descriptor.semver
-        )),
+        )
     );
-    obj.insert("payload_bytes".into(), Value::from(plan.content_length));
-    obj.insert("chunk_count".into(), Value::from(plan.chunks.len() as u64));
-    obj.insert("file_count".into(), Value::from(plan.files.len() as u64));
-    obj.insert("car_size".into(), Value::from(stats.car_size));
-    obj.insert(
-        "car_payload_digest_hex".into(),
-        Value::from(hex_encode(stats.car_payload_digest.as_bytes())),
+    insert_value!(obj["payload_bytes"] = plan.content_length);
+    insert_value!(obj["chunk_count"] = plan.chunks.len() as u64);
+    insert_value!(obj["file_count"] = plan.files.len() as u64);
+    insert_value!(obj["car_size"] = stats.car_size);
+    insert_value!(obj["car_payload_digest_hex"] = hex_encode(stats.car_payload_digest.as_bytes()));
+    insert_value!(obj["car_digest_hex"] = hex_encode(stats.car_archive_digest.as_bytes()));
+    insert_value!(
+        obj["chunk_digest_sha3_256_hex"] =
+            hex_encode(chunk_digest_sha3_from_specs(&chunk_fetch_specs))
     );
-    obj.insert(
-        "car_digest_hex".into(),
-        Value::from(hex_encode(stats.car_archive_digest.as_bytes())),
-    );
-    obj.insert(
-        "chunk_digest_sha3_256_hex".into(),
-        Value::from(hex_encode(chunk_digest_sha3_from_specs(&chunk_fetch_specs))),
-    );
-    obj.insert("por_root_hex".into(), Value::from(hex_encode(por_root)));
-    obj.insert(
-        "car_cid_hex".into(),
-        Value::from(hex_encode(&stats.car_cid)),
-    );
-    obj.insert(
-        "root_cids_hex".into(),
-        Value::Array(
+    insert_value!(obj["por_root_hex"] = hex_encode(por_root));
+    insert_value!(obj["car_cid_hex"] = hex_encode(&stats.car_cid));
+    insert_json!(
+        obj["root_cids_hex"] = Value::Array(
             stats
                 .root_cids
                 .iter()
                 .map(|cid| Value::from(hex_encode(cid)))
                 .collect(),
-        ),
+        )
     );
-    obj.insert(
-        "output_car".into(),
-        Value::from(car_path.display().to_string()),
-    );
+    insert_value!(obj["output_car"] = car_path.display().to_string());
     match input {
         InputSummary::File { path, bytes } => {
-            obj.insert("input_kind".into(), Value::from("file"));
-            obj.insert("input_path".into(), Value::from(path.display().to_string()));
-            obj.insert("input_bytes".into(), Value::from(*bytes));
+            insert_value!(obj["input_kind"] = "file");
+            insert_value!(obj["input_path"] = path.display().to_string());
+            insert_value!(obj["input_bytes"] = *bytes);
         }
         InputSummary::Directory { path, file_count } => {
-            obj.insert("input_kind".into(), Value::from("directory"));
-            obj.insert("input_path".into(), Value::from(path.display().to_string()));
-            obj.insert("input_file_count".into(), Value::from(*file_count));
+            insert_value!(obj["input_kind"] = "directory");
+            insert_value!(obj["input_path"] = path.display().to_string());
+            insert_value!(obj["input_file_count"] = *file_count);
         }
     }
     Ok(Value::Object(obj))
@@ -3138,92 +3025,56 @@ fn option_usize_to_value(value: Option<usize>) -> Value {
 }
 fn build_gateway_scoreboard_metadata(input: &GatewayScoreboardMetadataInput<'_>) -> Value {
     let mut metadata = Map::new();
-    metadata.insert("version".into(), Value::from(SORAFS_CLI_VERSION));
-    metadata.insert("use_scoreboard".into(), Value::from(true));
-    metadata.insert("allow_implicit_metadata".into(), Value::from(false));
-    metadata.insert(
-        "provider_count".into(),
-        Value::from(input.provider_counts.direct_u64()),
+    insert_value!(metadata["version"] = SORAFS_CLI_VERSION);
+    insert_value!(metadata["use_scoreboard"] = true);
+    insert_value!(metadata["allow_implicit_metadata"] = false);
+    insert_value!(metadata["provider_count"] = input.provider_counts.direct_u64());
+    insert_value!(metadata["gateway_provider_count"] = input.provider_counts.gateway_u64());
+    insert_value!(metadata["provider_mix"] = input.provider_counts.mix_label());
+    insert_json!(metadata["max_parallel"] = Value::Null);
+    insert_json!(metadata["max_peers"] = option_usize_to_value(input.max_peers));
+    insert_json!(metadata["retry_budget"] = option_usize_to_value(input.retry_budget));
+    insert_json!(metadata["provider_failure_threshold"] = Value::Null);
+    insert_json!(metadata["assume_now"] = input.scoreboard_now.map_or(Value::Null, Value::from));
+    insert_json!(
+        metadata["telemetry_source"] = input.telemetry_source.map_or(Value::Null, Value::from)
     );
-    metadata.insert(
-        "gateway_provider_count".into(),
-        Value::from(input.provider_counts.gateway_u64()),
+    insert_json!(
+        metadata["gateway_manifest_id"] =
+            input.gateway_manifest_id.map_or(Value::Null, Value::from)
     );
-    metadata.insert(
-        "provider_mix".into(),
-        Value::from(input.provider_counts.mix_label()),
+    insert_json!(
+        metadata["gateway_manifest_cid"] =
+            input.gateway_manifest_cid.map_or(Value::Null, Value::from)
     );
-    metadata.insert("max_parallel".into(), Value::Null);
-    metadata.insert("max_peers".into(), option_usize_to_value(input.max_peers));
-    metadata.insert(
-        "retry_budget".into(),
-        option_usize_to_value(input.retry_budget),
-    );
-    metadata.insert("provider_failure_threshold".into(), Value::Null);
-    metadata.insert(
-        "assume_now".into(),
-        input.scoreboard_now.map_or(Value::Null, Value::from),
-    );
-    metadata.insert(
-        "telemetry_source".into(),
-        input.telemetry_source.map_or(Value::Null, Value::from),
-    );
-    metadata.insert(
-        "gateway_manifest_id".into(),
-        input.gateway_manifest_id.map_or(Value::Null, Value::from),
-    );
-    metadata.insert(
-        "gateway_manifest_cid".into(),
-        input.gateway_manifest_cid.map_or(Value::Null, Value::from),
-    );
-    metadata.insert(
-        "gateway_manifest_provided".into(),
-        Value::from(input.manifest_envelope_present),
-    );
+    insert_value!(metadata["gateway_manifest_provided"] = input.manifest_envelope_present);
     let transport_labels =
         summarise_transport_policy(input.transport_policy, input.transport_policy_override);
-    metadata.insert(
-        "transport_policy".into(),
-        Value::from(transport_labels.effective_label),
-    );
-    metadata.insert(
-        "transport_policy_override".into(),
-        Value::from(transport_labels.override_flag),
-    );
-    metadata.insert(
-        "transport_policy_override_label".into(),
-        transport_labels
+    insert_value!(metadata["transport_policy"] = transport_labels.effective_label);
+    insert_value!(metadata["transport_policy_override"] = transport_labels.override_flag);
+    insert_json!(
+        metadata["transport_policy_override_label"] = transport_labels
             .override_label
-            .map_or(Value::Null, Value::from),
+            .map_or(Value::Null, Value::from)
     );
     let anonymity_labels =
         summarise_anonymity_policy(input.anonymity_policy, input.anonymity_policy_override);
-    metadata.insert(
-        "anonymity_policy".into(),
-        Value::from(anonymity_labels.effective_label),
-    );
-    metadata.insert(
-        "anonymity_policy_override".into(),
-        Value::from(anonymity_labels.override_flag),
-    );
-    metadata.insert(
-        "anonymity_policy_override_label".into(),
-        anonymity_labels
+    insert_value!(metadata["anonymity_policy"] = anonymity_labels.effective_label);
+    insert_value!(metadata["anonymity_policy_override"] = anonymity_labels.override_flag);
+    insert_json!(
+        metadata["anonymity_policy_override_label"] = anonymity_labels
             .override_label
-            .map_or(Value::Null, Value::from),
+            .map_or(Value::Null, Value::from)
     );
-    metadata.insert("write_mode".into(), Value::from(input.write_mode.label()));
-    metadata.insert(
-        "write_mode_enforces_pq".into(),
-        Value::from(input.write_mode.enforces_pq_only()),
-    );
+    insert_value!(metadata["write_mode"] = input.write_mode.label());
+    insert_value!(metadata["write_mode_enforces_pq"] = input.write_mode.enforces_pq_only());
     Value::Object(metadata)
 }
 fn insert_telemetry_source(summary: &mut Value, telemetry_source: Option<&str>) {
     if let Some(label) = telemetry_source
         && let Some(obj) = summary.as_object_mut()
     {
-        obj.insert("telemetry_source".into(), Value::from(label));
+        insert_value!(obj["telemetry_source"] = label);
     }
 }
 fn por_usage() -> String {
@@ -3752,11 +3603,8 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         .filter_map(|entry| match &entry.eligibility {
             Eligibility::Ineligible(reason) => {
                 let mut obj = Map::new();
-                obj.insert(
-                    "provider".into(),
-                    Value::from(entry.provider.id().as_str().to_string()),
-                );
-                obj.insert("reason".into(), Value::from(reason.to_string()));
+                insert_value!(obj["provider"] = entry.provider.id().as_str().to_string());
+                insert_value!(obj["reason"] = reason.to_string());
                 Some(Value::Object(obj))
             }
             Eligibility::Eligible => None,
@@ -3830,44 +3678,29 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(region) = telemetry_region_effective.as_deref()
         && let Some(obj) = summary.as_object_mut()
     {
-        obj.insert("telemetry_region".into(), Value::from(region));
+        insert_value!(obj["telemetry_region"] = region);
     }
     insert_telemetry_source(&mut summary, telemetry_source_label.as_deref());
     if let Some(obj) = summary.as_object_mut() {
-        obj.insert(
-            "ineligible_providers".into(),
-            Value::Array(ineligible_providers),
-        );
+        insert_json!(obj["ineligible_providers"] = Value::Array(ineligible_providers));
         if let Some(policy) = requested_anonymity_override {
-            obj.insert("anonymity_policy".into(), Value::from(policy.label()));
-            obj.insert("anonymity_policy_override".into(), Value::from(true));
-            obj.insert(
-                "anonymity_policy_override_label".into(),
-                Value::from(policy.label()),
-            );
+            insert_value!(obj["anonymity_policy"] = policy.label());
+            insert_value!(obj["anonymity_policy_override"] = true);
+            insert_value!(obj["anonymity_policy_override_label"] = policy.label());
         }
         if let Some(proxy_cfg) = local_proxy_snapshot.as_ref() {
-            obj.insert(
-                "local_proxy_mode".into(),
-                Value::from(proxy_cfg.proxy_mode.as_str()),
-            );
+            insert_value!(obj["local_proxy_mode"] = proxy_cfg.proxy_mode.as_str());
             if let Some(bridge) = proxy_cfg.norito_bridge.as_ref() {
-                obj.insert(
-                    "local_proxy_norito_spool".into(),
-                    Value::from(bridge.spool_dir.clone()),
-                );
+                insert_value!(obj["local_proxy_norito_spool"] = bridge.spool_dir.clone());
             }
             if let Some(bridge) = proxy_cfg.kaigi_bridge.as_ref() {
-                obj.insert(
-                    "local_proxy_kaigi_spool".into(),
-                    Value::from(bridge.spool_dir.clone()),
-                );
+                insert_value!(obj["local_proxy_kaigi_spool"] = bridge.spool_dir.clone());
                 let policy = bridge
                     .room_policy
                     .as_deref()
                     .unwrap_or("public")
                     .to_string();
-                obj.insert("local_proxy_kaigi_policy".into(), Value::from(policy));
+                insert_value!(obj["local_proxy_kaigi_policy"] = policy);
             }
         }
     }
@@ -3974,37 +3807,24 @@ fn proxy_set_mode(raw_args: Vec<String>) -> Result<(), String> {
         write_text(target_config_path, config_json.as_bytes())?;
     }
     let mut summary = Map::new();
-    summary.insert(
-        "mode_previous".into(),
-        Value::String(previous_mode.as_str().to_string()),
-    );
-    summary.insert(
-        "mode_effective".into(),
-        Value::String(effective_mode.as_str().to_string()),
-    );
-    summary.insert(
-        "mode_requested".into(),
-        Value::String(requested_mode.as_str().to_string()),
-    );
-    summary.insert("dry_run".into(), Value::from(dry_run));
-    summary.insert(
-        "config_path".into(),
-        Value::String(config_path.to_string_lossy().into()),
-    );
+    insert_json!(summary["mode_previous"] = Value::String(previous_mode.as_str().to_string()));
+    insert_json!(summary["mode_effective"] = Value::String(effective_mode.as_str().to_string()));
+    insert_json!(summary["mode_requested"] = Value::String(requested_mode.as_str().to_string()));
+    insert_value!(summary["dry_run"] = dry_run);
+    insert_json!(summary["config_path"] = Value::String(config_path.to_string_lossy().into()));
     if !dry_run {
-        summary.insert(
-            "config_written".into(),
-            Value::String(target_config_path.to_string_lossy().into()),
+        insert_json!(
+            summary["config_written"] = Value::String(target_config_path.to_string_lossy().into())
         );
     } else {
-        summary.insert("config_written".into(), Value::Null);
+        insert_json!(summary["config_written"] = Value::Null);
     }
     if let Some(label) = telemetry_label {
-        summary.insert("telemetry_label".into(), Value::String(label));
+        insert_json!(summary["telemetry_label"] = Value::String(label));
     }
-    summary.insert("bind_addr".into(), Value::String(bind_addr));
+    insert_json!(summary["bind_addr"] = Value::String(bind_addr));
     if let Some(guard_key) = guard_cache_key_hex {
-        summary.insert("guard_cache_key_hex".into(), Value::String(guard_key));
+        insert_json!(summary["guard_cache_key_hex"] = Value::String(guard_key));
     }
     let summary_json = norito::json::to_json_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render summary JSON: {err}"))?;
@@ -4640,42 +4460,20 @@ fn moderation_registry_status_json(
         .lock()
         .map_err(|_| "moderation model registry state lock poisoned".to_string())?;
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.model_registry.service_status.v1"),
-    );
-    output.insert("status".into(), Value::from(status.to_string()));
-    output.insert("source".into(), Value::from("sorafs_cli"));
-    output.insert(
-        "state_path".into(),
-        Value::from(service.state_path.display().to_string()),
-    );
-    output.insert(
-        "state_digest_hex".into(),
-        Value::from(moderation_registry_state_digest_hex(&state)?),
-    );
-    output.insert(
-        "repro_manifest_count".into(),
-        Value::from(state.repro_manifests.len() as u64),
-    );
-    output.insert(
-        "corpus_count".into(),
-        Value::from(state.adversarial_corpora.len() as u64),
-    );
-    output.insert(
-        "max_body_bytes".into(),
-        Value::from(service.max_body_bytes as u64),
-    );
-    output.insert(
-        "snapshot_limit".into(),
-        Value::from(service.snapshot_limit as u64),
-    );
-    output.insert("outbound_network".into(), Value::from("disabled"));
-    output.insert(
-        "listen".into(),
-        listen
+    insert_value!(output["schema"] = "sorafs.moderation.model_registry.service_status.v1");
+    insert_value!(output["status"] = status.to_string());
+    insert_value!(output["source"] = "sorafs_cli");
+    insert_value!(output["state_path"] = service.state_path.display().to_string());
+    insert_value!(output["state_digest_hex"] = moderation_registry_state_digest_hex(&state)?);
+    insert_value!(output["repro_manifest_count"] = state.repro_manifests.len() as u64);
+    insert_value!(output["corpus_count"] = state.adversarial_corpora.len() as u64);
+    insert_value!(output["max_body_bytes"] = service.max_body_bytes as u64);
+    insert_value!(output["snapshot_limit"] = service.snapshot_limit as u64);
+    insert_value!(output["outbound_network"] = "disabled");
+    insert_json!(
+        output["listen"] = listen
             .map(|value| Value::from(value.to_string()))
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
     Ok(Value::Object(output))
 }
@@ -4714,42 +4512,18 @@ fn moderation_registry_snapshot_json(
         .map(moderation_registry_corpus_record_json)
         .collect::<Vec<_>>();
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.model_registry.snapshot.v1"),
-    );
-    output.insert("source".into(), Value::from("sorafs_cli"));
-    output.insert(
-        "state_digest_hex".into(),
-        Value::from(moderation_registry_state_digest_hex(state)?),
-    );
-    output.insert(
-        "repro_manifest_count".into(),
-        Value::from(repro_count as u64),
-    );
-    output.insert(
-        "returned_repro_manifest_count".into(),
-        Value::from(repro_manifests.len() as u64),
-    );
-    output.insert(
-        "truncated_repro_manifests".into(),
-        Value::from(repro_count > limit),
-    );
-    output.insert("corpus_count".into(), Value::from(corpus_count as u64));
-    output.insert(
-        "returned_corpus_count".into(),
-        Value::from(adversarial_corpora.len() as u64),
-    );
-    output.insert(
-        "truncated_corpora".into(),
-        Value::from(corpus_count > limit),
-    );
-    output.insert("limit".into(), Value::from(limit as u64));
-    output.insert("repro_manifests".into(), Value::Array(repro_manifests));
-    output.insert(
-        "adversarial_corpora".into(),
-        Value::Array(adversarial_corpora),
-    );
+    insert_value!(output["schema"] = "sorafs.moderation.model_registry.snapshot.v1");
+    insert_value!(output["source"] = "sorafs_cli");
+    insert_value!(output["state_digest_hex"] = moderation_registry_state_digest_hex(state)?);
+    insert_value!(output["repro_manifest_count"] = repro_count as u64);
+    insert_value!(output["returned_repro_manifest_count"] = repro_manifests.len() as u64);
+    insert_value!(output["truncated_repro_manifests"] = repro_count > limit);
+    insert_value!(output["corpus_count"] = corpus_count as u64);
+    insert_value!(output["returned_corpus_count"] = adversarial_corpora.len() as u64);
+    insert_value!(output["truncated_corpora"] = corpus_count > limit);
+    insert_value!(output["limit"] = limit as u64);
+    insert_json!(output["repro_manifests"] = Value::Array(repro_manifests));
+    insert_json!(output["adversarial_corpora"] = Value::Array(adversarial_corpora));
     Ok(Value::Object(output))
 }
 fn moderation_registry_repro_admission_json(
@@ -4757,16 +4531,12 @@ fn moderation_registry_repro_admission_json(
     created: bool,
 ) -> Value {
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.model_registry.repro_manifest_admission.v1"),
+    insert_value!(
+        output["schema"] = "sorafs.moderation.model_registry.repro_manifest_admission.v1"
     );
-    output.insert("status".into(), Value::from("accepted"));
-    output.insert("created".into(), Value::from(created));
-    output.insert(
-        "record".into(),
-        moderation_registry_repro_record_json(record),
-    );
+    insert_value!(output["status"] = "accepted");
+    insert_value!(output["created"] = created);
+    insert_json!(output["record"] = moderation_registry_repro_record_json(record));
     Value::Object(output)
 }
 fn moderation_registry_corpus_admission_json(
@@ -4774,70 +4544,38 @@ fn moderation_registry_corpus_admission_json(
     created: bool,
 ) -> Value {
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.model_registry.corpus_manifest_admission.v1"),
+    insert_value!(
+        output["schema"] = "sorafs.moderation.model_registry.corpus_manifest_admission.v1"
     );
-    output.insert("status".into(), Value::from("accepted"));
-    output.insert("created".into(), Value::from(created));
-    output.insert(
-        "record".into(),
-        moderation_registry_corpus_record_json(record),
-    );
+    insert_value!(output["status"] = "accepted");
+    insert_value!(output["created"] = created);
+    insert_json!(output["record"] = moderation_registry_corpus_record_json(record));
     Value::Object(output)
 }
 fn moderation_registry_repro_record_json(record: &ModerationRegistryReproRecord) -> Value {
     let mut output = Map::new();
-    output.insert(
-        "manifest_id_hex".into(),
-        Value::from(hex_encode(record.manifest_id)),
-    );
-    output.insert(
-        "manifest_digest_hex".into(),
-        Value::from(hex_encode(record.manifest_digest)),
-    );
-    output.insert(
-        "runner_hash_hex".into(),
-        Value::from(hex_encode(record.runner_hash)),
-    );
-    output.insert(
-        "runtime_version".into(),
-        Value::from(record.runtime_version.clone()),
-    );
-    output.insert("issued_at_unix".into(), Value::from(record.issued_at_unix));
-    output.insert(
-        "model_count".into(),
-        Value::from(u64::from(record.model_count)),
-    );
-    output.insert(
-        "signer_count".into(),
-        Value::from(u64::from(record.signer_count)),
-    );
+    insert_value!(output["manifest_id_hex"] = hex_encode(record.manifest_id));
+    insert_value!(output["manifest_digest_hex"] = hex_encode(record.manifest_digest));
+    insert_value!(output["runner_hash_hex"] = hex_encode(record.runner_hash));
+    insert_value!(output["runtime_version"] = record.runtime_version.clone());
+    insert_value!(output["issued_at_unix"] = record.issued_at_unix);
+    insert_value!(output["model_count"] = u64::from(record.model_count));
+    insert_value!(output["signer_count"] = u64::from(record.signer_count));
     Value::Object(output)
 }
 fn moderation_registry_corpus_record_json(record: &ModerationRegistryCorpusRecord) -> Value {
     let mut output = Map::new();
-    output.insert(
-        "corpus_digest_hex".into(),
-        Value::from(hex_encode(record.corpus_digest)),
-    );
-    output.insert("issued_at_unix".into(), Value::from(record.issued_at_unix));
-    output.insert(
-        "cohort_label".into(),
-        record
+    insert_value!(output["corpus_digest_hex"] = hex_encode(record.corpus_digest));
+    insert_value!(output["issued_at_unix"] = record.issued_at_unix);
+    insert_json!(
+        output["cohort_label"] = record
             .cohort_label
             .as_deref()
             .map(Value::from)
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
-    output.insert(
-        "family_count".into(),
-        Value::from(u64::from(record.family_count)),
-    );
-    output.insert(
-        "variant_count".into(),
-        Value::from(u64::from(record.variant_count)),
-    );
+    insert_value!(output["family_count"] = u64::from(record.family_count));
+    insert_value!(output["variant_count"] = u64::from(record.variant_count));
     Value::Object(output)
 }
 fn moderation_registry_json_response(status: u16, reason: &str, value: &Value) -> Vec<u8> {
@@ -4846,12 +4584,9 @@ fn moderation_registry_json_response(status: u16, reason: &str, value: &Value) -
 }
 fn moderation_registry_error_response(status: u16, reason: &str, message: &str) -> Vec<u8> {
     let mut body = Map::new();
-    body.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.model_registry.error.v1"),
-    );
-    body.insert("status".into(), Value::from("error"));
-    body.insert("message".into(), Value::from(message.to_string()));
+    insert_value!(body["schema"] = "sorafs.moderation.model_registry.error.v1");
+    insert_value!(body["status"] = "error");
+    insert_value!(body["message"] = message.to_string());
     moderation_registry_json_response(status, reason, &Value::Object(body))
 }
 fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
@@ -5842,69 +5577,26 @@ fn moderation_runner_bundle_summary_json(
     files: &[&str],
 ) -> Value {
     let mut summary = Map::new();
-    summary.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.runner.bundle.v1"),
-    );
-    summary.insert("source".into(), Value::from("sorafs_cli"));
-    summary.insert(
-        "bundle_dir".into(),
-        Value::from(bundle_dir.display().to_string()),
-    );
-    summary.insert(
-        "manifest_source".into(),
-        Value::from(spec.manifest_source.display().to_string()),
-    );
-    summary.insert("manifest_copy".into(), Value::from(manifest_copy_name));
-    summary.insert(
-        "manifest_format".into(),
-        Value::from(spec.manifest_format.clone()),
-    );
-    summary.insert(
-        "manifest_id_hex".into(),
-        Value::from(hex_encode(spec.manifest.body.manifest_id)),
-    );
-    summary.insert(
-        "manifest_digest_hex".into(),
-        Value::from(hex_encode(spec.manifest.body.manifest_digest)),
-    );
-    summary.insert(
-        "runner_hash_hex".into(),
-        Value::from(hex_encode(spec.manifest.body.runner_hash)),
-    );
-    summary.insert(
-        "runtime_version".into(),
-        Value::from(spec.manifest.body.runtime_version.clone()),
-    );
-    summary.insert("listen".into(), Value::from(spec.listen.clone()));
-    summary.insert(
-        "max_body_bytes".into(),
-        Value::from(spec.max_body_bytes as u64),
-    );
-    summary.insert(
-        "max_payload_bytes".into(),
-        Value::from(u64::from(spec.max_payload_bytes)),
-    );
-    summary.insert("binary".into(), Value::from(spec.binary.clone()));
-    summary.insert(
-        "service_name".into(),
-        Value::from(spec.service_name.clone()),
-    );
-    summary.insert(
-        "service_user".into(),
-        Value::from(spec.service_user.clone()),
-    );
-    summary.insert(
-        "service_group".into(),
-        Value::from(spec.service_group.clone()),
-    );
-    summary.insert(
-        "outbound_network".into(),
-        Value::from("process_policy_required"),
-    );
-    summary.insert(
-        "files".into(),
-        Value::Array(files.iter().map(|file| Value::from(*file)).collect()),
+    insert_value!(summary["schema"] = "sorafs.moderation.runner.bundle.v1");
+    insert_value!(summary["source"] = "sorafs_cli");
+    insert_value!(summary["bundle_dir"] = bundle_dir.display().to_string());
+    insert_value!(summary["manifest_source"] = spec.manifest_source.display().to_string());
+    insert_value!(summary["manifest_copy"] = manifest_copy_name);
+    insert_value!(summary["manifest_format"] = spec.manifest_format.clone());
+    insert_value!(summary["manifest_id_hex"] = hex_encode(spec.manifest.body.manifest_id));
+    insert_value!(summary["manifest_digest_hex"] = hex_encode(spec.manifest.body.manifest_digest));
+    insert_value!(summary["runner_hash_hex"] = hex_encode(spec.manifest.body.runner_hash));
+    insert_value!(summary["runtime_version"] = spec.manifest.body.runtime_version.clone());
+    insert_value!(summary["listen"] = spec.listen.clone());
+    insert_value!(summary["max_body_bytes"] = spec.max_body_bytes as u64);
+    insert_value!(summary["max_payload_bytes"] = u64::from(spec.max_payload_bytes));
+    insert_value!(summary["binary"] = spec.binary.clone());
+    insert_value!(summary["service_name"] = spec.service_name.clone());
+    insert_value!(summary["service_user"] = spec.service_user.clone());
+    insert_value!(summary["service_group"] = spec.service_group.clone());
+    insert_value!(summary["outbound_network"] = "process_policy_required");
+    insert_json!(
+        summary["files"] = Value::Array(files.iter().map(|file| Value::from(*file)).collect())
     );
     Value::Object(summary)
 }
@@ -6182,67 +5874,27 @@ fn moderation_committee_bundle_summary_json(
     files: &[&str],
 ) -> Value {
     let mut summary = Map::new();
-    summary.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.committee.bundle.v1"),
-    );
-    summary.insert("source".into(), Value::from("sorafs_cli"));
-    summary.insert(
-        "bundle_dir".into(),
-        Value::from(bundle_dir.display().to_string()),
-    );
-    summary.insert(
-        "manifest_source".into(),
-        Value::from(spec.manifest_source.display().to_string()),
-    );
-    summary.insert("manifest_copy".into(), Value::from(manifest_copy_name));
-    summary.insert(
-        "manifest_format".into(),
-        Value::from(spec.manifest_format.clone()),
-    );
-    summary.insert(
-        "manifest_id_hex".into(),
-        Value::from(hex_encode(spec.manifest.body.manifest_id)),
-    );
-    summary.insert(
-        "manifest_digest_hex".into(),
-        Value::from(hex_encode(spec.manifest.body.manifest_digest)),
-    );
-    summary.insert(
-        "runner_hash_hex".into(),
-        Value::from(hex_encode(spec.manifest.body.runner_hash)),
-    );
-    summary.insert(
-        "runtime_version".into(),
-        Value::from(spec.manifest.body.runtime_version.clone()),
-    );
-    summary.insert("quorum".into(), Value::from(spec.quorum as u64));
-    summary.insert("aggregation".into(), Value::from("median_score_bps"));
-    summary.insert("listen".into(), Value::from(spec.listen.clone()));
-    summary.insert(
-        "max_body_bytes".into(),
-        Value::from(spec.max_body_bytes as u64),
-    );
-    summary.insert("binary".into(), Value::from(spec.binary.clone()));
-    summary.insert(
-        "service_name".into(),
-        Value::from(spec.service_name.clone()),
-    );
-    summary.insert(
-        "service_user".into(),
-        Value::from(spec.service_user.clone()),
-    );
-    summary.insert(
-        "service_group".into(),
-        Value::from(spec.service_group.clone()),
-    );
-    summary.insert(
-        "outbound_network".into(),
-        Value::from("network_capable_process_policy_required"),
-    );
-    summary.insert(
-        "files".into(),
-        Value::Array(files.iter().map(|file| Value::from(*file)).collect()),
+    insert_value!(summary["schema"] = "sorafs.moderation.committee.bundle.v1");
+    insert_value!(summary["source"] = "sorafs_cli");
+    insert_value!(summary["bundle_dir"] = bundle_dir.display().to_string());
+    insert_value!(summary["manifest_source"] = spec.manifest_source.display().to_string());
+    insert_value!(summary["manifest_copy"] = manifest_copy_name);
+    insert_value!(summary["manifest_format"] = spec.manifest_format.clone());
+    insert_value!(summary["manifest_id_hex"] = hex_encode(spec.manifest.body.manifest_id));
+    insert_value!(summary["manifest_digest_hex"] = hex_encode(spec.manifest.body.manifest_digest));
+    insert_value!(summary["runner_hash_hex"] = hex_encode(spec.manifest.body.runner_hash));
+    insert_value!(summary["runtime_version"] = spec.manifest.body.runtime_version.clone());
+    insert_value!(summary["quorum"] = spec.quorum as u64);
+    insert_value!(summary["aggregation"] = "median_score_bps");
+    insert_value!(summary["listen"] = spec.listen.clone());
+    insert_value!(summary["max_body_bytes"] = spec.max_body_bytes as u64);
+    insert_value!(summary["binary"] = spec.binary.clone());
+    insert_value!(summary["service_name"] = spec.service_name.clone());
+    insert_value!(summary["service_user"] = spec.service_user.clone());
+    insert_value!(summary["service_group"] = spec.service_group.clone());
+    insert_value!(summary["outbound_network"] = "network_capable_process_policy_required");
+    insert_json!(
+        summary["files"] = Value::Array(files.iter().map(|file| Value::from(*file)).collect())
     );
     Value::Object(summary)
 }
@@ -6361,26 +6013,17 @@ struct ModerationCanaryHttpProbe {
 }
 fn moderation_canary_probe_json(name: &str, probe: &ModerationCanaryHttpProbe) -> Value {
     let mut output = Map::new();
-    output.insert("name".into(), Value::from(name.to_string()));
-    output.insert("method".into(), Value::from(probe.method));
-    output.insert("url".into(), Value::from(probe.url.clone()));
-    output.insert(
-        "status_code".into(),
-        Value::from(u64::from(probe.status_code)),
-    );
-    output.insert("request_bytes".into(), Value::from(probe.request_bytes));
-    output.insert(
-        "request_body_blake3".into(),
-        Value::from(hex_encode(probe.request_body_blake3)),
-    );
-    output.insert("response_bytes".into(), Value::from(probe.response_bytes));
-    output.insert(
-        "response_body_blake3".into(),
-        Value::from(hex_encode(probe.response_body_blake3)),
-    );
-    output.insert("passed".into(), Value::from(true));
-    output.insert("payload_bytes_included".into(), Value::from(false));
-    output.insert("private_payloads_included".into(), Value::from(false));
+    insert_value!(output["name"] = name.to_string());
+    insert_value!(output["method"] = probe.method);
+    insert_value!(output["url"] = probe.url.clone());
+    insert_value!(output["status_code"] = u64::from(probe.status_code));
+    insert_value!(output["request_bytes"] = probe.request_bytes);
+    insert_value!(output["request_body_blake3"] = hex_encode(probe.request_body_blake3));
+    insert_value!(output["response_bytes"] = probe.response_bytes);
+    insert_value!(output["response_body_blake3"] = hex_encode(probe.response_body_blake3));
+    insert_value!(output["passed"] = true);
+    insert_value!(output["payload_bytes_included"] = false);
+    insert_value!(output["private_payloads_included"] = false);
     Value::Object(output)
 }
 fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
@@ -6844,17 +6487,13 @@ fn moderation_runner_canary_screen_request_json(
     notes: Option<&str>,
 ) -> Value {
     let mut request = Map::new();
-    request.insert("subject".into(), Value::from(subject.to_string()));
-    request.insert(
-        "payload_b64".into(),
-        Value::from(BASE64_STANDARD.encode(payload)),
-    );
-    request.insert("screened_at_unix".into(), Value::from(screened_at_unix));
-    request.insert(
-        "notes".into(),
-        notes
+    insert_value!(request["subject"] = subject.to_string());
+    insert_value!(request["payload_b64"] = BASE64_STANDARD.encode(payload));
+    insert_value!(request["screened_at_unix"] = screened_at_unix);
+    insert_json!(
+        request["notes"] = notes
             .map(|value| Value::from(value.to_string()))
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
     Value::Object(request)
 }
@@ -6883,33 +6522,17 @@ fn moderation_runner_canary_evidence_json(
         moderation_canary_probe_json("screen", &input.screening_probe),
     ]);
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.runner.rollout_evidence.v1"),
-    );
-    output.insert("status".into(), Value::from("verified"));
-    output.insert("synthetic".into(), Value::from(false));
-    output.insert("source".into(), Value::from("sorafs_cli"));
-    output.insert(
-        "generated_at_unix".into(),
-        Value::from(input.deployment_context.generated_at_unix),
-    );
-    output.insert(
-        "deployment_id".into(),
-        Value::from(input.deployment_context.deployment_id),
-    );
-    output.insert(
-        "environment".into(),
-        Value::from(input.deployment_context.environment),
-    );
-    output.insert("deployment_context_reviewed".into(), Value::from(true));
-    output.insert(
-        "outbound_network".into(),
-        Value::from("model_engine_none_process_policy_required"),
-    );
-    output.insert(
-        "process_isolation_evidence".into(),
-        Value::Object(Map::from_iter([
+    insert_value!(output["schema"] = "sorafs.moderation.runner.rollout_evidence.v1");
+    insert_value!(output["status"] = "verified");
+    insert_value!(output["synthetic"] = false);
+    insert_value!(output["source"] = "sorafs_cli");
+    insert_value!(output["generated_at_unix"] = input.deployment_context.generated_at_unix);
+    insert_value!(output["deployment_id"] = input.deployment_context.deployment_id);
+    insert_value!(output["environment"] = input.deployment_context.environment);
+    insert_value!(output["deployment_context_reviewed"] = true);
+    insert_value!(output["outbound_network"] = "model_engine_none_process_policy_required");
+    insert_json!(
+        output["process_isolation_evidence"] = Value::Object(Map::from_iter([
             ("required".into(), Value::from(true)),
             ("status".into(), Value::from("runtime_verified")),
             (
@@ -6926,63 +6549,32 @@ fn moderation_runner_canary_evidence_json(
             ),
             ("reviewed".into(), Value::from(true)),
             ("synthetic".into(), Value::from(false)),
-        ])),
+        ]))
     );
-    output.insert(
-        "runner_url".into(),
-        Value::from(input.runner_url.to_string()),
-    );
-    output.insert(
-        "status_url".into(),
-        Value::from(input.status_url.to_string()),
-    );
-    output.insert(
-        "screen_url".into(),
-        Value::from(input.screen_url.to_string()),
-    );
-    output.insert(
-        "manifest_id_hex".into(),
-        Value::from(hex_encode(input.manifest.body.manifest_id)),
-    );
-    output.insert(
-        "runner_hash_hex".into(),
-        Value::from(hex_encode(input.manifest.body.runner_hash)),
-    );
-    output.insert("subject".into(), Value::from(input.subject.to_string()));
-    output.insert(
-        "subject_digest_hex".into(),
-        Value::from(hex_encode(subject_digest)),
-    );
-    output.insert(
-        "screened_at_unix".into(),
-        Value::from(input.screened_at_unix),
-    );
-    output.insert("checked_at_unix".into(), Value::from(input.checked_at_unix));
-    output.insert(
-        "combined_score_bps".into(),
-        Value::from(u64::from(screening.combined_score_bps)),
-    );
-    output.insert("verdict".into(), Value::from(screening.verdict));
-    output.insert(
-        "evidence_digest_hex".into(),
-        Value::from(hex_encode(screening.evidence_digest)),
-    );
-    output.insert(
-        "policy_digest_hex".into(),
-        Value::from(hex_encode(screening.policy_digest)),
-    );
-    output.insert("probe_count".into(), Value::from(2_u64));
-    output.insert("passed_probe_count".into(), Value::from(2_u64));
-    output.insert("probes".into(), probes);
-    output.insert(
-        "notes".into(),
-        input
+    insert_value!(output["runner_url"] = input.runner_url.to_string());
+    insert_value!(output["status_url"] = input.status_url.to_string());
+    insert_value!(output["screen_url"] = input.screen_url.to_string());
+    insert_value!(output["manifest_id_hex"] = hex_encode(input.manifest.body.manifest_id));
+    insert_value!(output["runner_hash_hex"] = hex_encode(input.manifest.body.runner_hash));
+    insert_value!(output["subject"] = input.subject.to_string());
+    insert_value!(output["subject_digest_hex"] = hex_encode(subject_digest));
+    insert_value!(output["screened_at_unix"] = input.screened_at_unix);
+    insert_value!(output["checked_at_unix"] = input.checked_at_unix);
+    insert_value!(output["combined_score_bps"] = u64::from(screening.combined_score_bps));
+    insert_value!(output["verdict"] = screening.verdict);
+    insert_value!(output["evidence_digest_hex"] = hex_encode(screening.evidence_digest));
+    insert_value!(output["policy_digest_hex"] = hex_encode(screening.policy_digest));
+    insert_value!(output["probe_count"] = 2_u64);
+    insert_value!(output["passed_probe_count"] = 2_u64);
+    insert_json!(output["probes"] = probes);
+    insert_json!(
+        output["notes"] = input
             .notes
             .map(|value| Value::from(value.to_string()))
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
-    output.insert("runner_status".into(), input.status_probe.response);
-    output.insert("screening_result".into(), input.screening_probe.response);
+    insert_json!(output["runner_status"] = input.status_probe.response);
+    insert_json!(output["screening_result"] = input.screening_probe.response);
     Ok(Value::Object(output))
 }
 struct ModerationRunnerCanaryScreening {
@@ -7583,48 +7175,30 @@ fn moderation_committee_aggregate_json(
         .map(moderation_committee_member_result_json)
         .collect();
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.committee.aggregate.v1"),
+    insert_value!(output["schema"] = "sorafs.moderation.committee.aggregate.v1");
+    insert_value!(output["status"] = "quorum_satisfied");
+    insert_value!(output["source"] = "sorafs_cli");
+    insert_value!(output["manifest_id_hex"] = hex_encode(manifest.body.manifest_id));
+    insert_value!(output["runner_hash_hex"] = hex_encode(manifest.body.runner_hash));
+    insert_value!(output["subject"] = first.subject.clone());
+    insert_value!(output["subject_digest_hex"] = hex_encode(first.subject_digest));
+    insert_value!(output["result_count"] = inputs.len() as u64);
+    insert_value!(output["quorum"] = quorum as u64);
+    insert_value!(output["aggregation"] = "median_score_bps");
+    insert_value!(output["aggregated_score_bps"] = u64::from(median_score_bps));
+    insert_value!(output["verdict"] = verdict);
+    insert_json!(
+        output["screened_at_unix_min"] = screened_min.map(Value::from).unwrap_or(Value::Null)
     );
-    output.insert("status".into(), Value::from("quorum_satisfied"));
-    output.insert("source".into(), Value::from("sorafs_cli"));
-    output.insert(
-        "manifest_id_hex".into(),
-        Value::from(hex_encode(manifest.body.manifest_id)),
+    insert_json!(
+        output["screened_at_unix_max"] = screened_max.map(Value::from).unwrap_or(Value::Null)
     );
-    output.insert(
-        "runner_hash_hex".into(),
-        Value::from(hex_encode(manifest.body.runner_hash)),
-    );
-    output.insert("subject".into(), Value::from(first.subject.clone()));
-    output.insert(
-        "subject_digest_hex".into(),
-        Value::from(hex_encode(first.subject_digest)),
-    );
-    output.insert("result_count".into(), Value::from(inputs.len() as u64));
-    output.insert("quorum".into(), Value::from(quorum as u64));
-    output.insert("aggregation".into(), Value::from("median_score_bps"));
-    output.insert(
-        "aggregated_score_bps".into(),
-        Value::from(u64::from(median_score_bps)),
-    );
-    output.insert("verdict".into(), Value::from(verdict));
-    output.insert(
-        "screened_at_unix_min".into(),
-        screened_min.map(Value::from).unwrap_or(Value::Null),
-    );
-    output.insert(
-        "screened_at_unix_max".into(),
-        screened_max.map(Value::from).unwrap_or(Value::Null),
-    );
-    output.insert(
-        "notes".into(),
-        notes
+    insert_json!(
+        output["notes"] = notes
             .map(|value| Value::from(value.to_string()))
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
-    output.insert("member_results".into(), Value::Array(member_results));
+    insert_json!(output["member_results"] = Value::Array(member_results));
     Ok(Value::Object(output))
 }
 fn moderation_committee_median_score(mut scores: Vec<u16>) -> u16 {
@@ -7639,45 +7213,35 @@ fn moderation_committee_median_score(mut scores: Vec<u16>) -> u16 {
 }
 fn moderation_committee_member_result_json(input: &ModerationCommitteeInput) -> Value {
     let mut result = Map::new();
-    result.insert(
-        "source_path".into(),
-        Value::from(input.source_path.display().to_string()),
-    );
-    result.insert(
-        "combined_score_bps".into(),
-        Value::from(u64::from(input.combined_score_bps)),
-    );
-    result.insert("verdict".into(), Value::from(input.verdict.clone()));
-    result.insert(
-        "screened_at_unix".into(),
-        input
+    insert_value!(result["source_path"] = input.source_path.display().to_string());
+    insert_value!(result["combined_score_bps"] = u64::from(input.combined_score_bps));
+    insert_value!(result["verdict"] = input.verdict.clone());
+    insert_json!(
+        result["screened_at_unix"] = input
             .screened_at_unix
             .map(Value::from)
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
-    result.insert(
-        "evidence_digest_hex".into(),
-        input
+    insert_json!(
+        result["evidence_digest_hex"] = input
             .evidence_digest
             .map(hex_encode)
             .map(Value::from)
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
-    result.insert(
-        "policy_digest_hex".into(),
-        input
+    insert_json!(
+        result["policy_digest_hex"] = input
             .policy_digest
             .map(hex_encode)
             .map(Value::from)
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
-    result.insert(
-        "notes".into(),
-        input
+    insert_json!(
+        result["notes"] = input
             .notes
             .as_ref()
             .map(|value| Value::from(value.clone()))
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
     Value::Object(result)
 }
@@ -8311,86 +7875,42 @@ fn moderation_committee_status_json(
     listen: Option<&str>,
 ) -> Value {
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.committee.status.v1"),
-    );
-    output.insert("status".into(), Value::from(status.to_string()));
-    output.insert("source".into(), Value::from("sorafs_cli"));
-    output.insert(
-        "manifest_source".into(),
-        Value::from(service.manifest_source.clone()),
-    );
-    output.insert(
-        "manifest_id_hex".into(),
-        Value::from(hex_encode(service.manifest.body.manifest_id)),
-    );
-    output.insert(
-        "runner_hash_hex".into(),
-        Value::from(hex_encode(service.manifest.body.runner_hash)),
-    );
-    output.insert("quorum".into(), Value::from(service.quorum as u64));
-    output.insert("aggregation".into(), Value::from("median_score_bps"));
-    output.insert(
-        "model_count".into(),
-        Value::from(service.manifest.body.models.len() as u64),
-    );
-    output.insert(
-        "max_body_bytes".into(),
-        Value::from(service.max_body_bytes as u64),
-    );
-    output.insert(
-        "outbound_network".into(),
-        Value::from("network_capable_process_policy_required"),
-    );
-    output.insert(
-        "process_isolation".into(),
-        Value::from("external_runtime_attestation_required"),
-    );
-    output.insert("process_isolation_verified".into(), Value::from(false));
+    insert_value!(output["schema"] = "sorafs.moderation.committee.status.v1");
+    insert_value!(output["status"] = status.to_string());
+    insert_value!(output["source"] = "sorafs_cli");
+    insert_value!(output["manifest_source"] = service.manifest_source.clone());
+    insert_value!(output["manifest_id_hex"] = hex_encode(service.manifest.body.manifest_id));
+    insert_value!(output["runner_hash_hex"] = hex_encode(service.manifest.body.runner_hash));
+    insert_value!(output["quorum"] = service.quorum as u64);
+    insert_value!(output["aggregation"] = "median_score_bps");
+    insert_value!(output["model_count"] = service.manifest.body.models.len() as u64);
+    insert_value!(output["max_body_bytes"] = service.max_body_bytes as u64);
+    insert_value!(output["outbound_network"] = "network_capable_process_policy_required");
+    insert_value!(output["process_isolation"] = "external_runtime_attestation_required");
+    insert_value!(output["process_isolation_verified"] = false);
     if let Some(state) = &service.authenticated {
         let policy = &state.trust_policy;
         let snapshot = state.provenance.snapshot().ok();
-        output.insert(
-            "trust_boundary".into(),
-            Value::from("externally_anchored_authenticated_committee"),
+        insert_value!(output["trust_boundary"] = "externally_anchored_authenticated_committee");
+        insert_value!(output["authenticated_results"] = true);
+        insert_value!(output["unsigned_aggregation_enabled"] = false);
+        insert_value!(
+            output["authenticated_aggregation_endpoint"] =
+                "/v1/sorafs/moderation/committee/aggregate-authenticated"
         );
-        output.insert("authenticated_results".into(), Value::from(true));
-        output.insert("unsigned_aggregation_enabled".into(), Value::from(false));
-        output.insert(
-            "authenticated_aggregation_endpoint".into(),
-            Value::from("/v1/sorafs/moderation/committee/aggregate-authenticated"),
+        insert_value!(output["trust_policy_id_hex"] = hex_encode(policy.body.policy_id));
+        insert_value!(output["trust_policy_digest_hex"] = hex_encode(policy.body.policy_digest));
+        insert_value!(
+            output["minimum_governance_quorum"] = u64::from(state.minimum_governance_quorum)
         );
-        output.insert(
-            "trust_policy_id_hex".into(),
-            Value::from(hex_encode(policy.body.policy_id)),
+        insert_value!(
+            output["trusted_governance_anchor_count"] = u64::try_from(state.trust_anchors.len())
+                .expect("bounded governance anchor count fits u64")
         );
-        output.insert(
-            "trust_policy_digest_hex".into(),
-            Value::from(hex_encode(policy.body.policy_digest)),
-        );
-        output.insert(
-            "minimum_governance_quorum".into(),
-            Value::from(u64::from(state.minimum_governance_quorum)),
-        );
-        output.insert(
-            "trusted_governance_anchor_count".into(),
-            Value::from(
-                u64::try_from(state.trust_anchors.len())
-                    .expect("bounded governance anchor count fits u64"),
-            ),
-        );
-        output.insert(
-            "provenance_path".into(),
-            Value::from(state.provenance.path().display().to_string()),
-        );
-        output.insert(
-            "provenance_verified".into(),
-            Value::from(snapshot.is_some()),
-        );
-        output.insert(
-            "provenance_entry_count".into(),
-            snapshot
+        insert_value!(output["provenance_path"] = state.provenance.path().display().to_string());
+        insert_value!(output["provenance_verified"] = snapshot.is_some());
+        insert_json!(
+            output["provenance_entry_count"] = snapshot
                 .as_ref()
                 .map(|value| {
                     Value::from(
@@ -8398,29 +7918,24 @@ fn moderation_committee_status_json(
                             .expect("bounded provenance entry count fits u64"),
                     )
                 })
-                .unwrap_or(Value::Null),
+                .unwrap_or(Value::Null)
         );
-        output.insert(
-            "provenance_head_digest_hex".into(),
-            snapshot
+        insert_json!(
+            output["provenance_head_digest_hex"] = snapshot
                 .map(|value| Value::from(hex_encode(value.head_digest)))
-                .unwrap_or(Value::Null),
+                .unwrap_or(Value::Null)
         );
-        output.insert("max_authenticated_in_flight".into(), Value::from(1_u64));
+        insert_value!(output["max_authenticated_in_flight"] = 1_u64);
     } else {
-        output.insert(
-            "trust_boundary".into(),
-            Value::from("unsigned_diagnostic_only"),
-        );
-        output.insert("authenticated_results".into(), Value::from(false));
-        output.insert("unsigned_aggregation_enabled".into(), Value::from(true));
-        output.insert("provenance_verified".into(), Value::from(false));
+        insert_value!(output["trust_boundary"] = "unsigned_diagnostic_only");
+        insert_value!(output["authenticated_results"] = false);
+        insert_value!(output["unsigned_aggregation_enabled"] = true);
+        insert_value!(output["provenance_verified"] = false);
     }
-    output.insert(
-        "listen".into(),
-        listen
+    insert_json!(
+        output["listen"] = listen
             .map(|value| Value::from(value.to_string()))
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
     Value::Object(output)
 }
@@ -8430,12 +7945,9 @@ fn moderation_committee_json_response(status: u16, reason: &str, value: &Value) 
 }
 fn moderation_committee_error_response(status: u16, reason: &str, message: &str) -> Vec<u8> {
     let mut body = Map::new();
-    body.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.committee.error.v1"),
-    );
-    body.insert("status".into(), Value::from("error"));
-    body.insert("message".into(), Value::from(message.to_string()));
+    insert_value!(body["schema"] = "sorafs.moderation.committee.error.v1");
+    insert_value!(body["status"] = "error");
+    insert_value!(body["message"] = message.to_string());
     moderation_committee_json_response(status, reason, &Value::Object(body))
 }
 fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
@@ -8798,20 +8310,13 @@ fn load_moderation_committee_result_value(
     let bytes_len = u64::try_from(bytes.len())
         .map_err(|_| "committee canary result length exceeds u64".to_string())?;
     let mut fingerprint = Map::new();
-    fingerprint.insert(
-        "name".into(),
-        Value::from(format!(
-            "ai-prescreen-committee-result-{}",
-            hex_encode(body_blake3)
-        )),
+    insert_value!(
+        fingerprint["name"] = format!("ai-prescreen-committee-result-{}", hex_encode(body_blake3))
     );
-    fingerprint.insert("bytes".into(), Value::from(bytes_len));
-    fingerprint.insert(
-        "body_blake3_hex".into(),
-        Value::from(hex_encode(body_blake3)),
-    );
-    fingerprint.insert("payload_bytes_included".into(), Value::from(false));
-    fingerprint.insert("private_payloads_included".into(), Value::from(false));
+    insert_value!(fingerprint["bytes"] = bytes_len);
+    insert_value!(fingerprint["body_blake3_hex"] = hex_encode(body_blake3));
+    insert_value!(fingerprint["payload_bytes_included"] = false);
+    insert_value!(fingerprint["private_payloads_included"] = false);
     Ok(ModerationCommitteeCanaryResult {
         value,
         body_blake3,
@@ -8848,12 +8353,11 @@ fn moderation_committee_canary_aggregate_request_json(
     notes: Option<&str>,
 ) -> Value {
     let mut request = Map::new();
-    request.insert("results".into(), Value::Array(result_values.to_vec()));
-    request.insert(
-        "notes".into(),
-        notes
+    insert_json!(request["results"] = Value::Array(result_values.to_vec()));
+    insert_json!(
+        request["notes"] = notes
             .map(|value| Value::from(value.to_string()))
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
     Value::Object(request)
 }
@@ -8999,33 +8503,17 @@ fn moderation_committee_canary_evidence_json(
         moderation_canary_probe_json("aggregate", &input.aggregate_probe),
     ]);
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.committee.rollout_evidence.v1"),
-    );
-    output.insert("status".into(), Value::from("verified"));
-    output.insert("synthetic".into(), Value::from(false));
-    output.insert("source".into(), Value::from("sorafs_cli"));
-    output.insert(
-        "generated_at_unix".into(),
-        Value::from(input.deployment_context.generated_at_unix),
-    );
-    output.insert(
-        "deployment_id".into(),
-        Value::from(input.deployment_context.deployment_id),
-    );
-    output.insert(
-        "environment".into(),
-        Value::from(input.deployment_context.environment),
-    );
-    output.insert("deployment_context_reviewed".into(), Value::from(true));
-    output.insert(
-        "outbound_network".into(),
-        Value::from("network_capable_process_policy_required"),
-    );
-    output.insert(
-        "process_isolation_evidence".into(),
-        Value::Object(Map::from_iter([
+    insert_value!(output["schema"] = "sorafs.moderation.committee.rollout_evidence.v1");
+    insert_value!(output["status"] = "verified");
+    insert_value!(output["synthetic"] = false);
+    insert_value!(output["source"] = "sorafs_cli");
+    insert_value!(output["generated_at_unix"] = input.deployment_context.generated_at_unix);
+    insert_value!(output["deployment_id"] = input.deployment_context.deployment_id);
+    insert_value!(output["environment"] = input.deployment_context.environment);
+    insert_value!(output["deployment_context_reviewed"] = true);
+    insert_value!(output["outbound_network"] = "network_capable_process_policy_required");
+    insert_json!(
+        output["process_isolation_evidence"] = Value::Object(Map::from_iter([
             ("required".into(), Value::from(true)),
             ("status".into(), Value::from("runtime_verified")),
             (
@@ -9042,52 +8530,33 @@ fn moderation_committee_canary_evidence_json(
             ),
             ("reviewed".into(), Value::from(true)),
             ("synthetic".into(), Value::from(false)),
-        ])),
+        ]))
     );
-    output.insert(
-        "committee_url".into(),
-        Value::from(input.committee_url.to_string()),
-    );
-    output.insert(
-        "status_url".into(),
-        Value::from(input.status_url.to_string()),
-    );
-    output.insert(
-        "aggregate_url".into(),
-        Value::from(input.aggregate_url.to_string()),
-    );
-    output.insert(
-        "manifest_id_hex".into(),
-        Value::from(hex_encode(input.manifest.body.manifest_id)),
-    );
-    output.insert(
-        "runner_hash_hex".into(),
-        Value::from(hex_encode(input.manifest.body.runner_hash)),
-    );
-    output.insert("quorum".into(), Value::from(input.quorum as u64));
-    output.insert("aggregation".into(), Value::from("median_score_bps"));
-    output.insert("result_count".into(), Value::from(result_count));
-    output.insert("results".into(), Value::Array(input.result_fingerprints));
-    output.insert("subject".into(), Value::from(subject.to_string()));
-    output.insert(
-        "subject_digest_hex".into(),
-        Value::from(subject_digest_hex.to_string()),
-    );
-    output.insert("aggregated_score_bps".into(), Value::from(score));
-    output.insert("verdict".into(), Value::from(verdict.to_string()));
-    output.insert("checked_at_unix".into(), Value::from(input.checked_at_unix));
-    output.insert("probe_count".into(), Value::from(2_u64));
-    output.insert("passed_probe_count".into(), Value::from(2_u64));
-    output.insert("probes".into(), probes);
-    output.insert(
-        "notes".into(),
-        input
+    insert_value!(output["committee_url"] = input.committee_url.to_string());
+    insert_value!(output["status_url"] = input.status_url.to_string());
+    insert_value!(output["aggregate_url"] = input.aggregate_url.to_string());
+    insert_value!(output["manifest_id_hex"] = hex_encode(input.manifest.body.manifest_id));
+    insert_value!(output["runner_hash_hex"] = hex_encode(input.manifest.body.runner_hash));
+    insert_value!(output["quorum"] = input.quorum as u64);
+    insert_value!(output["aggregation"] = "median_score_bps");
+    insert_value!(output["result_count"] = result_count);
+    insert_json!(output["results"] = Value::Array(input.result_fingerprints));
+    insert_value!(output["subject"] = subject.to_string());
+    insert_value!(output["subject_digest_hex"] = subject_digest_hex.to_string());
+    insert_value!(output["aggregated_score_bps"] = score);
+    insert_value!(output["verdict"] = verdict.to_string());
+    insert_value!(output["checked_at_unix"] = input.checked_at_unix);
+    insert_value!(output["probe_count"] = 2_u64);
+    insert_value!(output["passed_probe_count"] = 2_u64);
+    insert_json!(output["probes"] = probes);
+    insert_json!(
+        output["notes"] = input
             .notes
             .map(|value| Value::from(value.to_string()))
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
-    output.insert("committee_status".into(), input.status_probe.response);
-    output.insert("committee_aggregate".into(), input.aggregate_probe.response);
+    insert_json!(output["committee_status"] = input.status_probe.response);
+    insert_json!(output["committee_aggregate"] = input.aggregate_probe.response);
     Ok(Value::Object(output))
 }
 fn validate_moderation_committee_status_response(
@@ -10183,124 +9652,64 @@ fn moderation_runner_status_json(
     listen: Option<&str>,
 ) -> Value {
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.runner.status.v1"),
+    insert_value!(output["schema"] = "sorafs.moderation.runner.status.v1");
+    insert_value!(output["status"] = status.to_string());
+    insert_value!(output["source"] = "sorafs_cli");
+    insert_value!(output["manifest_source"] = service.manifest_source.clone());
+    insert_value!(output["manifest_id_hex"] = hex_encode(service.manifest().body.manifest_id));
+    insert_value!(
+        output["manifest_digest_hex"] = hex_encode(service.manifest().body.manifest_digest)
     );
-    output.insert("status".into(), Value::from(status.to_string()));
-    output.insert("source".into(), Value::from("sorafs_cli"));
-    output.insert(
-        "manifest_source".into(),
-        Value::from(service.manifest_source.clone()),
+    insert_value!(output["runner_hash_hex"] = hex_encode(service.manifest().body.runner_hash));
+    insert_value!(output["runtime_version"] = service.manifest().body.runtime_version.clone());
+    insert_value!(
+        output["model_count"] = u64::try_from(service.manifest().body.models.len())
+            .expect("validated runner model count fits u64")
     );
-    output.insert(
-        "manifest_id_hex".into(),
-        Value::from(hex_encode(service.manifest().body.manifest_id)),
+    insert_value!(output["max_body_bytes"] = service.max_body_bytes as u64);
+    insert_value!(output["max_payload_bytes"] = u64::from(service.max_payload_bytes));
+    insert_value!(
+        output["max_active_connections"] = u64::try_from(MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS)
+            .expect("runner connection limit fits u64")
     );
-    output.insert(
-        "manifest_digest_hex".into(),
-        Value::from(hex_encode(service.manifest().body.manifest_digest)),
+    insert_value!(
+        output["max_grpc_in_flight"] = u64::try_from(MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT)
+            .expect("runner gRPC in-flight limit fits u64")
     );
-    output.insert(
-        "runner_hash_hex".into(),
-        Value::from(hex_encode(service.manifest().body.runner_hash)),
-    );
-    output.insert(
-        "runtime_version".into(),
-        Value::from(service.manifest().body.runtime_version.clone()),
-    );
-    output.insert(
-        "model_count".into(),
-        Value::from(
-            u64::try_from(service.manifest().body.models.len())
-                .expect("validated runner model count fits u64"),
-        ),
-    );
-    output.insert(
-        "max_body_bytes".into(),
-        Value::from(service.max_body_bytes as u64),
-    );
-    output.insert(
-        "max_payload_bytes".into(),
-        Value::from(u64::from(service.max_payload_bytes)),
-    );
-    output.insert(
-        "max_active_connections".into(),
-        Value::from(
-            u64::try_from(MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS)
-                .expect("runner connection limit fits u64"),
-        ),
-    );
-    output.insert(
-        "max_grpc_in_flight".into(),
-        Value::from(
-            u64::try_from(MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT)
-                .expect("runner gRPC in-flight limit fits u64"),
-        ),
-    );
-    output.insert(
-        "max_grpc_response_bytes".into(),
-        Value::from(
+    insert_value!(
+        output["max_grpc_response_bytes"] =
             u64::try_from(MODERATION_RUNNER_MAX_GRPC_RESPONSE_BYTES)
-                .expect("runner gRPC response limit fits u64"),
-        ),
+                .expect("runner gRPC response limit fits u64")
     );
-    output.insert(
-        "outbound_network".into(),
-        Value::from("model_engine_none_process_policy_required"),
-    );
-    output.insert(
-        "process_isolation".into(),
-        Value::from("external_runtime_attestation_required"),
-    );
-    output.insert("process_isolation_verified".into(), Value::from(false));
+    insert_value!(output["outbound_network"] = "model_engine_none_process_policy_required");
+    insert_value!(output["process_isolation"] = "external_runtime_attestation_required");
+    insert_value!(output["process_isolation_verified"] = false);
     if let Some(state) = &service.signed {
         let policy = state.signing_runner.trust_policy();
         let snapshot = state.provenance.snapshot().ok();
-        output.insert(
-            "trust_boundary".into(),
-            Value::from("externally_anchored_signed_results"),
+        insert_value!(output["trust_boundary"] = "externally_anchored_signed_results");
+        insert_value!(output["signed_results"] = true);
+        insert_value!(output["unsigned_screening_enabled"] = false);
+        insert_value!(
+            output["signed_screening_endpoint"] = "/v1/sorafs/moderation/runner/screen-signed"
         );
-        output.insert("signed_results".into(), Value::from(true));
-        output.insert("unsigned_screening_enabled".into(), Value::from(false));
-        output.insert(
-            "signed_screening_endpoint".into(),
-            Value::from("/v1/sorafs/moderation/runner/screen-signed"),
+        insert_value!(output["trust_policy_id_hex"] = hex_encode(policy.body.policy_id));
+        insert_value!(output["trust_policy_digest_hex"] = hex_encode(policy.body.policy_digest));
+        insert_value!(
+            output["result_signer_public_key"] =
+                state.signing_runner.signer_public_key().to_string()
         );
-        output.insert(
-            "trust_policy_id_hex".into(),
-            Value::from(hex_encode(policy.body.policy_id)),
+        insert_value!(
+            output["minimum_governance_quorum"] = u64::from(state.minimum_governance_quorum)
         );
-        output.insert(
-            "trust_policy_digest_hex".into(),
-            Value::from(hex_encode(policy.body.policy_digest)),
+        insert_value!(
+            output["trusted_governance_anchor_count"] = u64::try_from(state.trust_anchors.len())
+                .expect("bounded governance anchor count fits u64")
         );
-        output.insert(
-            "result_signer_public_key".into(),
-            Value::from(state.signing_runner.signer_public_key().to_string()),
-        );
-        output.insert(
-            "minimum_governance_quorum".into(),
-            Value::from(u64::from(state.minimum_governance_quorum)),
-        );
-        output.insert(
-            "trusted_governance_anchor_count".into(),
-            Value::from(
-                u64::try_from(state.trust_anchors.len())
-                    .expect("bounded governance anchor count fits u64"),
-            ),
-        );
-        output.insert(
-            "provenance_path".into(),
-            Value::from(state.provenance.path().display().to_string()),
-        );
-        output.insert(
-            "provenance_verified".into(),
-            Value::from(snapshot.is_some()),
-        );
-        output.insert(
-            "provenance_entry_count".into(),
-            snapshot
+        insert_value!(output["provenance_path"] = state.provenance.path().display().to_string());
+        insert_value!(output["provenance_verified"] = snapshot.is_some());
+        insert_json!(
+            output["provenance_entry_count"] = snapshot
                 .as_ref()
                 .map(|value| {
                     Value::from(
@@ -10308,29 +9717,24 @@ fn moderation_runner_status_json(
                             .expect("bounded provenance entry count fits u64"),
                     )
                 })
-                .unwrap_or(Value::Null),
+                .unwrap_or(Value::Null)
         );
-        output.insert(
-            "provenance_head_digest_hex".into(),
-            snapshot
+        insert_json!(
+            output["provenance_head_digest_hex"] = snapshot
                 .map(|value| Value::from(hex_encode(value.head_digest)))
-                .unwrap_or(Value::Null),
+                .unwrap_or(Value::Null)
         );
-        output.insert("max_signed_in_flight".into(), Value::from(1_u64));
+        insert_value!(output["max_signed_in_flight"] = 1_u64);
     } else {
-        output.insert(
-            "trust_boundary".into(),
-            Value::from("unsigned_diagnostic_only"),
-        );
-        output.insert("signed_results".into(), Value::from(false));
-        output.insert("unsigned_screening_enabled".into(), Value::from(true));
-        output.insert("provenance_verified".into(), Value::from(false));
+        insert_value!(output["trust_boundary"] = "unsigned_diagnostic_only");
+        insert_value!(output["signed_results"] = false);
+        insert_value!(output["unsigned_screening_enabled"] = true);
+        insert_value!(output["provenance_verified"] = false);
     }
-    output.insert(
-        "listen".into(),
-        listen
+    insert_json!(
+        output["listen"] = listen
             .map(|value| Value::from(value.to_string()))
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
     Value::Object(output)
 }
@@ -10457,12 +9861,9 @@ fn moderation_runner_json_response(status: u16, reason: &str, value: &Value) -> 
 }
 fn moderation_runner_error_response(status: u16, reason: &str, message: &str) -> Vec<u8> {
     let mut body = Map::new();
-    body.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.runner.error.v1"),
-    );
-    body.insert("status".into(), Value::from("error"));
-    body.insert("message".into(), Value::from(message.to_string()));
+    insert_value!(body["schema"] = "sorafs.moderation.runner.error.v1");
+    insert_value!(body["status"] = "error");
+    insert_value!(body["message"] = message.to_string());
     moderation_runner_json_response(status, reason, &Value::Object(body))
 }
 fn moderation_runner_http_response_bytes(
@@ -10960,44 +10361,19 @@ fn moderation_signed_result_summary_json(
     provenance_head: [u8; 32],
 ) -> Result<Value, String> {
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.signed_runner_output.v1"),
+    insert_value!(output["schema"] = "sorafs.moderation.signed_runner_output.v1");
+    insert_json!(
+        output["signed_result"] = to_value(result)
+            .map_err(|error| format!("failed to render signed result JSON: {error}"))?
     );
-    output.insert(
-        "signed_result".into(),
-        to_value(result)
-            .map_err(|error| format!("failed to render signed result JSON: {error}"))?,
-    );
-    output.insert(
-        "signed_result_norito_b64".into(),
-        Value::from(BASE64_STANDARD.encode(canonical_bytes)),
-    );
-    output.insert(
-        "manifest_id_hex".into(),
-        Value::from(hex_encode(result.body.manifest_id)),
-    );
-    output.insert(
-        "trust_policy_id_hex".into(),
-        Value::from(hex_encode(result.body.trust_policy_id)),
-    );
-    output.insert(
-        "trust_policy_digest_hex".into(),
-        Value::from(hex_encode(result.body.trust_policy_digest)),
-    );
-    output.insert(
-        "signer_public_key".into(),
-        Value::from(result.signer_public_key.to_string()),
-    );
-    output.insert(
-        "evidence_digest_hex".into(),
-        Value::from(hex_encode(result.body.evidence_digest)),
-    );
-    output.insert(
-        "provenance_head_digest_hex".into(),
-        Value::from(hex_encode(provenance_head)),
-    );
-    output.insert("payload_bytes_included".into(), Value::from(false));
+    insert_value!(output["signed_result_norito_b64"] = BASE64_STANDARD.encode(canonical_bytes));
+    insert_value!(output["manifest_id_hex"] = hex_encode(result.body.manifest_id));
+    insert_value!(output["trust_policy_id_hex"] = hex_encode(result.body.trust_policy_id));
+    insert_value!(output["trust_policy_digest_hex"] = hex_encode(result.body.trust_policy_digest));
+    insert_value!(output["signer_public_key"] = result.signer_public_key.to_string());
+    insert_value!(output["evidence_digest_hex"] = hex_encode(result.body.evidence_digest));
+    insert_value!(output["provenance_head_digest_hex"] = hex_encode(provenance_head));
+    insert_value!(output["payload_bytes_included"] = false);
     Ok(Value::Object(output))
 }
 fn moderation_authenticated_aggregate_summary_json(
@@ -11006,39 +10382,20 @@ fn moderation_authenticated_aggregate_summary_json(
     provenance_head: [u8; 32],
 ) -> Result<Value, String> {
     let mut output = Map::new();
-    output.insert(
-        "schema".into(),
-        Value::from("sorafs.moderation.authenticated_committee_output.v1"),
+    insert_value!(output["schema"] = "sorafs.moderation.authenticated_committee_output.v1");
+    insert_json!(
+        output["aggregate"] = to_value(aggregate)
+            .map_err(|error| format!("failed to render committee aggregate JSON: {error}"))?
     );
-    output.insert(
-        "aggregate".into(),
-        to_value(aggregate)
-            .map_err(|error| format!("failed to render committee aggregate JSON: {error}"))?,
+    insert_value!(output["aggregate_norito_b64"] = BASE64_STANDARD.encode(canonical_bytes));
+    insert_value!(output["aggregate_digest_hex"] = hex_encode(aggregate.aggregate_digest));
+    insert_value!(output["trust_policy_digest_hex"] = hex_encode(aggregate.trust_policy_digest));
+    insert_value!(
+        output["distinct_signer_count"] = u64::try_from(aggregate.members.len())
+            .expect("bounded committee member count fits u64")
     );
-    output.insert(
-        "aggregate_norito_b64".into(),
-        Value::from(BASE64_STANDARD.encode(canonical_bytes)),
-    );
-    output.insert(
-        "aggregate_digest_hex".into(),
-        Value::from(hex_encode(aggregate.aggregate_digest)),
-    );
-    output.insert(
-        "trust_policy_digest_hex".into(),
-        Value::from(hex_encode(aggregate.trust_policy_digest)),
-    );
-    output.insert(
-        "distinct_signer_count".into(),
-        Value::from(
-            u64::try_from(aggregate.members.len())
-                .expect("bounded committee member count fits u64"),
-        ),
-    );
-    output.insert(
-        "provenance_head_digest_hex".into(),
-        Value::from(hex_encode(provenance_head)),
-    );
-    output.insert("payload_bytes_included".into(), Value::from(false));
+    insert_value!(output["provenance_head_digest_hex"] = hex_encode(provenance_head));
+    insert_value!(output["payload_bytes_included"] = false);
     Ok(Value::Object(output))
 }
 fn validate_moderation_local_runner_manifest(
@@ -11113,58 +10470,35 @@ fn moderation_local_runner_screening_json(
             model_scores: &model_scores,
         });
     let mut output = Map::new();
-    output.insert("subject".into(), Value::from(subject.to_string()));
-    output.insert(
-        "subject_digest_hex".into(),
-        Value::from(hex_encode(subject_digest)),
-    );
-    output.insert(
-        "manifest_id_hex".into(),
-        Value::from(hex_encode(manifest.body.manifest_id)),
-    );
-    output.insert(
-        "runner_hash_hex".into(),
-        Value::from(hex_encode(manifest.body.runner_hash)),
-    );
-    output.insert("combined_score_bps".into(), Value::from(u64::from(score)));
-    output.insert(
-        "model_scores".into(),
-        Value::Array(
+    insert_value!(output["subject"] = subject.to_string());
+    insert_value!(output["subject_digest_hex"] = hex_encode(subject_digest));
+    insert_value!(output["manifest_id_hex"] = hex_encode(manifest.body.manifest_id));
+    insert_value!(output["runner_hash_hex"] = hex_encode(manifest.body.runner_hash));
+    insert_value!(output["combined_score_bps"] = u64::from(score));
+    insert_json!(
+        output["model_scores"] = Value::Array(
             model_scores
                 .iter()
                 .map(moderation_model_score_json)
                 .collect(),
-        ),
+        )
     );
-    output.insert("verdict".into(), Value::from(verdict.to_string()));
-    output.insert("screened_at_unix".into(), Value::from(screened_at_unix));
-    output.insert(
-        "evidence_digest_hex".into(),
-        Value::from(hex_encode(evidence_digest)),
-    );
-    output.insert(
-        "policy_digest_hex".into(),
-        Value::from(hex_encode(policy_digest)),
-    );
-    output.insert(
-        "notes".into(),
-        notes
+    insert_value!(output["verdict"] = verdict.to_string());
+    insert_value!(output["screened_at_unix"] = screened_at_unix);
+    insert_value!(output["evidence_digest_hex"] = hex_encode(evidence_digest));
+    insert_value!(output["policy_digest_hex"] = hex_encode(policy_digest));
+    insert_json!(
+        output["notes"] = notes
             .map(|value| Value::from(value.to_string()))
-            .unwrap_or(Value::Null),
+            .unwrap_or(Value::Null)
     );
     Ok(Value::Object(output))
 }
 fn moderation_model_score_json(score: &ModerationModelScoreV1) -> Value {
     let mut output = Map::new();
-    output.insert(
-        "model_id_hex".into(),
-        Value::from(hex_encode(score.model_id)),
-    );
-    output.insert(
-        "artifact_digest_hex".into(),
-        Value::from(hex_encode(score.artifact_digest)),
-    );
-    output.insert("score_bps".into(), Value::from(u64::from(score.score_bps)));
+    insert_value!(output["model_id_hex"] = hex_encode(score.model_id));
+    insert_value!(output["artifact_digest_hex"] = hex_encode(score.artifact_digest));
+    insert_value!(output["score_bps"] = u64::from(score.score_bps));
     Value::Object(output)
 }
 fn moderation_score_verdict(score: u16, thresholds: ModerationThresholdsV1) -> &'static str {
@@ -11384,41 +10718,33 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
                     .map(|report| {
                         let evidence = &report.policy.evidence;
                         let mut map = Map::new();
-                        map.insert("provider".into(), Value::from(report.provider_id.clone()));
-                        map.insert(
-                            "observed_status".into(),
-                            Value::from(evidence.observed_status.as_u16()),
-                        );
-                        map.insert("code".into(), Value::from(evidence.code.clone()));
-                        map.insert("source".into(), Value::from(evidence.source.clone()));
-                        map.insert(
-                            "catalog_digest_hex".into(),
-                            Value::from(evidence.catalog_digest_hex.clone()),
+                        insert_value!(map["provider"] = report.provider_id.clone());
+                        insert_value!(map["observed_status"] = evidence.observed_status.as_u16());
+                        insert_value!(map["code"] = evidence.code.clone());
+                        insert_value!(map["source"] = evidence.source.clone());
+                        insert_value!(
+                            map["catalog_digest_hex"] = evidence.catalog_digest_hex.clone()
                         );
                         Value::Object(map)
                     })
                     .collect();
                 let mut digest_map = Map::new();
-                digest_map.insert("digest_hex".into(), Value::from(hex::encode(spec.digest)));
-                digest_map.insert("reports".into(), Value::Array(providers));
+                insert_value!(digest_map["digest_hex"] = hex::encode(spec.digest));
+                insert_json!(digest_map["reports"] = Value::Array(providers));
                 Value::Object(digest_map)
             })
             .collect();
         let mut summary = Map::new();
-        summary.insert(
-            "manifest_id_hex".into(),
-            Value::from(manifest_id_hex.clone()),
-        );
-        summary.insert("chunker_handle".into(), Value::from(chunker_handle.clone()));
-        summary.insert(
-            "expected_catalog_digest_hex".into(),
-            expected_catalog_digest_hex
+        insert_value!(summary["manifest_id_hex"] = manifest_id_hex.clone());
+        insert_value!(summary["chunker_handle"] = chunker_handle.clone());
+        insert_json!(
+            summary["expected_catalog_digest_hex"] = expected_catalog_digest_hex
                 .as_ref()
                 .map(|value| Value::from(value.clone()))
-                .unwrap_or(Value::Null),
+                .unwrap_or(Value::Null)
         );
-        summary.insert("provider_count".into(), Value::from(providers.len() as u64));
-        summary.insert("digests".into(), Value::Array(digests));
+        insert_value!(summary["provider_count"] = providers.len() as u64);
+        insert_json!(summary["digests"] = Value::Array(digests));
         let summary = Value::Object(summary);
         let rendered =
             to_string_pretty(&summary).map_err(|err| format!("failed to render JSON: {err}"))?;
@@ -11843,86 +11169,61 @@ fn print_appeal_quote_table(class_cfg: &AppealClassConfig, ctx: &AppealQuoteInpu
 }
 fn print_appeal_quote_json(ctx: &AppealQuoteInputs<'_>) -> Result<(), String> {
     let mut breakdown = Map::new();
-    breakdown.insert(
-        "base_rate_xor".into(),
-        Value::String(format_exact(&ctx.quote.breakdown.base_rate_xor)),
+    insert_json!(
+        breakdown["base_rate_xor"] =
+            Value::String(format_exact(&ctx.quote.breakdown.base_rate_xor))
     );
-    breakdown.insert(
-        "backlog_factor".into(),
-        Value::String(format_exact(&ctx.quote.breakdown.backlog_factor)),
+    insert_json!(
+        breakdown["backlog_factor"] =
+            Value::String(format_exact(&ctx.quote.breakdown.backlog_factor))
     );
-    breakdown.insert(
-        "size_multiplier".into(),
-        Value::String(format_exact(&ctx.quote.breakdown.size_multiplier)),
+    insert_json!(
+        breakdown["size_multiplier"] =
+            Value::String(format_exact(&ctx.quote.breakdown.size_multiplier))
     );
-    breakdown.insert(
-        "urgency_multiplier".into(),
-        Value::String(format_exact(&ctx.quote.breakdown.urgency_multiplier)),
+    insert_json!(
+        breakdown["urgency_multiplier"] =
+            Value::String(format_exact(&ctx.quote.breakdown.urgency_multiplier))
     );
-    breakdown.insert(
-        "panel_multiplier".into(),
-        Value::String(format_exact(&ctx.quote.breakdown.panel_multiplier)),
+    insert_json!(
+        breakdown["panel_multiplier"] =
+            Value::String(format_exact(&ctx.quote.breakdown.panel_multiplier))
     );
-    breakdown.insert(
-        "surge_multiplier".into(),
-        Value::String(format_exact(&ctx.quote.breakdown.surge_multiplier)),
+    insert_json!(
+        breakdown["surge_multiplier"] =
+            Value::String(format_exact(&ctx.quote.breakdown.surge_multiplier))
     );
-    breakdown.insert(
-        "raw_deposit_xor".into(),
-        Value::String(format_exact(&ctx.quote.breakdown.raw_deposit_xor)),
+    insert_json!(
+        breakdown["raw_deposit_xor"] =
+            Value::String(format_exact(&ctx.quote.breakdown.raw_deposit_xor))
     );
-    breakdown.insert(
-        "min_deposit_xor".into(),
-        Value::String(format_exact(&ctx.quote.breakdown.min_deposit_xor)),
+    insert_json!(
+        breakdown["min_deposit_xor"] =
+            Value::String(format_exact(&ctx.quote.breakdown.min_deposit_xor))
     );
-    breakdown.insert(
-        "max_deposit_xor".into(),
-        Value::String(format_exact(&ctx.quote.breakdown.max_deposit_xor)),
+    insert_json!(
+        breakdown["max_deposit_xor"] =
+            Value::String(format_exact(&ctx.quote.breakdown.max_deposit_xor))
     );
     let mut root = Map::new();
-    root.insert(
-        "version".into(),
-        Value::String(ctx.config.version().to_string()),
+    insert_json!(root["version"] = Value::String(ctx.config.version().to_string()));
+    insert_json!(root["class"] = Value::String(ctx.class.as_str().to_string()));
+    insert_json!(root["urgency"] = Value::String(ctx.urgency.as_str().to_string()));
+    insert_json!(root["deposit_xor"] = Value::String(format_exact(&ctx.quote.deposit_xor)));
+    insert_json!(root["backlog_open_cases"] = Value::Number(Number::from(ctx.backlog as u64)));
+    insert_json!(
+        root["evidence_size_mb"] = Value::Number(Number::from(ctx.evidence_size_mb as u64))
     );
-    root.insert(
-        "class".into(),
-        Value::String(ctx.class.as_str().to_string()),
+    insert_json!(root["panel_size"] = Value::Number(Number::from(u64::from(ctx.panel_size))));
+    insert_json!(
+        root["default_panel_size"] =
+            Value::Number(Number::from(ctx.config.default_panel_size() as u64))
     );
-    root.insert(
-        "urgency".into(),
-        Value::String(ctx.urgency.as_str().to_string()),
-    );
-    root.insert(
-        "deposit_xor".into(),
-        Value::String(format_exact(&ctx.quote.deposit_xor)),
-    );
-    root.insert(
-        "backlog_open_cases".into(),
-        Value::Number(Number::from(ctx.backlog as u64)),
-    );
-    root.insert(
-        "evidence_size_mb".into(),
-        Value::Number(Number::from(ctx.evidence_size_mb as u64)),
-    );
-    root.insert(
-        "panel_size".into(),
-        Value::Number(Number::from(u64::from(ctx.panel_size))),
-    );
-    root.insert(
-        "default_panel_size".into(),
-        Value::Number(Number::from(ctx.config.default_panel_size() as u64)),
-    );
-    root.insert(
-        "quote_ttl_secs".into(),
-        Value::Number(Number::from(ctx.config.quote_ttl_secs())),
-    );
+    insert_json!(root["quote_ttl_secs"] = Value::Number(Number::from(ctx.config.quote_ttl_secs())));
     if let Some(expiry) = ctx.valid_until_unix {
-        root.insert(
-            "valid_until_unix".into(),
-            Value::Number(Number::from(expiry)),
-        );
+        insert_json!(root["valid_until_unix"] = Value::Number(Number::from(expiry)));
     }
-    root.insert("breakdown".into(), Value::Object(breakdown));
+    insert_json!(root["breakdown"] = Value::Object(breakdown));
     let json = to_string_pretty(&Value::Object(root))
         .map_err(|err| format!("failed to render JSON quote: {err}"))?;
     println!("{json}");
@@ -11950,38 +11251,20 @@ fn print_appeal_settlement_table(ctx: &AppealSettlementInputs<'_>) {
 }
 fn print_appeal_settlement_json(ctx: &AppealSettlementInputs<'_>) -> Result<(), String> {
     let mut root = Map::new();
-    root.insert(
-        "version".into(),
-        Value::String(ctx.config.version().to_string()),
+    insert_json!(root["version"] = Value::String(ctx.config.version().to_string()));
+    insert_json!(root["outcome"] = Value::String(ctx.verdict.to_string()));
+    insert_json!(root["deposit_xor"] = Value::String(format_exact(&ctx.deposit_xor)));
+    insert_json!(root["refund_xor"] = Value::String(format_exact(&ctx.breakdown.refund_xor)));
+    insert_json!(root["treasury_xor"] = Value::String(format_exact(&ctx.breakdown.treasury_xor)));
+    insert_json!(root["held_xor"] = Value::String(format_exact(&ctx.breakdown.held_xor)));
+    insert_json!(root["panel_size"] = Value::Number(Number::from(u64::from(ctx.panel_size))));
+    insert_json!(
+        root["panel_reward_per_juror_xor"] =
+            Value::String(format_exact(&ctx.breakdown.panel_reward_per_juror_xor))
     );
-    root.insert("outcome".into(), Value::String(ctx.verdict.to_string()));
-    root.insert(
-        "deposit_xor".into(),
-        Value::String(format_exact(&ctx.deposit_xor)),
-    );
-    root.insert(
-        "refund_xor".into(),
-        Value::String(format_exact(&ctx.breakdown.refund_xor)),
-    );
-    root.insert(
-        "treasury_xor".into(),
-        Value::String(format_exact(&ctx.breakdown.treasury_xor)),
-    );
-    root.insert(
-        "held_xor".into(),
-        Value::String(format_exact(&ctx.breakdown.held_xor)),
-    );
-    root.insert(
-        "panel_size".into(),
-        Value::Number(Number::from(u64::from(ctx.panel_size))),
-    );
-    root.insert(
-        "panel_reward_per_juror_xor".into(),
-        Value::String(format_exact(&ctx.breakdown.panel_reward_per_juror_xor)),
-    );
-    root.insert(
-        "panel_reward_total_xor".into(),
-        Value::String(format_exact(&ctx.breakdown.panel_reward_total_xor)),
+    insert_json!(
+        root["panel_reward_total_xor"] =
+            Value::String(format_exact(&ctx.breakdown.panel_reward_total_xor))
     );
     let json = to_string_pretty(&Value::Object(root))
         .map_err(|err| format!("failed to render JSON settlement: {err}"))?;
@@ -12038,86 +11321,54 @@ fn print_appeal_disbursement_table(ctx: &AppealDisbursementInputs<'_>) {
 }
 fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<(), String> {
     let mut root = Map::new();
-    root.insert(
-        "version".into(),
-        Value::String(ctx.config.version().to_string()),
-    );
-    root.insert(
-        "outcome".into(),
-        Value::String(ctx.plan.verdict.to_string()),
-    );
-    root.insert(
-        "deposit_xor".into(),
-        Value::String(format_exact(&ctx.plan.deposit_xor)),
-    );
-    root.insert(
-        "panel_size".into(),
-        Value::Number(Number::from(u64::from(ctx.plan.panel_size))),
-    );
+    insert_json!(root["version"] = Value::String(ctx.config.version().to_string()));
+    insert_json!(root["outcome"] = Value::String(ctx.plan.verdict.to_string()));
+    insert_json!(root["deposit_xor"] = Value::String(format_exact(&ctx.plan.deposit_xor)));
+    insert_json!(root["panel_size"] = Value::Number(Number::from(u64::from(ctx.plan.panel_size))));
     let mut refund = Map::new();
-    refund.insert(
-        "account".into(),
-        Value::String(ctx.plan.refund_account.to_string()),
+    insert_json!(refund["account"] = Value::String(ctx.plan.refund_account.to_string()));
+    insert_json!(
+        refund["amount_xor"] = Value::String(format_exact(&ctx.plan.settlement.refund_xor))
     );
-    refund.insert(
-        "amount_xor".into(),
-        Value::String(format_exact(&ctx.plan.settlement.refund_xor)),
-    );
-    root.insert("refund".into(), Value::Object(refund));
+    insert_json!(root["refund"] = Value::Object(refund));
     let mut treasury = Map::new();
-    treasury.insert(
-        "account".into(),
-        Value::String(ctx.plan.treasury_account.to_string()),
+    insert_json!(treasury["account"] = Value::String(ctx.plan.treasury_account.to_string()));
+    insert_json!(
+        treasury["deposit_component_xor"] =
+            Value::String(format_exact(&ctx.plan.settlement.treasury_xor))
     );
-    treasury.insert(
-        "deposit_component_xor".into(),
-        Value::String(format_exact(&ctx.plan.settlement.treasury_xor)),
+    insert_json!(
+        treasury["forfeited_rewards_xor"] =
+            Value::String(format_exact(&ctx.plan.rewards_forfeited_treasury_xor))
     );
-    treasury.insert(
-        "forfeited_rewards_xor".into(),
-        Value::String(format_exact(&ctx.plan.rewards_forfeited_treasury_xor)),
-    );
-    treasury.insert(
-        "total_xor".into(),
-        Value::String(format_exact(&ctx.plan.total_treasury_xor)),
-    );
-    root.insert("treasury".into(), Value::Object(treasury));
+    insert_json!(treasury["total_xor"] = Value::String(format_exact(&ctx.plan.total_treasury_xor)));
+    insert_json!(root["treasury"] = Value::Object(treasury));
     let mut held = Map::new();
-    held.insert(
-        "account".into(),
-        Value::String(ctx.plan.escrow_account.to_string()),
-    );
-    held.insert(
-        "amount_xor".into(),
-        Value::String(format_exact(&ctx.plan.settlement.held_xor)),
-    );
-    root.insert("held".into(), Value::Object(held));
+    insert_json!(held["account"] = Value::String(ctx.plan.escrow_account.to_string()));
+    insert_json!(held["amount_xor"] = Value::String(format_exact(&ctx.plan.settlement.held_xor)));
+    insert_json!(root["held"] = Value::Object(held));
     let mut rewards = Map::new();
-    rewards.insert(
-        "available_xor".into(),
-        Value::String(format_exact(&ctx.plan.rewards_available_xor)),
+    insert_json!(
+        rewards["available_xor"] = Value::String(format_exact(&ctx.plan.rewards_available_xor))
     );
-    rewards.insert(
-        "paid_xor".into(),
-        Value::String(format_exact(&ctx.plan.rewards_paid_total_xor)),
+    insert_json!(
+        rewards["paid_xor"] = Value::String(format_exact(&ctx.plan.rewards_paid_total_xor))
     );
-    rewards.insert(
-        "forfeited_xor".into(),
-        Value::String(format_exact(&ctx.plan.rewards_forfeited_treasury_xor)),
+    insert_json!(
+        rewards["forfeited_xor"] =
+            Value::String(format_exact(&ctx.plan.rewards_forfeited_treasury_xor))
     );
-    rewards.insert(
-        "attending".into(),
-        Value::Number(Number::from(ctx.plan.attending_count() as u64)),
+    insert_json!(
+        rewards["attending"] = Value::Number(Number::from(ctx.plan.attending_count() as u64))
     );
-    rewards.insert(
-        "no_shows".into(),
-        Value::Array(
+    insert_json!(
+        rewards["no_shows"] = Value::Array(
             ctx.plan
                 .no_show_accounts
                 .iter()
                 .map(|acct| Value::String(acct.to_string()))
                 .collect(),
-        ),
+        )
     );
     let participants: Vec<Value> = ctx
         .plan
@@ -12125,26 +11376,19 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
         .iter()
         .map(|payout| {
             let mut entry = Map::new();
-            entry.insert("account".into(), Value::String(payout.juror.to_string()));
-            entry.insert(
-                "stipend_xor".into(),
-                Value::String(format_exact(&payout.stipend_xor)),
-            );
-            entry.insert(
-                "bonus_xor".into(),
-                Value::String(format_exact(&payout.bonus_xor)),
-            );
-            entry.insert(
-                "total_xor".into(),
-                Value::String(format_exact(
+            insert_json!(entry["account"] = Value::String(payout.juror.to_string()));
+            insert_json!(entry["stipend_xor"] = Value::String(format_exact(&payout.stipend_xor)));
+            insert_json!(entry["bonus_xor"] = Value::String(format_exact(&payout.bonus_xor)));
+            insert_json!(
+                entry["total_xor"] = Value::String(format_exact(
                     &payout.total().expect("validated payout arithmetic"),
-                )),
+                ))
             );
             Value::Object(entry)
         })
         .collect();
-    rewards.insert("participants".into(), Value::Array(participants));
-    root.insert("rewards".into(), Value::Object(rewards));
+    insert_json!(rewards["participants"] = Value::Array(participants));
+    insert_json!(root["rewards"] = Value::Object(rewards));
     let json = to_string_pretty(&Value::Object(root))
         .map_err(|err| format!("failed to render JSON disbursement: {err}"))?;
     println!("{json}");
@@ -12173,6 +11417,33 @@ mod manifest_tests {
     }
     fn canonical_temp_path(temp: &TempDir) -> std::path::PathBuf {
         temp.path().canonicalize().expect("canonical tempdir")
+    }
+    macro_rules! assert_json_str {
+        ($object:ident, $field:literal, $expected:expr) => {
+            assert_eq!($object.get($field).and_then(Value::as_str), Some($expected));
+        };
+    }
+    macro_rules! assert_json_u64 {
+        ($object:ident, $field:literal, $expected:expr) => {
+            assert_eq!($object.get($field).and_then(Value::as_u64), Some($expected));
+        };
+    }
+    macro_rules! assert_json_bool {
+        ($object:ident, $field:literal, $expected:expr) => {
+            assert_eq!(
+                $object.get($field).and_then(Value::as_bool),
+                Some($expected)
+            );
+        };
+    }
+    macro_rules! write_manifest_fixture {
+        ($path:ident, $manifest:ident) => {
+            fs::write(
+                &$path,
+                norito::json::to_json_pretty(&$manifest).expect("render manifest json"),
+            )
+            .expect("write manifest");
+        };
     }
     #[test]
     fn write_text_creates_parent_and_writes_bytes() {
@@ -12274,14 +11545,8 @@ mod manifest_tests {
         let summary_value: Value =
             norito::json::from_str(&summary_json).expect("parse summary json");
         let summary_map = summary_value.as_object().expect("summary to be an object");
-        assert_eq!(
-            summary_map.get("mode_effective").and_then(Value::as_str),
-            Some("metadata-only")
-        );
-        assert_eq!(
-            summary_map.get("mode_previous").and_then(Value::as_str),
-            Some("bridge")
-        );
+        assert_json_str!(summary_map, "mode_effective", "metadata-only");
+        assert_json_str!(summary_map, "mode_previous", "bridge");
     }
     #[test]
     fn moderation_validate_corpus_accepts_valid_manifest() {
@@ -12452,11 +11717,7 @@ mod manifest_tests {
         let artifact_root = root.join("artifacts");
         write_moderation_model_artifacts_fixture(&artifact_root);
         let payload = b"moderation payload bytes";
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
-        )
-        .expect("write manifest");
+        write_manifest_fixture!(manifest_path, manifest);
         fs::write(&payload_path, payload).expect("write payload");
         moderation_run_local(vec![
             format!("--manifest={}", manifest_path.display()),
@@ -12487,21 +11748,21 @@ mod manifest_tests {
         .expect("direct local runner output");
         assert_eq!(value, expected);
         let object = value.as_object().expect("runner output object");
-        assert_eq!(
-            object.get("subject").and_then(Value::as_str),
-            Some("cid:bafy-local-runner")
+        assert_json_str!(object, "subject", "cid:bafy-local-runner");
+        assert_json_str!(
+            object,
+            "subject_digest_hex",
+            hex_encode(blake3_hash(payload).as_bytes()).as_str()
         );
-        assert_eq!(
-            object.get("subject_digest_hex").and_then(Value::as_str),
-            Some(hex_encode(blake3_hash(payload).as_bytes()).as_str())
+        assert_json_str!(
+            object,
+            "manifest_id_hex",
+            hex_encode(manifest.body.manifest_id).as_str()
         );
-        assert_eq!(
-            object.get("manifest_id_hex").and_then(Value::as_str),
-            Some(hex_encode(manifest.body.manifest_id).as_str())
-        );
-        assert_eq!(
-            object.get("runner_hash_hex").and_then(Value::as_str),
-            Some(hex_encode(manifest.body.runner_hash).as_str())
+        assert_json_str!(
+            object,
+            "runner_hash_hex",
+            hex_encode(manifest.body.runner_hash).as_str()
         );
         let score = object
             .get("combined_score_bps")
@@ -12674,14 +11935,12 @@ mod manifest_tests {
             moderation_registry_http_response(&service, &repro_request, service.max_body_bytes);
         let (header, repro_json) = moderation_runner_response_parts(&repro_response);
         assert!(header.starts_with("HTTP/1.1 200 OK"));
-        assert_eq!(
-            repro_json.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.model_registry.repro_manifest_admission.v1")
+        assert_json_str!(
+            repro_json,
+            "schema",
+            "sorafs.moderation.model_registry.repro_manifest_admission.v1"
         );
-        assert_eq!(
-            repro_json.get("created").and_then(Value::as_bool),
-            Some(true)
-        );
+        assert_json_bool!(repro_json, "created", true);
         let corpus_body = moderation_registry_manifest_request(&corpus_manifest);
         let corpus_request = moderation_runner_http_request(
             "POST",
@@ -12692,32 +11951,25 @@ mod manifest_tests {
             moderation_registry_http_response(&service, &corpus_request, service.max_body_bytes);
         let (header, corpus_json) = moderation_runner_response_parts(&corpus_response);
         assert!(header.starts_with("HTTP/1.1 200 OK"));
-        assert_eq!(
-            corpus_json.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.model_registry.corpus_manifest_admission.v1")
+        assert_json_str!(
+            corpus_json,
+            "schema",
+            "sorafs.moderation.model_registry.corpus_manifest_admission.v1"
         );
-        assert_eq!(
-            corpus_json.get("created").and_then(Value::as_bool),
-            Some(true)
-        );
+        assert_json_bool!(corpus_json, "created", true);
         let snapshot_request =
             moderation_runner_http_request("GET", "/v1/sorafs/moderation/model-registry", &[]);
         let snapshot_response =
             moderation_registry_http_response(&service, &snapshot_request, service.max_body_bytes);
         let (header, snapshot) = moderation_runner_response_parts(&snapshot_response);
         assert!(header.starts_with("HTTP/1.1 200 OK"));
-        assert_eq!(
-            snapshot.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.model_registry.snapshot.v1")
+        assert_json_str!(
+            snapshot,
+            "schema",
+            "sorafs.moderation.model_registry.snapshot.v1"
         );
-        assert_eq!(
-            snapshot.get("repro_manifest_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            snapshot.get("corpus_count").and_then(Value::as_u64),
-            Some(1)
-        );
+        assert_json_u64!(snapshot, "repro_manifest_count", 1);
+        assert_json_u64!(snapshot, "corpus_count", 1);
         assert!(state_path.exists(), "registry service should persist state");
         let reloaded = moderation_registry_fixture_service(&state_path);
         let reloaded_response = moderation_registry_http_response(
@@ -12837,14 +12089,8 @@ mod manifest_tests {
         assert_eq!(provenance.entries.len(), 1);
         provenance.validate_chain().expect("valid provenance chain");
         let status = moderation_runner_status_json(&service, "ready", None);
-        assert_eq!(
-            status.get("signed_results").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            status.get("provenance_entry_count").and_then(Value::as_u64),
-            Some(1)
-        );
+        assert_json_bool!(status, "signed_results", true);
+        assert_json_u64!(status, "provenance_entry_count", 1);
     }
     #[test]
     fn signed_runner_rejects_client_time_unsigned_route_and_unknown_fields() {
@@ -13008,10 +12254,7 @@ mod manifest_tests {
             moderation_committee_http_response(&service, &request, service.max_body_bytes);
         let (header, output) = moderation_runner_response_parts(&response);
         assert!(header.starts_with("HTTP/1.1 200 OK"), "{header}");
-        assert_eq!(
-            output.get("distinct_signer_count").and_then(Value::as_u64),
-            Some(2)
-        );
+        assert_json_u64!(output, "distinct_signer_count", 2);
         assert_eq!(
             output
                 .get("payload_bytes_included")
@@ -13207,13 +12450,10 @@ mod manifest_tests {
         )
         .expect("runner output");
         let object = value.as_object_mut().expect("runner output object");
-        object.insert("combined_score_bps".into(), Value::from(u64::from(score)));
-        object.insert("verdict".into(), Value::from(verdict));
-        object.insert("screened_at_unix".into(), Value::from(screened_at_unix));
-        object.insert(
-            "evidence_digest_hex".into(),
-            Value::from(hex_encode(evidence_digest)),
-        );
+        insert_value!(object["combined_score_bps"] = u64::from(score));
+        insert_value!(object["verdict"] = verdict);
+        insert_value!(object["screened_at_unix"] = screened_at_unix);
+        insert_value!(object["evidence_digest_hex"] = hex_encode(evidence_digest));
         value
     }
     fn write_moderation_json(path: &Path, value: &Value) {
@@ -13229,17 +12469,16 @@ mod manifest_tests {
         let response = moderation_runner_http_response(&service, &request, service.max_body_bytes);
         let (header, body) = moderation_runner_response_parts(&response);
         assert!(header.starts_with("HTTP/1.1 200 OK"));
-        assert_eq!(
-            body.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.runner.status.v1")
+        assert_json_str!(body, "schema", "sorafs.moderation.runner.status.v1");
+        assert_json_str!(
+            body,
+            "manifest_id_hex",
+            hex_encode(manifest.body.manifest_id).as_str()
         );
-        assert_eq!(
-            body.get("manifest_id_hex").and_then(Value::as_str),
-            Some(hex_encode(manifest.body.manifest_id).as_str())
-        );
-        assert_eq!(
-            body.get("outbound_network").and_then(Value::as_str),
-            Some("model_engine_none_process_policy_required")
+        assert_json_str!(
+            body,
+            "outbound_network",
+            "model_engine_none_process_policy_required"
         );
     }
     #[test]
@@ -13269,9 +12508,10 @@ mod manifest_tests {
         .expect("expected runner output");
         assert!(header.starts_with("HTTP/1.1 200 OK"));
         assert_eq!(actual, expected);
-        assert_eq!(
-            actual.get("subject_digest_hex").and_then(Value::as_str),
-            Some(hex_encode(blake3_hash(payload).as_bytes()).as_str())
+        assert_json_str!(
+            actual,
+            "subject_digest_hex",
+            hex_encode(blake3_hash(payload).as_bytes()).as_str()
         );
     }
     #[test]
@@ -13616,11 +12856,7 @@ mod manifest_tests {
         let bundle_dir = temp.path().join("runner-bundle");
         let artifact_root = temp.path().join("source-artifacts");
         write_moderation_model_artifacts_fixture(&artifact_root);
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
-        )
-        .expect("write manifest");
+        write_manifest_fixture!(manifest_path, manifest);
         moderation_runner_bundle(vec![
             format!("--manifest={}", manifest_path.display()),
             format!("--artifact-root={}", artifact_root.display()),
@@ -13661,18 +12897,13 @@ mod manifest_tests {
         assert!(launchd.contains("<key>KeepAlive</key>"));
         assert!(readme.contains("SoraFS Moderation Runner Bundle"));
         let object = metadata.as_object().expect("metadata object");
-        assert_eq!(
-            object.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.runner.bundle.v1")
+        assert_json_str!(object, "schema", "sorafs.moderation.runner.bundle.v1");
+        assert_json_str!(
+            object,
+            "manifest_id_hex",
+            hex_encode(manifest.body.manifest_id).as_str()
         );
-        assert_eq!(
-            object.get("manifest_id_hex").and_then(Value::as_str),
-            Some(hex_encode(manifest.body.manifest_id).as_str())
-        );
-        assert_eq!(
-            object.get("listen").and_then(Value::as_str),
-            Some("127.0.0.1:9195")
-        );
+        assert_json_str!(object, "listen", "127.0.0.1:9195");
         let files = match object.get("files") {
             Some(Value::Array(values)) => values,
             other => panic!("expected files array, got {other:?}"),
@@ -13698,11 +12929,7 @@ mod manifest_tests {
         let manifest = signed_moderation_repro_manifest_fixture();
         let temp = TempDir::new().expect("tempdir");
         let manifest_path = temp.path().join("repro.json");
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
-        )
-        .expect("write manifest");
+        write_manifest_fixture!(manifest_path, manifest);
         let err = moderation_runner_bundle(vec![
             format!("--manifest={}", manifest_path.display()),
             format!(
@@ -13723,11 +12950,7 @@ mod manifest_tests {
         let payload_path = root.join("payload.bin");
         let out_path = root.join("runner-canary.json");
         let payload = b"runner canary payload bytes";
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
-        )
-        .expect("write manifest");
+        write_manifest_fixture!(manifest_path, manifest);
         fs::write(&payload_path, payload).expect("write payload");
         let (runner_url, handle) = moderation_runner_canary_fixture_server(manifest.clone());
         moderation_runner_canary(vec![
@@ -13755,66 +12978,40 @@ mod manifest_tests {
         assert!(!rendered.contains("payload_b64"));
         let value: Value = norito::json::from_str(&rendered).expect("parse canary output");
         let object = value.as_object().expect("canary output object");
-        assert_eq!(
-            object.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.runner.rollout_evidence.v1")
+        assert_json_str!(
+            object,
+            "schema",
+            "sorafs.moderation.runner.rollout_evidence.v1"
         );
-        assert_eq!(
-            object.get("status").and_then(Value::as_str),
-            Some("verified")
+        assert_json_str!(object, "status", "verified");
+        assert_json_str!(
+            object,
+            "manifest_id_hex",
+            hex_encode(manifest.body.manifest_id).as_str()
         );
-        assert_eq!(
-            object.get("manifest_id_hex").and_then(Value::as_str),
-            Some(hex_encode(manifest.body.manifest_id).as_str())
+        assert_json_str!(
+            object,
+            "runner_hash_hex",
+            hex_encode(manifest.body.runner_hash).as_str()
         );
-        assert_eq!(
-            object.get("runner_hash_hex").and_then(Value::as_str),
-            Some(hex_encode(manifest.body.runner_hash).as_str())
+        assert_json_str!(
+            object,
+            "subject_digest_hex",
+            hex_encode(blake3_hash(payload).as_bytes()).as_str()
         );
-        assert_eq!(
-            object.get("subject_digest_hex").and_then(Value::as_str),
-            Some(hex_encode(blake3_hash(payload).as_bytes()).as_str())
-        );
-        assert_eq!(
-            object.get("checked_at_unix").and_then(Value::as_u64),
-            Some(1_800_004_999)
-        );
-        assert_eq!(
-            object.get("generated_at_unix").and_then(Value::as_u64),
-            Some(1_800_004_999)
-        );
-        assert_eq!(
-            object.get("deployment_id").and_then(Value::as_str),
-            Some("ai-prescreen-production-20260701")
-        );
-        assert_eq!(
-            object.get("environment").and_then(Value::as_str),
-            Some("production")
-        );
-        assert_eq!(
-            object.get("synthetic").and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_json_u64!(object, "checked_at_unix", 1_800_004_999);
+        assert_json_u64!(object, "generated_at_unix", 1_800_004_999);
+        assert_json_str!(object, "deployment_id", "ai-prescreen-production-20260701");
+        assert_json_str!(object, "environment", "production");
+        assert_json_bool!(object, "synthetic", false);
         let isolation = object
             .get("process_isolation_evidence")
             .and_then(Value::as_object)
             .expect("runner isolation evidence");
-        assert_eq!(
-            isolation.get("status").and_then(Value::as_str),
-            Some("runtime_verified")
-        );
-        assert_eq!(
-            isolation.get("enforcement").and_then(Value::as_str),
-            Some("systemd_ip_filter")
-        );
-        assert_eq!(
-            isolation.get("reviewed").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            isolation.get("synthetic").and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_json_str!(isolation, "status", "runtime_verified");
+        assert_json_str!(isolation, "enforcement", "systemd_ip_filter");
+        assert_json_bool!(isolation, "reviewed", true);
+        assert_json_bool!(isolation, "synthetic", false);
         assert_eq!(object.get("probe_count").and_then(Value::as_u64), Some(2));
         let probes = object
             .get("probes")
@@ -13976,22 +13173,18 @@ mod manifest_tests {
             moderation_committee_http_response(&service, &request, service.max_body_bytes);
         let (header, body) = moderation_runner_response_parts(&response);
         assert!(header.starts_with("HTTP/1.1 200 OK"));
-        assert_eq!(
-            body.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.committee.status.v1")
-        );
-        assert_eq!(
-            body.get("manifest_id_hex").and_then(Value::as_str),
-            Some(hex_encode(manifest.body.manifest_id).as_str())
+        assert_json_str!(body, "schema", "sorafs.moderation.committee.status.v1");
+        assert_json_str!(
+            body,
+            "manifest_id_hex",
+            hex_encode(manifest.body.manifest_id).as_str()
         );
         assert_eq!(body.get("quorum").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            body.get("aggregation").and_then(Value::as_str),
-            Some("median_score_bps")
-        );
-        assert_eq!(
-            body.get("outbound_network").and_then(Value::as_str),
-            Some("network_capable_process_policy_required")
+        assert_json_str!(body, "aggregation", "median_score_bps");
+        assert_json_str!(
+            body,
+            "outbound_network",
+            "network_capable_process_policy_required"
         );
     }
     #[test]
@@ -14007,11 +13200,11 @@ mod manifest_tests {
         let result_c =
             moderation_committee_result_fixture(&manifest, payload, subject, 8_700, 1_800_005_003);
         let mut body = Map::new();
-        body.insert(
-            "results".into(),
-            Value::Array(vec![result_b.clone(), result_a.clone(), result_c.clone()]),
+        insert_json!(
+            body["results"] =
+                Value::Array(vec![result_b.clone(), result_a.clone(), result_c.clone()])
         );
-        body.insert("notes".into(), Value::from("service aggregate"));
+        insert_value!(body["notes"] = "service aggregate");
         let body = to_vec(&Value::Object(body)).expect("committee request JSON");
         let request = moderation_runner_http_request(
             "POST",
@@ -14038,14 +13231,8 @@ mod manifest_tests {
         .expect("expected aggregate");
         assert!(header.starts_with("HTTP/1.1 200 OK"));
         assert_eq!(actual, expected);
-        assert_eq!(
-            actual.get("aggregated_score_bps").and_then(Value::as_u64),
-            Some(6_100)
-        );
-        assert_eq!(
-            actual.get("verdict").and_then(Value::as_str),
-            Some("quarantine")
-        );
+        assert_json_u64!(actual, "aggregated_score_bps", 6_100);
+        assert_json_str!(actual, "verdict", "quarantine");
     }
     #[test]
     fn moderation_committee_aggregate_endpoint_rejects_payload_bytes() {
@@ -14059,11 +13246,8 @@ mod manifest_tests {
             1_800_005_010,
         );
         let mut body = Map::new();
-        body.insert("results".into(), Value::Array(vec![result]));
-        body.insert(
-            "payload_b64".into(),
-            Value::from(BASE64_STANDARD.encode(b"payload")),
-        );
+        insert_json!(body["results"] = Value::Array(vec![result]));
+        insert_value!(body["payload_b64"] = BASE64_STANDARD.encode(b"payload"));
         let body = to_vec(&Value::Object(body)).expect("committee request JSON");
         let request = moderation_runner_http_request(
             "POST",
@@ -14087,11 +13271,7 @@ mod manifest_tests {
         let temp = TempDir::new().expect("tempdir");
         let manifest_path = temp.path().join("repro.json");
         let bundle_dir = temp.path().join("committee-bundle");
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
-        )
-        .expect("write manifest");
+        write_manifest_fixture!(manifest_path, manifest);
         moderation_committee_bundle(vec![
             format!("--manifest={}", manifest_path.display()),
             "--quorum=2".to_string(),
@@ -14131,23 +13311,15 @@ mod manifest_tests {
         assert!(launchd.contains("<key>KeepAlive</key>"));
         assert!(readme.contains("SoraFS Moderation Committee Bundle"));
         let object = metadata.as_object().expect("metadata object");
-        assert_eq!(
-            object.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.committee.bundle.v1")
-        );
-        assert_eq!(
-            object.get("manifest_id_hex").and_then(Value::as_str),
-            Some(hex_encode(manifest.body.manifest_id).as_str())
+        assert_json_str!(object, "schema", "sorafs.moderation.committee.bundle.v1");
+        assert_json_str!(
+            object,
+            "manifest_id_hex",
+            hex_encode(manifest.body.manifest_id).as_str()
         );
         assert_eq!(object.get("quorum").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            object.get("aggregation").and_then(Value::as_str),
-            Some("median_score_bps")
-        );
-        assert_eq!(
-            object.get("listen").and_then(Value::as_str),
-            Some("127.0.0.1:9197")
-        );
+        assert_json_str!(object, "aggregation", "median_score_bps");
+        assert_json_str!(object, "listen", "127.0.0.1:9197");
         let files = match object.get("files") {
             Some(Value::Array(values)) => values,
             other => panic!("expected files array, got {other:?}"),
@@ -14185,11 +13357,7 @@ mod manifest_tests {
         let result_c = root.join("c.json");
         let payload = b"committee canary payload bytes";
         let subject = "cid:bafy-committee-canary";
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
-        )
-        .expect("write manifest");
+        write_manifest_fixture!(manifest_path, manifest);
         write_moderation_json(
             &result_a,
             &moderation_committee_result_fixture(&manifest, payload, subject, 5_900, 1_800_006_001),
@@ -14230,21 +13398,21 @@ mod manifest_tests {
         assert!(!rendered.contains("payload_b64"));
         let value: Value = norito::json::from_str(&rendered).expect("parse canary output");
         let object = value.as_object().expect("canary output object");
-        assert_eq!(
-            object.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.committee.rollout_evidence.v1")
+        assert_json_str!(
+            object,
+            "schema",
+            "sorafs.moderation.committee.rollout_evidence.v1"
         );
-        assert_eq!(
-            object.get("status").and_then(Value::as_str),
-            Some("verified")
+        assert_json_str!(object, "status", "verified");
+        assert_json_str!(
+            object,
+            "manifest_id_hex",
+            hex_encode(manifest.body.manifest_id).as_str()
         );
-        assert_eq!(
-            object.get("manifest_id_hex").and_then(Value::as_str),
-            Some(hex_encode(manifest.body.manifest_id).as_str())
-        );
-        assert_eq!(
-            object.get("runner_hash_hex").and_then(Value::as_str),
-            Some(hex_encode(manifest.body.runner_hash).as_str())
+        assert_json_str!(
+            object,
+            "runner_hash_hex",
+            hex_encode(manifest.body.runner_hash).as_str()
         );
         assert_eq!(object.get("quorum").and_then(Value::as_u64), Some(2));
         assert_eq!(object.get("result_count").and_then(Value::as_u64), Some(3));
@@ -14269,50 +13437,24 @@ mod manifest_tests {
                 .and_then(Value::as_str)
                 .is_some_and(|digest| digest.len() == 64)
         );
-        assert_eq!(
-            object.get("subject_digest_hex").and_then(Value::as_str),
-            Some(hex_encode(blake3_hash(payload).as_bytes()).as_str())
+        assert_json_str!(
+            object,
+            "subject_digest_hex",
+            hex_encode(blake3_hash(payload).as_bytes()).as_str()
         );
-        assert_eq!(
-            object.get("aggregated_score_bps").and_then(Value::as_u64),
-            Some(6_100)
-        );
-        assert_eq!(
-            object.get("verdict").and_then(Value::as_str),
-            Some("quarantine")
-        );
-        assert_eq!(
-            object.get("checked_at_unix").and_then(Value::as_u64),
-            Some(1_800_006_999)
-        );
-        assert_eq!(
-            object.get("generated_at_unix").and_then(Value::as_u64),
-            Some(1_800_006_999)
-        );
-        assert_eq!(
-            object.get("synthetic").and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_json_u64!(object, "aggregated_score_bps", 6_100);
+        assert_json_str!(object, "verdict", "quarantine");
+        assert_json_u64!(object, "checked_at_unix", 1_800_006_999);
+        assert_json_u64!(object, "generated_at_unix", 1_800_006_999);
+        assert_json_bool!(object, "synthetic", false);
         let isolation = object
             .get("process_isolation_evidence")
             .and_then(Value::as_object)
             .expect("committee isolation evidence");
-        assert_eq!(
-            isolation.get("status").and_then(Value::as_str),
-            Some("runtime_verified")
-        );
-        assert_eq!(
-            isolation.get("enforcement").and_then(Value::as_str),
-            Some("systemd_ip_filter")
-        );
-        assert_eq!(
-            isolation.get("reviewed").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            isolation.get("synthetic").and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_json_str!(isolation, "status", "runtime_verified");
+        assert_json_str!(isolation, "enforcement", "systemd_ip_filter");
+        assert_json_bool!(isolation, "reviewed", true);
+        assert_json_bool!(isolation, "synthetic", false);
         assert_eq!(object.get("probe_count").and_then(Value::as_u64), Some(2));
         assert!(object.get("committee_status").is_some());
         assert!(object.get("committee_aggregate").is_some());
@@ -14452,11 +13594,7 @@ mod manifest_tests {
         let result_c = root.join("c.json");
         let payload = b"committee payload bytes";
         let subject = "cid:bafy-committee";
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
-        )
-        .expect("write manifest");
+        write_manifest_fixture!(manifest_path, manifest);
         write_moderation_json(
             &result_a,
             &moderation_committee_result_fixture(&manifest, payload, subject, 5_900, 1_800_003_001),
@@ -14483,36 +13621,15 @@ mod manifest_tests {
         assert!(!rendered.contains("payload_b64"));
         let value: Value = norito::json::from_str(&rendered).expect("parse committee output");
         let object = value.as_object().expect("committee output object");
-        assert_eq!(
-            object.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.committee.aggregate.v1")
-        );
-        assert_eq!(
-            object.get("status").and_then(Value::as_str),
-            Some("quorum_satisfied")
-        );
+        assert_json_str!(object, "schema", "sorafs.moderation.committee.aggregate.v1");
+        assert_json_str!(object, "status", "quorum_satisfied");
         assert_eq!(object.get("result_count").and_then(Value::as_u64), Some(3));
         assert_eq!(object.get("quorum").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            object.get("aggregation").and_then(Value::as_str),
-            Some("median_score_bps")
-        );
-        assert_eq!(
-            object.get("aggregated_score_bps").and_then(Value::as_u64),
-            Some(6_100)
-        );
-        assert_eq!(
-            object.get("verdict").and_then(Value::as_str),
-            Some("quarantine")
-        );
-        assert_eq!(
-            object.get("screened_at_unix_min").and_then(Value::as_u64),
-            Some(1_800_003_001)
-        );
-        assert_eq!(
-            object.get("screened_at_unix_max").and_then(Value::as_u64),
-            Some(1_800_003_003)
-        );
+        assert_json_str!(object, "aggregation", "median_score_bps");
+        assert_json_u64!(object, "aggregated_score_bps", 6_100);
+        assert_json_str!(object, "verdict", "quarantine");
+        assert_json_u64!(object, "screened_at_unix_min", 1_800_003_001);
+        assert_json_u64!(object, "screened_at_unix_max", 1_800_003_003);
         let member_results = match object.get("member_results") {
             Some(Value::Array(values)) => values,
             other => panic!("expected member_results array, got {other:?}"),
@@ -14526,11 +13643,7 @@ mod manifest_tests {
         let manifest_path = temp.path().join("repro.json");
         let result_path = temp.path().join("result.json");
         let out_path = temp.path().join("committee.json");
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
-        )
-        .expect("write manifest");
+        write_manifest_fixture!(manifest_path, manifest);
         let mut result = moderation_committee_result_fixture(
             &manifest,
             b"committee mismatch payload",
@@ -14559,11 +13672,7 @@ mod manifest_tests {
         let manifest_path = temp.path().join("repro.json");
         let result_a = temp.path().join("a.json");
         let result_b = temp.path().join("b.json");
-        fs::write(
-            &manifest_path,
-            norito::json::to_json_pretty(&manifest).expect("render manifest json"),
-        )
-        .expect("write manifest");
+        write_manifest_fixture!(manifest_path, manifest);
         write_moderation_json(
             &result_a,
             &moderation_committee_result_fixture(
@@ -14619,7 +13728,7 @@ mod manifest_tests {
     fn taikai_cache_override_accepts_wrapped_object() {
         let raw = sample_taikai_cache_value();
         let mut map = Map::new();
-        map.insert("taikai_cache".into(), raw);
+        insert_json!(map["taikai_cache"] = raw);
         let parsed = parse_taikai_cache_override(Value::Object(map)).expect("wrapped cache parses");
         assert!(parsed.is_some());
     }
@@ -14826,43 +13935,27 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let mut summary = Map::new();
-    summary.insert(
-        "manifest_path".into(),
-        Value::from(manifest_out.display().to_string()),
-    );
-    summary.insert(
-        "manifest_digest_hex".into(),
-        Value::from(hex_encode(manifest_digest.as_bytes())),
-    );
-    summary.insert("chunker_handle".into(), Value::from(chunker_handle));
-    summary.insert(
-        "chunker_profile_id".into(),
-        Value::from(descriptor.id.0 as u64),
-    );
-    summary.insert(
-        "pin_policy".into(),
-        Value::Object(pin_policy_json(&pin_policy)),
-    );
+    insert_value!(summary["manifest_path"] = manifest_out.display().to_string());
+    insert_value!(summary["manifest_digest_hex"] = hex_encode(manifest_digest.as_bytes()));
+    insert_value!(summary["chunker_handle"] = chunker_handle);
+    insert_value!(summary["chunker_profile_id"] = descriptor.id.0 as u64);
+    insert_json!(summary["pin_policy"] = Value::Object(pin_policy_json(&pin_policy)));
     if let Some(json_path) = manifest_json_out {
-        summary.insert(
-            "manifest_json_path".into(),
-            Value::from(json_path.display().to_string()),
-        );
+        insert_value!(summary["manifest_json_path"] = json_path.display().to_string());
     }
     if !metadata_entries.is_empty() {
-        summary.insert(
-            "metadata_kv".into(),
-            Value::Array(
+        insert_json!(
+            summary["metadata_kv"] = Value::Array(
                 metadata_entries
                     .into_iter()
                     .map(|(k, v)| {
                         let mut kv = Map::new();
-                        kv.insert("key".into(), Value::from(k));
-                        kv.insert("value".into(), Value::from(v));
+                        insert_value!(kv["key"] = k);
+                        insert_value!(kv["value"] = v);
                         Value::Object(kv)
                     })
                     .collect(),
-            ),
+            )
         );
     }
     let rendered = to_string_pretty(&Value::Object(summary))
@@ -14929,26 +14022,17 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
         .abi_version;
     write_bytes(&bytecode_out, &bytecode)?;
     let mut summary = Map::new();
-    summary.insert(
-        "bytecode_path".into(),
-        Value::from(bytecode_out.display().to_string()),
-    );
-    summary.insert("bytecode_len".into(), Value::from(bytecode.len() as u64));
-    summary.insert(
-        "bytecode_blake3_hex".into(),
-        Value::from(hex_encode(blake3_hash(&bytecode).as_bytes())),
-    );
-    summary.insert("abi_version".into(), Value::from(abi_version as u64));
+    insert_value!(summary["bytecode_path"] = bytecode_out.display().to_string());
+    insert_value!(summary["bytecode_len"] = bytecode.len() as u64);
+    insert_value!(summary["bytecode_blake3_hex"] = hex_encode(blake3_hash(&bytecode).as_bytes()));
+    insert_value!(summary["abi_version"] = abi_version as u64);
     match &source_path {
         Some(path) => {
-            summary.insert("source_kind".into(), Value::from("file"));
-            summary.insert(
-                "source_path".into(),
-                Value::from(path.display().to_string()),
-            );
+            insert_value!(summary["source_kind"] = "file");
+            insert_value!(summary["source_path"] = path.display().to_string());
         }
         None => {
-            summary.insert("source_kind".into(), Value::from("stdin"));
+            insert_value!(summary["source_kind"] = "stdin");
         }
     }
     let summary_value = Value::Object(summary);
@@ -15161,65 +14245,37 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         write_bytes(&path, &submission.response_bytes)?;
     }
     let mut summary = Map::new();
-    summary.insert("torii_url".into(), Value::from(torii_url));
-    summary.insert(
-        "torii_endpoint".into(),
-        Value::from(submission.endpoint_used.clone()),
-    );
-    summary.insert(
-        "torii_endpoint_requested".into(),
-        Value::from(submission.endpoint_requested),
-    );
-    summary.insert(
-        "status".into(),
-        Value::from(submission.status.as_u16() as u64),
-    );
-    summary.insert("authority".into(), Value::from(authority_literal));
-    summary.insert(
-        "submission_mode".into(),
-        Value::from(submission.submission_mode),
-    );
-    summary.insert(
-        "manifest_path".into(),
-        Value::from(manifest_path.display().to_string()),
-    );
-    summary.insert(
-        "manifest_digest_hex".into(),
-        Value::from(manifest_digest_hex.clone()),
-    );
-    summary.insert(
-        "manifest_car_digest_hex".into(),
-        Value::from(manifest_car_digest_hex.clone()),
-    );
-    summary.insert(
-        "chunk_digest_sha3_hex".into(),
-        Value::from(hex_encode(chunk_digest)),
-    );
-    summary.insert(
-        "chunker_handle".into(),
-        Value::from(format!(
+    insert_value!(summary["torii_url"] = torii_url);
+    insert_value!(summary["torii_endpoint"] = submission.endpoint_used.clone());
+    insert_value!(summary["torii_endpoint_requested"] = submission.endpoint_requested);
+    insert_value!(summary["status"] = submission.status.as_u16() as u64);
+    insert_value!(summary["authority"] = authority_literal);
+    insert_value!(summary["submission_mode"] = submission.submission_mode);
+    insert_value!(summary["manifest_path"] = manifest_path.display().to_string());
+    insert_value!(summary["manifest_digest_hex"] = manifest_digest_hex.clone());
+    insert_value!(summary["manifest_car_digest_hex"] = manifest_car_digest_hex.clone());
+    insert_value!(summary["chunk_digest_sha3_hex"] = hex_encode(chunk_digest));
+    insert_value!(
+        summary["chunker_handle"] = format!(
             "{}.{}@{}",
             manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
-        )),
+        )
     );
-    summary.insert(
-        "pin_policy".into(),
-        Value::Object(pin_policy_json(&manifest.pin_policy)),
-    );
+    insert_json!(summary["pin_policy"] = Value::Object(pin_policy_json(&manifest.pin_policy)));
     if let Some(label) = chunk_plan_label {
-        summary.insert("chunk_plan".into(), Value::from(label));
+        insert_value!(summary["chunk_plan"] = label);
     }
     if let Some(count) = plan_chunk_count {
-        summary.insert("chunk_plan_chunk_count".into(), Value::from(count));
+        insert_value!(summary["chunk_plan_chunk_count"] = count);
     }
     if let Some(alias) = alias_inputs {
-        summary.insert("alias_namespace".into(), Value::from(alias.namespace));
-        summary.insert("alias_name".into(), Value::from(alias.name));
+        insert_value!(summary["alias_namespace"] = alias.namespace);
+        insert_value!(summary["alias_name"] = alias.name);
     }
     if let Some(hex) = successor_hex.as_ref() {
-        summary.insert("successor_of_hex".into(), Value::from(hex.clone()));
+        insert_value!(summary["successor_of_hex"] = hex.clone());
     }
-    summary.insert("torii_response".into(), submission.response_value);
+    insert_json!(summary["torii_response"] = submission.response_value);
     let rendered = to_string_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
@@ -15352,36 +14408,20 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render storage files JSON: {err}"))?;
     write_text(&files_out, files_rendered.as_bytes())?;
     let mut summary = Map::new();
-    summary.insert(
-        "manifest_path".into(),
-        Value::from(manifest_path.display().to_string()),
-    );
-    summary.insert(
-        "payload_path".into(),
-        Value::from(payload_path.display().to_string()),
-    );
-    summary.insert(
-        "payload_out".into(),
-        Value::from(payload_out.display().to_string()),
-    );
-    summary.insert(
-        "files_out".into(),
-        Value::from(files_out.display().to_string()),
-    );
-    summary.insert("payload_kind".into(), Value::from(payload_kind));
-    summary.insert("payload_bytes".into(), Value::from(payload_bytes_len));
-    summary.insert("payload_file_count".into(), Value::from(payload_file_count));
-    summary.insert(
-        "manifest_digest_hex".into(),
-        Value::from(manifest_digest_hex),
-    );
-    summary.insert("manifest_id_hex".into(), Value::from(manifest_id_hex));
-    summary.insert(
-        "chunker_handle".into(),
-        Value::from(format!(
+    insert_value!(summary["manifest_path"] = manifest_path.display().to_string());
+    insert_value!(summary["payload_path"] = payload_path.display().to_string());
+    insert_value!(summary["payload_out"] = payload_out.display().to_string());
+    insert_value!(summary["files_out"] = files_out.display().to_string());
+    insert_value!(summary["payload_kind"] = payload_kind);
+    insert_value!(summary["payload_bytes"] = payload_bytes_len);
+    insert_value!(summary["payload_file_count"] = payload_file_count);
+    insert_value!(summary["manifest_digest_hex"] = manifest_digest_hex);
+    insert_value!(summary["manifest_id_hex"] = manifest_id_hex);
+    insert_value!(
+        summary["chunker_handle"] = format!(
             "{}.{}@{}",
             manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
-        )),
+        )
     );
     let rendered = to_string_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render summary: {err}"))?;
@@ -15611,81 +14651,45 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     let car_payload_digest_hex = hex_encode(report.stats.car_payload_digest.as_bytes());
     let car_digest_hex = hex_encode(report.stats.car_archive_digest.as_bytes());
     let mut summary = Map::new();
-    summary.insert(
-        "manifest_path".into(),
-        Value::from(manifest_path.display().to_string()),
-    );
-    summary.insert(
-        "car_path".into(),
-        Value::from(car_path.display().to_string()),
-    );
-    summary.insert(
-        "chunk_count".into(),
-        Value::from(report.chunk_store.chunks().len() as u64),
-    );
+    insert_value!(summary["manifest_path"] = manifest_path.display().to_string());
+    insert_value!(summary["car_path"] = car_path.display().to_string());
+    insert_value!(summary["chunk_count"] = report.chunk_store.chunks().len() as u64);
     if let Some(label) = chunk_plan_label {
-        summary.insert("chunk_plan_source".into(), Value::from(label));
+        insert_value!(summary["chunk_plan_source"] = label);
     }
     if let Some(plan_with_handle) = resolved_plan.as_ref() {
-        summary.insert(
-            "chunk_plan_chunk_count".into(),
-            Value::from(plan_with_handle.plan.chunks.len() as u64),
+        insert_value!(
+            summary["chunk_plan_chunk_count"] = plan_with_handle.plan.chunks.len() as u64
         );
     }
-    summary.insert(
-        "payload_bytes".into(),
-        Value::from(report.chunk_store.payload_len()),
-    );
-    summary.insert("payload_digest_hex".into(), Value::from(payload_digest_hex));
-    summary.insert(
-        "chunk_digest_sha3_hex".into(),
-        Value::from(chunk_digest_hex),
-    );
-    summary.insert(
-        "car_payload_digest_hex".into(),
-        Value::from(car_payload_digest_hex),
-    );
-    summary.insert("car_digest_hex".into(), Value::from(car_digest_hex.clone()));
-    summary.insert(
-        "manifest_car_digest_hex".into(),
-        Value::from(car_digest_hex),
-    );
-    summary.insert("car_size".into(), Value::from(report.stats.car_size));
-    summary.insert(
-        "chunker_handle".into(),
-        Value::from(format!(
+    insert_value!(summary["payload_bytes"] = report.chunk_store.payload_len());
+    insert_value!(summary["payload_digest_hex"] = payload_digest_hex);
+    insert_value!(summary["chunk_digest_sha3_hex"] = chunk_digest_hex);
+    insert_value!(summary["car_payload_digest_hex"] = car_payload_digest_hex);
+    insert_value!(summary["car_digest_hex"] = car_digest_hex.clone());
+    insert_value!(summary["manifest_car_digest_hex"] = car_digest_hex);
+    insert_value!(summary["car_size"] = report.stats.car_size);
+    insert_value!(
+        summary["chunker_handle"] = format!(
             "{}.{}@{}",
             manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
-        )),
+        )
     );
-    summary.insert(
-        "manifest_digest_hex".into(),
-        Value::from(hex_encode(manifest_digest.as_bytes())),
-    );
-    summary.insert(
-        "pin_policy".into(),
-        Value::Object(pin_policy_json(&manifest.pin_policy)),
-    );
-    summary.insert(
-        "root_cids_hex".into(),
-        Value::Array(
+    insert_value!(summary["manifest_digest_hex"] = hex_encode(manifest_digest.as_bytes()));
+    insert_json!(summary["pin_policy"] = Value::Object(pin_policy_json(&manifest.pin_policy)));
+    insert_json!(
+        summary["root_cids_hex"] = Value::Array(
             report
                 .stats
                 .root_cids
                 .iter()
                 .map(|cid| Value::from(hex_encode(cid)))
                 .collect(),
-        ),
+        )
     );
-    summary.insert("dag_codec".into(), Value::from(report.stats.dag_codec));
-    summary.insert(
-        "chunker_profile_id".into(),
-        Value::from(u64::from(manifest.chunking.profile_id.0)),
-    );
-    summary.insert(
-        "car_payload_bytes".into(),
-        Value::from(report.stats.payload_bytes),
-    );
+    insert_value!(summary["dag_codec"] = report.stats.dag_codec);
+    insert_value!(summary["chunker_profile_id"] = u64::from(manifest.chunking.profile_id.0));
+    insert_value!(summary["car_payload_bytes"] = report.stats.payload_bytes);
     let summary_value = Value::Object(summary);
     let rendered = to_string_pretty(&summary_value)
         .map_err(|err| format!("failed to render summary: {err}"))?;
@@ -16647,41 +15651,19 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
     }
     let snapshot = read_reputation_snapshot(&snapshot_path)?;
     let mut summary = Map::new();
-    summary.insert(
-        "snapshot_path".into(),
-        Value::from(snapshot_path.display().to_string()),
-    );
-    summary.insert(
-        "snapshot_id_hex".into(),
-        Value::from(hex_encode(snapshot.snapshot_id)),
-    );
-    summary.insert(
-        "generated_at_unix".into(),
-        Value::from(snapshot.generated_at_unix),
-    );
+    insert_value!(summary["snapshot_path"] = snapshot_path.display().to_string());
+    insert_value!(summary["snapshot_id_hex"] = hex_encode(snapshot.snapshot_id));
+    insert_value!(summary["generated_at_unix"] = snapshot.generated_at_unix);
     if let Some(previous_snapshot_id) = snapshot.previous_snapshot_id {
-        summary.insert(
-            "previous_snapshot_id_hex".into(),
-            Value::from(hex_encode(previous_snapshot_id)),
-        );
+        insert_value!(summary["previous_snapshot_id_hex"] = hex_encode(previous_snapshot_id));
     }
-    summary.insert(
-        "provider_count".into(),
-        Value::from(snapshot.providers.len() as u64),
+    insert_value!(summary["provider_count"] = snapshot.providers.len() as u64);
+    insert_value!(summary["merkle_root_hex"] = hex_encode(snapshot.merkle_root));
+    insert_value!(summary["alpha_bps"] = u64::from(snapshot.alpha_bps));
+    insert_value!(
+        summary["current_score_weight_bps"] = u64::from(snapshot.current_score_weight_bps)
     );
-    summary.insert(
-        "merkle_root_hex".into(),
-        Value::from(hex_encode(snapshot.merkle_root)),
-    );
-    summary.insert(
-        "alpha_bps".into(),
-        Value::from(u64::from(snapshot.alpha_bps)),
-    );
-    summary.insert(
-        "current_score_weight_bps".into(),
-        Value::from(u64::from(snapshot.current_score_weight_bps)),
-    );
-    summary.insert("valid".into(), Value::from(true));
+    insert_value!(summary["valid"] = true);
     if let (Some(provider_id), Some(proof_path)) = (provider_id, proof_path) {
         let provider = snapshot
             .providers
@@ -16701,27 +15683,12 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
         proof
             .verify(provider, snapshot.merkle_root)
             .map_err(|_| "invalid reputation proof".to_owned())?;
-        summary.insert(
-            "provider_id".into(),
-            Value::from(provider.provider_id.clone()),
-        );
-        summary.insert(
-            "provider_score_bps".into(),
-            Value::from(u64::from(provider.score_bps)),
-        );
-        summary.insert(
-            "proof_path".into(),
-            Value::from(proof_path.display().to_string()),
-        );
-        summary.insert(
-            "proof_leaf_index".into(),
-            Value::from(u64::from(proof.leaf_index)),
-        );
-        summary.insert(
-            "proof_sibling_count".into(),
-            Value::from(proof.siblings.len() as u64),
-        );
-        summary.insert("proof_verified".into(), Value::from(true));
+        insert_value!(summary["provider_id"] = provider.provider_id.clone());
+        insert_value!(summary["provider_score_bps"] = u64::from(provider.score_bps));
+        insert_value!(summary["proof_path"] = proof_path.display().to_string());
+        insert_value!(summary["proof_leaf_index"] = u64::from(proof.leaf_index));
+        insert_value!(summary["proof_sibling_count"] = proof.siblings.len() as u64);
+        insert_value!(summary["proof_verified"] = true);
     }
     let summary_value = Value::Object(summary);
     let rendered = to_string_pretty(&summary_value)
@@ -17009,67 +15976,58 @@ fn validate_finalized_pin_manifest(
 }
 fn payload_free_proof_stream_event(item: &ProofStreamItem) -> Value {
     let mut map = Map::new();
-    map.insert(
-        "request_digest_hex".into(),
-        Value::from(item.request_digest_hex()),
-    );
-    map.insert(
-        "manifest_digest_hex".into(),
-        Value::from(item.manifest_digest_hex()),
-    );
-    map.insert(
-        "provider_id_hex".into(),
-        Value::from(item.provider_id_hex()),
-    );
-    map.insert("proof_kind".into(), Value::from(item.proof_kind().as_str()));
-    map.insert("result".into(), Value::from(item.status().as_str()));
+    insert_value!(map["request_digest_hex"] = item.request_digest_hex());
+    insert_value!(map["manifest_digest_hex"] = item.manifest_digest_hex());
+    insert_value!(map["provider_id_hex"] = item.provider_id_hex());
+    insert_value!(map["proof_kind"] = item.proof_kind().as_str());
+    insert_value!(map["result"] = item.status().as_str());
     if let Some(value) = item.outcome_identity_hex() {
-        map.insert("outcome_identity_hex".into(), Value::from(value));
+        insert_value!(map["outcome_identity_hex"] = value);
     }
     if let Some(value) = item.outcome_digest_hex() {
-        map.insert("outcome_digest_hex".into(), Value::from(value));
+        insert_value!(map["outcome_digest_hex"] = value);
     }
     if let Some(value) = item.admission_envelope_digest_hex() {
-        map.insert("admission_envelope_digest_hex".into(), Value::from(value));
+        insert_value!(map["admission_envelope_digest_hex"] = value);
     }
     if let Some(value) = item.finalized_block_height() {
-        map.insert("finalized_block_height".into(), Value::from(value));
+        insert_value!(map["finalized_block_height"] = value);
     }
     if let Some(value) = item.finalized_block_hash_hex() {
-        map.insert("finalized_block_hash_hex".into(), Value::from(value));
+        insert_value!(map["finalized_block_hash_hex"] = value);
     }
     if let Some(value) = item.committed_at_ms() {
-        map.insert("committed_at_ms".into(), Value::from(value));
+        insert_value!(map["committed_at_ms"] = value);
     }
     if let Some(value) = item.challenge_id_hex() {
-        map.insert("challenge_id_hex".into(), Value::from(value));
+        insert_value!(map["challenge_id_hex"] = value);
     }
     if let Some(value) = item.failure_reason() {
-        map.insert("failure_reason".into(), Value::from(value));
+        insert_value!(map["failure_reason"] = value);
     }
     if let Some(value) = item.latency_ms() {
-        map.insert("latency_ms".into(), Value::from(u64::from(value)));
+        insert_value!(map["latency_ms"] = u64::from(value));
     }
     if let Some(value) = item.deadline_ms() {
-        map.insert("deadline_ms".into(), Value::from(u64::from(value)));
+        insert_value!(map["deadline_ms"] = u64::from(value));
     }
     if let Some(value) = item.sample_index() {
-        map.insert("leaf_index_flat".into(), Value::from(value));
+        insert_value!(map["leaf_index_flat"] = value);
     }
     if let Some(value) = item.chunk_index() {
-        map.insert("chunk_index".into(), Value::from(u64::from(value)));
+        insert_value!(map["chunk_index"] = u64::from(value));
     }
     if let Some(value) = item.segment_index() {
-        map.insert("segment_index".into(), Value::from(u64::from(value)));
+        insert_value!(map["segment_index"] = u64::from(value));
     }
     if let Some(value) = item.leaf_index() {
-        map.insert("leaf_index".into(), Value::from(u64::from(value)));
+        insert_value!(map["leaf_index"] = u64::from(value));
     }
     if let Some(value) = item.tier() {
-        map.insert("tier".into(), Value::from(value.as_str()));
+        insert_value!(map["tier"] = value.as_str());
     }
     if let Some(value) = item.recorded_at_ms() {
-        map.insert("recorded_at_ms".into(), Value::from(value));
+        insert_value!(map["recorded_at_ms"] = value);
     }
     Value::Object(map)
 }
@@ -17402,79 +16360,44 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     }
     let mut summary_map = Map::new();
     let endpoint_label = redacted_endpoint(&endpoint);
-    summary_map.insert("endpoint".into(), Value::from(endpoint_label.clone()));
-    summary_map.insert(
-        "manifest_path".into(),
-        Value::from(manifest_path.display().to_string()),
+    insert_value!(summary_map["endpoint"] = endpoint_label.clone());
+    insert_value!(summary_map["manifest_path"] = manifest_path.display().to_string());
+    insert_value!(summary_map["manifest_digest_hex"] = manifest_digest_hex.clone());
+    insert_value!(summary_map["manifest_cid_hex"] = manifest_cid_hex.clone());
+    insert_value!(summary_map["provider_id_hex"] = provider_id.clone());
+    insert_value!(summary_map["proof_kind"] = proof_kind.as_str());
+    insert_value!(
+        summary_map["request_digest_hex"] = hex_encode(verification_context.request_digest())
     );
-    summary_map.insert(
-        "manifest_digest_hex".into(),
-        Value::from(manifest_digest_hex.clone()),
-    );
-    summary_map.insert(
-        "manifest_cid_hex".into(),
-        Value::from(manifest_cid_hex.clone()),
-    );
-    summary_map.insert("provider_id_hex".into(), Value::from(provider_id.clone()));
-    summary_map.insert("proof_kind".into(), Value::from(proof_kind.as_str()));
-    summary_map.insert(
-        "request_digest_hex".into(),
-        Value::from(hex_encode(verification_context.request_digest())),
-    );
-    summary_map.insert(
-        "finalized_block_height".into(),
-        Value::from(validated_pin.finalized_height),
-    );
-    summary_map.insert(
-        "finalized_block_hash_hex".into(),
-        Value::from(hex_encode(validated_pin.finalized_block_hash)),
+    insert_value!(summary_map["finalized_block_height"] = validated_pin.finalized_height);
+    insert_value!(
+        summary_map["finalized_block_hash_hex"] = hex_encode(validated_pin.finalized_block_hash)
     );
     if let Some(challenge_id) = challenge_id_hex {
-        summary_map.insert(
-            "requested_challenge_id_hex".into(),
-            Value::from(challenge_id),
-        );
+        insert_value!(summary_map["requested_challenge_id_hex"] = challenge_id);
     }
     if let Some(count) = sample_count {
-        summary_map.insert(
-            "requested_sample_count".into(),
-            Value::from(u64::from(count)),
-        );
+        insert_value!(summary_map["requested_sample_count"] = u64::from(count));
     }
     if let Some(seed) = sample_seed {
-        summary_map.insert("requested_sample_seed".into(), Value::from(seed));
+        insert_value!(summary_map["requested_sample_seed"] = seed);
     }
     if let Some(deadline) = deadline_ms {
-        summary_map.insert(
-            "requested_deadline_ms".into(),
-            Value::from(u64::from(deadline)),
-        );
+        insert_value!(summary_map["requested_deadline_ms"] = u64::from(deadline));
     }
     if let Some(tier) = tier {
-        summary_map.insert("requested_tier".into(), Value::from(tier.as_str()));
+        insert_value!(summary_map["requested_tier"] = tier.as_str());
     }
     if let Some(job_id) = orchestrator_job_id_hex {
-        summary_map.insert(
-            "requested_orchestrator_job_id_hex".into(),
-            Value::from(job_id),
-        );
+        insert_value!(summary_map["requested_orchestrator_job_id_hex"] = job_id);
     }
-    summary_map.insert(
-        "nonce_digest_hex".into(),
-        Value::from(hex_encode(blake3_hash(&nonce).as_bytes())),
-    );
-    summary_map.insert("metrics".into(), metrics.to_json());
+    insert_value!(summary_map["nonce_digest_hex"] = hex_encode(blake3_hash(&nonce).as_bytes()));
+    insert_json!(summary_map["metrics"] = metrics.to_json());
     if let Some(root) = trusted_por_root.as_ref() {
-        summary_map.insert(
-            "verification_root_hex".into(),
-            Value::from(hex_encode(root)),
-        );
-        summary_map.insert("verification_total".into(), Value::from(metrics.item_total));
-        summary_map.insert(
-            "verification_successes".into(),
-            Value::from(metrics.item_total),
-        );
-        summary_map.insert("verification_failures".into(), Value::from(0_u64));
+        insert_value!(summary_map["verification_root_hex"] = hex_encode(root));
+        insert_value!(summary_map["verification_total"] = metrics.item_total);
+        insert_value!(summary_map["verification_successes"] = metrics.item_total);
+        insert_value!(summary_map["verification_failures"] = 0_u64);
     }
     let summary_value = Value::Object(summary_map);
     let rendered = to_string_pretty(&summary_value)
@@ -17522,19 +16445,13 @@ fn write_proof_stream_evidence(
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_millis() as u64;
     let mut metadata = Map::new();
-    metadata.insert("captured_at_unix_ms".into(), Value::from(captured_at_ms));
-    metadata.insert("sorafs_cli_version".into(), Value::from(SORAFS_CLI_VERSION));
-    metadata.insert("endpoint".into(), Value::from(endpoint.to_string()));
-    metadata.insert(
-        "manifest_source".into(),
-        Value::from(manifest_path.display().to_string()),
-    );
-    metadata.insert("manifest_copy".into(), Value::from(manifest_copy_name));
-    metadata.insert(
-        "manifest_digest_hex".into(),
-        Value::from(manifest_digest_hex.to_string()),
-    );
-    metadata.insert("summary_file".into(), Value::from(summary_file_name));
+    insert_value!(metadata["captured_at_unix_ms"] = captured_at_ms);
+    insert_value!(metadata["sorafs_cli_version"] = SORAFS_CLI_VERSION);
+    insert_value!(metadata["endpoint"] = endpoint.to_string());
+    insert_value!(metadata["manifest_source"] = manifest_path.display().to_string());
+    insert_value!(metadata["manifest_copy"] = manifest_copy_name);
+    insert_value!(metadata["manifest_digest_hex"] = manifest_digest_hex.to_string());
+    insert_value!(metadata["summary_file"] = summary_file_name);
     let metadata_json = to_string_pretty(&Value::Object(metadata))
         .map_err(|err| format!("failed to render governance evidence metadata: {err}"))?;
     write_text(&dir.join("metadata.json"), metadata_json.as_bytes())?;
@@ -17622,14 +16539,11 @@ fn insert_governance_submission_summary(
     publisher_account_digest_hex: Option<&str>,
     origin: Option<&str>,
 ) {
-    object.insert(
-        "submission_publisher_account_digest_hex".into(),
-        publisher_account_digest_hex.map_or(Value::Null, Value::from),
+    insert_json!(
+        object["submission_publisher_account_digest_hex"] =
+            publisher_account_digest_hex.map_or(Value::Null, Value::from)
     );
-    object.insert(
-        "submission_origin".into(),
-        origin.map_or(Value::Null, Value::from),
-    );
+    insert_json!(object["submission_origin"] = origin.map_or(Value::Null, Value::from));
 }
 fn insert_governance_node_submission_summary(object: &mut Map, node: &GovernanceLogNodeV1) {
     let (publisher_account_digest_hex, origin) = governance_submission_summary(node);
@@ -17853,15 +16767,12 @@ fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
         sidecar.push('\n');
         write_text(&sidecar_path, sidecar.as_bytes())?;
         let mut file = Map::new();
-        file.insert(
-            "path".into(),
-            Value::from(format!("nodes/{}", artifact.rel_path)),
-        );
-        file.insert("blake3".into(), Value::from(artifact.blake3_hex.clone()));
-        file.insert("encoded_len".into(), Value::from(artifact.encoded_len));
+        insert_value!(file["path"] = format!("nodes/{}", artifact.rel_path));
+        insert_value!(file["blake3"] = artifact.blake3_hex.clone());
+        insert_value!(file["encoded_len"] = artifact.encoded_len);
         if let Some(node) = &artifact.node {
-            file.insert("node_cid".into(), Value::from(node.node_cid_label.clone()));
-            file.insert("payload_kind".into(), Value::from(node.payload_kind));
+            insert_value!(file["node_cid"] = node.node_cid_label.clone());
+            insert_value!(file["payload_kind"] = node.payload_kind);
             insert_governance_submission_summary(
                 &mut file,
                 node.submission_publisher_account_digest_hex.as_deref(),
@@ -17871,20 +16782,11 @@ fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
         exported_files.push(Value::Object(file));
     }
     let mut manifest = Map::new();
-    manifest.insert(
-        "schema".into(),
-        Value::from("sorafs.governance_dag.export.v1"),
-    );
-    manifest.insert(
-        "generated_at".into(),
-        Value::from(governance_dag_now_secs()),
-    );
-    manifest.insert(
-        "source_root".into(),
-        Value::from(root.display().to_string()),
-    );
-    manifest.insert("verification".into(), verify_summary);
-    manifest.insert("files".into(), Value::Array(exported_files));
+    insert_value!(manifest["schema"] = "sorafs.governance_dag.export.v1");
+    insert_value!(manifest["generated_at"] = governance_dag_now_secs());
+    insert_value!(manifest["source_root"] = root.display().to_string());
+    insert_json!(manifest["verification"] = verify_summary);
+    insert_json!(manifest["files"] = Value::Array(exported_files));
     let manifest_value = Value::Object(manifest);
     write_governance_dag_json(&out.join("manifest.json"), &manifest_value)?;
     print_governance_dag_json(&manifest_value)
@@ -18038,40 +16940,29 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
             block_sidecar_bytes,
         )?);
         let mut block_value = Map::new();
-        block_value.insert("path".into(), Value::from(block_rel_path));
-        block_value.insert("sequence".into(), Value::from(sequence));
-        block_value.insert(
-            "block_cid_hex".into(),
-            Value::from(hex_encode(&block.block_cid)),
-        );
-        block_value.insert(
-            "prev_block_cid_hex".into(),
-            block
+        insert_value!(block_value["path"] = block_rel_path);
+        insert_value!(block_value["sequence"] = sequence);
+        insert_value!(block_value["block_cid_hex"] = hex_encode(&block.block_cid));
+        insert_json!(
+            block_value["prev_block_cid_hex"] = block
                 .prev_block_cid
                 .as_ref()
                 .map(hex_encode)
-                .map_or(Value::Null, Value::from),
+                .map_or(Value::Null, Value::from)
         );
-        block_value.insert(
-            "source_node_path".into(),
-            Value::from(artifact.rel_path.clone()),
-        );
+        insert_value!(block_value["source_node_path"] = artifact.rel_path.clone());
         if let Some(node) = &artifact.node {
-            block_value.insert("node_cid".into(), Value::from(node.node_cid_label.clone()));
-            block_value.insert(
-                "node_cid_hex".into(),
-                Value::from(node.node_cid_hex.clone()),
-            );
-            block_value.insert("payload_kind".into(), Value::from(node.payload_kind));
+            insert_value!(block_value["node_cid"] = node.node_cid_label.clone());
+            insert_value!(block_value["node_cid_hex"] = node.node_cid_hex.clone());
+            insert_value!(block_value["payload_kind"] = node.payload_kind);
             insert_governance_submission_summary(
                 &mut block_value,
                 node.submission_publisher_account_digest_hex.as_deref(),
                 node.submission_origin,
             );
         }
-        block_value.insert(
-            "encoded_blake3_hex".into(),
-            Value::from(hex_encode(blake3_hash(&block_bytes).as_bytes())),
+        insert_value!(
+            block_value["encoded_blake3_hex"] = hex_encode(blake3_hash(&block_bytes).as_bytes())
         );
         block_files.push(Value::Object(block_value));
         prev_block_cid = Some(block.block_cid.clone());
@@ -18117,45 +17008,28 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
         None
     };
     let mut summary = Map::new();
-    summary.insert(
-        "schema".into(),
-        Value::from("sorafs.governance_dag.build.v1"),
+    insert_value!(summary["schema"] = "sorafs.governance_dag.build.v1");
+    insert_value!(summary["source_root"] = root.display().to_string());
+    insert_value!(summary["output_root"] = out.display().to_string());
+    insert_value!(summary["generated_at"] = generated_at);
+    insert_value!(
+        summary["publisher_peer_id"] = String::from_utf8_lossy(&publisher_peer_id).to_string()
     );
-    summary.insert(
-        "source_root".into(),
-        Value::from(root.display().to_string()),
+    insert_value!(
+        summary["publisher_public_key_hex"] = hex_encode(signing_key.verifying_key().to_bytes())
     );
-    summary.insert("output_root".into(), Value::from(out.display().to_string()));
-    summary.insert("generated_at".into(), Value::from(generated_at));
-    summary.insert(
-        "publisher_peer_id".into(),
-        Value::from(String::from_utf8_lossy(&publisher_peer_id).to_string()),
-    );
-    summary.insert(
-        "publisher_public_key_hex".into(),
-        Value::from(hex_encode(signing_key.verifying_key().to_bytes())),
-    );
-    summary.insert("block_count".into(), Value::from(blocks.len() as u64));
-    summary.insert(
-        "head_block_cid_hex".into(),
-        Value::from(hex_encode(&head_block_cid)),
-    );
-    summary.insert("head_path".into(), Value::from("head.to"));
-    summary.insert(
-        "head_blake3_hex".into(),
-        Value::from(hex_encode(blake3_hash(&head_bytes).as_bytes())),
-    );
+    insert_value!(summary["block_count"] = blocks.len() as u64);
+    insert_value!(summary["head_block_cid_hex"] = hex_encode(&head_block_cid));
+    insert_value!(summary["head_path"] = "head.to");
+    insert_value!(summary["head_blake3_hex"] = hex_encode(blake3_hash(&head_bytes).as_bytes()));
     if let Some(checkpoint) = &head.checkpoint_cid {
-        summary.insert(
-            "checkpoint_cid_hex".into(),
-            Value::from(hex_encode(checkpoint)),
-        );
+        insert_value!(summary["checkpoint_cid_hex"] = hex_encode(checkpoint));
     }
-    summary.insert("blocks".into(), Value::Array(block_files));
+    insert_json!(summary["blocks"] = Value::Array(block_files));
     if let Some(car_summary) = car_archive_summary {
-        summary.insert("car_archive".into(), car_summary);
+        insert_json!(summary["car_archive"] = car_summary);
     }
-    summary.insert("input_verification".into(), verify_summary);
+    insert_json!(summary["input_verification"] = verify_summary);
     let summary_value = Value::Object(summary);
     write_governance_dag_json(&out.join("manifest.json"), &summary_value)?;
     if let Some(path) = summary_out.as_deref() {
@@ -18288,48 +17162,25 @@ fn governance_dag_rebuild_head(raw_args: Vec<String>) -> Result<(), String> {
     write_text(&head_out, &head_bytes)?;
     write_governance_blake3_sidecar(&head_out, &head_bytes)?;
     let mut summary = Map::new();
-    summary.insert(
-        "schema".into(),
-        Value::from("sorafs.governance_dag.head.rebuild.v1"),
+    insert_value!(summary["schema"] = "sorafs.governance_dag.head.rebuild.v1");
+    insert_value!(summary["source_root"] = root.display().to_string());
+    insert_value!(summary["head_path"] = head_out.display().to_string());
+    insert_value!(summary["generated_at"] = generated_at);
+    insert_value!(
+        summary["publisher_peer_id"] = String::from_utf8_lossy(&publisher_peer_id).to_string()
     );
-    summary.insert(
-        "source_root".into(),
-        Value::from(root.display().to_string()),
+    insert_value!(
+        summary["publisher_public_key_hex"] = hex_encode(signing_key.verifying_key().to_bytes())
     );
-    summary.insert(
-        "head_path".into(),
-        Value::from(head_out.display().to_string()),
-    );
-    summary.insert("generated_at".into(), Value::from(generated_at));
-    summary.insert(
-        "publisher_peer_id".into(),
-        Value::from(String::from_utf8_lossy(&publisher_peer_id).to_string()),
-    );
-    summary.insert(
-        "publisher_public_key_hex".into(),
-        Value::from(hex_encode(signing_key.verifying_key().to_bytes())),
-    );
-    summary.insert("block_count".into(), Value::from(blocks.len() as u64));
-    summary.insert(
-        "head_block_cid".into(),
-        Value::from(cid_display(&head_block_cid)),
-    );
-    summary.insert(
-        "head_block_cid_hex".into(),
-        Value::from(hex_encode(&head_block_cid)),
-    );
-    summary.insert(
-        "head_blake3_hex".into(),
-        Value::from(hex_encode(blake3_hash(&head_bytes).as_bytes())),
-    );
+    insert_value!(summary["block_count"] = blocks.len() as u64);
+    insert_value!(summary["head_block_cid"] = cid_display(&head_block_cid));
+    insert_value!(summary["head_block_cid_hex"] = hex_encode(&head_block_cid));
+    insert_value!(summary["head_blake3_hex"] = hex_encode(blake3_hash(&head_bytes).as_bytes()));
     if let Some(checkpoint) = &head.checkpoint_cid {
-        summary.insert(
-            "checkpoint_cid_hex".into(),
-            Value::from(hex_encode(checkpoint)),
-        );
+        insert_value!(summary["checkpoint_cid_hex"] = hex_encode(checkpoint));
     }
-    summary.insert("blocks".into(), Value::Array(block_records));
-    summary.insert("warnings".into(), Value::Array(warnings));
+    insert_json!(summary["blocks"] = Value::Array(block_records));
+    insert_json!(summary["warnings"] = Value::Array(warnings));
     let summary_value = Value::Object(summary);
     if let Some(path) = summary_out.as_deref() {
         write_governance_dag_json(path, &summary_value)?;
@@ -18397,42 +17248,33 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
         )
     })?;
     let mut head_value = Map::new();
-    head_value.insert("path".into(), Value::from("head.to"));
-    head_value.insert(
-        "source_path".into(),
-        Value::from(head_path.display().to_string()),
+    insert_value!(head_value["path"] = "head.to");
+    insert_value!(head_value["source_path"] = head_path.display().to_string());
+    insert_value!(head_value["encoded_len"] = head_len);
+    insert_value!(head_value["blake3"] = head_blake3_hex);
+    insert_value!(head_value["head_block_cid"] = cid_display(&head.head_block_cid));
+    insert_value!(head_value["head_block_cid_hex"] = hex_encode(&head.head_block_cid));
+    insert_value!(head_value["block_count"] = head.block_count);
+    insert_value!(head_value["generated_at"] = head.generated_at);
+    insert_value!(
+        head_value["publisher_peer_id"] =
+            String::from_utf8_lossy(&head.publisher_peer_id).to_string()
     );
-    head_value.insert("encoded_len".into(), Value::from(head_len));
-    head_value.insert("blake3".into(), Value::from(head_blake3_hex));
-    head_value.insert(
-        "head_block_cid".into(),
-        Value::from(cid_display(&head.head_block_cid)),
-    );
-    head_value.insert(
-        "head_block_cid_hex".into(),
-        Value::from(hex_encode(&head.head_block_cid)),
-    );
-    head_value.insert("block_count".into(), Value::from(head.block_count));
-    head_value.insert("generated_at".into(), Value::from(head.generated_at));
-    head_value.insert(
-        "publisher_peer_id".into(),
-        Value::from(String::from_utf8_lossy(&head.publisher_peer_id).to_string()),
-    );
-    head_value.insert(
-        "checkpoint_cid_hex".into(),
-        head.checkpoint_cid
+    insert_json!(
+        head_value["checkpoint_cid_hex"] = head
+            .checkpoint_cid
             .as_ref()
             .map(hex_encode)
-            .map_or(Value::Null, Value::from),
+            .map_or(Value::Null, Value::from)
     );
     let car_value = if let Some(path) = car_path.as_deref() {
         let (_, encoded_len, blake3_hex) =
             governance_dag_read_digest_file(path, "governance DAG checkpoint CAR")?;
         let mut value = Map::new();
-        value.insert("path".into(), Value::from(path.display().to_string()));
-        value.insert("encoded_len".into(), Value::from(encoded_len));
-        value.insert("car_size".into(), Value::from(encoded_len));
-        value.insert("blake3".into(), Value::from(blake3_hex));
+        insert_value!(value["path"] = path.display().to_string());
+        insert_value!(value["encoded_len"] = encoded_len);
+        insert_value!(value["car_size"] = encoded_len);
+        insert_value!(value["blake3"] = blake3_hex);
         Some(Value::Object(value))
     } else {
         None
@@ -18486,63 +17328,46 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
             ));
         }
         let mut value = Map::new();
-        value.insert("path".into(), Value::from(path.display().to_string()));
-        value.insert("encoded_len".into(), Value::from(encoded_len));
-        value.insert("blake3".into(), Value::from(blake3_hex));
-        value.insert(
-            "schema".into(),
-            Value::from("sorafs.governance_dag.mirror.v1"),
-        );
-        value.insert("block_count".into(), Value::from(index_block_count));
-        value.insert(
-            "head_block_cid_hex".into(),
-            Value::from(index_head_cid.to_string()),
-        );
+        insert_value!(value["path"] = path.display().to_string());
+        insert_value!(value["encoded_len"] = encoded_len);
+        insert_value!(value["blake3"] = blake3_hex);
+        insert_value!(value["schema"] = "sorafs.governance_dag.mirror.v1");
+        insert_value!(value["block_count"] = index_block_count);
+        insert_value!(value["head_block_cid_hex"] = index_head_cid.to_string());
         Some(Value::Object(value))
     } else {
         None
     };
     let mut summary = Map::new();
-    summary.insert(
-        "schema".into(),
-        Value::from("sorafs.governance_dag.checkpoint.v1"),
-    );
-    summary.insert(
-        "source_root".into(),
-        Value::from(root.display().to_string()),
-    );
-    summary.insert("output_path".into(), Value::from(out.display().to_string()));
-    summary.insert(
-        "generated_at".into(),
-        Value::from(generated_at.unwrap_or_else(governance_dag_now_secs)),
-    );
-    summary.insert("require_sidecars".into(), Value::from(require_sidecars));
-    summary.insert(
-        "expected_head_cid".into(),
-        head_cid
+    insert_value!(summary["schema"] = "sorafs.governance_dag.checkpoint.v1");
+    insert_value!(summary["source_root"] = root.display().to_string());
+    insert_value!(summary["output_path"] = out.display().to_string());
+    insert_value!(summary["generated_at"] = generated_at.unwrap_or_else(governance_dag_now_secs));
+    insert_value!(summary["require_sidecars"] = require_sidecars);
+    insert_json!(
+        summary["expected_head_cid"] = head_cid
             .as_ref()
             .map(|cid| cid_display(cid))
-            .map_or(Value::Null, Value::from),
+            .map_or(Value::Null, Value::from)
     );
-    summary.insert(
-        "expected_head_cid_hex".into(),
-        head_cid
+    insert_json!(
+        summary["expected_head_cid_hex"] = head_cid
             .as_ref()
             .map(hex_encode)
-            .map_or(Value::Null, Value::from),
+            .map_or(Value::Null, Value::from)
     );
-    summary.insert("head".into(), Value::Object(head_value));
-    summary.insert("block_count".into(), Value::from(head.block_count));
+    insert_json!(summary["head"] = Value::Object(head_value));
+    insert_value!(summary["block_count"] = head.block_count);
     if let Some(blocks) = verification.get("blocks").cloned() {
-        summary.insert("blocks".into(), blocks);
+        insert_json!(summary["blocks"] = blocks);
     }
     if let Some(value) = car_value {
-        summary.insert("car_archive".into(), value);
+        insert_json!(summary["car_archive"] = value);
     }
     if let Some(value) = mirror_index_value {
-        summary.insert("mirror_index".into(), value);
+        insert_json!(summary["mirror_index"] = value);
     }
-    summary.insert("verification".into(), verification);
+    insert_json!(summary["verification"] = verification);
     let summary_value = Value::Object(summary);
     write_governance_dag_json(&out, &summary_value)?;
     print_governance_dag_json(&summary_value)
@@ -18601,12 +17426,9 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
         ));
     }
     let mut checkpoint_file_value = Map::new();
-    checkpoint_file_value.insert(
-        "path".into(),
-        Value::from(checkpoint_path.display().to_string()),
-    );
-    checkpoint_file_value.insert("encoded_len".into(), Value::from(checkpoint_len));
-    checkpoint_file_value.insert("blake3".into(), Value::from(checkpoint_blake3_hex));
+    insert_value!(checkpoint_file_value["path"] = checkpoint_path.display().to_string());
+    insert_value!(checkpoint_file_value["encoded_len"] = checkpoint_len);
+    insert_value!(checkpoint_file_value["blake3"] = checkpoint_blake3_hex);
     let expected_head_cid_hex = checkpoint
         .get("head")
         .and_then(|head| head.get("head_block_cid_hex"))
@@ -18644,13 +17466,13 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
     let mut head_check = Value::Null;
     let mut root_verification = Value::Null;
     if let Some(root) = root_path.as_deref() {
-        root_value.insert("path".into(), Value::from(root.display().to_string()));
+        insert_value!(root_value["path"] = root.display().to_string());
         let (root_ok, verification) = verify_governance_dag_build_snapshot(
             root,
             require_sidecars,
             expected_head_cid.as_deref(),
         );
-        root_value.insert("ok".into(), Value::from(root_ok));
+        insert_value!(root_value["ok"] = root_ok);
         if !root_ok {
             errors.push(governance_dag_problem(
                 root.to_string_lossy().as_ref(),
@@ -18676,7 +17498,7 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
             "checkpoint verification requires `--root=DIR` or a checkpoint `source_root`",
         ));
     }
-    root_value.insert("verification".into(), root_verification);
+    insert_json!(root_value["verification"] = root_verification);
     let car_check = governance_dag_checkpoint_optional_artifact_check(
         &checkpoint,
         car_override.as_deref(),
@@ -18703,26 +17525,22 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
         );
     }
     let mut summary = Map::new();
-    summary.insert(
-        "schema".into(),
-        Value::from("sorafs.governance_dag.checkpoint.verify.v1"),
+    insert_value!(summary["schema"] = "sorafs.governance_dag.checkpoint.verify.v1");
+    insert_value!(summary["ok"] = errors.is_empty());
+    insert_value!(summary["require_sidecars"] = require_sidecars);
+    insert_json!(summary["checkpoint"] = Value::Object(checkpoint_file_value));
+    insert_json!(
+        summary["expected_head_cid_hex"] = expected_head_cid_hex.map_or(Value::Null, Value::from)
     );
-    summary.insert("ok".into(), Value::from(errors.is_empty()));
-    summary.insert("require_sidecars".into(), Value::from(require_sidecars));
-    summary.insert("checkpoint".into(), Value::Object(checkpoint_file_value));
-    summary.insert(
-        "expected_head_cid_hex".into(),
-        expected_head_cid_hex.map_or(Value::Null, Value::from),
-    );
-    summary.insert("root".into(), Value::Object(root_value));
-    summary.insert("head".into(), head_check);
+    insert_json!(summary["root"] = Value::Object(root_value));
+    insert_json!(summary["head"] = head_check);
     if let Some((_, value)) = car_check {
-        summary.insert("car_archive".into(), value);
+        insert_json!(summary["car_archive"] = value);
     }
     if let Some((_, value)) = mirror_check {
-        summary.insert("mirror_index".into(), value);
+        insert_json!(summary["mirror_index"] = value);
     }
-    summary.insert("errors".into(), Value::Array(errors.clone()));
+    insert_json!(summary["errors"] = Value::Array(errors.clone()));
     let summary_value = Value::Object(summary);
     if let Some(path) = summary_out.as_deref() {
         write_governance_dag_json(path, &summary_value)?;
@@ -18796,12 +17614,9 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
         ));
     }
     let mut checkpoint_file_value = Map::new();
-    checkpoint_file_value.insert(
-        "path".into(),
-        Value::from(checkpoint_path.display().to_string()),
-    );
-    checkpoint_file_value.insert("encoded_len".into(), Value::from(checkpoint_len));
-    checkpoint_file_value.insert("blake3".into(), Value::from(checkpoint_blake3_hex));
+    insert_value!(checkpoint_file_value["path"] = checkpoint_path.display().to_string());
+    insert_value!(checkpoint_file_value["encoded_len"] = checkpoint_len);
+    insert_value!(checkpoint_file_value["blake3"] = checkpoint_blake3_hex);
     let expected_head_cid_hex = checkpoint
         .get("head")
         .and_then(|head| head.get("head_block_cid_hex"))
@@ -18857,26 +17672,22 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
         &mut errors,
     )?;
     let mut summary = Map::new();
-    summary.insert(
-        "schema".into(),
-        Value::from("sorafs.governance_dag.checkpoint.recover.v1"),
-    );
-    summary.insert("require_sidecars".into(), Value::from(require_sidecars));
-    summary.insert("checkpoint".into(), Value::Object(checkpoint_file_value));
-    summary.insert(
-        "expected_head_cid_hex".into(),
-        expected_head_cid_hex
+    insert_value!(summary["schema"] = "sorafs.governance_dag.checkpoint.recover.v1");
+    insert_value!(summary["require_sidecars"] = require_sidecars);
+    insert_json!(summary["checkpoint"] = Value::Object(checkpoint_file_value));
+    insert_json!(
+        summary["expected_head_cid_hex"] = expected_head_cid_hex
             .clone()
-            .map_or(Value::Null, Value::from),
+            .map_or(Value::Null, Value::from)
     );
     let mut root_value = Map::new();
-    root_value.insert("path".into(), Value::from(root.display().to_string()));
-    root_value.insert("ok".into(), Value::from(root_ok));
-    root_value.insert("verification".into(), root_verification);
-    summary.insert("root".into(), Value::Object(root_value));
-    summary.insert("head".into(), head_check);
+    insert_value!(root_value["path"] = root.display().to_string());
+    insert_value!(root_value["ok"] = root_ok);
+    insert_json!(root_value["verification"] = root_verification);
+    insert_json!(summary["root"] = Value::Object(root_value));
+    insert_json!(summary["head"] = head_check);
     if let Some((_, value)) = car_check {
-        summary.insert("car_archive".into(), value);
+        insert_json!(summary["car_archive"] = value);
     }
     if errors.is_empty() {
         let index = governance_dag_mirror_index_value(
@@ -18894,32 +17705,27 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
             )
         })?;
         let mut recovered = Map::new();
-        recovered.insert("path".into(), Value::from(out.display().to_string()));
-        recovered.insert("encoded_len".into(), Value::from(encoded_len));
-        recovered.insert("blake3".into(), Value::from(blake3_hex));
-        recovered.insert(
-            "schema".into(),
-            Value::from("sorafs.governance_dag.mirror.v1"),
-        );
-        recovered.insert(
-            "head_block_cid_hex".into(),
-            index_value
+        insert_value!(recovered["path"] = out.display().to_string());
+        insert_value!(recovered["encoded_len"] = encoded_len);
+        insert_value!(recovered["blake3"] = blake3_hex);
+        insert_value!(recovered["schema"] = "sorafs.governance_dag.mirror.v1");
+        insert_json!(
+            recovered["head_block_cid_hex"] = index_value
                 .get("head")
                 .and_then(|head| head.get("head_block_cid_hex"))
                 .cloned()
-                .unwrap_or(Value::Null),
+                .unwrap_or(Value::Null)
         );
-        recovered.insert(
-            "block_count".into(),
-            index_value
+        insert_json!(
+            recovered["block_count"] = index_value
                 .get("block_count")
                 .cloned()
-                .unwrap_or(Value::Null),
+                .unwrap_or(Value::Null)
         );
-        summary.insert("recovered_mirror_index".into(), Value::Object(recovered));
+        insert_json!(summary["recovered_mirror_index"] = Value::Object(recovered));
     }
-    summary.insert("ok".into(), Value::from(errors.is_empty()));
-    summary.insert("errors".into(), Value::Array(errors.clone()));
+    insert_value!(summary["ok"] = errors.is_empty());
+    insert_json!(summary["errors"] = Value::Array(errors.clone()));
     let summary_value = Value::Object(summary);
     if let Some(path) = summary_out.as_deref() {
         write_governance_dag_json(path, &summary_value)?;
@@ -19139,84 +17945,61 @@ fn governance_dag_mirror_index_value(
         by_block_cid_hex.insert(block_cid_hex.clone(), Value::from(position as u64));
         by_node_cid_hex.insert(node_cid_hex.clone(), Value::from(position as u64));
         let mut block_value = Map::new();
-        block_value.insert("position".into(), Value::from(position as u64));
-        block_value.insert("path".into(), Value::from(path.clone()));
-        block_value.insert("sequence".into(), Value::from(block.sequence));
-        block_value.insert("timestamp".into(), Value::from(block.timestamp));
-        block_value.insert(
-            "publisher_peer_id".into(),
-            Value::from(String::from_utf8_lossy(&block.publisher_peer_id).to_string()),
+        insert_value!(block_value["position"] = position as u64);
+        insert_value!(block_value["path"] = path.clone());
+        insert_value!(block_value["sequence"] = block.sequence);
+        insert_value!(block_value["timestamp"] = block.timestamp);
+        insert_value!(
+            block_value["publisher_peer_id"] =
+                String::from_utf8_lossy(&block.publisher_peer_id).to_string()
         );
-        block_value.insert(
-            "block_cid".into(),
-            Value::from(cid_display(&block.block_cid)),
-        );
-        block_value.insert("block_cid_hex".into(), Value::from(block_cid_hex));
-        block_value.insert(
-            "prev_block_cid_hex".into(),
-            block
+        insert_value!(block_value["block_cid"] = cid_display(&block.block_cid));
+        insert_value!(block_value["block_cid_hex"] = block_cid_hex);
+        insert_json!(
+            block_value["prev_block_cid_hex"] = block
                 .prev_block_cid
                 .as_ref()
                 .map(hex_encode)
-                .map_or(Value::Null, Value::from),
+                .map_or(Value::Null, Value::from)
         );
-        block_value.insert(
-            "node_cid".into(),
-            Value::from(cid_display(&block.node.node_cid)),
-        );
-        block_value.insert("node_cid_hex".into(), Value::from(node_cid_hex));
-        block_value.insert(
-            "payload_kind".into(),
-            Value::from(governance_payload_kind_cli(&block.node.payload)),
+        insert_value!(block_value["node_cid"] = cid_display(&block.node.node_cid));
+        insert_value!(block_value["node_cid_hex"] = node_cid_hex);
+        insert_value!(
+            block_value["payload_kind"] = governance_payload_kind_cli(&block.node.payload)
         );
         insert_governance_node_submission_summary(&mut block_value, &block.node);
-        block_value.insert("blake3".into(), Value::from(blake3_hex.clone()));
-        block_value.insert("sidecar_status".into(), Value::from(sidecar_status.clone()));
+        insert_value!(block_value["blake3"] = blake3_hex.clone());
+        insert_value!(block_value["sidecar_status"] = sidecar_status.clone());
         block_values.push(Value::Object(block_value));
     }
     let mut head_value = Map::new();
-    head_value.insert("path".into(), Value::from("head.to"));
-    head_value.insert(
-        "head_block_cid".into(),
-        Value::from(cid_display(&head.head_block_cid)),
+    insert_value!(head_value["path"] = "head.to");
+    insert_value!(head_value["head_block_cid"] = cid_display(&head.head_block_cid));
+    insert_value!(head_value["head_block_cid_hex"] = hex_encode(&head.head_block_cid));
+    insert_value!(head_value["block_count"] = head.block_count);
+    insert_value!(head_value["generated_at"] = head.generated_at);
+    insert_value!(
+        head_value["publisher_peer_id"] =
+            String::from_utf8_lossy(&head.publisher_peer_id).to_string()
     );
-    head_value.insert(
-        "head_block_cid_hex".into(),
-        Value::from(hex_encode(&head.head_block_cid)),
-    );
-    head_value.insert("block_count".into(), Value::from(head.block_count));
-    head_value.insert("generated_at".into(), Value::from(head.generated_at));
-    head_value.insert(
-        "publisher_peer_id".into(),
-        Value::from(String::from_utf8_lossy(&head.publisher_peer_id).to_string()),
-    );
-    head_value.insert("blake3".into(), Value::from(head_blake3_hex));
-    head_value.insert(
-        "checkpoint_cid_hex".into(),
-        head.checkpoint_cid
+    insert_value!(head_value["blake3"] = head_blake3_hex);
+    insert_json!(
+        head_value["checkpoint_cid_hex"] = head
+            .checkpoint_cid
             .as_ref()
             .map(hex_encode)
-            .map_or(Value::Null, Value::from),
+            .map_or(Value::Null, Value::from)
     );
     let mut root_value = Map::new();
-    root_value.insert(
-        "schema".into(),
-        Value::from("sorafs.governance_dag.mirror.v1"),
-    );
-    root_value.insert(
-        "source_root".into(),
-        Value::from(root.display().to_string()),
-    );
-    root_value.insert(
-        "generated_at".into(),
-        Value::from(governance_dag_now_secs()),
-    );
-    root_value.insert("require_sidecars".into(), Value::from(require_sidecars));
-    root_value.insert("head".into(), Value::Object(head_value));
-    root_value.insert("block_count".into(), Value::from(block_values.len() as u64));
-    root_value.insert("blocks".into(), Value::Array(block_values));
-    root_value.insert("by_block_cid_hex".into(), Value::Object(by_block_cid_hex));
-    root_value.insert("by_node_cid_hex".into(), Value::Object(by_node_cid_hex));
+    insert_value!(root_value["schema"] = "sorafs.governance_dag.mirror.v1");
+    insert_value!(root_value["source_root"] = root.display().to_string());
+    insert_value!(root_value["generated_at"] = governance_dag_now_secs());
+    insert_value!(root_value["require_sidecars"] = require_sidecars);
+    insert_json!(root_value["head"] = Value::Object(head_value));
+    insert_value!(root_value["block_count"] = block_values.len() as u64);
+    insert_json!(root_value["blocks"] = Value::Array(block_values));
+    insert_json!(root_value["by_block_cid_hex"] = Value::Object(by_block_cid_hex));
+    insert_json!(root_value["by_node_cid_hex"] = Value::Object(by_node_cid_hex));
     Ok(Value::Object(root_value))
 }
 fn governance_dag_mirror_query_value(
@@ -19225,43 +18008,37 @@ fn governance_dag_mirror_query_value(
     query: &GovernanceDagMirrorQuery,
 ) -> Result<(bool, Value), String> {
     let mut result = Map::new();
-    result.insert(
-        "schema".into(),
-        Value::from("sorafs.governance_dag.mirror.query.v1"),
-    );
-    result.insert(
-        "index".into(),
-        Value::from(index_path.display().to_string()),
-    );
+    insert_value!(result["schema"] = "sorafs.governance_dag.mirror.query.v1");
+    insert_value!(result["index"] = index_path.display().to_string());
     match query {
         GovernanceDagMirrorQuery::Head => {
-            result.insert("query".into(), Value::from("head"));
+            insert_value!(result["query"] = "head");
             let head = index.get("head").cloned().unwrap_or(Value::Null);
             let found = !matches!(head, Value::Null);
-            result.insert("found".into(), Value::from(found));
-            result.insert("head".into(), head);
+            insert_value!(result["found"] = found);
+            insert_json!(result["head"] = head);
             Ok((found, Value::Object(result)))
         }
         GovernanceDagMirrorQuery::BlockCid(cid) => {
             let cid_hex = hex_encode(cid);
-            result.insert("query".into(), Value::from("block_cid"));
-            result.insert("cid".into(), Value::from(cid_display(cid)));
-            result.insert("cid_hex".into(), Value::from(cid_hex.clone()));
+            insert_value!(result["query"] = "block_cid");
+            insert_value!(result["cid"] = cid_display(cid));
+            insert_value!(result["cid_hex"] = cid_hex.clone());
             let block = governance_dag_mirror_lookup_block(index, "by_block_cid_hex", &cid_hex)?;
             let found = !matches!(block, Value::Null);
-            result.insert("found".into(), Value::from(found));
-            result.insert("block".into(), block);
+            insert_value!(result["found"] = found);
+            insert_json!(result["block"] = block);
             Ok((found, Value::Object(result)))
         }
         GovernanceDagMirrorQuery::NodeCid(cid) => {
             let cid_hex = hex_encode(cid);
-            result.insert("query".into(), Value::from("node_cid"));
-            result.insert("cid".into(), Value::from(cid_display(cid)));
-            result.insert("cid_hex".into(), Value::from(cid_hex.clone()));
+            insert_value!(result["query"] = "node_cid");
+            insert_value!(result["cid"] = cid_display(cid));
+            insert_value!(result["cid_hex"] = cid_hex.clone());
             let block = governance_dag_mirror_lookup_block(index, "by_node_cid_hex", &cid_hex)?;
             let found = !matches!(block, Value::Null);
-            result.insert("found".into(), Value::from(found));
-            result.insert("block".into(), block);
+            insert_value!(result["found"] = found);
+            insert_json!(result["block"] = block);
             Ok((found, Value::Object(result)))
         }
     }
@@ -19310,18 +18087,17 @@ fn governance_dag_checkpoint_file_check(
     errors: &mut Vec<Value>,
 ) -> Value {
     let mut value = Map::new();
-    value.insert("path".into(), Value::from(path.display().to_string()));
+    insert_value!(value["path"] = path.display().to_string());
     match governance_dag_read_digest_file(path, artifact) {
         Ok((_, encoded_len, blake3_hex)) => {
-            value.insert("encoded_len".into(), Value::from(encoded_len));
-            value.insert("blake3".into(), Value::from(blake3_hex.clone()));
+            insert_value!(value["encoded_len"] = encoded_len);
+            insert_value!(value["blake3"] = blake3_hex.clone());
             let expected_blake3 = expected.get("blake3").and_then(Value::as_str);
-            value.insert(
-                "expected_blake3".into(),
-                expected_blake3.map_or(Value::Null, Value::from),
+            insert_json!(
+                value["expected_blake3"] = expected_blake3.map_or(Value::Null, Value::from)
             );
             let digest_ok = expected_blake3 == Some(blake3_hex.as_str());
-            value.insert("digest_ok".into(), Value::from(digest_ok));
+            insert_value!(value["digest_ok"] = digest_ok);
             if !digest_ok {
                 errors.push(governance_dag_problem(
                     path.to_string_lossy().as_ref(),
@@ -19332,12 +18108,9 @@ fn governance_dag_checkpoint_file_check(
             let expected_len = size_fields
                 .iter()
                 .find_map(|field| expected.get(*field).and_then(Value::as_u64));
-            value.insert(
-                "expected_len".into(),
-                expected_len.map_or(Value::Null, Value::from),
-            );
+            insert_json!(value["expected_len"] = expected_len.map_or(Value::Null, Value::from));
             let len_ok = expected_len == Some(encoded_len);
-            value.insert("encoded_len_ok".into(), Value::from(len_ok));
+            insert_value!(value["encoded_len_ok"] = len_ok);
             if !len_ok {
                 errors.push(governance_dag_problem(
                     path.to_string_lossy().as_ref(),
@@ -19345,11 +18118,11 @@ fn governance_dag_checkpoint_file_check(
                     "checkpoint artifact length does not match recorded value",
                 ));
             }
-            value.insert("ok".into(), Value::from(digest_ok && len_ok));
+            insert_value!(value["ok"] = digest_ok && len_ok);
         }
         Err(err) => {
-            value.insert("ok".into(), Value::from(false));
-            value.insert("read_error".into(), Value::from(err.clone()));
+            insert_value!(value["ok"] = false);
+            insert_value!(value["read_error"] = err.clone());
             errors.push(governance_dag_problem(
                 path.to_string_lossy().as_ref(),
                 format!("{artifact}_read"),
@@ -19410,14 +18183,13 @@ fn governance_dag_checkpoint_optional_artifact_check(
     let mut value =
         governance_dag_checkpoint_file_check(artifact, &path, expected, size_fields, errors);
     if let Value::Object(ref mut obj) = value {
-        obj.insert("label".into(), Value::from(label.to_string()));
-        obj.insert(
-            "path_source".into(),
-            Value::from(if override_path.is_some() {
+        insert_value!(obj["label"] = label.to_string());
+        insert_value!(
+            obj["path_source"] = if override_path.is_some() {
                 "override"
             } else {
                 "checkpoint"
-            }),
+            }
         );
     }
     Ok(Some((path, value)))
@@ -19607,41 +18379,25 @@ fn load_governance_dag_block_snapshot(
     let mut records = Vec::<Value>::with_capacity(decoded.len());
     for (position, (path, blake3_hex, sidecar_status, block)) in decoded.into_iter().enumerate() {
         let mut record = Map::new();
-        record.insert("position".into(), Value::from(position as u64));
-        record.insert("path".into(), Value::from(path));
-        record.insert("sequence".into(), Value::from(block.sequence));
-        record.insert("timestamp".into(), Value::from(block.timestamp));
-        record.insert(
-            "block_cid".into(),
-            Value::from(cid_display(&block.block_cid)),
-        );
-        record.insert(
-            "block_cid_hex".into(),
-            Value::from(hex_encode(&block.block_cid)),
-        );
-        record.insert(
-            "prev_block_cid_hex".into(),
-            block
+        insert_value!(record["position"] = position as u64);
+        insert_value!(record["path"] = path);
+        insert_value!(record["sequence"] = block.sequence);
+        insert_value!(record["timestamp"] = block.timestamp);
+        insert_value!(record["block_cid"] = cid_display(&block.block_cid));
+        insert_value!(record["block_cid_hex"] = hex_encode(&block.block_cid));
+        insert_json!(
+            record["prev_block_cid_hex"] = block
                 .prev_block_cid
                 .as_ref()
                 .map(hex_encode)
-                .map_or(Value::Null, Value::from),
+                .map_or(Value::Null, Value::from)
         );
-        record.insert(
-            "node_cid".into(),
-            Value::from(cid_display(&block.node.node_cid)),
-        );
-        record.insert(
-            "node_cid_hex".into(),
-            Value::from(hex_encode(&block.node.node_cid)),
-        );
-        record.insert(
-            "payload_kind".into(),
-            Value::from(governance_payload_kind_cli(&block.node.payload)),
-        );
+        insert_value!(record["node_cid"] = cid_display(&block.node.node_cid));
+        insert_value!(record["node_cid_hex"] = hex_encode(&block.node.node_cid));
+        insert_value!(record["payload_kind"] = governance_payload_kind_cli(&block.node.payload));
         insert_governance_node_submission_summary(&mut record, &block.node);
-        record.insert("blake3".into(), Value::from(blake3_hex));
-        record.insert("sidecar_status".into(), Value::from(sidecar_status));
+        insert_value!(record["blake3"] = blake3_hex);
+        insert_value!(record["sidecar_status"] = sidecar_status);
         blocks.push(block);
         records.push(Value::Object(record));
     }
@@ -19713,70 +18469,46 @@ fn write_governance_dag_car_archive(
         .iter()
         .map(|file| {
             let mut obj = Map::new();
-            obj.insert("path".into(), Value::from(file.path.join("/")));
-            obj.insert("size".into(), Value::from(file.size));
-            obj.insert("first_chunk".into(), Value::from(file.first_chunk as u64));
-            obj.insert("chunk_count".into(), Value::from(file.chunk_count as u64));
+            insert_value!(obj["path"] = file.path.join("/"));
+            insert_value!(obj["size"] = file.size);
+            insert_value!(obj["first_chunk"] = file.first_chunk as u64);
+            insert_value!(obj["chunk_count"] = file.chunk_count as u64);
             Value::Object(obj)
         })
         .collect::<Vec<_>>();
     let mut summary = Map::new();
-    summary.insert("schema".into(), Value::from("sorafs.governance_dag.car.v1"));
-    summary.insert(
-        "snapshot_root".into(),
-        Value::from(snapshot_root.display().to_string()),
-    );
-    summary.insert(
-        "output_car".into(),
-        Value::from(car_out.display().to_string()),
-    );
-    summary.insert(
-        "chunker_handle".into(),
-        Value::from(chunker_handle.to_string()),
-    );
-    summary.insert(
-        "chunker_profile_id".into(),
-        Value::from(descriptor.id.0 as u64),
-    );
-    summary.insert(
-        "chunker_profile_canonical".into(),
-        Value::from(format!(
+    insert_value!(summary["schema"] = "sorafs.governance_dag.car.v1");
+    insert_value!(summary["snapshot_root"] = snapshot_root.display().to_string());
+    insert_value!(summary["output_car"] = car_out.display().to_string());
+    insert_value!(summary["chunker_handle"] = chunker_handle.to_string());
+    insert_value!(summary["chunker_profile_id"] = descriptor.id.0 as u64);
+    insert_value!(
+        summary["chunker_profile_canonical"] = format!(
             "{}.{}@{}",
             descriptor.namespace, descriptor.name, descriptor.semver
-        )),
+        )
     );
-    summary.insert("payload_bytes".into(), Value::from(plan.content_length));
-    summary.insert("chunk_count".into(), Value::from(plan.chunks.len() as u64));
-    summary.insert("file_count".into(), Value::from(plan.files.len() as u64));
-    summary.insert("files".into(), Value::Array(files));
-    summary.insert("car_size".into(), Value::from(stats.car_size));
-    summary.insert(
-        "car_payload_digest_hex".into(),
-        Value::from(hex_encode(stats.car_payload_digest.as_bytes())),
+    insert_value!(summary["payload_bytes"] = plan.content_length);
+    insert_value!(summary["chunk_count"] = plan.chunks.len() as u64);
+    insert_value!(summary["file_count"] = plan.files.len() as u64);
+    insert_json!(summary["files"] = Value::Array(files));
+    insert_value!(summary["car_size"] = stats.car_size);
+    insert_value!(
+        summary["car_payload_digest_hex"] = hex_encode(stats.car_payload_digest.as_bytes())
     );
-    summary.insert(
-        "car_digest_hex".into(),
-        Value::from(hex_encode(stats.car_archive_digest.as_bytes())),
-    );
-    summary.insert(
-        "car_cid_hex".into(),
-        Value::from(hex_encode(&stats.car_cid)),
-    );
-    summary.insert(
-        "root_cids_hex".into(),
-        Value::Array(
+    insert_value!(summary["car_digest_hex"] = hex_encode(stats.car_archive_digest.as_bytes()));
+    insert_value!(summary["car_cid_hex"] = hex_encode(&stats.car_cid));
+    insert_json!(
+        summary["root_cids_hex"] = Value::Array(
             stats
                 .root_cids
                 .iter()
                 .map(|cid| Value::from(hex_encode(cid)))
                 .collect(),
-        ),
+        )
     );
     if let Some(plan_path) = car_plan_out {
-        summary.insert(
-            "chunk_plan_path".into(),
-            Value::from(plan_path.display().to_string()),
-        );
+        insert_value!(summary["chunk_plan_path"] = plan_path.display().to_string());
     }
     Ok(Value::Object(summary))
 }
@@ -19800,27 +18532,23 @@ fn verify_governance_dag_build_snapshot(
     }
     let head_path = root.join("head.to");
     let head_rel = governance_dag_relative_path(root, &head_path);
-    head_value.insert("path".into(), Value::from(head_rel.clone()));
-    head_value.insert(
-        "source_path".into(),
-        Value::from(head_path.display().to_string()),
-    );
+    insert_value!(head_value["path"] = head_rel.clone());
+    insert_value!(head_value["source_path"] = head_path.display().to_string());
     match fs::read(&head_path) {
         Ok(bytes) => {
             let blake3_hex = hex_encode(blake3_hash(&bytes).as_bytes());
             let (sidecar_status, sidecar_value, sidecar_error) =
                 governance_dag_sidecar_status(&head_path, &blake3_hex);
-            head_value.insert(
-                "encoded_len".into(),
-                Value::from(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+            insert_value!(
+                head_value["encoded_len"] = u64::try_from(bytes.len()).unwrap_or(u64::MAX)
             );
-            head_value.insert("blake3".into(), Value::from(blake3_hex));
-            head_value.insert("sidecar_status".into(), Value::from(sidecar_status.clone()));
+            insert_value!(head_value["blake3"] = blake3_hex);
+            insert_value!(head_value["sidecar_status"] = sidecar_status.clone());
             if let Some(value) = sidecar_value {
-                head_value.insert("sidecar_blake3".into(), Value::from(value));
+                insert_value!(head_value["sidecar_blake3"] = value);
             }
             if let Some(error) = &sidecar_error {
-                head_value.insert("sidecar_error".into(), Value::from(error.clone()));
+                insert_value!(head_value["sidecar_error"] = error.clone());
             }
             push_governance_dag_sidecar_problem(
                 &head_rel,
@@ -19832,40 +18560,36 @@ fn verify_governance_dag_build_snapshot(
             );
             match decode_from_bytes::<GovernanceDagHeadV1>(&bytes) {
                 Ok(head) => {
-                    head_value.insert("version".into(), Value::from(head.version));
-                    head_value.insert("block_count".into(), Value::from(head.block_count));
-                    head_value.insert("generated_at".into(), Value::from(head.generated_at));
-                    head_value.insert(
-                        "publisher_peer_id".into(),
-                        Value::from(String::from_utf8_lossy(&head.publisher_peer_id).to_string()),
+                    insert_value!(head_value["version"] = head.version);
+                    insert_value!(head_value["block_count"] = head.block_count);
+                    insert_value!(head_value["generated_at"] = head.generated_at);
+                    insert_value!(
+                        head_value["publisher_peer_id"] =
+                            String::from_utf8_lossy(&head.publisher_peer_id).to_string()
                     );
-                    head_value.insert(
-                        "head_block_cid".into(),
-                        Value::from(cid_display(&head.head_block_cid)),
+                    insert_value!(head_value["head_block_cid"] = cid_display(&head.head_block_cid));
+                    insert_value!(
+                        head_value["head_block_cid_hex"] = hex_encode(&head.head_block_cid)
                     );
-                    head_value.insert(
-                        "head_block_cid_hex".into(),
-                        Value::from(hex_encode(&head.head_block_cid)),
-                    );
-                    head_value.insert(
-                        "checkpoint_cid_hex".into(),
-                        head.checkpoint_cid
+                    insert_json!(
+                        head_value["checkpoint_cid_hex"] = head
+                            .checkpoint_cid
                             .as_ref()
                             .map(hex_encode)
-                            .map_or(Value::Null, Value::from),
+                            .map_or(Value::Null, Value::from)
                     );
                     decoded_head = Some(head);
                 }
                 Err(err) => {
                     let message = format!("failed to decode GovernanceDagHeadV1: {err}");
-                    head_value.insert("decode_error".into(), Value::from(message.clone()));
+                    insert_value!(head_value["decode_error"] = message.clone());
                     errors.push(governance_dag_problem(&head_rel, "decode_head", message));
                 }
             }
         }
         Err(err) => {
             let message = format!("failed to read governance DAG head: {err}");
-            head_value.insert("read_error".into(), Value::from(message.clone()));
+            insert_value!(head_value["read_error"] = message.clone());
             errors.push(governance_dag_problem(&head_rel, "head", message));
         }
     }
@@ -19897,27 +18621,23 @@ fn verify_governance_dag_build_snapshot(
     for block_path in &block_paths {
         let rel_path = governance_dag_relative_path(root, block_path);
         let mut block_value = Map::new();
-        block_value.insert("path".into(), Value::from(rel_path.clone()));
-        block_value.insert(
-            "source_path".into(),
-            Value::from(block_path.display().to_string()),
-        );
+        insert_value!(block_value["path"] = rel_path.clone());
+        insert_value!(block_value["source_path"] = block_path.display().to_string());
         match fs::read(block_path) {
             Ok(bytes) => {
                 let blake3_hex = hex_encode(blake3_hash(&bytes).as_bytes());
                 let (sidecar_status, sidecar_value, sidecar_error) =
                     governance_dag_sidecar_status(block_path, &blake3_hex);
-                block_value.insert(
-                    "encoded_len".into(),
-                    Value::from(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+                insert_value!(
+                    block_value["encoded_len"] = u64::try_from(bytes.len()).unwrap_or(u64::MAX)
                 );
-                block_value.insert("blake3".into(), Value::from(blake3_hex));
-                block_value.insert("sidecar_status".into(), Value::from(sidecar_status.clone()));
+                insert_value!(block_value["blake3"] = blake3_hex);
+                insert_value!(block_value["sidecar_status"] = sidecar_status.clone());
                 if let Some(value) = sidecar_value {
-                    block_value.insert("sidecar_blake3".into(), Value::from(value));
+                    insert_value!(block_value["sidecar_blake3"] = value);
                 }
                 if let Some(error) = &sidecar_error {
-                    block_value.insert("sidecar_error".into(), Value::from(error.clone()));
+                    insert_value!(block_value["sidecar_error"] = error.clone());
                 }
                 push_governance_dag_sidecar_problem(
                     &rel_path,
@@ -19929,56 +18649,43 @@ fn verify_governance_dag_build_snapshot(
                 );
                 match decode_from_bytes::<GovernanceDagBlockV1>(&bytes) {
                     Ok(block) => {
-                        block_value.insert("version".into(), Value::from(block.version));
-                        block_value.insert("sequence".into(), Value::from(block.sequence));
-                        block_value.insert("timestamp".into(), Value::from(block.timestamp));
-                        block_value.insert(
-                            "publisher_peer_id".into(),
-                            Value::from(
-                                String::from_utf8_lossy(&block.publisher_peer_id).to_string(),
-                            ),
+                        insert_value!(block_value["version"] = block.version);
+                        insert_value!(block_value["sequence"] = block.sequence);
+                        insert_value!(block_value["timestamp"] = block.timestamp);
+                        insert_value!(
+                            block_value["publisher_peer_id"] =
+                                String::from_utf8_lossy(&block.publisher_peer_id).to_string()
                         );
-                        block_value.insert(
-                            "block_cid".into(),
-                            Value::from(cid_display(&block.block_cid)),
-                        );
-                        block_value.insert(
-                            "block_cid_hex".into(),
-                            Value::from(hex_encode(&block.block_cid)),
-                        );
-                        block_value.insert(
-                            "prev_block_cid_hex".into(),
-                            block
+                        insert_value!(block_value["block_cid"] = cid_display(&block.block_cid));
+                        insert_value!(block_value["block_cid_hex"] = hex_encode(&block.block_cid));
+                        insert_json!(
+                            block_value["prev_block_cid_hex"] = block
                                 .prev_block_cid
                                 .as_ref()
                                 .map(hex_encode)
-                                .map_or(Value::Null, Value::from),
+                                .map_or(Value::Null, Value::from)
                         );
-                        block_value.insert(
-                            "node_cid".into(),
-                            Value::from(cid_display(&block.node.node_cid)),
+                        insert_value!(block_value["node_cid"] = cid_display(&block.node.node_cid));
+                        insert_value!(
+                            block_value["node_cid_hex"] = hex_encode(&block.node.node_cid)
                         );
-                        block_value.insert(
-                            "node_cid_hex".into(),
-                            Value::from(hex_encode(&block.node.node_cid)),
-                        );
-                        block_value.insert(
-                            "payload_kind".into(),
-                            Value::from(governance_payload_kind_cli(&block.node.payload)),
+                        insert_value!(
+                            block_value["payload_kind"] =
+                                governance_payload_kind_cli(&block.node.payload)
                         );
                         insert_governance_node_submission_summary(&mut block_value, &block.node);
                         decoded_blocks.push((rel_path, block));
                     }
                     Err(err) => {
                         let message = format!("failed to decode GovernanceDagBlockV1: {err}");
-                        block_value.insert("decode_error".into(), Value::from(message.clone()));
+                        insert_value!(block_value["decode_error"] = message.clone());
                         errors.push(governance_dag_problem(&rel_path, "decode_block", message));
                     }
                 }
             }
             Err(err) => {
                 let message = format!("failed to read governance DAG block: {err}");
-                block_value.insert("read_error".into(), Value::from(message.clone()));
+                insert_value!(block_value["read_error"] = message.clone());
                 errors.push(governance_dag_problem(&rel_path, "block", message));
             }
         }
@@ -20017,34 +18724,26 @@ fn verify_governance_dag_build_snapshot(
         }
     }
     let mut summary = Map::new();
-    summary.insert(
-        "schema".into(),
-        Value::from("sorafs.governance_dag.build.verify.v1"),
-    );
-    summary.insert("root".into(), Value::from(root.display().to_string()));
-    summary.insert("ok".into(), Value::from(errors.is_empty()));
-    summary.insert("require_sidecars".into(), Value::from(require_sidecars));
-    summary.insert(
-        "expected_head_cid".into(),
-        expected_head_cid
+    insert_value!(summary["schema"] = "sorafs.governance_dag.build.verify.v1");
+    insert_value!(summary["root"] = root.display().to_string());
+    insert_value!(summary["ok"] = errors.is_empty());
+    insert_value!(summary["require_sidecars"] = require_sidecars);
+    insert_json!(
+        summary["expected_head_cid"] = expected_head_cid
             .map(cid_display)
-            .map_or(Value::Null, Value::from),
+            .map_or(Value::Null, Value::from)
     );
-    summary.insert(
-        "expected_head_cid_hex".into(),
-        expected_head_cid
+    insert_json!(
+        summary["expected_head_cid_hex"] = expected_head_cid
             .map(hex_encode)
-            .map_or(Value::Null, Value::from),
+            .map_or(Value::Null, Value::from)
     );
-    summary.insert("head".into(), Value::Object(head_value));
-    summary.insert(
-        "block_file_count".into(),
-        Value::from(block_paths.len() as u64),
-    );
-    summary.insert("block_count".into(), Value::from(blocks.len() as u64));
-    summary.insert("blocks".into(), Value::Array(block_values));
-    summary.insert("warnings".into(), Value::Array(warnings));
-    summary.insert("errors".into(), Value::Array(errors.clone()));
+    insert_json!(summary["head"] = Value::Object(head_value));
+    insert_value!(summary["block_file_count"] = block_paths.len() as u64);
+    insert_value!(summary["block_count"] = blocks.len() as u64);
+    insert_json!(summary["blocks"] = Value::Array(block_values));
+    insert_json!(summary["warnings"] = Value::Array(warnings));
+    insert_json!(summary["errors"] = Value::Array(errors.clone()));
     (errors.is_empty(), Value::Object(summary))
 }
 fn load_governance_dag_inventory(root: &Path) -> Result<Vec<GovernanceDagArtifact>, String> {
@@ -20471,42 +19170,31 @@ fn verify_governance_dag_inventory(
     }
     let mut summary = governance_dag_inventory_value(root, artifacts);
     if let Value::Object(ref mut obj) = summary {
-        obj.insert("ok".into(), Value::from(errors.is_empty()));
-        obj.insert("require_chain".into(), Value::from(options.require_chain));
-        obj.insert(
-            "require_sidecars".into(),
-            Value::from(options.require_sidecars),
-        );
-        obj.insert(
-            "head_cids".into(),
-            Value::Array(
+        insert_value!(obj["ok"] = errors.is_empty());
+        insert_value!(obj["require_chain"] = options.require_chain);
+        insert_value!(obj["require_sidecars"] = options.require_sidecars);
+        insert_json!(
+            obj["head_cids"] = Value::Array(
                 heads
                     .iter()
                     .map(|cid| Value::from(cid_display(cid)))
                     .collect(),
-            ),
+            )
         );
-        obj.insert(
-            "head_cid_hex".into(),
-            Value::Array(
+        insert_json!(
+            obj["head_cid_hex"] = Value::Array(
                 heads
                     .iter()
                     .map(|cid| Value::from(hex_encode(cid)))
                     .collect(),
-            ),
+            )
         );
         if let Some(expected) = &options.expected_head_cid {
-            obj.insert(
-                "expected_head_cid".into(),
-                Value::from(cid_display(expected)),
-            );
-            obj.insert(
-                "expected_head_cid_hex".into(),
-                Value::from(hex_encode(expected)),
-            );
+            insert_value!(obj["expected_head_cid"] = cid_display(expected));
+            insert_value!(obj["expected_head_cid_hex"] = hex_encode(expected));
         }
-        obj.insert("warnings".into(), Value::Array(warnings));
-        obj.insert("errors".into(), Value::Array(errors.clone()));
+        insert_json!(obj["warnings"] = Value::Array(warnings));
+        insert_json!(obj["errors"] = Value::Array(errors.clone()));
     }
     (errors.is_empty(), summary, node_indices)
 }
@@ -20516,9 +19204,9 @@ fn governance_dag_problem(
     message: impl Into<String>,
 ) -> Value {
     let mut obj = Map::new();
-    obj.insert("path".into(), Value::from(path.to_string()));
-    obj.insert("kind".into(), Value::from(kind.into()));
-    obj.insert("message".into(), Value::from(message.into()));
+    insert_value!(obj["path"] = path.to_string());
+    insert_value!(obj["kind"] = kind.into());
+    insert_value!(obj["message"] = message.into());
     Value::Object(obj)
 }
 fn governance_dag_inventory_value(root: &Path, artifacts: &[GovernanceDagArtifact]) -> Value {
@@ -20544,105 +19232,65 @@ fn governance_dag_inventory_value(root: &Path, artifacts: &[GovernanceDagArtifac
         .filter(|artifact| artifact.sidecar_status == "missing")
         .count();
     let mut obj = Map::new();
-    obj.insert(
-        "schema".into(),
-        Value::from("sorafs.governance_dag.inventory.v1"),
-    );
-    obj.insert("root".into(), Value::from(root.display().to_string()));
-    obj.insert("artifact_count".into(), Value::from(artifacts.len() as u64));
-    obj.insert("node_count".into(), Value::from(node_count as u64));
-    obj.insert(
-        "valid_node_count".into(),
-        Value::from(valid_node_count as u64),
-    );
-    obj.insert(
-        "sidecar_mismatch_count".into(),
-        Value::from(sidecar_mismatch_count as u64),
-    );
-    obj.insert(
-        "sidecar_missing_count".into(),
-        Value::from(sidecar_missing_count as u64),
-    );
-    obj.insert(
-        "artifacts".into(),
-        Value::Array(
+    insert_value!(obj["schema"] = "sorafs.governance_dag.inventory.v1");
+    insert_value!(obj["root"] = root.display().to_string());
+    insert_value!(obj["artifact_count"] = artifacts.len() as u64);
+    insert_value!(obj["node_count"] = node_count as u64);
+    insert_value!(obj["valid_node_count"] = valid_node_count as u64);
+    insert_value!(obj["sidecar_mismatch_count"] = sidecar_mismatch_count as u64);
+    insert_value!(obj["sidecar_missing_count"] = sidecar_missing_count as u64);
+    insert_json!(
+        obj["artifacts"] = Value::Array(
             artifacts
                 .iter()
                 .map(|artifact| governance_dag_artifact_value(artifact, false))
                 .collect(),
-        ),
+        )
     );
     Value::Object(obj)
 }
 fn governance_dag_artifact_value(artifact: &GovernanceDagArtifact, include_outcome: bool) -> Value {
     let mut obj = Map::new();
-    obj.insert("path".into(), Value::from(artifact.rel_path.clone()));
-    obj.insert(
-        "source_path".into(),
-        Value::from(artifact.path.display().to_string()),
-    );
-    obj.insert("encoded_len".into(), Value::from(artifact.encoded_len));
-    obj.insert("blake3".into(), Value::from(artifact.blake3_hex.clone()));
-    obj.insert(
-        "sidecar_status".into(),
-        Value::from(artifact.sidecar_status.clone()),
-    );
+    insert_value!(obj["path"] = artifact.rel_path.clone());
+    insert_value!(obj["source_path"] = artifact.path.display().to_string());
+    insert_value!(obj["encoded_len"] = artifact.encoded_len);
+    insert_value!(obj["blake3"] = artifact.blake3_hex.clone());
+    insert_value!(obj["sidecar_status"] = artifact.sidecar_status.clone());
     if let Some(value) = &artifact.sidecar_value {
-        obj.insert("sidecar_blake3".into(), Value::from(value.clone()));
+        insert_value!(obj["sidecar_blake3"] = value.clone());
     }
     if let Some(error) = &artifact.sidecar_error {
-        obj.insert("sidecar_error".into(), Value::from(error.clone()));
+        insert_value!(obj["sidecar_error"] = error.clone());
     }
     if let Some(node) = &artifact.node {
-        obj.insert("node".into(), governance_dag_node_value(node));
+        insert_json!(obj["node"] = governance_dag_node_value(node));
         if let Some(outcome) = &artifact.outcome {
-            obj.insert(
-                "validation_status".into(),
-                Value::from(outcome.status.clone()),
-            );
-            obj.insert("validation_code".into(), Value::from(outcome.code.clone()));
+            insert_value!(obj["validation_status"] = outcome.status.clone());
+            insert_value!(obj["validation_code"] = outcome.code.clone());
             if include_outcome {
-                obj.insert(
-                    "validation_outcome".into(),
-                    to_value(outcome).unwrap_or(Value::Null),
-                );
+                insert_json!(obj["validation_outcome"] = to_value(outcome).unwrap_or(Value::Null));
             }
         }
     } else if let Some(error) = &artifact.decode_error {
-        obj.insert(
-            "validation_status".into(),
-            Value::from("not_governance_node"),
-        );
-        obj.insert("decode_error".into(), Value::from(error.clone()));
+        insert_value!(obj["validation_status"] = "not_governance_node");
+        insert_value!(obj["decode_error"] = error.clone());
     }
     Value::Object(obj)
 }
 fn governance_dag_node_value(node: &GovernanceDagNodeSummary) -> Value {
     let mut obj = Map::new();
-    obj.insert("node_cid".into(), Value::from(node.node_cid_label.clone()));
-    obj.insert(
-        "node_cid_hex".into(),
-        Value::from(node.node_cid_hex.clone()),
-    );
-    obj.insert(
-        "prev_cid".into(),
-        node.prev_cid_label.clone().map_or(Value::Null, Value::from),
-    );
-    obj.insert(
-        "prev_cid_hex".into(),
-        node.prev_cid_hex.clone().map_or(Value::Null, Value::from),
-    );
-    obj.insert("timestamp".into(), Value::from(node.timestamp));
-    obj.insert(
-        "publisher_peer_id".into(),
-        Value::from(node.publisher_peer_id.clone()),
-    );
+    insert_value!(obj["node_cid"] = node.node_cid_label.clone());
+    insert_value!(obj["node_cid_hex"] = node.node_cid_hex.clone());
+    insert_json!(obj["prev_cid"] = node.prev_cid_label.clone().map_or(Value::Null, Value::from));
+    insert_json!(obj["prev_cid_hex"] = node.prev_cid_hex.clone().map_or(Value::Null, Value::from));
+    insert_value!(obj["timestamp"] = node.timestamp);
+    insert_value!(obj["publisher_peer_id"] = node.publisher_peer_id.clone());
     insert_governance_submission_summary(
         &mut obj,
         node.submission_publisher_account_digest_hex.as_deref(),
         node.submission_origin,
     );
-    obj.insert("payload_kind".into(), Value::from(node.payload_kind));
+    insert_value!(obj["payload_kind"] = node.payload_kind);
     Value::Object(obj)
 }
 fn print_governance_dag_inventory_table(root: &Path, artifacts: &[GovernanceDagArtifact]) {
@@ -20925,37 +19573,22 @@ fn build_manifest_proposal_summary(summary: ManifestProposalSummary<'_>) -> Resu
         successor_bytes,
     );
     let mut map = Map::new();
-    map.insert("proposal_version".into(), Value::from(1_u64));
-    map.insert(
-        "manifest_path".into(),
-        Value::from(manifest_path.display().to_string()),
-    );
-    map.insert(
-        "manifest_digest_hex".into(),
-        Value::from(hex_encode(manifest_digest.as_bytes())),
-    );
-    map.insert(
-        "chunk_digest_sha3_hex".into(),
-        Value::from(hex_encode(chunk_digest_sha3)),
-    );
-    map.insert(
-        "chunker_handle".into(),
-        Value::from(chunker_handle.to_handle()),
-    );
-    map.insert(
-        "pin_policy".into(),
-        Value::Object(pin_policy_json(&manifest.pin_policy)),
-    );
+    insert_value!(map["proposal_version"] = 1_u64);
+    insert_value!(map["manifest_path"] = manifest_path.display().to_string());
+    insert_value!(map["manifest_digest_hex"] = hex_encode(manifest_digest.as_bytes()));
+    insert_value!(map["chunk_digest_sha3_hex"] = hex_encode(chunk_digest_sha3));
+    insert_value!(map["chunker_handle"] = chunker_handle.to_handle());
+    insert_json!(map["pin_policy"] = Value::Object(pin_policy_json(&manifest.pin_policy)));
     if let Some(label) = chunk_plan_label {
-        map.insert("chunk_plan_source".into(), Value::from(label));
+        insert_value!(map["chunk_plan_source"] = label);
     }
     if let Some(alias) = alias_hint {
-        map.insert("alias_hint".into(), Value::from(alias));
+        insert_value!(map["alias_hint"] = alias);
     }
     if let Some(bytes) = successor_bytes {
-        map.insert("successor_of_hex".into(), Value::from(hex_encode(bytes)));
+        insert_value!(map["successor_of_hex"] = hex_encode(bytes));
     }
-    map.insert("register_instruction".into(), register_value);
+    insert_json!(map["register_instruction"] = register_value);
     Ok(Value::Object(map))
 }
 fn chunker_handle_from_profile(profile: &ChunkingProfileV1) -> ChunkerProfileHandle {
@@ -20989,39 +19622,26 @@ fn build_register_instruction_value(
     successor_bytes: Option<[u8; 32]>,
 ) -> Value {
     let mut register_map = Map::new();
-    register_map.insert(
-        "digest_hex".into(),
-        Value::from(hex_encode(manifest_digest.as_bytes())),
-    );
-    register_map.insert(
-        "chunker_handle".into(),
-        Value::from(chunker_handle.to_handle()),
-    );
-    register_map.insert(
-        "chunk_digest_sha3_256_hex".into(),
-        Value::from(hex_encode(chunk_digest_sha3)),
-    );
-    register_map.insert("policy".into(), registry_pin_policy_to_value(policy));
+    insert_value!(register_map["digest_hex"] = hex_encode(manifest_digest.as_bytes()));
+    insert_value!(register_map["chunker_handle"] = chunker_handle.to_handle());
+    insert_value!(register_map["chunk_digest_sha3_256_hex"] = hex_encode(chunk_digest_sha3));
+    insert_json!(register_map["policy"] = registry_pin_policy_to_value(policy));
     if let Some(bytes) = successor_bytes {
-        register_map.insert("successor_of_hex".into(), Value::from(hex_encode(bytes)));
+        insert_value!(register_map["successor_of_hex"] = hex_encode(bytes));
     }
     Value::Object(register_map)
 }
 fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
     let mut map = Map::new();
-    map.insert("min_replicas".into(), Value::from(policy.min_replicas));
-    map.insert(
-        "storage_class".into(),
-        Value::from(match policy.storage_class {
+    insert_value!(map["min_replicas"] = policy.min_replicas);
+    insert_value!(
+        map["storage_class"] = match policy.storage_class {
             RegistryStorageClass::Hot => "hot",
             RegistryStorageClass::Warm => "warm",
             RegistryStorageClass::Cold => "cold",
-        }),
+        }
     );
-    map.insert(
-        "retention_epoch".into(),
-        Value::from(policy.retention_epoch),
-    );
+    insert_value!(map["retention_epoch"] = policy.retention_epoch);
     Value::Object(map)
 }
 #[cfg(test)]
@@ -22140,33 +20760,23 @@ mod tests {
             .next()
             .expect("one sample");
         let mut item = sample_to_map(flat_index, &proof);
-        item.insert(
-            "request_digest_hex".into(),
-            Value::from(hex_encode(context.request_digest())),
+        insert_value!(item["request_digest_hex"] = hex_encode(context.request_digest()));
+        insert_value!(item["manifest_digest_hex"] = hex_encode(request.manifest_digest));
+        insert_value!(item["provider_id_hex"] = hex_encode(request.provider_id));
+        insert_value!(
+            item["finalized_block_height"] =
+                request.expected_finalized_height.expect("finalized height")
         );
-        item.insert(
-            "manifest_digest_hex".into(),
-            Value::from(hex_encode(request.manifest_digest)),
-        );
-        item.insert(
-            "provider_id_hex".into(),
-            Value::from(hex_encode(request.provider_id)),
-        );
-        item.insert(
-            "finalized_block_height".into(),
-            Value::from(request.expected_finalized_height.expect("finalized height")),
-        );
-        item.insert(
-            "finalized_block_hash_hex".into(),
-            Value::from(hex_encode(
+        insert_value!(
+            item["finalized_block_hash_hex"] = hex_encode(
                 request
                     .expected_finalized_block_hash
                     .expect("finalized hash"),
-            )),
+            )
         );
-        item.insert("proof_kind".into(), Value::from("por"));
-        item.insert("result".into(), Value::from("success"));
-        item.insert("latency_ms".into(), Value::from(40_u64));
+        insert_value!(item["proof_kind"] = "por");
+        insert_value!(item["result"] = "success");
+        insert_value!(item["latency_ms"] = 40_u64);
         let ndjson = format!(
             "{}\n",
             norito::json::to_string(&Value::Object(item)).expect("encode PoR item")
@@ -22318,101 +20928,74 @@ fn build_fetch_summary(
     let outcome = &session.outcome;
     let policy_report = &session.policy_report;
     let mut root = Map::new();
-    root.insert("manifest_id_hex".into(), Value::from(manifest_id_hex));
-    root.insert("chunker_handle".into(), Value::from(chunker_handle));
-    root.insert(
-        "rollout_phase".into(),
-        Value::from(options.rollout_phase.label()),
-    );
-    root.insert("write_mode".into(), Value::from(options.write_mode.label()));
-    root.insert(
-        "write_mode_enforces_pq".into(),
-        Value::from(options.write_mode.enforces_pq_only()),
-    );
+    insert_value!(root["manifest_id_hex"] = manifest_id_hex);
+    insert_value!(root["chunker_handle"] = chunker_handle);
+    insert_value!(root["rollout_phase"] = options.rollout_phase.label());
+    insert_value!(root["write_mode"] = options.write_mode.label());
+    insert_value!(root["write_mode_enforces_pq"] = options.write_mode.enforces_pq_only());
     if let Some(client) = options.client_id {
-        root.insert("client_id".into(), Value::from(client));
+        insert_value!(root["client_id"] = client);
     }
     if let Some(profile) = options.cache_profile {
         let label = profile.label();
-        root.insert("cache_profile".into(), Value::from(label));
-        root.insert("cache_state".into(), Value::from(label));
+        insert_value!(root["cache_profile"] = label);
+        insert_value!(root["cache_state"] = label);
     }
-    root.insert("chunk_count".into(), Value::from(plan.chunks.len() as u64));
-    root.insert("content_length".into(), Value::from(plan.content_length));
+    insert_value!(root["chunk_count"] = plan.chunks.len() as u64);
+    insert_value!(root["content_length"] = plan.content_length);
     let assembled_bytes: u64 = outcome.chunks.iter().map(|chunk| chunk.len() as u64).sum();
-    root.insert("assembled_bytes".into(), Value::from(assembled_bytes));
+    insert_value!(root["assembled_bytes"] = assembled_bytes);
     let provider_reports = outcome
         .provider_reports
         .iter()
         .map(|report| {
             let mut obj = Map::new();
-            obj.insert(
-                "provider".into(),
-                Value::from(report.provider.id().as_str()),
-            );
-            obj.insert("successes".into(), Value::from(report.successes as u64));
-            obj.insert("failures".into(), Value::from(report.failures as u64));
-            obj.insert("disabled".into(), Value::from(report.disabled));
+            insert_value!(obj["provider"] = report.provider.id().as_str());
+            insert_value!(obj["successes"] = report.successes as u64);
+            insert_value!(obj["failures"] = report.failures as u64);
+            insert_value!(obj["disabled"] = report.disabled);
             Value::Object(obj)
         })
         .collect();
-    root.insert("provider_reports".into(), Value::Array(provider_reports));
+    insert_json!(root["provider_reports"] = Value::Array(provider_reports));
     let receipts = outcome
         .chunk_receipts
         .iter()
         .map(|receipt| {
             let mut obj = Map::new();
-            obj.insert(
-                "chunk_index".into(),
-                Value::from(receipt.chunk_index as u64),
-            );
-            obj.insert("provider".into(), Value::from(receipt.provider.as_str()));
-            obj.insert("attempts".into(), Value::from(receipt.attempts as u64));
+            insert_value!(obj["chunk_index"] = receipt.chunk_index as u64);
+            insert_value!(obj["provider"] = receipt.provider.as_str());
+            insert_value!(obj["attempts"] = receipt.attempts as u64);
             Value::Object(obj)
         })
         .collect();
-    root.insert("chunk_receipts".into(), Value::Array(receipts));
+    insert_json!(root["chunk_receipts"] = Value::Array(receipts));
     if let Some(manifest) = &session.local_proxy_manifest {
         let manifest_json =
             to_value(manifest).expect("local proxy manifest should serialise to JSON");
-        root.insert("local_proxy_manifest".into(), manifest_json);
+        insert_json!(root["local_proxy_manifest"] = manifest_json);
     }
     if let Some(stats) = session.taikai_cache_stats {
-        root.insert(
-            "taikai_cache_summary".into(),
-            taikai_cache_stats_to_value(stats),
-        );
+        insert_json!(root["taikai_cache_summary"] = taikai_cache_stats_to_value(stats));
     }
     if let Some(queue_stats) = session.taikai_cache_queue {
-        root.insert(
-            "taikai_cache_queue".into(),
-            taikai_cache_queue_to_value(queue_stats),
-        );
+        insert_json!(root["taikai_cache_queue"] = taikai_cache_queue_to_value(queue_stats));
     }
     if let Some(verification) = &session.car_verification {
-        root.insert(
-            "manifest_digest_hex".into(),
-            Value::from(hex_encode(verification.manifest_digest.as_bytes())),
+        insert_value!(
+            root["manifest_digest_hex"] = hex_encode(verification.manifest_digest.as_bytes())
         );
-        root.insert(
-            "manifest_payload_digest_hex".into(),
-            Value::from(hex_encode(verification.manifest_payload_digest.as_bytes())),
+        insert_value!(
+            root["manifest_payload_digest_hex"] =
+                hex_encode(verification.manifest_payload_digest.as_bytes())
         );
-        root.insert(
-            "manifest_car_digest_hex".into(),
-            Value::from(hex_encode(verification.manifest_car_digest)),
+        insert_value!(
+            root["manifest_car_digest_hex"] = hex_encode(verification.manifest_car_digest)
         );
-        root.insert(
-            "manifest_content_length".into(),
-            Value::from(verification.manifest_content_length),
-        );
-        root.insert(
-            "manifest_chunk_count".into(),
-            Value::from(verification.manifest_chunk_count),
-        );
-        root.insert(
-            "manifest_chunk_profile_handle".into(),
-            Value::from(verification.chunk_profile_handle.clone()),
+        insert_value!(root["manifest_content_length"] = verification.manifest_content_length);
+        insert_value!(root["manifest_chunk_count"] = verification.manifest_chunk_count);
+        insert_value!(
+            root["manifest_chunk_profile_handle"] = verification.chunk_profile_handle.clone()
         );
         let governance_signatures: Vec<Value> = verification
             .manifest_governance
@@ -22420,214 +21003,139 @@ fn build_fetch_summary(
             .iter()
             .map(|signature| {
                 let mut obj = Map::new();
-                obj.insert(
-                    "signer_hex".into(),
-                    Value::from(hex_encode(signature.signer)),
-                );
-                obj.insert(
-                    "signature_hex".into(),
-                    Value::from(hex_encode(&signature.signature)),
-                );
+                insert_value!(obj["signer_hex"] = hex_encode(signature.signer));
+                insert_value!(obj["signature_hex"] = hex_encode(&signature.signature));
                 Value::Object(obj)
             })
             .collect();
         let mut governance_obj = Map::new();
-        governance_obj.insert(
-            "council_signatures".into(),
-            Value::Array(governance_signatures),
-        );
-        root.insert("manifest_governance".into(), Value::Object(governance_obj));
+        insert_json!(governance_obj["council_signatures"] = Value::Array(governance_signatures));
+        insert_json!(root["manifest_governance"] = Value::Object(governance_obj));
         let mut car_obj = Map::new();
-        car_obj.insert("size".into(), Value::from(verification.car_stats.car_size));
-        car_obj.insert(
-            "payload_digest_hex".into(),
-            Value::from(hex_encode(
-                verification.car_stats.car_payload_digest.as_bytes(),
-            )),
+        insert_value!(car_obj["size"] = verification.car_stats.car_size);
+        insert_value!(
+            car_obj["payload_digest_hex"] =
+                hex_encode(verification.car_stats.car_payload_digest.as_bytes(),)
         );
-        car_obj.insert(
-            "archive_digest_hex".into(),
-            Value::from(hex_encode(
-                verification.car_stats.car_archive_digest.as_bytes(),
-            )),
+        insert_value!(
+            car_obj["archive_digest_hex"] =
+                hex_encode(verification.car_stats.car_archive_digest.as_bytes(),)
         );
-        car_obj.insert(
-            "cid_hex".into(),
-            Value::from(hex_encode(&verification.car_stats.car_cid)),
-        );
-        car_obj.insert(
-            "root_cids_hex".into(),
-            Value::Array(
+        insert_value!(car_obj["cid_hex"] = hex_encode(&verification.car_stats.car_cid));
+        insert_json!(
+            car_obj["root_cids_hex"] = Value::Array(
                 verification
                     .car_stats
                     .root_cids
                     .iter()
                     .map(|cid| Value::from(hex_encode(cid)))
                     .collect(),
-            ),
+            )
         );
-        car_obj.insert("verified".into(), Value::from(true));
-        car_obj.insert(
-            "por_leaf_count".into(),
-            Value::from(verification.por_leaf_count as u64),
-        );
-        root.insert("car_archive".into(), Value::Object(car_obj));
+        insert_value!(car_obj["verified"] = true);
+        insert_value!(car_obj["por_leaf_count"] = verification.por_leaf_count as u64);
+        insert_json!(root["car_archive"] = Value::Object(car_obj));
     }
-    root.insert(
-        "anonymity_policy".into(),
-        Value::from(anonymity_policy_label(policy_report.policy).to_string()),
+    insert_value!(
+        root["anonymity_policy"] = anonymity_policy_label(policy_report.policy).to_string()
     );
-    root.insert(
-        "anonymity_status".into(),
-        Value::from(policy_report.status_label()),
-    );
-    root.insert(
-        "anonymity_reason".into(),
-        Value::from(policy_report.reason_label()),
-    );
-    root.insert(
-        "anonymity_soranet_selected".into(),
-        Value::from(policy_report.selected_soranet_total as u64),
-    );
-    root.insert(
-        "anonymity_pq_selected".into(),
-        Value::from(policy_report.selected_pq as u64),
-    );
-    root.insert(
-        "anonymity_classical_selected".into(),
-        Value::from(policy_report.selected_classical() as u64),
-    );
-    root.insert(
-        "anonymity_classical_ratio".into(),
-        Value::from(policy_report.classical_ratio()),
-    );
-    root.insert(
-        "anonymity_pq_ratio".into(),
-        Value::from(policy_report.pq_ratio()),
-    );
-    root.insert(
-        "anonymity_candidate_ratio".into(),
-        Value::from(policy_report.candidate_ratio()),
-    );
-    root.insert(
-        "anonymity_deficit_ratio".into(),
-        Value::from(policy_report.deficit_ratio()),
-    );
-    root.insert(
-        "anonymity_supply_delta".into(),
-        Value::from(policy_report.supply_delta_ratio()),
-    );
-    root.insert(
-        "anonymity_brownout".into(),
-        Value::from(policy_report.is_brownout()),
-    );
-    root.insert(
-        "anonymity_brownout_effective".into(),
-        Value::from(policy_report.should_flag_brownout()),
-    );
-    root.insert(
-        "anonymity_uses_classical".into(),
-        Value::from(policy_report.uses_classical()),
-    );
+    insert_value!(root["anonymity_status"] = policy_report.status_label());
+    insert_value!(root["anonymity_reason"] = policy_report.reason_label());
+    insert_value!(root["anonymity_soranet_selected"] = policy_report.selected_soranet_total as u64);
+    insert_value!(root["anonymity_pq_selected"] = policy_report.selected_pq as u64);
+    insert_value!(root["anonymity_classical_selected"] = policy_report.selected_classical() as u64);
+    insert_value!(root["anonymity_classical_ratio"] = policy_report.classical_ratio());
+    insert_value!(root["anonymity_pq_ratio"] = policy_report.pq_ratio());
+    insert_value!(root["anonymity_candidate_ratio"] = policy_report.candidate_ratio());
+    insert_value!(root["anonymity_deficit_ratio"] = policy_report.deficit_ratio());
+    insert_value!(root["anonymity_supply_delta"] = policy_report.supply_delta_ratio());
+    insert_value!(root["anonymity_brownout"] = policy_report.is_brownout());
+    insert_value!(root["anonymity_brownout_effective"] = policy_report.should_flag_brownout());
+    insert_value!(root["anonymity_uses_classical"] = policy_report.uses_classical());
     Value::Object(root)
 }
 fn taikai_cache_stats_to_value(stats: TaikaiCacheStatsSnapshot) -> Value {
     let mut map = Map::new();
-    map.insert(
-        "hits".into(),
-        tier_counts_value(stats.hits.hot, stats.hits.warm, stats.hits.cold),
-    );
-    map.insert("misses".into(), Value::from(stats.misses));
-    map.insert(
-        "inserts".into(),
-        tier_counts_value(stats.inserts.hot, stats.inserts.warm, stats.inserts.cold),
+    insert_json!(map["hits"] = tier_counts_value(stats.hits.hot, stats.hits.warm, stats.hits.cold));
+    insert_value!(map["misses"] = stats.misses);
+    insert_json!(
+        map["inserts"] =
+            tier_counts_value(stats.inserts.hot, stats.inserts.warm, stats.inserts.cold)
     );
     let mut evictions = Map::new();
-    evictions.insert(
-        "hot".into(),
-        reason_counts_value(stats.evictions.hot.expired, stats.evictions.hot.capacity),
+    insert_json!(
+        evictions["hot"] =
+            reason_counts_value(stats.evictions.hot.expired, stats.evictions.hot.capacity)
     );
-    evictions.insert(
-        "warm".into(),
-        reason_counts_value(stats.evictions.warm.expired, stats.evictions.warm.capacity),
+    insert_json!(
+        evictions["warm"] =
+            reason_counts_value(stats.evictions.warm.expired, stats.evictions.warm.capacity)
     );
-    evictions.insert(
-        "cold".into(),
-        reason_counts_value(stats.evictions.cold.expired, stats.evictions.cold.capacity),
+    insert_json!(
+        evictions["cold"] =
+            reason_counts_value(stats.evictions.cold.expired, stats.evictions.cold.capacity)
     );
-    map.insert("evictions".into(), Value::Object(evictions));
-    map.insert(
-        "promotions".into(),
-        promotion_counts_value(
+    insert_json!(map["evictions"] = Value::Object(evictions));
+    insert_json!(
+        map["promotions"] = promotion_counts_value(
             stats.promotions.warm_to_hot,
             stats.promotions.cold_to_warm,
             stats.promotions.cold_to_hot,
-        ),
+        )
     );
-    map.insert(
-        "qos_denials".into(),
-        qos_counts_value(
+    insert_json!(
+        map["qos_denials"] = qos_counts_value(
             stats.qos_denials.priority,
             stats.qos_denials.standard,
             stats.qos_denials.bulk,
-        ),
+        )
     );
     Value::Object(map)
 }
 fn taikai_cache_queue_to_value(stats: TaikaiPullQueueStats) -> Value {
     let mut map = Map::new();
-    map.insert(
-        "pending_segments".into(),
-        Value::from(stats.pending_segments),
-    );
-    map.insert("pending_bytes".into(), Value::from(stats.pending_bytes));
-    map.insert("pending_batches".into(), Value::from(stats.pending_batches));
-    map.insert(
-        "in_flight_batches".into(),
-        Value::from(stats.in_flight_batches),
-    );
-    map.insert("hedged_batches".into(), Value::from(stats.hedged_batches));
-    map.insert(
-        "shaper_denials".into(),
-        qos_counts_value(
+    insert_value!(map["pending_segments"] = stats.pending_segments);
+    insert_value!(map["pending_bytes"] = stats.pending_bytes);
+    insert_value!(map["pending_batches"] = stats.pending_batches);
+    insert_value!(map["in_flight_batches"] = stats.in_flight_batches);
+    insert_value!(map["hedged_batches"] = stats.hedged_batches);
+    insert_json!(
+        map["shaper_denials"] = qos_counts_value(
             stats.shaper_denials.priority,
             stats.shaper_denials.standard,
             stats.shaper_denials.bulk,
-        ),
+        )
     );
-    map.insert(
-        "dropped_segments".into(),
-        Value::from(stats.dropped_segments),
-    );
-    map.insert("failovers".into(), Value::from(stats.failovers));
-    map.insert("open_circuits".into(), Value::from(stats.open_circuits));
+    insert_value!(map["dropped_segments"] = stats.dropped_segments);
+    insert_value!(map["failovers"] = stats.failovers);
+    insert_value!(map["open_circuits"] = stats.open_circuits);
     Value::Object(map)
 }
 fn tier_counts_value(hot: u64, warm: u64, cold: u64) -> Value {
     let mut map = Map::new();
-    map.insert("hot".into(), Value::from(hot));
-    map.insert("warm".into(), Value::from(warm));
-    map.insert("cold".into(), Value::from(cold));
+    insert_value!(map["hot"] = hot);
+    insert_value!(map["warm"] = warm);
+    insert_value!(map["cold"] = cold);
     Value::Object(map)
 }
 fn reason_counts_value(expired: u64, capacity: u64) -> Value {
     let mut map = Map::new();
-    map.insert("expired".into(), Value::from(expired));
-    map.insert("capacity".into(), Value::from(capacity));
+    insert_value!(map["expired"] = expired);
+    insert_value!(map["capacity"] = capacity);
     Value::Object(map)
 }
 fn promotion_counts_value(warm_to_hot: u64, cold_to_warm: u64, cold_to_hot: u64) -> Value {
     let mut map = Map::new();
-    map.insert("warm_to_hot".into(), Value::from(warm_to_hot));
-    map.insert("cold_to_warm".into(), Value::from(cold_to_warm));
-    map.insert("cold_to_hot".into(), Value::from(cold_to_hot));
+    insert_value!(map["warm_to_hot"] = warm_to_hot);
+    insert_value!(map["cold_to_warm"] = cold_to_warm);
+    insert_value!(map["cold_to_hot"] = cold_to_hot);
     Value::Object(map)
 }
 fn qos_counts_value(priority: u64, standard: u64, bulk: u64) -> Value {
     let mut map = Map::new();
-    map.insert("priority".into(), Value::from(priority));
-    map.insert("standard".into(), Value::from(standard));
-    map.insert("bulk".into(), Value::from(bulk));
+    insert_value!(map["priority"] = priority);
+    insert_value!(map["standard"] = standard);
+    insert_value!(map["bulk"] = bulk);
     Value::Object(map)
 }
 fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, String> {
@@ -22723,7 +21231,7 @@ fn parse_taikai_cache_override(value: Value) -> Result<Option<TaikaiCacheConfig>
         other => other,
     };
     let mut wrapper = Map::new();
-    wrapper.insert("taikai_cache".into(), inner);
+    insert_json!(wrapper["taikai_cache"] = inner);
     let parsed = orchestrator_config_from_json(&Value::Object(wrapper))
         .map_err(|err| format!("failed to parse Taikai cache config: {err}"))?;
     Ok(parsed.taikai_cache)
@@ -22969,15 +21477,9 @@ fn pin_policy_json(policy: &PinPolicy) -> Map {
         StorageClass::Warm => "warm",
         StorageClass::Cold => "cold",
     };
-    obj.insert(
-        "min_replicas".into(),
-        Value::from(policy.min_replicas as u64),
-    );
-    obj.insert("storage_class".into(), Value::from(label));
-    obj.insert(
-        "retention_epoch".into(),
-        Value::from(policy.retention_epoch),
-    );
+    insert_value!(obj["min_replicas"] = policy.min_replicas as u64);
+    insert_value!(obj["storage_class"] = label);
+    insert_value!(obj["retention_epoch"] = policy.retention_epoch);
     obj
 }
 enum JsonSource {

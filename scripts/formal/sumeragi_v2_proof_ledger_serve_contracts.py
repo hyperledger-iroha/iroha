@@ -1002,10 +1002,19 @@ _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
         "fdbcc73d2d6dbe68e0ffa683f9a6413043e58a7b5013df9c8f080ca4185b26e5"
     ),
     "v2_worker_recovered_lifecycle_output_cases.rs": (
-        "15ba2beabaec09f4b91fe0c3356c5ef7c6684abfa38fe0c2d9cca1d63fe48ff5"
+        "101004202bb87e98d9372d80563277db29df21889f6df957fc3a131b7f8d3bc4"
     ),
     "v2_worker_nonzero_view_restart.rs": (
         "b4e023c528ce068df688c6470a27a25ba14df45fb7553f053f8877cdda253fa9"
+    ),
+    "v2_worker_serve_unsealed_cases.rs": (
+        "aaeeebba50f95dff140bda57b82be1c2379dc2e7c5330639e9cb0a02fe77b842"
+    ),
+    "v2_worker_serve_decision_restart_cases.rs": (
+        "4756497a5ce66a906a0b1e8195afe6e6978c55f88acb1ea7ca0ae0bbce131de6"
+    ),
+    "v2_worker_certified_serve_budget_cases.rs": (
+        "0bad66535d74184e0576248ed79fd63754bc38f82c765126459bdcf5489a61ff"
     ),
 }
 
@@ -1014,6 +1023,9 @@ _WORKER_TEST_INCLUDE_TEST_COUNT = {
     "v2_worker_backpressure_cases.rs": 21,
     "v2_worker_recovered_lifecycle_output_cases.rs": 8,
     "v2_worker_nonzero_view_restart.rs": 1,
+    "v2_worker_serve_unsealed_cases.rs": 23,
+    "v2_worker_serve_decision_restart_cases.rs": 11,
+    "v2_worker_certified_serve_budget_cases.rs": 13,
 }
 
 _SERVICED_CANDIDATE_STORE_STRUCT_SHA256 = {
@@ -1328,7 +1340,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "6d46edcfbf32039e6c1f17bd7a1fa0203a8faa6069f2b69fcf5f2684c0bcd458"
     ),
     "producer_parent_has_exact_local_replay_binding": (
-        "235feed79743cfcdff3ad31fd607c05546ad593ee8d5bd76dbdf6eaf40b2120c"
+        "a70ccef5d263dff9464f9292e354039e840b8258c35e9c053245fdd1629d5eb7"
     ),
     "serviced_candidate_stage": (
         "af1e74ad7671148c9dfe5fdade32ff32608e17cdf60c7e4c268095d8ff0f1060"
@@ -1406,7 +1418,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "b0f80b64612e436979c51bef1a607147f2fcc3c4c5b127a3738a4ca3410cc40f"
     ),
     "drive_effects": (
-        "5adf00903e0a88fb10917c9e614352be22f3ec1feb7ec94767a5a5f4dc243a08"
+        "228291c466d581465006e2b731591caea95750c08dd0c5cea836b8d3c7de6e95"
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNTIME_STRUCT_SHA256 = {
@@ -1452,13 +1464,13 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
     ),
     "minimum_active_lifecycle_ordinal_excluding": (
-        "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
+        "bb53e945b76e2bdbd83e60c3e259d6a946eaf83be9685ca099c01fc8da5dbdf8"
     ),
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
     ),
     "observe_effects": (
-        "23d97acae28bbe7990bc3316cb6f38f38c412511f4613657a842e12f9a5517a7"
+        "a046c2022e0ae5bec78701605451d8ef99c2c474345ebddd0b49d8c18f274e49"
     ),
     "step": "aaa41e0366ae660537780528c97e763e8f292e9a80234c21d4cc37a390eea414",
     "finish_dispatched_step": (
@@ -1481,7 +1493,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
-    "launch": "1a34076aed7b1758af2efd56af77b5b66cb1606d41db0e04836470497abbb626",
+    "launch": "f0107f312d84e643a22a0590b87b4fa4b27bfad5f8eab5e5e4b40daa4eb025eb",
     "into_serialized_runtime": "1afc003a9b27312c1d9b4868eb6dc1c42d6bd4f838b3ebe383131627c40972bd",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
@@ -1622,9 +1634,6 @@ _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
     ),
     "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
         "22e6b7d6b7620598c67f3e942898d695e717bca1625f3af3572dcce450d43093"
-    ),
-    "restart_dormant_completion_batch_atomically_replaces_latent_slots": (
-        "3eddbb9168d425d56925da39fff899a8615ebd43c63afd04fd94071849d06fbc"
     ),
     "dormant_local_fifo_metadata_rejects_wrong_stage_ordinal_and_capacity": (
         "e882762fdaf772c5a57d5277f4b29f0d6ae71ffb9d4374edd3c7dd1fdb42117d"
@@ -1834,7 +1843,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256 = {
         "b4daaad31d1dff26abf5581a80142973caa2f2ce108475debfda12f62ee3947e"
     ),
     "full_normal_deferred_lane_cannot_drop_absolute_timeout": (
-        "8d18abf6d0df4d314eb57f9f95d5f6c02eac0d0f320b0a0f5dd3747508da2a62"
+        "adf5d6b807867607244f20da26031ca985061e59363830a91f91735c896c70b1"
     ),
 }
 _TIMEOUT_VOTE_VIEW_WINDOW_ITEM_SHA256 = {

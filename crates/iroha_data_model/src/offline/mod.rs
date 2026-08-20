@@ -1,10 +1,9 @@
-//! Canonical Kagemusha offline-cash models.
-//!
-//! The module exposes one lifecycle: exact online top-up, recursive
-//! offline split/spend, and exact online redemption.
+//! Canonical Kagemusha offline-cash models. The module exposes one lifecycle:
+//! exact online top-up, recursive offline split/spend, and exact online redemption.
+mod kagemusha_promotion_receipt;
 mod receiver_snapshot;
 mod status;
-pub use self::model::*;
+pub use self::{kagemusha_promotion_receipt::*, model::*};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -5161,6 +5160,7 @@ mod kagemusha_v4_artifact_contract_tests {
         assert!(reordered.validate().is_err());
     }
     include!("kagemusha_release_validation_inline_tests.rs");
+    include!("kagemusha_promotion_receipt_inline_tests.rs");
     #[test]
     fn v4_artifact_contract_source_guard_is_exhaustive() {
         fn canonical_index(kind: KagemushaPastaCycleArtifactKindV4) -> usize {

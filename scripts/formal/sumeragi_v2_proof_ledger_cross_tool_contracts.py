@@ -25,7 +25,7 @@ _DURABLE_INTENT_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_for_pending", "8b26caff839a21e4350fcfc48d65ad15485ef4740673caee4323c3111a3358ce", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_claim", "2be2c4e14a098fd2334fdbe96fa4b8044461d8d94b7f2a6a3f820274fc5d293e", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_grant", "1e263db662a7b2e1f7bbdead0f4bb3026e6fbd5174cde1c11ba254036a3dc7ff", brace_context=(("impl", "Reducer"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "transition_projection", "49d3a03ed60e2baa9aeb2796d0959c1e1754f77c335920f88eee1694f2768f02", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "transition_projection", "e0551aca5b9c8aa1147e966f13ae3ee893b629cd37842eee7e2b041ca2b9fb3f", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "event_kind", "dda92f84e6994e7ae557198f8346fbe75ce0c3e424442bd760789465e525d282", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "progress_witness_violation", "8c15eb7f0f261819eb387288d1cce374be7d6b61d3489167cd0a53accfe06d69", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "locked_commit_progress_witness_projection", "c19038941ba1aecc7614e2769c7662f8ba3c82074b9166273414be51e2392455", brace_context=(("impl", "Reducer"),)),
@@ -267,14 +267,14 @@ _TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "6fbdddbe5b1a6cddad8e75a566f897a44e0d7cc74be88dc037d9aa7339a3791f", brace_context=(("impl", "NetworkRelayShared"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "push", "d30cc609e125945f143c35d42f513479d7255ed739859859a6a2149aa74abf82", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "pop_if_with_trace", "a370e5f5cee51cc1029e98aa16701951ea9c307d3b01f291fcf29c9a7c67f83c", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "finish_sumeragi_block_ingress_attempt", "b3022c31815414001838c0db14d09029fbb063a37384696ddd24e1a58388cb27"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "finish_sumeragi_block_ingress_attempt", "619ad104babda4d71bab1cf83f24ddacb5e02f891acb96c620498ac5160e7933"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "attempt_sumeragi_relay_work", "48785399f28a8eedac4f2e71ef4429c2c7e1ea892511b14ed608360127fafecf"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_source_capacity", "d0bb1db54ebde2668f6f6c52b6dae565c696950422448fbdb994ae9ceb9641ec"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "new_sumeragi_relay_retained_queue", "ed48c8fb78adf6d9cc4750004bf768828d4dca2676d0d58ef76ed272a4e43314"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_source_credits", "142b0e99fd19e9b6ef02821ac06acd5589b1c4644414d99460affcb8ab8cdd59"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_dispatcher_capacity", "5d5c9a68cde0a263c47641d250717da5f186f7b1c3c9437a7d57d05fc0bb581c"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_class_capacity", "6a0f470f2cc7ba50e6893bb586cbd18e99a6ceffa29029279decaf1e692f7d49"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_retain_retry", "f668e5ce645905c1e717c47f35512de6102d0d64f71da6b8508ce454209015f6"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_retain_retry", "052e90cc19d9416a0546c0938c57592da456a5bf98d9c9d64939dc4469d258ac"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_sumeragi_relay_dispatcher", "8ec9a952ab902393a16405c7454b18025ac711460e2158745bbb1af40c4efece"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_network_relay_worker", "78bcf5e86d56182049fcdb979b37ba564aa3724f78be8dd4547216aad26afe44"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "forward_relay_lane", "8aca2344fdba8a6e935e2d852ed79b0c3f4d904560b3a6a52d0428c7990ddceb"),
@@ -379,7 +379,7 @@ _HISTORICAL_CERTIFICATE_SOURCE_ITEM_SEALS = _SUCCESSOR_IDENTITY_CONSTANT_SOURCE_
 
 _HISTORICAL_BODY_SOURCE_ITEM_SEALS = _SUCCESSOR_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS + (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "CanonicalIdentityProjection", "6988ca07a23b2b0b2f6f97862355cd26b65549402367584c30cc32311fa907b0", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionHistoricalBodyPipelineTraceProjection", "2fd6008bed8f678cbd90891c79db7783a5d641f4e8086a1e7e3846376cd4642b", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionHistoricalBodyPipelineTraceProjection", "0c78312bdb56dfe88be422b2715ff32c51a2a40d76e0ed1d948d9b3001102e71", "struct"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionHistoricalBodyPipelineTraceProjection", "0a83de2f2abcd66aae01529e6f8b3d187b416c5b7467295b43a6ed16d39a1f9a", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "PendingFetch", "50ace9e19f281c23899dfeb61aefbac861572c406d75752913b02788844e656e", "struct"),
@@ -1126,7 +1126,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolLinkedConsumerContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="install_view",
-                        item_token_sha256="aead33e5d7df955164b9ff8764dc4aefbe46648b96041d5c056fb4f366d3697d",
+                        item_token_sha256="f15646e36b63aa6d1fb538fcdd0b45d1eb61f66f54ffb25a781b98f076734a0f",
                         required_expression="""
                             let stale_body_cleanup =
                                 self.plan_certified_view_body_cleanup(
@@ -3160,7 +3160,7 @@ _CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE = (
     "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs"
 )
 _CHECKED_PRODUCTION_TOKEN_CLOSURE_SHA256 = (
-    "acdc63763495b64aceacd92c8f1fe80ef9cb7e8194a8f5fb967f1a02d55b2bca"
+    "52558a7c6976fc869b1e6214202190ef3eb0111231e8c49d990a7e36fe2c63d7"
 )
 _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256 = (
     "c79d22d356c0f53aceb7b771cb14660ea68ab6da856d46e186506bb5e570a9aa"

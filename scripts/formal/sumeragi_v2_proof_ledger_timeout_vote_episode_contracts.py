@@ -771,9 +771,9 @@ let post_snapshot_source = context.roster[2].validator.clone();
         ),
         (
             """
-leader_wire_ingress.try_push(InboundBlockMessage::new(
+leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
     BlockMessage::V2(message.clone()),
-    Some(post_snapshot_source),
+    post_snapshot_source,
 ))
 """,
             "the post-snapshot TC must acquire real fair-ingress ownership",
@@ -856,7 +856,7 @@ assert!(matches!(
     if tc_regression is not None:
         tc_tokens = rust_code_tokens(tc_regression.body)
         ordered_sequences = (
-            "leader_wire_ingress.try_push(InboundBlockMessage::new(",
+            "leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(",
             "let timeout_owner = runtime.frozen_timeout_owner_for_test(deadline)",
             "leader_wire_ingress.try_recv_if(",
             "let mut fresh_inbound = leader_wire_ingress.try_recv()",

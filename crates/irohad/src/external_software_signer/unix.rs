@@ -13,8 +13,8 @@ use super::{
         scrub, sign_request_digest, sign_response_digest,
     },
     service::{
-        SoftwareSignerServiceV1, native_payload_matches_role, taira_authority_signing_message,
-        verify_provenance, verify_response_attestation,
+        SoftwareSignerServiceV1, native_payload_matches_role, verify_provenance,
+        verify_response_attestation,
     },
 };
 use iroha_crypto::Signature;
@@ -979,10 +979,6 @@ fn verify_payload_signature(
                 return Err(ExternalSoftwareSignerClientErrorV1::Rejected);
             }
             builder.payload_hash_bytes().to_vec()
-        }
-        SoftwareSignerRoleV1::TairaAuthority => {
-            taira_authority_signing_message(binding, payload)
-                .ok_or(ExternalSoftwareSignerClientErrorV1::Rejected)?
         }
         _ => super::typed_payload::validated_typed_signing_message(binding, payload)
             .map_err(|()| ExternalSoftwareSignerClientErrorV1::Rejected)?,

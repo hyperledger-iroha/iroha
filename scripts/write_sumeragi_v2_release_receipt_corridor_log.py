@@ -52,7 +52,6 @@ _RECEIPT_VALIDATION_OPTION_ORDER = (
     "--formal-completion",
     "--seed-completion",
     "--chaos-completion",
-    "--taira-completion",
     "--g4p-completion",
     "--g12-seed-completion",
     "--g12-fault-soak-completion",
@@ -96,7 +95,6 @@ _RECEIPT_VALIDATION_PATH_OPTIONS = frozenset(
         "--formal-completion",
         "--seed-completion",
         "--chaos-completion",
-        "--taira-completion",
         "--g4p-completion",
         "--g12-seed-completion",
         "--g12-fault-soak-completion",
@@ -1334,17 +1332,6 @@ def _corridor_legs(
             ),
         )
     )
-    legs.extend(
-        (
-            f"taira-contract-{index}",
-            "cargo-exact",
-            1,
-            "cargo test --locked --offline -p integration_tests "
-            "--test consensus_and_da "
-            f"{test} -- --exact --test-threads=1",
-        )
-        for index, test in enumerate(_TAIRA_CONTRACT_TESTS)
-    )
     legs.append(
         (
             "cross-sdk-rust",
@@ -1528,32 +1515,6 @@ def _corridor_legs(
                 27,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_formal_release_test.py",
-            ),
-            (
-                "preflight-taira-soak",
-                "pytest",
-                43,
-                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
-                "-q -p no:cacheprovider "
-                "pytests/scripts/taira_v2_soak_test.py::"
-                "test_launcher_pins_complete_profile_and_runs_exactly_one_test "
-                "pytests/scripts/taira_v2_soak_test.py::"
-                "test_launcher_rejects_zero_test_inventory "
-                "pytests/scripts/taira_v2_soak_test.py::"
-                "test_launcher_rejects_zero_test_execution_output "
-                "pytests/scripts/taira_v2_soak_test.py::"
-                "test_launcher_rejects_bundle_tampering_before_completion "
-                "pytests/scripts/taira_v2_soak_test.py::"
-                "test_launcher_rejects_symlinked_marker_temp_without_completion "
-                "pytests/scripts/taira_v2_soak_test.py::"
-                "test_launcher_marker_durability_failure_is_not_terminal "
-                "pytests/scripts/taira_v2_soak_test.py::"
-                "test_launcher_rejects_profile_override_arguments_before_cargo "
-                "pytests/scripts/taira_v2_soak_test.py::"
-                "test_launcher_rejects_a_concurrent_source_bound_soak "
-                "pytests/scripts/taira_v2_soak_test.py::"
-                "test_launcher_does_not_promote_provisional_evidence_when_validation_fails "
-                "pytests/scripts/taira_v2_soak_evidence_test.py",
             ),
         )
     )

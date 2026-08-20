@@ -927,6 +927,16 @@ fn decode_bound_remote_spend_claims(
             details: "remote-spend claim metadata must use canonical Norito bytes".into(),
         });
     }
+    for claim in &claims {
+        claim
+            .handle_replay_key
+            .validate()
+            .map_err(|error| Error::InvalidAxtBinding {
+                details: format!(
+                    "remote-spend claim contains an invalid handle replay key: {error}"
+                ),
+            })?;
+    }
     let commitments: Vec<_> = claims
         .iter()
         .map(compute_remote_spend_claim_commitment_v1)
@@ -1344,7 +1354,7 @@ mod tests {
         asset::id::AssetDefinitionId,
         domain::DomainId,
         fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
-        nexus::{AxtHandleReplayKey, LaneId},
+        nexus::{AxtAssetIncarnationV1, AxtHandleIssuerContextV1, AxtHandleReplayKey, LaneId},
     };
     use iroha_primitives::numeric::Quantity;
     fn sample_binding() -> AxtFastpqBinding {
@@ -1489,6 +1499,7 @@ mod tests {
         AxtRemoteSpendClaimV1::new(
             AxtHandleReplayKey::from_parts(
                 DataSpaceId::new(binding.source_dsid),
+                AxtHandleIssuerContextV1::default().asset_definition_incarnation,
                 [0xA5; 32],
                 1,
                 1,
@@ -2478,6 +2489,59 @@ mod tests {
             Error::InvalidAxtBinding { details }
                 if details.contains("one-for-one")
         ));
+    }
+    #[test]
+    fn remote_spend_claim_rejects_invalid_asset_incarnation_before_transcript_linkage() {
+        let mut binding = remote_transfer_binding();
+        let mut batch = real_transfer_claim_batch(&binding);
+        batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+        let mut claims: Vec<AxtRemoteSpendClaimV1> = decode_from_bytes(
+            batch
+                .metadata
+                .get(AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY)
+                .expect("remote-spend claim metadata"),
+        )
+        .expect("decode remote-spend claims");
+        let mut logical_zero =
+            norito::json::to_value(&claims[0].handle_replay_key.asset_definition_incarnation)
+                .expect("encode replay-key incarnation");
+        logical_zero
+            .as_array_mut()
+            .expect("transparent incarnation JSON tuple")[0] =
+            norito::json::to_value(&Hash::prehashed([0; Hash::LENGTH]))
+                .expect("encode logical-zero hash");
+        claims[0].handle_replay_key.asset_definition_incarnation =
+            norito::json::from_value(logical_zero)
+                .expect("decode syntactically valid logical-zero incarnation");
+        binding.remote_spend_intent_commitments =
+            vec![compute_remote_spend_claim_commitment_v1(&claims[0])];
+        set_axt_remote_spend_claims(&mut batch, &binding, &claims)
+            .expect("attach malformed claim preimage for verifier regression");
+
+        let error = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("a logical-zero claim incarnation must fail closed");
+        let Error::InvalidAxtBinding { details } = error else {
+            panic!("expected an invalid AXT binding error, got {error:?}");
+        };
+        assert_eq!(
+            details,
+            "remote-spend claim contains an invalid handle replay key: replay key has an invalid asset-definition incarnation: AXT asset-definition incarnation is zero"
+        );
+    }
+    #[test]
+    fn remote_spend_claim_commitment_separates_asset_incarnations() {
+        let binding = remote_transfer_binding();
+        let first = real_transfer_claim(&binding);
+        let mut reincarnated = first.clone();
+        reincarnated.handle_replay_key.asset_definition_incarnation =
+            AxtAssetIncarnationV1::try_from_bytes([0xC3; Hash::LENGTH])
+                .expect("non-zero alternate asset incarnation");
+
+        assert_ne!(
+            compute_remote_spend_claim_commitment_v1(&first),
+            compute_remote_spend_claim_commitment_v1(&reincarnated),
+            "historical proof claims must not authenticate a newly registered asset incarnation"
+        );
     }
     #[test]
     fn remote_spend_claim_rejects_two_handle_claims_for_one_transfer_delta() {

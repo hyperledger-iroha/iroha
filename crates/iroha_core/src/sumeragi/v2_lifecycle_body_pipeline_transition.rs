@@ -1637,6 +1637,7 @@ pub(super) struct PreparedSealedValidateApplyTransition<'coordinator, 'registry,
     coordinator: &'coordinator mut LifecycleCoordinator,
     publication: PreparedReadyDurableValidateApplyPreAdmission<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    admission_candidate: CandidateAdmission,
     lease: TurnLease,
     parent_ordinal: u128,
     child_ordinal: u128,
@@ -1683,6 +1684,7 @@ pub(super) struct PreparedSealedValidateReportTransition<'coordinator, 'registry
     coordinator: &'coordinator mut LifecycleCoordinator,
     report: PreparedInvalidBodyReportReplayPreAdmission<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    admission_candidate: CandidateAdmission,
     lease: TurnLease,
     edge: DurableContinuationEdge,
     parent_ordinal: u128,
@@ -1703,6 +1705,7 @@ pub(super) struct PreparedSealedValidateSignTransition<'coordinator, 'registry, 
     coordinator: &'coordinator mut LifecycleCoordinator,
     publication: PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    admission_candidate: CandidateAdmission,
     lease: TurnLease,
     parent_ordinal: u128,
     child_ordinal: u128,
@@ -1941,6 +1944,7 @@ impl LifecycleCoordinator {
             candidate,
             parent_payload,
         } = projection;
+        let admission_candidate = candidate.clone();
         let edge = match candidate.key.phase() {
             LifecyclePhase::Prepare => DurableContinuationEdge::ValidateToSignPrepare,
             LifecyclePhase::Commit => DurableContinuationEdge::ValidateToSignCommit,
@@ -1972,6 +1976,7 @@ impl LifecycleCoordinator {
             coordinator: self,
             publication,
             staged: transition.staged,
+            admission_candidate,
             lease: projected_lease,
             parent_ordinal: transition.parent_ordinal,
             child_ordinal: transition.child_ordinal,
@@ -2005,6 +2010,11 @@ impl LifecycleCoordinator {
         ) {
             Ok(projection) => projection,
             Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal = lease.ordinal(),
+                    "Ready Validate no-successor projection failed"
+                );
                 return Err(SealedValidateNoSuccessorTransitionError {
                     _preview: preview,
                     _failure: SealedValidateNoSuccessorTransitionFailure::Projection(error),
@@ -2019,6 +2029,11 @@ impl LifecycleCoordinator {
         ) {
             Ok(transition) => transition,
             Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal = lease.ordinal(),
+                    "Ready Validate no-successor coordinator staging failed"
+                );
                 return Err(SealedValidateNoSuccessorTransitionError {
                     _preview: preview,
                     _failure: SealedValidateNoSuccessorTransitionFailure::Stage(error),
@@ -2137,6 +2152,7 @@ impl LifecycleCoordinator {
                 });
             }
         };
+        let admission_candidate = projection.candidate.clone();
         let transition = match stage_body_stage_transition(
             self,
             &projection.lease,
@@ -2156,6 +2172,7 @@ impl LifecycleCoordinator {
             coordinator: self,
             publication,
             staged: transition.staged,
+            admission_candidate,
             lease: lease.clone(),
             parent_ordinal: transition.parent_ordinal,
             child_ordinal: transition.child_ordinal,
@@ -2199,6 +2216,7 @@ impl LifecycleCoordinator {
                 });
             }
         };
+        let admission_candidate = projection.candidate.clone();
         let transition = match stage_body_stage_transition(
             self,
             &projection.lease,
@@ -2218,6 +2236,7 @@ impl LifecycleCoordinator {
             coordinator: self,
             report,
             staged: transition.staged,
+            admission_candidate,
             lease: lease.clone(),
             edge: DurableContinuationEdge::ValidateToInvalidBodyReport,
             parent_ordinal: transition.parent_ordinal,
@@ -2241,6 +2260,7 @@ impl<'coordinator, 'registry, 'adapter>
             coordinator,
             publication,
             staged,
+            admission_candidate,
             lease,
             parent_ordinal,
             child_ordinal,
@@ -2253,6 +2273,7 @@ impl<'coordinator, 'registry, 'adapter>
             child_ordinal,
             child_slot,
             child_digest,
+            admission_candidate,
         ) {
             Ok(registry) => registry,
             Err(error) => {
@@ -2293,6 +2314,7 @@ impl<'coordinator, 'registry, 'adapter>
             coordinator,
             report,
             staged,
+            admission_candidate,
             lease,
             edge,
             parent_ordinal,
@@ -2309,6 +2331,7 @@ impl<'coordinator, 'registry, 'adapter>
             child_ordinal,
             child_slot,
             child_digest,
+            admission_candidate,
         ) {
             Ok(publication) => publication,
             Err(error) => {
@@ -2370,6 +2393,11 @@ impl<'coordinator, 'registry, 'adapter>
                 != coordinator.capacity_generation[&CapacityClass::Consensus]
         );
         if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+            iroha_logger::error!(
+                ?error,
+                ordinal = parent_ordinal,
+                "Ready Validate no-successor LedgerV1 publication failed"
+            );
             coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
             return Err(SealedValidateNoSuccessorPublicationError {
                 _coordinator: coordinator,
@@ -2402,6 +2430,7 @@ impl<'coordinator, 'registry, 'adapter>
             coordinator,
             publication,
             staged,
+            admission_candidate,
             lease,
             parent_ordinal,
             child_ordinal,
@@ -2413,6 +2442,7 @@ impl<'coordinator, 'registry, 'adapter>
             child_ordinal,
             child_slot,
             child_digest,
+            admission_candidate,
         ) {
             Ok(registry) => registry,
             Err(error) => {

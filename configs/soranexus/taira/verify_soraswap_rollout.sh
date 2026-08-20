@@ -7,12 +7,9 @@ DEFAULT_SORASWAP_ROOT="${IROHA_ROOT}/../soraswap"
 SORASWAP_ROOT="${SORASWAP_ROOT:-${DEFAULT_SORASWAP_ROOT}}"
 SORASWAP_CLIENT_CONFIG="${SORASWAP_CLIENT_CONFIG:-}"
 PUBLIC_TORII_ROOT="${PUBLIC_TORII_ROOT:-}"
-LOCAL_TORII_ROOT="${LOCAL_TORII_ROOT:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
 WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-}"
 IROHA_BIN="${IROHA_BIN:-}"
-EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
-VALIDATOR_ROOT_SPECS=()
 TRADER_APP_API_PROBE_ATTEMPTS="${TRADER_APP_API_PROBE_ATTEMPTS:-6}"
 TRADER_APP_API_PROBE_INTERVAL_SECS="${TRADER_APP_API_PROBE_INTERVAL_SECS:-1}"
 RUN_DEPLOY=0
@@ -28,12 +25,9 @@ SKIP_TRADER_APP_API_CHECK=0
 usage() {
   cat <<'EOF'
 Usage: verify_soraswap_rollout.sh --public-root URL [--write-config PATH]
-                                  [--local-root URL]
                                   [--soraswap-root PATH]
                                   [--soraswap-client-config PATH]
                                   [--iroha-bin PATH]
-                                  [--expected-git-sha 40_HEX_SHA]
-                                  [--validator-root LABEL=URL]...
                                   [--run-deploy]
                                   [--run-smoke]
                                   [--run-release-checklist]
@@ -47,9 +41,7 @@ Usage: verify_soraswap_rollout.sh --public-root URL [--write-config PATH]
 
 Run the post-upgrade public-Taira validation chain in the canonical order:
   1. local `iroha_core` regressions for SoraSwap universal deploy routing and three-hop nested transfers
-  2. fail-closed `check_mcp_rollout.sh` on the chosen public node, pinned to
-     the full git SHA, all four validators, ordinary health/finality, and the
-     exact `is`/`is2` dataspace routing identities
+  2. same-revision compiled `iroha taira doctor` on the chosen public node
   3. `check_sorafs_rollout.sh` on the chosen public node
   4. trader app-api CID probe from `deployments/testnet/trader_api_bundle.latest.json` when present
   5. `make testnet-nested-call-probe` in `../soraswap`
@@ -71,14 +63,6 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       PUBLIC_TORII_ROOT="$2"
-      shift 2
-      ;;
-    --local-root)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --local-root" >&2
-        exit 1
-      }
-      LOCAL_TORII_ROOT="$2"
       shift 2
       ;;
     --write-config)
@@ -111,22 +95,6 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       IROHA_BIN="$2"
-      shift 2
-      ;;
-    --expected-git-sha)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --expected-git-sha" >&2
-        exit 1
-      }
-      EXPECTED_TAIRA_GIT_SHA="$2"
-      shift 2
-      ;;
-    --validator-root)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --validator-root" >&2
-        exit 1
-      }
-      VALIDATOR_ROOT_SPECS+=("$2")
       shift 2
       ;;
     --run-deploy)
@@ -345,29 +313,26 @@ if [[ $SKIP_LOCAL_REGRESSIONS -ne 1 ]]; then
 fi
 
 if [[ $SKIP_MCP_CHECK -ne 1 ]]; then
+  if [[ -z "$IROHA_BIN" ]]; then
+    IROHA_BIN="${IROHA_ROOT}/target/local-release/iroha"
+  fi
+  if [[ ! -x "$IROHA_BIN" ]]; then
+    echo "current iroha CLI is unavailable; build it or pass --iroha-bin: $IROHA_BIN" >&2
+    exit 1
+  fi
+  mcp_config="${WRITE_CONFIG:-${SORASWAP_CLIENT_CONFIG:-}}"
+  if [[ -z "$mcp_config" || ! -f "$mcp_config" ]]; then
+    echo "--write-config or --soraswap-client-config must name a runtime-only client config for the Taira doctor" >&2
+    exit 1
+  fi
   mcp_cmd=(
-    "${SCRIPT_DIR}/check_mcp_rollout.sh"
+    "$IROHA_BIN"
+    -c "$mcp_config"
+    taira doctor
     --public-root "$PUBLIC_TORII_ROOT"
-    --require-all-validators
+    --json
   )
-  for validator_root_spec in "${VALIDATOR_ROOT_SPECS[@]+"${VALIDATOR_ROOT_SPECS[@]}"}"; do
-    mcp_cmd+=(--validator-root "$validator_root_spec")
-  done
-  if [[ -n "$WRITE_CONFIG" ]]; then
-    mcp_cmd+=(--write-config "$WRITE_CONFIG")
-  fi
-  if [[ -n "$LOCAL_TORII_ROOT" ]]; then
-    mcp_cmd+=(--local-root "$LOCAL_TORII_ROOT")
-  else
-    mcp_cmd+=(--skip-local)
-  fi
-  if [[ -n "$IROHA_BIN" ]]; then
-    mcp_cmd+=(--iroha-bin "$IROHA_BIN")
-  fi
-  if [[ -n "$EXPECTED_TAIRA_GIT_SHA" ]]; then
-    mcp_cmd+=(--expected-git-sha "$EXPECTED_TAIRA_GIT_SHA")
-  fi
-  run_step "public Taira MCP + write canary" "${mcp_cmd[@]}"
+  run_step "public Taira compiled endpoint doctor" "${mcp_cmd[@]}"
 fi
 
 if [[ $SKIP_SORAFS_CHECK -ne 1 ]]; then

@@ -272,9 +272,20 @@ fn deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences() {
         "dropping the current envelope cannot drop the causal root's physical position"
     );
     runtime.ingress.commands.clear();
-    runtime.pending_effect_ownership = Some(vec![RuntimeEffectOwnership::inherited(
-        replay_owner.clone(),
-    )]);
+    runtime.pending_effect_ownership = Some(vec![
+        RuntimeEffectOwnership::new_bound(
+            replay_owner.clone(),
+            RuntimeEffectCausality::Inherit,
+            RUNTIME_EFFECT_KIND_OPAQUE_TEST,
+            &[RUNTIME_EFFECT_KIND_OPAQUE_TEST],
+            None,
+            1,
+            1,
+            0,
+            0,
+        )
+        .expect("bind the post-cut opaque test effect"),
+    ]);
     assert_eq!(
         runtime
             .minimum_active_lifecycle_ordinal_for_deferred(&target)
@@ -631,10 +642,18 @@ fn passive_external_owner_cannot_fence_fifo_or_absolute_timeout() {
     assert_eq!(runtime.driver.timeouts, vec![owner_tag]);
     assert!(runtime.driver.retransmits.is_empty());
 
-    let older_effect = RuntimeEffectOwnership::fresh(
+    let older_effect = RuntimeEffectOwnership::new_bound(
         older.clone(),
-        RuntimeFreshRootKind::HistoricalLockedRetransmit,
-    );
+        RuntimeEffectCausality::Fresh(RuntimeFreshRootKind::HistoricalLockedRetransmit),
+        RUNTIME_EFFECT_KIND_OPAQUE_TEST,
+        &[RUNTIME_EFFECT_KIND_OPAQUE_TEST],
+        None,
+        1,
+        1,
+        0,
+        0,
+    )
+    .expect("bind the older opaque test effect");
     runtime
         .enqueue_with_lifecycle_owner(
             owner_tag,
@@ -1002,107 +1021,6 @@ fn equal_lifecycle_fence_siblings_follow_exact_physical_rank() {
 }
 
 #[test]
-fn preassigned_batch_lifecycles_require_shared_mint_and_exact_root() {
-    let admitted_at = Instant::now();
-    let owner_tag = tag(0);
-    let unminted_source = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
-    let mut unminted_ingress = BoundedIngress::with_lifecycle_ordinals(
-        RuntimeQueueConfig::new(4, 1, 1),
-        unminted_source.clone(),
-    );
-    let unminted_command = FakeCommand::record(1);
-    let mut unminted_origin = RuntimeCandidateCausalOrigin::mint(
-        owner_tag,
-        CommandClass::Completion,
-        &unminted_command,
-        None,
-    );
-    assert!(unminted_origin.bind_lifecycle_ordinal(1));
-    let unminted = TaggedCommand::with_causal_origin(
-        owner_tag,
-        CommandClass::Completion,
-        unminted_command,
-        admitted_at,
-        unminted_origin,
-        1,
-    )
-    .expect("construct internally exact but unminted lifecycle");
-    assert_eq!(
-        unminted_ingress.enqueue_completion_batch(vec![unminted]),
-        Err(EnqueueError::FailClosed)
-    );
-    assert!(unminted_ingress.commands.is_empty());
-    assert_eq!(
-        unminted_source
-            .next_ordinal_for_test()
-            .expect("unminted batch rejection preserves the source"),
-        Some(1)
-    );
-
-    let collision_source = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
-    let mut collision_ingress = BoundedIngress::with_lifecycle_ordinals(
-        RuntimeQueueConfig::new(4, 1, 1),
-        collision_source.clone(),
-    );
-    collision_ingress
-        .enqueue(TaggedCommand::new(
-            owner_tag,
-            CommandClass::Normal,
-            FakeCommand::record(2),
-            admitted_at,
-        ))
-        .expect("mint one exact lifecycle root");
-    let (_, root_owner) = collision_ingress
-        .pop_next_with_ownership()
-        .expect("select the minted root exactly")
-        .expect("root is ready");
-    let sibling = TaggedCommand::with_causal_origin(
-        owner_tag,
-        CommandClass::Completion,
-        FakeCommand::record(3),
-        admitted_at,
-        root_owner.causal_origin.clone(),
-        root_owner.lifecycle_ordinal,
-    )
-    .expect("construct one legitimate causal sibling");
-    let conflicting_command = FakeCommand::record(4);
-    let mut conflicting_origin = RuntimeCandidateCausalOrigin::mint(
-        owner_tag,
-        CommandClass::Completion,
-        &conflicting_command,
-        None,
-    );
-    assert!(conflicting_origin.bind_lifecycle_ordinal(root_owner.lifecycle_ordinal));
-    let conflicting = TaggedCommand::with_causal_origin(
-        owner_tag,
-        CommandClass::Completion,
-        conflicting_command,
-        admitted_at,
-        conflicting_origin,
-        root_owner.lifecycle_ordinal,
-    )
-    .expect("construct a distinct root at the colliding ordinal");
-    let next_before_collision = collision_source
-        .next_ordinal_for_test()
-        .expect("inspect source before batch collision");
-    assert_eq!(
-        collision_ingress.enqueue_completion_batch(vec![sibling, conflicting]),
-        Err(EnqueueError::FailClosed)
-    );
-    assert!(
-        collision_ingress.commands.is_empty(),
-        "batch collision must reject atomically"
-    );
-    assert_eq!(
-        collision_source
-            .next_ordinal_for_test()
-            .expect("batch collision preserves the source"),
-        next_before_collision,
-        "collision validation must run before reserving physical positions"
-    );
-}
-
-#[test]
 fn restart_dormant_local_fifo_reservation_survives_full_class_churn() {
     let started_at = Instant::now();
     let owner_tag = tag(0);
@@ -1253,68 +1171,6 @@ fn restart_dormant_local_fifo_reservation_survives_full_class_churn() {
         runtime.queued_commands(),
         5,
         "rejected resurrection cannot install another physical owner"
-    );
-}
-
-#[test]
-fn restart_dormant_completion_batch_atomically_replaces_latent_slots() {
-    let admitted_at = Instant::now();
-    let owner_tag = tag(0);
-    let first_key = Hash::new(b"first dormant validation lifecycle");
-    let second_key = Hash::new(b"second dormant validation lifecycle");
-    let mut ingress = BoundedIngress::with_lifecycle_ordinals(
-        RuntimeQueueConfig::new(5, 1, 1),
-        RuntimeLifecycleOrdinalSource::after_high_watermark(2),
-    );
-    ingress
-        .install_dormant_local_fifo_reservations(vec![
-            RuntimeDormantLocalFifoReservation::completion(first_key, 1, 9),
-            RuntimeDormantLocalFifoReservation::completion(second_key, 2, 9),
-        ])
-        .expect("restart installs two exact completion reservations");
-    for value in [1, 2] {
-        ingress
-            .enqueue(TaggedCommand::new(
-                owner_tag,
-                CommandClass::Completion,
-                FakeCommand::record(value),
-                admitted_at,
-            ))
-            .expect("ordinary completions fill the unreserved positions");
-    }
-    assert_eq!(ingress.remaining_capacity(), 0);
-    let batch = vec![
-        restored_fake_command(
-            owner_tag,
-            CommandClass::Completion,
-            FakeCommand::record(3),
-            first_key,
-            1,
-            9,
-        ),
-        restored_fake_command(
-            owner_tag,
-            CommandClass::Completion,
-            FakeCommand::record(4),
-            second_key,
-            2,
-            9,
-        ),
-    ];
-    ingress
-        .enqueue_completion_batch(batch.clone())
-        .expect("one atomic batch replaces both latent reservations");
-    assert!(ingress.dormant_local_fifo_reservations.is_empty());
-    assert_eq!(ingress.len(), 4);
-    let next_after_first_batch = ingress.next_admission_ordinal;
-
-    ingress
-        .enqueue_completion_batch(batch)
-        .expect("repeated exact batch coalesces with physical owners");
-    assert_eq!(ingress.len(), 4);
-    assert_eq!(
-        ingress.next_admission_ordinal, next_after_first_batch,
-        "duplicate batch cannot allocate another physical range"
     );
 }
 

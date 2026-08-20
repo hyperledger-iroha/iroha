@@ -483,20 +483,14 @@ fn autonomous_merge_commit_authorization_fixture(
     let expired_axt_replay_key = seed_expired_axt_replay.then(|| {
         let key = AxtHandleReplayKey::from_parts(
             DataSpaceId::UNIVERSAL,
+            axt_replay_incarnation_for_test(0xA7),
             [0xA7; 32],
             1,
             1,
             LaneId::SINGLE,
         );
         let mut replay = state.world.axt_replay_ledger.block();
-        replay.insert(
-            key,
-            AxtReplayRecord {
-                dataspace: DataSpaceId::UNIVERSAL,
-                used_slot: 0,
-                retain_until_slot: 0,
-            },
-        );
+        replay.insert(key, axt_replay_record_for_key(&key, 0, 0));
         replay.commit();
         key
     });

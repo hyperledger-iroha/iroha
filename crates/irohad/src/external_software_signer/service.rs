@@ -1,8 +1,4 @@
 //! Stateful software signer core independent of its Unix transport.
-#[cfg(feature = "taira-authority-bin")]
-use super::journal::verify_rotation_successor_record;
-#[cfg(feature = "taira-authority-bin")]
-use super::unix::SoftwareSignerSignatureReceiptV1;
 use super::{
     envelope::{
         SoftwareSignerKeyEnvelopeAadV1, SoftwareSignerKeyEnvelopeV1, SoftwareSignerWrappingKeyV1,
@@ -18,9 +14,9 @@ use super::{
         SIGNER_PUBLIC_BINDING_MAGIC_V1, SignRequestV1, SignResponseV1, SignStatusV1,
         SoftwareSignerKeyAlgorithmV1, SoftwareSignerLiveProvenanceV1,
         SoftwareSignerPublicBindingV1, SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1,
-        TAIRA_RELEASE_AUTHORITY_SIGNING_DOMAIN_V1, admin_request_digest, admin_response_digest,
-        digest_canonical, payload_digest, public_key_digest, sign_request_digest,
-        sign_response_digest, valid_identity, valid_software_signer_handle,
+        admin_request_digest, admin_response_digest, digest_canonical, payload_digest,
+        public_key_digest, sign_request_digest, sign_response_digest, valid_identity,
+        valid_software_signer_handle,
     },
 };
 use iroha_crypto::{KeyPair, Signature};
@@ -50,11 +46,6 @@ const PENDING_ENVELOPE_NAME_V1: &str = ".key-envelope-v1.pending";
 const ENVELOPE_FILE_MAX_BYTES_V1: usize = 32 * 1024;
 const PROVENANCE_ATTESTATION_DOMAIN_V1: &[u8] = b"iroha.external-signer.provenance.v1";
 const RESPONSE_ATTESTATION_DOMAIN_V1: &[u8] = b"iroha.external-signer.response-attestation.v1";
-const PUBLIC_SOAK_OBSERVATION_SIGNATURE_DOMAIN_V1: &[u8] =
-    b"iroha.taira.public-v2-24h-soak.authority-envelope-signature.v1\0";
-const PUBLIC_SOAK_BROKER_SIGNATURE_DOMAIN_V1: &[u8] =
-    b"iroha.taira.public-v2-24h-soak.durable-admission-signature.v1\0";
-const PUBLIC_SOAK_REPLAY_NAMESPACE_V1: &str = "iroha.taira.public-v2-24h-soak-authority-replay.v1";
 /// Public inputs used to create a fresh isolated software signer.
 #[derive(Clone, Debug)]
 pub struct SoftwareSignerProvisioningV1 {
@@ -84,25 +75,6 @@ pub struct SoftwareSignerProvisioningV1 {
     pub policy_digest: [u8; 32],
     /// Maximum canonical transaction payload size.
     pub max_request_bytes: u32,
-}
-
-/// Old-key-attested transition to one exact successor generation.
-#[cfg(feature = "taira-authority-bin")]
-pub(super) struct SoftwareSignerRotationSuccessorV1 {
-    pub operation_id: [u8; 32],
-    pub request_digest: [u8; 32],
-    pub sequence: u64,
-    pub predecessor_audit_head: [u8; 32],
-    pub audit_head: [u8; 32],
-    pub successor: SoftwareSignerPublicBindingV1,
-    pub journal_record: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SignerProcessIdentityModeV1 {
-    Enforce,
-    #[cfg(all(test, feature = "taira-authority-bin"))]
-    SyntheticTest,
 }
 
 impl SoftwareSignerProvisioningV1 {
@@ -189,48 +161,13 @@ impl SoftwareSignerServiceV1 {
         Self::provision_with_keypair(state_directory, provisioning, wrapping_key, keypair)
     }
 
-    /// Provision a signer with a synthetic service UID for an in-process
-    /// multi-role test harness. Production entry points never call this path.
-    #[cfg(all(test, feature = "taira-authority-bin"))]
-    pub(super) fn provision_for_test(
-        state_directory: impl Into<PathBuf>,
-        provisioning: SoftwareSignerProvisioningV1,
-        wrapping_key: SoftwareSignerWrappingKeyV1,
-    ) -> Result<Self, SoftwareSignerErrorV1> {
-        let keypair = KeyPair::try_random_with_algorithm(provisioning.algorithm.algorithm())
-            .map_err(|_| SoftwareSignerErrorV1::CryptoUnavailable)?;
-        Self::provision_with_keypair_for_test(state_directory, provisioning, wrapping_key, keypair)
-    }
-
     pub(super) fn provision_with_keypair(
         state_directory: impl Into<PathBuf>,
         provisioning: SoftwareSignerProvisioningV1,
         wrapping_key: SoftwareSignerWrappingKeyV1,
         keypair: KeyPair,
     ) -> Result<Self, SoftwareSignerErrorV1> {
-        Self::provision_with_keypair_inner(
-            state_directory,
-            provisioning,
-            wrapping_key,
-            keypair,
-            SignerProcessIdentityModeV1::Enforce,
-        )
-    }
-
-    #[cfg(all(test, feature = "taira-authority-bin"))]
-    pub(super) fn provision_with_keypair_for_test(
-        state_directory: impl Into<PathBuf>,
-        provisioning: SoftwareSignerProvisioningV1,
-        wrapping_key: SoftwareSignerWrappingKeyV1,
-        keypair: KeyPair,
-    ) -> Result<Self, SoftwareSignerErrorV1> {
-        Self::provision_with_keypair_inner(
-            state_directory,
-            provisioning,
-            wrapping_key,
-            keypair,
-            SignerProcessIdentityModeV1::SyntheticTest,
-        )
+        Self::provision_with_keypair_inner(state_directory, provisioning, wrapping_key, keypair)
     }
 
     fn provision_with_keypair_inner(
@@ -238,13 +175,8 @@ impl SoftwareSignerServiceV1 {
         provisioning: SoftwareSignerProvisioningV1,
         wrapping_key: SoftwareSignerWrappingKeyV1,
         keypair: KeyPair,
-        process_identity_mode: SignerProcessIdentityModeV1,
     ) -> Result<Self, SoftwareSignerErrorV1> {
-        match process_identity_mode {
-            SignerProcessIdentityModeV1::Enforce => provisioning.validate()?,
-            #[cfg(all(test, feature = "taira-authority-bin"))]
-            SignerProcessIdentityModeV1::SyntheticTest => provisioning.validate_binding()?,
-        }
+        provisioning.validate()?;
         if keypair.algorithm() != provisioning.algorithm.algorithm() {
             return Err(SoftwareSignerErrorV1::InvalidBinding);
         }
@@ -314,30 +246,12 @@ impl SoftwareSignerServiceV1 {
         state_directory: impl Into<PathBuf>,
         wrapping_key: SoftwareSignerWrappingKeyV1,
     ) -> Result<Self, SoftwareSignerErrorV1> {
-        Self::open_inner(
-            state_directory,
-            wrapping_key,
-            SignerProcessIdentityModeV1::Enforce,
-        )
-    }
-
-    /// Open synthetic-UID signer state owned by the current test process.
-    #[cfg(all(test, feature = "taira-authority-bin"))]
-    pub(super) fn open_for_test(
-        state_directory: impl Into<PathBuf>,
-        wrapping_key: SoftwareSignerWrappingKeyV1,
-    ) -> Result<Self, SoftwareSignerErrorV1> {
-        Self::open_inner(
-            state_directory,
-            wrapping_key,
-            SignerProcessIdentityModeV1::SyntheticTest,
-        )
+        Self::open_inner(state_directory, wrapping_key)
     }
 
     fn open_inner(
         state_directory: impl Into<PathBuf>,
         wrapping_key: SoftwareSignerWrappingKeyV1,
-        process_identity_mode: SignerProcessIdentityModeV1,
     ) -> Result<Self, SoftwareSignerErrorV1> {
         let state_directory = state_directory.into();
         validate_absolute_normal_path(&state_directory)?;
@@ -357,9 +271,7 @@ impl SoftwareSignerServiceV1 {
             .map_err(SoftwareSignerErrorV1::Envelope)?;
         let binding = binding_from_recovered(&recovered)?;
         #[cfg(unix)]
-        if process_identity_mode == SignerProcessIdentityModeV1::Enforce
-            && binding.service_uid != rustix::process::geteuid().as_raw()
-        {
+        if binding.service_uid != rustix::process::geteuid().as_raw() {
             return Err(SoftwareSignerErrorV1::IdentityMismatch);
         }
         Ok(Self {
@@ -466,14 +378,6 @@ impl SoftwareSignerServiceV1 {
                 }
                 builder.payload_hash_bytes().to_vec()
             }
-            SoftwareSignerRoleV1::TairaAuthority => {
-                let Some(message) =
-                    taira_authority_signing_message(&state.binding, &request.payload)
-                else {
-                    return state.sign_error_response(request, SignStatusV1::Rejected);
-                };
-                message
-            }
             _ => super::typed_payload::validated_typed_signing_message(
                 &state.binding,
                 &request.payload,
@@ -490,8 +394,6 @@ impl SoftwareSignerServiceV1 {
             .verify(&state.binding.public_key, &signing_message)
             .map_err(|_| SoftwareSignerErrorV1::Rejected)?;
         let signature_bytes = signature.payload().to_vec();
-        #[cfg(feature = "taira-authority-bin")]
-        let predecessor_audit_head = state.journal.audit_head();
         let audit_head = state.append_audit(SoftwareSignerAuditEventV1::SignCommitted {
             operation_id: request.operation_id,
             request_digest: request.request_digest,
@@ -504,42 +406,12 @@ impl SoftwareSignerServiceV1 {
             payload_digest: request.payload_digest,
             signature: signature_bytes,
             sequence: state.journal.sequence(),
-            #[cfg(feature = "taira-authority-bin")]
-            predecessor_audit_head,
             audit_head,
         };
         state
             .sign_commits
             .insert(request.operation_id, commit.clone());
         state.sign_success_response(request, SignStatusV1::Ok, commit)
-    }
-    /// Sign one already validated Taira authority envelope through the durable
-    /// software-signer journal without exposing the generic signer socket.
-    #[cfg(feature = "taira-authority-bin")]
-    pub(super) fn sign_taira_payload(
-        &self,
-        operation_id: [u8; 32],
-        payload: Vec<u8>,
-    ) -> Result<SignResponseV1, SoftwareSignerErrorV1> {
-        let binding = self.public_binding()?;
-        if binding.role != SoftwareSignerRoleV1::TairaAuthority {
-            return Err(SoftwareSignerErrorV1::Rejected);
-        }
-        let mut request = SignRequestV1 {
-            binding_digest: binding
-                .digest()
-                .map_err(|()| SoftwareSignerErrorV1::InvalidBinding)?,
-            operation_id,
-            expected_key_revision: binding.key_revision,
-            expected_policy_revision: binding.policy_revision,
-            expected_policy_digest: binding.policy_digest,
-            payload_digest: payload_digest(&payload),
-            payload,
-            request_digest: [0; 32],
-        };
-        request.request_digest =
-            sign_request_digest(&request).map_err(|()| SoftwareSignerErrorV1::Rejected)?;
-        self.handle_sign_request(&request)
     }
     pub(super) fn attest_protocol_response(
         &self,
@@ -548,136 +420,6 @@ impl SoftwareSignerServiceV1 {
         let state = self.lock_state()?;
         state.ensure_available()?;
         state.attest_response(response_digest)
-    }
-    #[cfg(feature = "taira-authority-bin")]
-    pub(super) fn verify_taira_journal_commit(
-        &self,
-        operation_id: [u8; 32],
-        payload: &[u8],
-        receipt: &SoftwareSignerSignatureReceiptV1,
-    ) -> Result<(), SoftwareSignerErrorV1> {
-        let state = self.lock_state()?;
-        let commit = state
-            .sign_commits
-            .get(&operation_id)
-            .ok_or(SoftwareSignerErrorV1::RollbackOrSubstitution)?;
-        let binding = &receipt.provenance.binding;
-        let SoftwareSignerPurposeBindingV1::TairaAuthority { .. } = &binding.purpose_binding else {
-            return Err(SoftwareSignerErrorV1::InvalidBinding);
-        };
-        if binding.role != SoftwareSignerRoleV1::TairaAuthority
-            || binding.handle != state.binding.handle
-            || binding.service_id != state.binding.service_id
-            || binding.administrator_id != state.binding.administrator_id
-            || binding.service_uid != state.binding.service_uid
-            || binding.client_uid != state.binding.client_uid
-            || binding.administrator_uid != state.binding.administrator_uid
-            || binding.audit_genesis_digest != state.binding.audit_genesis_digest
-            || receipt.operation_id != operation_id
-            || receipt.payload_length != u64::try_from(payload.len()).unwrap_or(u64::MAX)
-            || receipt.payload_digest != payload_digest(payload)
-            || commit.request_digest != receipt.request_digest
-            || commit.payload_digest != receipt.payload_digest
-            || commit.signature != receipt.signature
-            || commit.sequence != receipt.commit_sequence
-            || commit.audit_head != receipt.commit_audit_head
-            || commit.sequence > state.journal.sequence()
-        {
-            return Err(SoftwareSignerErrorV1::RollbackOrSubstitution);
-        }
-        Ok(())
-    }
-    /// Report whether the recovered journal contains the exact Taira sign
-    /// request that the current binding would construct for this operation and
-    /// payload.  This is deliberately crate-internal and is used only to
-    /// recover authority-owned write-ahead records; it is not exposed through
-    /// either signer protocol.
-    #[cfg(feature = "taira-authority-bin")]
-    pub(super) fn taira_journal_has_exact_commit(
-        &self,
-        operation_id: [u8; 32],
-        payload: &[u8],
-    ) -> Result<bool, SoftwareSignerErrorV1> {
-        let state = self.lock_state()?;
-        state.ensure_available()?;
-        if state.binding.role != SoftwareSignerRoleV1::TairaAuthority {
-            return Err(SoftwareSignerErrorV1::Rejected);
-        }
-        let Some(commit) = state.sign_commits.get(&operation_id) else {
-            return Ok(false);
-        };
-        let mut request = SignRequestV1 {
-            binding_digest: state
-                .binding
-                .digest()
-                .map_err(|()| SoftwareSignerErrorV1::InvalidBinding)?,
-            operation_id,
-            expected_key_revision: state.binding.key_revision,
-            expected_policy_revision: state.binding.policy_revision,
-            expected_policy_digest: state.binding.policy_digest,
-            payload_digest: payload_digest(payload),
-            payload: payload.to_vec(),
-            request_digest: [0; 32],
-        };
-        request.request_digest =
-            sign_request_digest(&request).map_err(|()| SoftwareSignerErrorV1::Rejected)?;
-        Ok(commit.request_digest == request.request_digest
-            && commit.payload_digest == request.payload_digest
-            && commit.sequence <= state.journal.sequence())
-    }
-
-    #[cfg(feature = "taira-authority-bin")]
-    pub(super) fn taira_rotation_successor(
-        &self,
-        previous: &SoftwareSignerPublicBindingV1,
-        operation_id: [u8; 32],
-    ) -> Result<SoftwareSignerRotationSuccessorV1, SoftwareSignerErrorV1> {
-        let state = self.lock_state()?;
-        let journal_record = state
-            .journal
-            .rotation_record_bytes(operation_id)
-            .map_err(SoftwareSignerErrorV1::Journal)?;
-        let successor = verify_software_signer_rotation_successor(previous, &journal_record)?;
-        if successor.successor != state.binding || successor.operation_id != operation_id {
-            return Err(SoftwareSignerErrorV1::RollbackOrSubstitution);
-        }
-        Ok(successor)
-    }
-
-    #[cfg(feature = "taira-authority-bin")]
-    pub(super) fn taira_current_rotation_successor(
-        &self,
-        previous: &SoftwareSignerPublicBindingV1,
-    ) -> Result<SoftwareSignerRotationSuccessorV1, SoftwareSignerErrorV1> {
-        let state = self.lock_state()?;
-        let journal_record = state
-            .journal
-            .rotation_record_bytes_from_previous(previous)
-            .map_err(SoftwareSignerErrorV1::Journal)?;
-        let successor = verify_software_signer_rotation_successor(previous, &journal_record)?;
-        if successor.successor != state.binding {
-            return Err(SoftwareSignerErrorV1::RollbackOrSubstitution);
-        }
-        Ok(successor)
-    }
-
-    /// Return the authenticated journal predecessor for an already verified
-    /// Taira commit.  Role receipts use this to prove exact audit-head
-    /// succession rather than trusting a predecessor copied into JSON.
-    #[cfg(feature = "taira-authority-bin")]
-    pub(super) fn taira_journal_commit_predecessor(
-        &self,
-        operation_id: [u8; 32],
-        payload: &[u8],
-        receipt: &SoftwareSignerSignatureReceiptV1,
-    ) -> Result<[u8; 32], SoftwareSignerErrorV1> {
-        self.verify_taira_journal_commit(operation_id, payload, receipt)?;
-        let state = self.lock_state()?;
-        state
-            .sign_commits
-            .get(&operation_id)
-            .map(|commit| commit.predecessor_audit_head)
-            .ok_or(SoftwareSignerErrorV1::RollbackOrSubstitution)
     }
     #[expect(
         clippy::too_many_lines,
@@ -1027,241 +769,6 @@ fn valid_promotion_payload(payload: &[u8]) -> bool {
         && std::str::from_utf8(json).is_ok()
 }
 
-fn exact_public_soak_json_line(message: &[u8], domain: &[u8]) -> Option<norito::json::Value> {
-    let line = message.strip_prefix(domain)?;
-    let core = line.strip_suffix(b"\n")?;
-    if core.is_empty() || core.ends_with(b"\n") {
-        return None;
-    }
-    let value = norito::json::from_slice::<norito::json::Value>(core).ok()?;
-    (norito::json::to_vec(&value).ok().as_deref() == Some(core)).then_some(value)
-}
-
-fn exact_json_fields(object: &norito::json::Map, fields: &[&str]) -> bool {
-    object.len() == fields.len() && fields.iter().all(|field| object.contains_key(*field))
-}
-
-fn json_string<'a>(object: &'a norito::json::Map, field: &str) -> Option<&'a str> {
-    object.get(field).and_then(norito::json::Value::as_str)
-}
-
-fn valid_hex_digest(value: Option<&str>) -> bool {
-    let Some(value) = value else {
-        return false;
-    };
-    value.len() == 64
-        && value != "0000000000000000000000000000000000000000000000000000000000000000"
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        && hex::decode(value).is_ok_and(|decoded| decoded.len() == 32)
-}
-
-fn valid_public_soak_observation_message(
-    binding: &SoftwareSignerPublicBindingV1,
-    message: &[u8],
-) -> bool {
-    let Some(value) =
-        exact_public_soak_json_line(message, PUBLIC_SOAK_OBSERVATION_SIGNATURE_DOMAIN_V1)
-    else {
-        return false;
-    };
-    let Some(envelope) = value.as_object() else {
-        return false;
-    };
-    let expected_key_id = hex::encode(binding.public_key_digest);
-    if !exact_json_fields(
-        envelope,
-        &[
-            "authority_key_id",
-            "claims",
-            "schema",
-            "schema_version",
-            "signature_algorithm",
-        ],
-    ) || json_string(envelope, "schema")
-        != Some("iroha.taira.public-v2-24h-soak-authority-envelope.v1")
-        || envelope
-            .get("schema_version")
-            .and_then(norito::json::Value::as_u64)
-            != Some(1)
-        || json_string(envelope, "signature_algorithm") != Some("ed25519")
-        || json_string(envelope, "authority_key_id") != Some(expected_key_id.as_str())
-    {
-        return false;
-    }
-    let Some(claims) = envelope
-        .get("claims")
-        .and_then(norito::json::Value::as_object)
-    else {
-        return false;
-    };
-    if !exact_json_fields(
-        claims,
-        &[
-            "expires_at_unix_ms",
-            "issued_at_unix_ms",
-            "replay_id",
-            "replay_namespace",
-            "schema",
-            "subject_digest",
-        ],
-    ) || json_string(claims, "schema")
-        != Some("iroha.taira.public-v2-24h-soak-authority-claims.v1")
-        || json_string(claims, "replay_namespace") != Some(PUBLIC_SOAK_REPLAY_NAMESPACE_V1)
-        || !valid_hex_digest(json_string(claims, "subject_digest"))
-        || !valid_hex_digest(json_string(claims, "replay_id"))
-    {
-        return false;
-    }
-    let Some(issued) = claims
-        .get("issued_at_unix_ms")
-        .and_then(norito::json::Value::as_u64)
-    else {
-        return false;
-    };
-    let Some(expires) = claims
-        .get("expires_at_unix_ms")
-        .and_then(norito::json::Value::as_u64)
-    else {
-        return false;
-    };
-    issued != 0 && expires > issued && expires - issued <= 15 * 60 * 1_000
-}
-
-fn valid_public_soak_broker_message(
-    binding: &SoftwareSignerPublicBindingV1,
-    message: &[u8],
-) -> bool {
-    let Some(value) = exact_public_soak_json_line(message, PUBLIC_SOAK_BROKER_SIGNATURE_DOMAIN_V1)
-    else {
-        return false;
-    };
-    let Some(receipt) = value.as_object() else {
-        return false;
-    };
-    let expected_key_id = hex::encode(binding.public_key_digest);
-    if !exact_json_fields(
-        receipt,
-        &[
-            "broker_key_id",
-            "claims",
-            "schema",
-            "schema_version",
-            "signature_algorithm",
-        ],
-    ) || json_string(receipt, "schema")
-        != Some("iroha.taira.public-v2-24h-soak-durable-admission-receipt.v1")
-        || receipt
-            .get("schema_version")
-            .and_then(norito::json::Value::as_u64)
-            != Some(1)
-        || json_string(receipt, "signature_algorithm") != Some("ed25519")
-        || json_string(receipt, "broker_key_id") != Some(expected_key_id.as_str())
-    {
-        return false;
-    }
-    let Some(claims) = receipt
-        .get("claims")
-        .and_then(norito::json::Value::as_object)
-    else {
-        return false;
-    };
-    exact_json_fields(
-        claims,
-        &[
-            "admitted_at_unix_ms",
-            "authority_envelope_sha256",
-            "authority_key_id",
-            "decision",
-            "receipt_id",
-            "replay_id",
-            "replay_namespace",
-            "schema",
-            "subject_digest",
-        ],
-    ) && json_string(claims, "schema")
-        == Some("iroha.taira.public-v2-24h-soak-durable-admission-claims.v1")
-        && json_string(claims, "decision") == Some("admitted")
-        && json_string(claims, "replay_namespace") == Some(PUBLIC_SOAK_REPLAY_NAMESPACE_V1)
-        && valid_hex_digest(json_string(claims, "receipt_id"))
-        && valid_hex_digest(json_string(claims, "subject_digest"))
-        && valid_hex_digest(json_string(claims, "authority_envelope_sha256"))
-        && valid_hex_digest(json_string(claims, "authority_key_id"))
-        && valid_hex_digest(json_string(claims, "replay_id"))
-        && claims
-            .get("admitted_at_unix_ms")
-            .and_then(norito::json::Value::as_u64)
-            .is_some_and(|time| time != 0)
-}
-
-pub(super) fn taira_authority_signing_message(
-    binding: &SoftwareSignerPublicBindingV1,
-    payload: &[u8],
-) -> Option<Vec<u8>> {
-    let SoftwareSignerPurposeBindingV1::TairaAuthority { role } = &binding.purpose_binding else {
-        return None;
-    };
-    if let Some(json) = payload.strip_prefix(TAIRA_RELEASE_AUTHORITY_SIGNING_DOMAIN_V1) {
-        if json.is_empty() || json.first() != Some(&b'{') || json.last() != Some(&b'}') {
-            return None;
-        }
-        let value = norito::json::from_slice::<norito::json::Value>(json).ok()?;
-        if norito::json::to_vec(&value).ok().as_deref() != Some(json)
-            || value
-                .as_object()
-                .and_then(|object| object.get("role"))
-                .and_then(norito::json::Value::as_str)
-                != Some(role.as_str())
-        {
-            return None;
-        }
-        let object = value.as_object()?;
-        if let Some(purpose) = object.get("purpose").and_then(norito::json::Value::as_str) {
-            let expected_purpose = match role.as_str() {
-                "public-soak-observation" => "public-soak-observation-envelope-v1",
-                "public-soak-replay-admission" => "public-soak-durable-admission-v1",
-                _ => return None,
-            };
-            if purpose != expected_purpose
-                || object.len() != 3
-                || !object.contains_key("role")
-                || !object.contains_key("signing_message_hex")
-            {
-                return None;
-            }
-            let message = object
-                .get("signing_message_hex")
-                .and_then(norito::json::Value::as_str)?;
-            if message.len() % 2 != 0 || message.len() > 2 * SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1 {
-                return None;
-            }
-            let decoded = hex::decode(message).ok()?;
-            let valid = match role.as_str() {
-                "public-soak-observation" => {
-                    valid_public_soak_observation_message(binding, &decoded)
-                }
-                "public-soak-replay-admission" => {
-                    valid_public_soak_broker_message(binding, &decoded)
-                }
-                _ => false,
-            };
-            if !valid {
-                return None;
-            }
-            return Some(decoded);
-        }
-        return Some(payload.to_vec());
-    }
-    if role != "privacy-governance" {
-        return None;
-    }
-    let builder = TransactionBuilder::decode_payload(payload).ok()?;
-    if builder.payload().authority != AccountId::new(binding.public_key.clone()) {
-        return None;
-    }
-    Some(builder.payload_hash_bytes().to_vec())
-}
 pub(super) fn native_payload_matches_role(
     role: SoftwareSignerRoleV1,
     payload: &TransactionPayload,
@@ -1333,8 +840,7 @@ pub(super) fn native_payload_matches_role(
         | SoftwareSignerRoleV1::BillingStatement
         | SoftwareSignerRoleV1::EvidenceViewer
         | SoftwareSignerRoleV1::StreamToken
-        | SoftwareSignerRoleV1::PopCredentials
-        | SoftwareSignerRoleV1::TairaAuthority => false,
+        | SoftwareSignerRoleV1::PopCredentials => false,
     }
 }
 fn binding_from_recovered(
@@ -1342,25 +848,6 @@ fn binding_from_recovered(
 ) -> Result<SoftwareSignerPublicBindingV1, SoftwareSignerErrorV1> {
     binding_from_aad(recovered.active_key.clone(), recovered.audit_genesis_digest)
 }
-#[cfg(feature = "taira-authority-bin")]
-pub(super) fn verify_software_signer_rotation_successor(
-    previous: &SoftwareSignerPublicBindingV1,
-    journal_record: &[u8],
-) -> Result<SoftwareSignerRotationSuccessorV1, SoftwareSignerErrorV1> {
-    let verified = verify_rotation_successor_record(journal_record, previous)
-        .map_err(SoftwareSignerErrorV1::Journal)?;
-    let successor = binding_from_aad(verified.new_key, previous.audit_genesis_digest)?;
-    Ok(SoftwareSignerRotationSuccessorV1 {
-        operation_id: verified.operation_id,
-        request_digest: verified.request_digest,
-        sequence: verified.sequence,
-        predecessor_audit_head: verified.predecessor_audit_head,
-        audit_head: verified.audit_head,
-        successor,
-        journal_record: journal_record.to_vec(),
-    })
-}
-
 fn binding_from_aad(
     aad: SoftwareSignerKeyEnvelopeAadV1,
     audit_genesis_digest: [u8; 32],

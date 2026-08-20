@@ -1246,7 +1246,7 @@ let discovery_was_outstanding = activated.with_runner_runtime(
             "adapter status publication latch closed surface",
             adapter_source,
             "status_publication_enabled",
-            7,
+            8,
         )
         require_token_count(
             adapter_path,
@@ -1302,31 +1302,28 @@ if publish_initial_status {
         ready_validate_context = (
             ("impl", "PreparedReadyDurableValidatePersistedSign", "<", "'", "_", ">"),
         )
-        ready_validate_candidates = [
+        ready_validate_publications = tuple(
             item
-            for item in rust_items(
-                adapter_source, "install_registry_and_commit_adapter"
-            )
+            for item in rust_items(adapter_source, "install_registry_and_commit_adapter")
             if item.brace_context == ready_validate_context
-        ]
-        if len(ready_validate_candidates) != 1:
+        )
+        if len(ready_validate_publications) != 1:
             errors.append(
-                f"{adapter_path}: require exactly one real Rust/Verus function item named "
-                "PreparedReadyDurableValidatePersistedSign::"
-                "install_registry_and_commit_adapter; found "
-                f"{len(ready_validate_candidates)}"
+                f"{adapter_path}: require exactly one Ready-Validate direct status "
+                "publication; found "
+                f"{len(ready_validate_publications)}"
             )
             ready_validate_publication = None
         else:
-            ready_validate_publication = ready_validate_candidates[0]
-            _require_rust_item_context(
-                adapter_path,
-                ready_validate_publication,
-                ready_validate_context,
-                "Ready-Validate direct status publication",
-                errors,
-                expected_attributes=("#[inline(never)]",),
-            )
+            ready_validate_publication = ready_validate_publications[0]
+        _require_rust_item_context(
+            adapter_path,
+            ready_validate_publication,
+            ready_validate_context,
+            "Ready-Validate direct status publication",
+            errors,
+            expected_attributes=("#[inline(never)]",),
+        )
         _require_rust_token_sequence(
             adapter_path,
             ready_validate_publication,
@@ -1622,64 +1619,23 @@ Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
             '"a non-Completion runner cursor cannot claim or mutate a recovered Sign owner"',
             1,
         )
-        certified_prepare = _require_rust_item(
+        certified = region(
             effects_path,
             effects_source,
-            "prepare_lifecycle_certified_fetch_completion",
-            errors,
-        )
-        _require_rust_item_context(
-            effects_path,
-            certified_prepare,
-            ((
-                "impl", "<", "R", ":", "EffectRuntime", ">",
-                "V2EffectExecutor", "<", "R", ">",
-            ),),
-            "certified Fetch executor preparation",
-            errors,
+            "accept_certified_body_response",
+            "pub(crate) fn accept_certified_body_response<",
+            "\n    /// Accept a durable application completion",
         )
         require_order(
             effects_path,
-            "certified Fetch executor preparation",
-            certified_prepare.source if certified_prepare is not None else "",
+            "accept_certified_body_response",
+            certified,
             (
-                "self.validate_lifecycle_ingress_selector_authority()",
-                "candidate.matches_authenticated_response(",
-                "self.pending_fetches\n            .get(&work_id)",
-                "current_effect_producer(&effect)",
-                "self.body_pipeline_owners",
-                "preflight_authenticated_response_claim(authenticated)",
-                "self.plan_certified_fetch_retirement(",
-                "Ok(PreparedLifecycleCertifiedFetchCompletion",
-            ),
-        )
-        certified_commit = _require_rust_item(
-            effects_path,
-            effects_source,
-            "commit_lifecycle_certified_fetch_completion",
-            errors,
-        )
-        _require_rust_item_context(
-            effects_path,
-            certified_commit,
-            ((
-                "impl", "<", "R", ":", "EffectRuntime", ">",
-                "V2EffectExecutor", "<", "R", ">",
-            ),),
-            "certified Fetch executor owner commit",
-            errors,
-        )
-        require_order(
-            effects_path,
-            "certified Fetch executor owner commit",
-            certified_commit.source if certified_commit is not None else "",
-            (
-                "preflight_authenticated_response_claim(authenticated)",
-                "prepare_authenticated_response_claim(authenticated)",
-                "claim.commit()",
-                "self.pending_fetches\n            .remove(&work_id)",
-                "self.commit_certified_fetch_retirement(prepared.certified)",
-                "self.body_pipeline_owners\n            .remove(&prepared.body_pipeline_key)",
+                "self.outstanding_requests.authenticate_response(",
+                "ReadyBody::derive(",
+                "self.plan_fetch_completion(",
+                "services.complete_certified_body_fetch(",
+                "self.commit_fetch_completion(plan)",
             ),
         )
         consume = region(
@@ -1698,46 +1654,6 @@ Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
                 "AdapterEffect::StoreBody",
                 "AdapterEffect::ValidateBody",
                 "AdapterEffect::Apply",
-            ),
-        )
-    lifecycle_selector_path, lifecycle_selector_source = load(
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs"
-    )
-    if lifecycle_selector_source:
-        certified_completion = _require_qualified_rust_item(
-            lifecycle_selector_path,
-            lifecycle_selector_source,
-            "LifecycleCoordinator",
-            "complete_certified_fetch_body_persistence",
-            errors,
-            "certified Fetch durable publication and exact-owner commit",
-            expected_attributes=(
-                "#[allow(clippy::too_many_arguments, clippy::result_large_err)]",
-            ),
-        )
-        require_order(
-            lifecycle_selector_path,
-            "certified Fetch durable publication and exact-owner commit",
-            certified_completion.source if certified_completion is not None else "",
-            (
-                "executor.prepare_lifecycle_ingress_selector(",
-                "prepare_selected_certified_fetch_completion(",
-                "bind_durable_body_receipt(receipt)",
-                "self.prepare_certified_fetch_ready_projection(",
-                "executor.prepare_lifecycle_certified_fetch_completion(",
-                "services.prepare_certified_body_fetch_owner_removal(",
-                "durable_registry.matches_selected_response(",
-                "selector.into_exact_certified_fetch_dequeue(",
-                "output_guard.begin_fail_stop_operation()",
-                "ready_mutation.persist_exact_staged_successor()",
-                "exact_dequeue.commit(ingress)",
-                "durable_registry.commit_after_exact_dequeue(dequeued)",
-                "ready.commit()",
-                "executor.commit_lifecycle_certified_fetch_completion(",
-                "service_prepared.commit(operation.permit())",
-                "work_ack.commit()",
-                "ingress.mark_leader_wire_durable_body_terminal(",
-                "operation.complete()",
             ),
         )
     release_path = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"

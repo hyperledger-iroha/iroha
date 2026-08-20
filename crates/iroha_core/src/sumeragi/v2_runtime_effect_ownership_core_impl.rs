@@ -1,44 +1,77 @@
-impl RuntimeEffectOwnership {
-    fn inherited(owner: RuntimeLifecycleOwner) -> Self {
+impl RuntimeEffectOwnerAssignment {
+    fn inherit(owner: RuntimeLifecycleOwner) -> Self {
         Self {
             owner,
             causality: RuntimeEffectCausality::Inherit,
-            binding: None,
-            producer: None,
-            remote_proposal_fetch_replay: None,
         }
     }
-    fn fresh(owner: RuntimeLifecycleOwner, kind: RuntimeFreshRootKind) -> Self {
+
+    fn fresh_root(owner: RuntimeLifecycleOwner, kind: RuntimeFreshRootKind) -> Self {
         Self {
             owner,
             causality: RuntimeEffectCausality::Fresh(kind),
-            binding: None,
-            producer: None,
-            remote_proposal_fetch_replay: None,
         }
     }
-    fn validate_exact(&self) -> bool {
-        self.owner.validate_exact()
-            && match (self.binding.as_ref(), self.producer.as_ref()) {
-                (None, None) => true,
-                (Some(binding), Some(producer)) => {
-                    binding.validate_exact(&self.owner, self.causality)
-                        && producer.validate_exact(&self.owner, binding)
-                }
-                _ => false,
-            }
+
+    #[cfg(test)]
+    pub(crate) fn fresh_for_test(tag: EventTag, lifecycle_ordinal: u128) -> Self {
+        Self::fresh_for_test_with_semantic_identity(tag, lifecycle_ordinal, b"test-runtime-effect")
     }
-    fn validate_bound_exact(&self) -> bool {
-        self.validate_exact() && self.binding.is_some()
+
+    #[cfg(test)]
+    pub(crate) fn fresh_for_test_with_semantic_identity(
+        tag: EventTag,
+        lifecycle_ordinal: u128,
+        semantic_identity: &[u8],
+    ) -> Self {
+        let kind = RuntimeFreshRootKind::StartupRecovery;
+        let origin = RuntimeCandidateCausalOrigin::mint_fresh_root(
+            tag,
+            CommandClass::Progress,
+            kind,
+            semantic_identity,
+        );
+        Self::fresh_root(
+            RuntimeLifecycleOwner::new(origin, lifecycle_ordinal)
+                .expect("fresh test owner binds its first lifecycle ordinal"),
+            kind,
+        )
+    }
+}
+
+impl RuntimeEffectOwnership {
+    /// Select a fresh test lifecycle for atomic batch binding.
+    #[cfg(test)]
+    pub(crate) fn fresh_for_test(
+        tag: EventTag,
+        lifecycle_ordinal: u128,
+    ) -> RuntimeEffectOwnerAssignment {
+        RuntimeEffectOwnerAssignment::fresh_for_test(tag, lifecycle_ordinal)
+    }
+
+    /// Select a semantically named fresh test lifecycle for atomic batch binding.
+    #[cfg(test)]
+    pub(crate) fn fresh_for_test_with_semantic_identity(
+        tag: EventTag,
+        lifecycle_ordinal: u128,
+        semantic_identity: &[u8],
+    ) -> RuntimeEffectOwnerAssignment {
+        RuntimeEffectOwnerAssignment::fresh_for_test_with_semantic_identity(
+            tag,
+            lifecycle_ordinal,
+            semantic_identity,
+        )
+    }
+
+    fn validate_exact(&self) -> bool {
+        self.owner.validate_exact() && self.binding.validate_exact(&self.owner, self.causality)
     }
     /// Return whether this non-forgeable sidecar names one exact production
     /// adapter effect, including all of the effect's concrete coordinates.
     pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {
-        let Some(binding) = self.binding.as_ref() else {
-            return false;
-        };
+        let binding = &self.binding;
         let effect_kind = production_adapter_effect_kind(effect);
-        self.validate_bound_exact()
+        self.validate_exact()
             && binding.effect_kind == effect_kind
             && binding.effect_identity
                 == runtime_effect_identity_hash(
@@ -46,18 +79,40 @@ impl RuntimeEffectOwnership {
                     &production_adapter_effect_semantic_identity(effect),
                 )
     }
-    /// Seal the exact ordinal-free producer which emitted this concrete effect.
-    pub(crate) fn current_effect_producer(
+    /// Mint the ordinal-free lifecycle-admission binding for this exact effect.
+    ///
+    /// The operation fails closed when the supplied effect differs from the
+    /// mandatory binding; there is no unbound or best-effort conversion path.
+    pub(crate) fn exact_pending_adapter_effect_binding(
         &self,
         effect: &AdapterEffect,
-    ) -> Option<CurrentRuntimeEffectProducer> {
+    ) -> Result<PendingRuntimeEffectBinding, EnqueueError> {
         if !self.exactly_binds_adapter_effect(effect) {
-            return None;
+            return Err(EnqueueError::FailClosed);
         }
-        self.producer
-            .as_ref()
-            .cloned()
-            .map(|binding| CurrentRuntimeEffectProducer { binding })
+        let binding = &self.binding;
+        let causal_lifecycle_key = self.owner.causal_origin.lifecycle_key;
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &causal_lifecycle_key,
+            binding.effect_kind,
+            &binding.effect_identity,
+            binding.candidate_kind,
+            binding.candidate_statement,
+            binding.candidate_semantic_identity.as_ref(),
+        );
+        let pending = PendingRuntimeEffectBinding {
+            causal_lifecycle_key,
+            effect_kind: binding.effect_kind,
+            effect_identity: binding.effect_identity,
+            candidate_kind: binding.candidate_kind,
+            candidate_statement: binding.candidate_statement,
+            candidate_semantic_identity: binding.candidate_semantic_identity,
+            projection_hash,
+        };
+        pending
+            .validate_exact(effect)
+            .then_some(pending)
+            .ok_or(EnqueueError::FailClosed)
     }
     /// Clone the opaque authenticated-Proposal replay envelope only for its exact Fetch.
     pub(in crate::sumeragi) fn exact_remote_proposal_fetch_replay(
@@ -65,7 +120,7 @@ impl RuntimeEffectOwnership {
         effect: &AdapterEffect,
     ) -> Option<RemoteProposalFetchReplayEvidenceV1> {
         let replay = self.remote_proposal_fetch_replay.as_ref()?;
-        let pending = self.current_effect_producer(effect)?.mint_pending_binding();
+        let pending = self.exact_pending_adapter_effect_binding(effect).ok()?;
         replay
             .exactly_matches_fetch_pending(effect, &pending)
             .then(|| replay.clone())
@@ -105,10 +160,9 @@ impl RuntimeEffectOwnership {
         else {
             return false;
         };
-        let Some(producer) = self.current_effect_producer(effect) else {
+        let Ok(pending) = self.exact_pending_adapter_effect_binding(effect) else {
             return false;
         };
-        let pending = producer.mint_pending_binding();
         let Some(replay) = origin.bind_exact_fetch(effect, pending) else {
             return false;
         };
@@ -152,39 +206,6 @@ impl RuntimeEffectOwnership {
                     round,
                     subject,
                 },
-                BodyPipelineCompletionEvidence::ValidationSucceeded {
-                    round: successor_round,
-                    subject: successor_subject,
-                    receipt,
-                },
-            ) => {
-                *predecessor_tag == tag
-                    && *round == *successor_round
-                    && *subject == *successor_subject
-                    && receipt.durable().round() == *round
-                    && receipt.durable().subject() == *subject
-            }
-            (
-                AdapterEffect::ValidateBody {
-                    tag: predecessor_tag,
-                    round,
-                    subject,
-                },
-                BodyPipelineCompletionEvidence::ValidationFailed {
-                    round: successor_round,
-                    subject: successor_subject,
-                },
-            ) => {
-                *predecessor_tag == tag
-                    && *round == *successor_round
-                    && *subject == *successor_subject
-            }
-            (
-                AdapterEffect::ValidateBody {
-                    tag: predecessor_tag,
-                    round,
-                    subject,
-                },
                 BodyPipelineCompletionEvidence::LocalProposalReady {
                     manifest,
                     durable_receipt,
@@ -203,9 +224,9 @@ impl RuntimeEffectOwnership {
         }
     }
     #[allow(clippy::too_many_arguments)]
-    fn bind_runtime_effect(
-        mut self,
-        parent: Option<&RuntimeLifecycleOwner>,
+    fn new_bound(
+        owner: RuntimeLifecycleOwner,
+        causality: RuntimeEffectCausality,
         effect_kind: u8,
         effect_semantic_identity: &[u8],
         candidate: Option<&RuntimeEffectCandidateSemantic>,
@@ -214,12 +235,10 @@ impl RuntimeEffectOwnership {
         candidate_position: u8,
         candidate_count: u8,
     ) -> Result<Self, EnqueueError> {
-        if self.binding.is_some() || self.producer.is_some() {
-            return Err(EnqueueError::FailClosed);
-        }
+        let parent = matches!(causality, RuntimeEffectCausality::Inherit).then_some(&owner);
         let binding = RuntimeEffectCandidateBinding::new(
-            &self.owner,
-            self.causality,
+            &owner,
+            causality,
             parent,
             effect_kind,
             effect_semantic_identity,
@@ -229,33 +248,32 @@ impl RuntimeEffectOwnership {
             candidate_position,
             candidate_count,
         )?;
-        let producer = RuntimeEffectProducerBinding::new(&self.owner, &binding)?;
-        self.binding = Some(binding);
-        self.producer = Some(producer);
-        self.validate_bound_exact()
-            .then_some(self)
+        let ownership = Self {
+            owner,
+            causality,
+            binding,
+            remote_proposal_fetch_replay: None,
+        };
+        ownership
+            .validate_exact()
+            .then_some(ownership)
             .ok_or(EnqueueError::FailClosed)
     }
-    fn binding(&self) -> Option<&RuntimeEffectCandidateBinding> {
-        self.binding.as_ref()
+
+    fn binding(&self) -> &RuntimeEffectCandidateBinding {
+        &self.binding
     }
     #[cfg(test)]
     pub(crate) fn candidate_identity(&self) -> Option<iroha_crypto::Hash> {
-        self.binding
-            .as_ref()
-            .and_then(|binding| binding.candidate_identity)
+        self.binding.candidate_identity
     }
     /// Route-neutral semantic lifecycle used by the single-owner admission gate.
     pub(crate) fn candidate_semantic_identity(&self) -> Option<iroha_crypto::Hash> {
-        self.binding
-            .as_ref()
-            .and_then(|binding| binding.candidate_semantic_identity)
+        self.binding.candidate_semantic_identity
     }
     /// Typed semantic statement retained through causal completion handoffs.
     fn candidate_semantic_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
-        self.binding
-            .as_ref()
-            .and_then(|binding| binding.candidate_statement)
+        self.binding.candidate_statement
     }
     /// Return whether this exact effect binding carries one durable Decision's
     /// complete Commit authority statement.
@@ -266,7 +284,7 @@ impl RuntimeEffectOwnership {
         subject: wire::BlockSubject,
         execution_commitment: wire::ExecutionCommitment,
     ) -> bool {
-        self.validate_bound_exact()
+        self.validate_exact()
             && self.candidate_semantic_statement()
                 == Some(RuntimeCandidateSemanticStatement::new(
                     decision_round,
@@ -277,10 +295,8 @@ impl RuntimeEffectOwnership {
                 ))
     }
     fn binds_exact_fetch_body_manifest(&self, manifest: &wire::PayloadManifest) -> bool {
-        let Some(binding) = self.binding.as_ref() else {
-            return false;
-        };
-        self.validate_bound_exact()
+        let binding = &self.binding;
+        self.validate_exact()
             && binding.effect_kind == RUNTIME_EFFECT_KIND_FETCH_BODY
             && binding.candidate_kind == RUNTIME_CANDIDATE_KIND_FETCH_BODY
             && binding
@@ -291,9 +307,7 @@ impl RuntimeEffectOwnership {
         &self,
         completion: &BodyPipelineCompletionEvidence,
     ) -> bool {
-        let Some(binding) = self.binding.as_ref() else {
-            return false;
-        };
+        let binding = &self.binding;
         let (effect_kind, candidate_kind, round, subject) = match completion {
             BodyPipelineCompletionEvidence::LocalProposalReady { manifest, .. } => (
                 RUNTIME_EFFECT_KIND_VALIDATE_BODY,
@@ -313,15 +327,8 @@ impl RuntimeEffectOwnership {
                 *round,
                 *subject,
             ),
-            BodyPipelineCompletionEvidence::ValidationSucceeded { round, subject, .. }
-            | BodyPipelineCompletionEvidence::ValidationFailed { round, subject } => (
-                RUNTIME_EFFECT_KIND_VALIDATE_BODY,
-                RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
-                *round,
-                *subject,
-            ),
         };
-        self.validate_bound_exact()
+        self.validate_exact()
             && binding.effect_kind == effect_kind
             && binding.candidate_kind == candidate_kind
             && binding.candidate_statement.is_some_and(|statement| {
@@ -335,9 +342,7 @@ impl RuntimeEffectOwnership {
                     self.binds_exact_fetch_body_manifest(manifest)
                 }
                 BodyPipelineCompletionEvidence::LocalProposalReady { .. }
-                | BodyPipelineCompletionEvidence::BodyStored { .. }
-                | BodyPipelineCompletionEvidence::ValidationSucceeded { .. }
-                | BodyPipelineCompletionEvidence::ValidationFailed { .. } => true,
+                | BodyPipelineCompletionEvidence::BodyStored { .. } => true,
             }
     }
     /// Immutable owner carried into an asynchronous task or completion.
@@ -348,29 +353,6 @@ impl RuntimeEffectOwnership {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn causality(&self) -> RuntimeEffectCausality {
         self.causality
-    }
-    #[cfg(test)]
-    pub(crate) fn fresh_for_test(tag: EventTag, lifecycle_ordinal: u128) -> Self {
-        Self::fresh_for_test_with_semantic_identity(tag, lifecycle_ordinal, b"test-runtime-effect")
-    }
-    #[cfg(test)]
-    pub(crate) fn fresh_for_test_with_semantic_identity(
-        tag: EventTag,
-        lifecycle_ordinal: u128,
-        semantic_identity: &[u8],
-    ) -> Self {
-        let kind = RuntimeFreshRootKind::StartupRecovery;
-        let origin = RuntimeCandidateCausalOrigin::mint_fresh_root(
-            tag,
-            CommandClass::Progress,
-            kind,
-            semantic_identity,
-        );
-        Self::fresh(
-            RuntimeLifecycleOwner::new(origin, lifecycle_ordinal)
-                .expect("fresh test owner binds its first lifecycle ordinal"),
-            kind,
-        )
     }
 }
 

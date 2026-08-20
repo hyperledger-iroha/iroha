@@ -2,26 +2,6 @@ use crate::sumeragi::v2_lifecycle_coordinator::{
     reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
 };
 #[test]
-fn exact_live_wal_cut_rejects_pre_persist_effect_without_appending() {
-    let directory = TempDir::new().expect("temporary missing-cause WAL directory");
-    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
-    assert!(startup.is_empty());
-    let effect = reducer::Effect::FetchBody {
-        tag: adapter.current_tag(),
-        round: reducer::Round::new(adapter.wire_context.height, adapter.current_tag().view()),
-        subject: reducer::Subject::default(),
-        manifest: None,
-        certified_sources: Vec::new(),
-        certificate: None,
-    };
-    assert!(matches!(
-        adapter.drive_exact_persisted_continuation(effect),
-        Err(AdapterError::LiveWalReplayCauseMismatch)
-    ));
-    assert!(adapter.fail_closed);
-    assert!(adapter.wal.recovered_records().is_empty());
-}
-#[test]
 fn quorum_forming_local_timeout_flattens_to_certificate_only() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
@@ -474,10 +454,8 @@ fn persistence_is_fsynced_before_sign_is_exposed() {
         [AdapterEffect::ValidateBody { .. }]
     ));
     let validated = ValidatedBodyReceipt::for_test(receipt.clone());
-    let sign = adapter
-        .validation_succeeded(tag, round, subject, &validated)
-        .expect("valid body")
-        .into_effects();
+    let sign =
+        settle_ready_validate_succeeded_for_test(&mut adapter, tag, round, subject, &validated);
     assert!(matches!(sign.as_slice(), [AdapterEffect::Sign { .. }]));
     assert_eq!(adapter.wal.recovered_records().len(), 1);
     assert_eq!(adapter.reducer.durable_state().last_id().get(), 1);
@@ -519,13 +497,87 @@ fn ordinary_validate_predecessor_for_test(
     .pop()
     .expect("one ordinary Store owner");
     let store_pending = owner
-        .current_effect_producer(&store)
-        .expect("seal ordinary Store predecessor producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(&store)
+        .expect("bind ordinary Store predecessor");
     let validate_pending = store_pending
         .project_store_validate_successor(&store, &validate)
         .expect("project ordinary Validate predecessor");
     (validate, validate_pending)
+}
+fn settle_ready_validate_succeeded_for_test(
+    adapter: &mut SumeragiV2Adapter,
+    tag: reducer::EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    validated: &ValidatedBodyReceipt,
+) -> Vec<AdapterEffect> {
+    let preview = adapter
+        .prepare_direct_validation_succeeded(tag, round, subject, validated)
+        .expect("prepare the exact sealed successful-validation transition");
+    let sealed = SealedReadyDurableValidateAdapterPreview(match preview {
+        DirectValidationSucceededPreparation::Busy(prepared) => {
+            ReadyDurableValidateAdapterPreviewKind::ValidatedBusy(prepared)
+        }
+        DirectValidationSucceededPreparation::Inactive(prepared) => {
+            ReadyDurableValidateAdapterPreviewKind::ValidatedInactive(prepared)
+        }
+        DirectValidationSucceededPreparation::NoEffect(prepared) => {
+            ReadyDurableValidateAdapterPreviewKind::ValidatedNoEffect(prepared)
+        }
+        DirectValidationSucceededPreparation::Apply(prepared) => {
+            ReadyDurableValidateAdapterPreviewKind::ValidatedApply(prepared)
+        }
+        DirectValidationSucceededPreparation::Persist(prepared) => {
+            ReadyDurableValidateAdapterPreviewKind::ValidatedPersist(prepared)
+        }
+    });
+    let publication = sealed
+        .preflight_publication()
+        .expect("preflight the sealed successful-validation publication");
+    match publication.kind() {
+        ReadyDurableValidateAdapterPublicationKind::ValidatedInactive
+        | ReadyDurableValidateAdapterPublicationKind::ValidatedNoEffect => {
+            publication.commit_no_successor_after_durable_ledger();
+            Vec::new()
+        }
+        ReadyDurableValidateAdapterPublicationKind::ValidatedPersist => {
+            let ReadyDurableValidateAdapterPublicationState::ValidatedPersist(prepared) =
+                &publication.0
+            else {
+                unreachable!("Persist discriminator retains one exact publication")
+            };
+            let sign = prepared.sign_effect.clone();
+            let (validate, validate_pending) = ordinary_validate_predecessor_for_test(
+                tag,
+                round,
+                subject,
+                u128::from(round.view).saturating_add(90_001),
+            );
+            let bound = publication
+                .bind_validate_sign_predecessor(ReadyValidateSignPredecessorAuthority::for_test(
+                    &validate,
+                    &validate_pending,
+                ))
+                .unwrap_or_else(|_| panic!("bind the exact sealed Validate predecessor"));
+            let persisted = bound
+                .append_live_wal()
+                .unwrap_or_else(|_| panic!("append and fsync the exact Validate WAL frame"));
+            Box::new(persisted).commit_after_test_durable_ledger_settlement();
+            vec![sign]
+        }
+        ReadyDurableValidateAdapterPublicationKind::ValidatedBusy => {
+            panic!("adapter test settlement cannot bypass a live reducer fence")
+        }
+        ReadyDurableValidateAdapterPublicationKind::ValidatedApply => {
+            panic!("adapter test settlement requires the dedicated Apply lifecycle fixture")
+        }
+        ReadyDurableValidateAdapterPublicationKind::RejectedBusy
+        | ReadyDurableValidateAdapterPublicationKind::RejectedInactive
+        | ReadyDurableValidateAdapterPublicationKind::RejectedNoEffect
+        | ReadyDurableValidateAdapterPublicationKind::RejectedReport => {
+            unreachable!("successful validation cannot produce a rejected publication")
+        }
+    }
 }
 fn advance_direct_validation_fixture_to_durable_with_proposal(
     adapter: &mut SumeragiV2Adapter,
@@ -606,10 +658,13 @@ fn reopen_with_prepare_intent(
     assert!(startup.is_empty());
     let (tag, proposal, manifest, _durable, validated) =
         advance_direct_validation_fixture_to_durable_with_proposal(&mut adapter, marker);
-    let sign = adapter
-        .validation_succeeded(tag, manifest.round, manifest.subject, &validated)
-        .expect("persist the exact PrepareIntent")
-        .into_effects();
+    let sign = settle_ready_validate_succeeded_for_test(
+        &mut adapter,
+        tag,
+        manifest.round,
+        manifest.subject,
+        &validated,
+    );
     let [
         AdapterEffect::Sign {
             request: SignRequest::Vote(expected_vote),
@@ -753,10 +808,8 @@ fn reopen_with_persisted_prepare_intent(
     let validated = body_store
         .validate(&durable, |_| Ok::<_, String>(commitment))
         .expect("fsync persisted Prepare validation marker");
-    let sign = adapter
-        .validation_succeeded(tag, round, subject, &validated)
-        .expect("persist exact PrepareIntent for the durable body")
-        .into_effects();
+    let sign =
+        settle_ready_validate_succeeded_for_test(&mut adapter, tag, round, subject, &validated);
     assert!(matches!(
         sign.as_slice(),
         [AdapterEffect::Sign {

@@ -678,6 +678,9 @@ fn standalone_validate_cold_census_rejects_a_foreign_owner_root() {
         StandaloneValidateOriginFixture::LocalBody,
     );
     let foreign_owner = OwnerId::new(record.owner().causal_root(), 12);
+    let continuation = record
+        .continuation()
+        .expect("standalone Validate continuation");
     let foreign = LifecycleLedgerRecordV1::new(
         record.key().expect("standalone Validate key"),
         foreign_owner,
@@ -691,10 +694,8 @@ fn standalone_validate_cold_census_rejects_a_foreign_owner_root() {
         record
             .durable_payload()
             .expect("standalone Validate payload"),
-        record.replay_authority.clone(),
-        record
-            .continuation()
-            .expect("standalone Validate continuation"),
+        record.replay_authority,
+        continuation,
     )
     .expect("construct structurally valid foreign-owner Validate row");
     let owner_root = unrelated_live_record(
@@ -910,8 +911,7 @@ fn fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast() {
     .pop()
     .expect("one unrelated live Broadcast owner");
     let pending = ownership
-        .current_effect_producer(&broadcast)
-        .map(|producer| producer.mint_pending_binding())
+        .exact_pending_adapter_effect_binding(&broadcast)
         .expect("mint unrelated live Broadcast binding");
     let prepared = owner
         .coordinator

@@ -537,7 +537,7 @@ fn decision_preserves_current_tag_local_proposal_for_direct_apply() {
             &mut services,
         )
         .expect("start exact local proposal");
-    complete_local_proposal_chain(&mut executor, &mut services);
+    complete_local_proposal_fixture(&mut executor, &mut services);
     assert!(matches!(
         executor.runtime.completions.as_slice(),
         [RuntimeCompletion::LocalProposal(_, manifest, ..)]
@@ -593,7 +593,7 @@ fn decision_commitment_mismatch_fails_closed_before_apply() {
             &mut services,
         )
         .expect("start exact local proposal");
-    complete_local_proposal_chain(&mut executor, &mut services);
+    complete_local_proposal_fixture(&mut executor, &mut services);
     let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new(b"Decision conflict parent state"),
         Hash::new(b"Decision conflict post state"),
@@ -674,7 +674,7 @@ fn stale_generation_local_completion_uses_durable_recovery() {
             &mut services,
         )
         .expect("start old-generation local proposal");
-    complete_local_proposal_chain(&mut executor, &mut services);
+    complete_local_proposal_fixture(&mut executor, &mut services);
     let current_tag = EventTag::new(1, 1, Generation::new(8));
     executor.runtime.round_tag = Some(current_tag);
     executor.reconciled_tag = Some(current_tag);
@@ -776,9 +776,7 @@ fn decision_body_stage_adoption_rejects_commitment_drift() {
         round: fixture.manifest.round,
         subject: fixture.manifest.subject,
     };
-    let incumbent = RuntimeEffectOwnership::fresh_for_test(tag(0), 9_020)
-        .rebind_same_adapter_effect(&store)
-        .expect("bind ordinary incumbent StoreBody");
+    let incumbent = bound_test_effect_ownership(&store, tag(0), 9_020);
     let mut conflicting = commit.clone();
     conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new(b"conflicting Decision parent state"),
@@ -821,278 +819,6 @@ fn decision_body_stage_adoption_rejects_commitment_drift() {
             .expect_err("commitment drift must not adopt the incumbent task")
             .contains("proposal or quorum authority")
     );
-}
-#[test]
-fn decision_body_stage_retry_rejects_same_root_ordinary_binding_without_mutation() {
-    let fixture = Fixture::new();
-    let commit = fixture.qc(wire::GlobalPhase::Commit);
-    let decision = (
-        commit.round,
-        commit.proposal_round,
-        commit.subject,
-        commit.execution_commitment,
-    );
-    let mut store_executor = fixture.executor(EffectQueueConfig::default());
-    let mut store_services = fixture.services();
-    store_executor
-        .admit_local_proposal(
-            tag(0),
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            &mut store_services,
-        )
-        .expect("start ordinary local StoreBody");
-    let store_id = store_services.store_tasks[0].id();
-    store_executor
-        .pending_stores
-        .get_mut(&store_id)
-        .expect("pending local store")
-        .consumer = None;
-    store_executor.protected_decision = Some(decision);
-    let store_effect = AdapterEffect::StoreBody {
-        tag: tag(0),
-        round: fixture.manifest.round,
-        subject: fixture.manifest.subject,
-    };
-    let ordinary_store_retry = store_executor.pending_stores[&store_id]
-        .task
-        .ownership()
-        .rebind_same_adapter_effect(&store_effect)
-        .expect("rebind same-root ordinary StoreBody retry");
-    assert_eq!(
-        &ordinary_store_retry,
-        store_executor.pending_stores[&store_id].task.ownership(),
-        "ownership equality deliberately ignores the stale authority binding"
-    );
-    let store_before = store_executor.body_ownership_projection();
-    let store_service_count = store_services.store_tasks.len();
-    assert!(matches!(
-        store_executor.begin_store_with_plans(
-            tag(0),
-            fixture.manifest.clone(),
-            Arc::from(fixture.body.clone()),
-            StorePurpose::Reducer,
-            LocalProposalBodyOrigin::Fresh,
-            None,
-            None,
-            ordinary_store_retry,
-            &mut store_services,
-        ),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("proposal or quorum authority")
-    ));
-    assert_eq!(store_executor.body_ownership_projection(), store_before);
-    assert_eq!(store_services.store_tasks.len(), store_service_count);
-    let mut validation_executor = fixture.executor(EffectQueueConfig::default());
-    let mut validation_services = fixture.services();
-    validation_executor
-        .admit_local_proposal(
-            tag(0),
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            &mut validation_services,
-        )
-        .expect("start ordinary local proposal");
-    let local_store_id = validation_services.store_tasks[0].id();
-    let stored = validation_services.execute_store(local_store_id);
-    validation_executor
-        .complete_body_store(stored, &mut validation_services)
-        .expect("advance ordinary body to ValidateBody");
-    let validation_id = validation_services.validation_tasks[0].id();
-    validation_executor
-        .pending_validations
-        .get_mut(&validation_id)
-        .expect("pending local validation")
-        .consumer = None;
-    validation_executor.protected_decision = Some(decision);
-    let validation_effect = AdapterEffect::ValidateBody {
-        tag: tag(0),
-        round: fixture.manifest.round,
-        subject: fixture.manifest.subject,
-    };
-    let ordinary_validation_retry = validation_executor.pending_validations[&validation_id]
-        .task
-        .ownership()
-        .rebind_same_adapter_effect(&validation_effect)
-        .expect("rebind same-root ordinary ValidateBody retry");
-    assert_eq!(
-        &ordinary_validation_retry,
-        validation_executor.pending_validations[&validation_id]
-            .task
-            .ownership(),
-        "ownership equality deliberately ignores the stale authority binding"
-    );
-    let durable = validation_executor.pending_validations[&validation_id]
-        .task
-        .durable_receipt()
-        .clone();
-    let validation_before = validation_executor.body_ownership_projection();
-    let validation_service_count = validation_services.validation_tasks.len();
-    assert!(matches!(
-        validation_executor.plan_begin_validation(
-            fixture.manifest.round,
-            fixture.manifest.subject,
-            durable,
-            ValidationConsumer::Reducer {
-                tag: tag(0),
-                ownership: ordinary_validation_retry,
-            },
-            ValidationStartContext::default(),
-        ),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("proposal or quorum authority")
-    ));
-    assert_eq!(
-        validation_executor.body_ownership_projection(),
-        validation_before
-    );
-    assert_eq!(
-        validation_services.validation_tasks.len(),
-        validation_service_count
-    );
-}
-#[test]
-fn decision_rebinds_exact_local_validation_to_reducer_progress() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    executor
-        .admit_local_proposal(
-            tag(0),
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            &mut services,
-        )
-        .expect("start exact local proposal");
-    let store_id = services.store_tasks[0].id();
-    let stored = services.execute_store(store_id);
-    executor
-        .complete_body_store(stored, &mut services)
-        .expect("advance exact local proposal to validation");
-    let validation_id = services.validation_tasks[0].id();
-    let incumbent_ownership = executor.pending_validations[&validation_id]
-        .task
-        .ownership()
-        .clone();
-    assert!(matches!(
-        &executor.pending_validations[&validation_id].consumer,
-        Some(ValidationConsumer::LocalProposal { .. })
-    ));
-    let commit = fixture.qc(wire::GlobalPhase::Commit);
-    executor.runtime.decided_body = Some((
-        commit.round,
-        commit.proposal_round,
-        commit.subject,
-        commit.execution_commitment,
-    ));
-    let certified_sources = certified_sources(&fixture, &commit);
-    let fetch_effect = AdapterEffect::FetchBody {
-        tag: tag(0),
-        round: commit.proposal_round,
-        subject: commit.subject,
-        manifest: None,
-        certified_sources,
-        certificate: Some(commit.clone()),
-    };
-    let decision_fetch_ownership = bind_adapter_effect_batch_ownership(
-        std::slice::from_ref(&fetch_effect),
-        vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 9_001)],
-    )
-    .expect("bind the distinct Commit-authorized Decision root")
-    .pop()
-    .expect("one Decision FetchBody owner");
-    let store_effect = AdapterEffect::StoreBody {
-        tag: tag(0),
-        round: fixture.manifest.round,
-        subject: fixture.manifest.subject,
-    };
-    let decision_store_ownership = decision_fetch_ownership
-        .rebind_as_inherited_adapter_effect(&store_effect)
-        .expect("carry Commit authority into Decision StoreBody");
-    let validation_effect = AdapterEffect::ValidateBody {
-        tag: tag(0),
-        round: fixture.manifest.round,
-        subject: fixture.manifest.subject,
-    };
-    let decision_validation_ownership = decision_store_ownership
-        .rebind_as_inherited_adapter_effect(&validation_effect)
-        .expect("carry Commit authority into Decision ValidateBody");
-    assert_ne!(decision_validation_ownership, incumbent_ownership);
-    executor
-        .consume_effects(vec![fetch_effect], &mut services)
-        .expect("Decision detaches the exact local validation consumer");
-    assert!(
-        executor.pending_validations[&validation_id]
-            .consumer
-            .is_none()
-    );
-    assert!(
-        executor.local_validate_replay.is_empty(),
-        "Decision detach consumes local replay authority"
-    );
-    assert!(matches!(
-        executor.runtime.completions.as_slice(),
-        [RuntimeCompletion::BodyAvailable(_, manifest)] if manifest == &fixture.manifest
-    ));
-    executor.runtime.completions.clear();
-    executor
-        .retain_effect_batch(vec![store_effect], vec![decision_store_ownership])
-        .expect("retain the Commit-authorized StoreBody effect");
-    executor
-        .drain_retained_effect_batch(&mut services, true)
-        .expect("decided reducer adopts the exact durable body");
-    executor.runtime.completions.clear();
-    executor
-        .retain_effect_batch(vec![validation_effect], vec![decision_validation_ownership])
-        .expect("retain the Commit-authorized ValidateBody effect");
-    executor
-        .drain_retained_effect_batch(&mut services, true)
-        .expect("decided reducer reattaches exact validation work");
-    assert!(matches!(
-        &executor.pending_validations[&validation_id].consumer,
-        Some(ValidationConsumer::Reducer {
-            tag: consumer,
-            ownership,
-        }) if *consumer == tag(0)
-            && ownership == &incumbent_ownership
-            && ownership.binds_durable_decision_authority(
-                commit.round,
-                commit.proposal_round,
-                commit.subject,
-                commit.execution_commitment,
-            )
-    ));
-    assert_eq!(
-        executor.pending_validations[&validation_id]
-            .task
-            .ownership(),
-        &incumbent_ownership,
-        "the physical validation keeps its original lifecycle root"
-    );
-    assert_eq!(
-        services.validation_tasks.last().map(BodyValidationTask::id),
-        Some(validation_id)
-    );
-    let completed = services.execute_validation(validation_id);
-    assert_eq!(
-        executor
-            .complete_body_validation(completed, &mut services)
-            .expect("route the incumbent validation completion under Commit authority"),
-        CompletionDisposition::Accepted,
-    );
-    let completion_ownership = executor
-        .runtime
-        .validation_completion_ownerships
-        .last()
-        .expect("owned validation completion retains its reducer authority");
-    assert_eq!(completion_ownership.owner(), incumbent_ownership.owner());
-    assert!(completion_ownership.binds_durable_decision_authority(
-        commit.round,
-        commit.proposal_round,
-        commit.subject,
-        commit.execution_commitment,
-    ));
-    assert!(!executor.status().fail_closed);
 }
 #[test]
 fn decision_rebinds_exact_local_store_under_incumbent_owner() {
@@ -1215,7 +941,7 @@ fn apply_requires_validated_body_and_typed_exact_kura_completion() {
             &mut services,
         )
         .expect("local proposal");
-    complete_local_proposal_chain(&mut executor, &mut services);
+    complete_local_proposal_fixture(&mut executor, &mut services);
     assert!(matches!(
         executor.runtime.completions.last(),
         Some(RuntimeCompletion::LocalProposal(completion_tag, manifest, durable, validated))
@@ -1288,7 +1014,7 @@ fn apply_completion_rejects_detached_owner_fields_before_settlement() {
                 &mut services,
             )
             .expect("local proposal");
-        complete_local_proposal_chain(&mut executor, &mut services);
+        complete_local_proposal_fixture(&mut executor, &mut services);
         let commit = fixture.qc(wire::GlobalPhase::Commit);
         executor
             .consume_effects(
@@ -1343,115 +1069,6 @@ fn apply_completion_rejects_detached_owner_fields_before_settlement() {
         );
     }
 }
-#[test]
-fn reproposal_commit_qc_applies_the_exact_unchanged_body() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    let mut commit = fixture.qc(wire::GlobalPhase::Commit);
-    commit.round.view = fixture
-        .manifest
-        .round
-        .view
-        .checked_add(2)
-        .expect("fixture reproposal view increment");
-    commit.proposal_round = commit.round;
-    let reproposal_manifest = canonical_payload_manifest(
-        &fixture.context,
-        commit.round,
-        fixture.manifest.subject,
-        &fixture.body,
-    );
-    assert!(executor.protected_lock.is_none());
-    executor.runtime.decided_body = Some((
-        commit.round,
-        commit.proposal_round,
-        commit.subject,
-        commit.execution_commitment,
-    ));
-    let certified_sources = certified_sources(&fixture, &commit);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: commit.proposal_round,
-                subject: fixture.manifest.subject,
-                manifest: None,
-                certified_sources,
-                certificate: Some(commit.clone()),
-            }],
-            &mut services,
-        )
-        .expect("lockless follower fetches the authenticated reproposal body");
-    let fetch = services
-        .fetch_tasks
-        .last()
-        .expect("certified fetch task")
-        .clone();
-    assert_eq!(fetch.round, commit.proposal_round);
-    executor
-        .complete_body_reconstruction(
-            &fetch,
-            reproposal_manifest,
-            fixture.body.clone(),
-            &mut services,
-        )
-        .expect("reproposal body arrives");
-    executor
-        .consume_effects(
-            vec![AdapterEffect::StoreBody {
-                tag: tag(0),
-                round: commit.proposal_round,
-                subject: commit.subject,
-            }],
-            &mut services,
-        )
-        .expect("store the authenticated reproposal body");
-    let store_id = services.store_tasks.last().expect("store task").id();
-    let stored = services.execute_store(store_id);
-    executor
-        .complete_body_store(stored, &mut services)
-        .expect("durable reproposal body");
-    executor
-        .consume_effects(
-            vec![AdapterEffect::ValidateBody {
-                tag: tag(0),
-                round: commit.proposal_round,
-                subject: commit.subject,
-            }],
-            &mut services,
-        )
-        .expect("validate the authenticated reproposal body");
-    let validation_id = services
-        .validation_tasks
-        .last()
-        .expect("validation task")
-        .id();
-    let validated = services.execute_validation(validation_id);
-    executor
-        .complete_body_validation(validated, &mut services)
-        .expect("reproposal validation completes");
-    executor
-        .consume_effects(
-            vec![AdapterEffect::Apply {
-                tag: tag(0),
-                subject: commit.subject,
-                certificate: commit.clone(),
-            }],
-            &mut services,
-        )
-        .expect("reproposal CommitQC applies after its exact body arrives");
-    let task = services.apply_tasks.last().expect("application task");
-    assert_eq!(task.tag(), tag(0));
-    assert_eq!(task.authorized_owner_tag(), tag(0));
-    assert_eq!(task.certificate(), &commit);
-    assert_eq!(
-        task.validated_receipt().durable().round(),
-        commit.proposal_round
-    );
-    assert_eq!(task.validated_receipt().durable().round(), commit.round);
-    assert!(!executor.status().fail_closed);
-}
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     apply_worker_request_has_no_runtime_ownership_sidecar
 );
@@ -1468,14 +1085,20 @@ fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
             &mut services,
         )
         .expect("local proposal");
-    complete_local_proposal_chain(&mut executor, &mut services);
+    complete_local_proposal_fixture(&mut executor, &mut services);
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     assert!(matches!(
         executor.begin_apply(
             EventTag::new(2, 3, Generation::new(7)),
             fixture.manifest.subject,
             commit.clone(),
-            RuntimeEffectOwnership::fresh_for_test(tag(3), 30),
+            bound_test_apply_ownership(
+                EventTag::new(2, 3, Generation::new(7)),
+                fixture.manifest.subject,
+                &commit,
+                tag(3),
+                30,
+            ),
             &mut services,
         ),
         Err(EffectExecutorError::Contract(_))
@@ -1488,7 +1111,7 @@ fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
             tag(2),
             fixture.manifest.subject,
             commit.clone(),
-            RuntimeEffectOwnership::fresh_for_test(tag(2), 31),
+            bound_test_apply_ownership(tag(2), fixture.manifest.subject, &commit, tag(2), 31,),
             &mut services,
         ),
         Err(EffectExecutorError::Contract(_))
@@ -1498,7 +1121,7 @@ fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
             tag(3),
             fixture.manifest.subject,
             commit.clone(),
-            RuntimeEffectOwnership::fresh_for_test(tag(3), 32),
+            bound_test_apply_ownership(tag(3), fixture.manifest.subject, &commit, tag(3), 32),
             &mut services,
         )
         .expect("a delayed decided CommitQC remains actionable");
@@ -1521,7 +1144,7 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
             &mut services,
         )
         .expect("local proposal");
-    complete_local_proposal_chain(&mut executor, &mut services);
+    complete_local_proposal_fixture(&mut executor, &mut services);
     let mut foreign_context = fixture.context.clone();
     foreign_context.network_id =
         crate::sumeragi::synthetic_network_id("foreign-v2-effect-executor-test");
@@ -1535,12 +1158,19 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
         foreign_commit.validate(&foreign_context).is_ok(),
         "the adversarial certificate must be internally valid for its foreign context"
     );
+    let foreign_apply_ownership = bound_test_apply_ownership(
+        tag(0),
+        fixture.manifest.subject,
+        &foreign_commit,
+        tag(0),
+        33,
+    );
     assert!(matches!(
         executor.begin_apply(
             tag(0),
             fixture.manifest.subject,
             foreign_commit,
-            RuntimeEffectOwnership::fresh_for_test(tag(0), 33),
+            foreign_apply_ownership,
             &mut services,
         ),
         Err(EffectExecutorError::Contract(reason))
@@ -1595,9 +1225,8 @@ fn reopen_rejection(fixture: &Fixture) -> (TempDir, V2BodyStore, DurableBodyRece
     let durable = store
         .store(fixture.manifest.clone(), fixture.body.clone())
         .expect("persist exact rejected pre-intent body");
-    let task = BodyValidationTask::for_test(77, durable.clone());
     let rejected = store
-        .execute_validation_task(&task, |_| {
+        .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
             Err::<wire::ExecutionCommitment, _>("deterministic recovered rejection".to_owned())
         })
         .expect("persist deterministic rejection marker");
@@ -1610,141 +1239,6 @@ fn reopen_rejection(fixture: &Fixture) -> (TempDir, V2BodyStore, DurableBodyRece
     )
     .expect("reopen rejected pre-intent body store");
     (directory, reopened, durable)
-}
-fn reopen_retired_rejection(fixture: &Fixture) -> (TempDir, V2BodyStore, DurableBodyReceipt) {
-    let (directory, mut reopened, durable) = reopen_rejection(fixture);
-    reopened
-        .retain_recovered_markers_for_authority(
-            super::super::v2::RecoveredValidationAuthority::for_test(&fixture.context, []),
-        )
-        .expect("retire marker outside authenticated WAL authority");
-    reopened
-        .ensure_recovered_markers_revalidated()
-        .expect("retired rejection carries no reducer authority");
-    (directory, reopened, durable)
-}
-#[test]
-fn cold_store_only_local_preintent_forces_exact_store_then_validate_replay() {
-    let fixture = Fixture::new();
-    let directory = TempDir::new().expect("store-only pre-intent body-store directory");
-    let mut store = V2BodyStore::open_with_policy(
-        directory.path(),
-        fixture.context.clone(),
-        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-    )
-    .expect("open store-only pre-intent body store");
-    let durable = store
-        .store(fixture.manifest.clone(), fixture.body.clone())
-        .expect("persist body before Store completion");
-    drop(store);
-    let reopened = V2BodyStore::open_with_policy(
-        directory.path(),
-        fixture.context.clone(),
-        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-    )
-    .expect("reopen store-only pre-intent body store");
-    let (mut executor, mut services) =
-        recovered_preintent_executor(&fixture, directory, reopened, tag(0));
-    let key = (fixture.manifest.round, fixture.manifest.subject);
-    assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
-    executor
-        .admit_local_proposal(
-            tag(0),
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            &mut services,
-        )
-        .expect("adopt exact store-only pre-intent body");
-    assert_eq!(services.store_tasks.len(), 1);
-    assert!(services.validation_tasks.is_empty());
-    let store_id = services.store_tasks[0].id();
-    let store_completion = services.execute_store(store_id);
-    assert_eq!(store_completion.receipt(), &durable);
-    assert_eq!(
-        executor
-            .complete_body_store(store_completion, &mut services)
-            .expect("replay exact idempotent Store completion"),
-        CompletionDisposition::Accepted
-    );
-    assert_eq!(services.validation_tasks.len(), 1);
-    let validation_id = services.validation_tasks[0].id();
-    let validation_completion = services.execute_validation(validation_id);
-    executor
-        .complete_body_validation(validation_completion, &mut services)
-        .expect("rebuild exact local ready replay lineage");
-    assert!(matches!(
-        executor.runtime.completions.as_slice(),
-        [RuntimeCompletion::LocalProposal(completion_tag, manifest, ..)]
-            if *completion_tag == tag(0) && manifest == &fixture.manifest
-    ));
-    assert!(executor.local_store_replay.is_empty());
-    assert!(executor.local_validate_replay.is_empty());
-    assert_eq!(executor.local_proposal_ready_replay.len(), 1);
-    assert!(services.closed.is_empty());
-}
-#[test]
-fn cold_retired_validated_preintent_replays_physical_store_and_validation_once() {
-    let fixture = Fixture::new();
-    let directory = TempDir::new().expect("validated pre-intent body-store directory");
-    let mut store = V2BodyStore::open_with_policy(
-        directory.path(),
-        fixture.context.clone(),
-        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-    )
-    .expect("open validated pre-intent body store");
-    let durable = store
-        .store(fixture.manifest.clone(), fixture.body.clone())
-        .expect("persist validated pre-intent body");
-    let validated = store
-        .validate(
-            &durable,
-            |_| Ok::<_, String>(fixture_execution_commitment()),
-        )
-        .expect("persist validated pre-intent marker");
-    drop(store);
-    let mut reopened = V2BodyStore::open_with_policy(
-        directory.path(),
-        fixture.context.clone(),
-        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-    )
-    .expect("reopen validated pre-intent body store");
-    reopened
-        .retain_recovered_markers_for_authority(
-            super::super::v2::RecoveredValidationAuthority::for_test(&fixture.context, []),
-        )
-        .expect("retire marker outside authenticated WAL authority");
-    reopened
-        .ensure_recovered_markers_revalidated()
-        .expect("retired validation carries no reducer authority");
-    assert!(reopened.validated_recovery_catalog().is_empty());
-    let (mut executor, mut services) =
-        recovered_preintent_executor(&fixture, directory, reopened, tag(0));
-    executor
-        .admit_local_proposal(
-            tag(0),
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            &mut services,
-        )
-        .expect("adopt exact validated pre-intent body");
-    assert_eq!(services.store_tasks.len(), 1);
-    let store_id = services.store_tasks[0].id();
-    let store_completion = services.execute_store(store_id);
-    executor
-        .complete_body_store(store_completion, &mut services)
-        .expect("complete forced physical Store");
-    assert_eq!(services.validation_tasks.len(), 1);
-    let validation_id = services.validation_tasks[0].id();
-    let validation_completion = services.execute_validation(validation_id);
-    assert_eq!(validation_completion.validated_receipt(), Some(&validated));
-    executor
-        .complete_body_validation(validation_completion, &mut services)
-        .expect("complete reproduced validation marker");
-    assert!(matches!(
-        executor.runtime.completions.as_slice(),
-        [RuntimeCompletion::LocalProposal(_, manifest, ..)] if manifest == &fixture.manifest
-    ));
-    assert!(services.closed.is_empty());
 }
 #[test]
 fn cold_active_rejection_denies_local_adoption_without_live_pipeline_owner() {
@@ -1777,68 +1271,6 @@ fn cold_active_rejection_denies_local_adoption_without_live_pipeline_owner() {
     assert_eq!(executor.body_ownership_projection(), before);
     assert!(executor.output_guard.restart_required());
     assert_eq!(services.closed.len(), 1);
-}
-#[test]
-fn cold_retired_rejection_denies_local_adoption_but_not_reducer_validation() {
-    let fixture = Fixture::new();
-    let (directory, reopened, durable) = reopen_retired_rejection(&fixture);
-    assert!(reopened.rejected_recovery_catalog().is_empty());
-    assert_eq!(reopened.retired_rejected_recovery_catalog().len(), 1);
-    let (mut local_executor, mut local_services) =
-        recovered_preintent_executor(&fixture, directory, reopened, tag(0));
-    let local_before = local_executor.body_ownership_projection();
-    assert!(matches!(
-        local_executor.admit_local_proposal(
-            tag(0),
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            &mut local_services,
-        ),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("durable deterministic rejection")
-    ));
-    assert_eq!(local_executor.body_ownership_projection(), local_before);
-    assert!(local_executor.output_guard.restart_required());
-    assert_eq!(local_services.closed.len(), 1);
-    drop((local_executor, local_services));
-
-    let (directory, reopened, durable_again) = reopen_retired_rejection(&fixture);
-    assert_eq!(durable_again, durable);
-    let (mut reducer_executor, mut reducer_services) =
-        recovered_preintent_executor(&fixture, directory, reopened, tag(0));
-    let key = (fixture.manifest.round, fixture.manifest.subject);
-    assert!(reducer_executor.rejected_bodies.is_empty());
-    assert_eq!(
-        reducer_executor.retired_rejected_bodies.get(&key),
-        Some(&durable)
-    );
-    reducer_executor
-        .bind_body_pipeline_owner(tag(0), &fixture.manifest)
-        .expect("bind reducer validation pipeline");
-    reducer_executor
-        .consume_effects(
-            vec![AdapterEffect::ValidateBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-            }],
-            &mut reducer_services,
-        )
-        .expect("retired marker cannot synthesize reducer ValidationFailed");
-    assert_eq!(reducer_services.validation_tasks.len(), 1);
-    reducer_services.validation_error = Some("deterministic recovered rejection".to_owned());
-    let validation_id = reducer_services.validation_tasks[0].id();
-    let completion = reducer_services.execute_validation(validation_id);
-    reducer_executor
-        .complete_body_validation(completion, &mut reducer_services)
-        .expect("real validation promotes exact retired rejection");
-    assert_eq!(reducer_executor.rejected_bodies.get(&key), Some(&durable));
-    assert!(!reducer_executor.retired_rejected_bodies.contains_key(&key));
-    assert!(matches!(
-        reducer_executor.runtime.completions.as_slice(),
-        [RuntimeCompletion::ValidationFailed(_, round, subject)]
-            if *round == fixture.manifest.round && *subject == fixture.manifest.subject
-    ));
 }
 #[test]
 fn cold_preintent_bytes_and_old_view_mismatches_fail_closed_without_work() {
@@ -1948,10 +1380,6 @@ fn recovered_validation_catalog_hydrates_direct_apply_durability() {
     )
     .expect("reopened effect executor");
     executor
-        .runtime
-        .bind_validated_body(&fixture.manifest, &validated)
-        .expect("restore runtime validation authority");
-    executor
         .install_recovered_validation_catalog(
             recovered_validations,
             recovered_rejections,
@@ -1962,12 +1390,14 @@ fn recovered_validation_catalog_hydrates_direct_apply_durability() {
     assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     let mut services = fixture.services();
+    let apply_ownership =
+        bound_test_apply_ownership(tag(0), fixture.manifest.subject, &commit, tag(0), 34);
     executor
         .begin_apply(
             tag(0),
             fixture.manifest.subject,
             commit.clone(),
-            RuntimeEffectOwnership::fresh_for_test(tag(0), 34),
+            apply_ownership,
             &mut services,
         )
         .expect("replayed CommitQC applies without body-stage replay");

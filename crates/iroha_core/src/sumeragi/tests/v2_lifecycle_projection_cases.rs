@@ -365,8 +365,7 @@ fn candidate(
     ownership: &RuntimeEffectOwnership,
 ) -> AuthorityFreeAdmissionProjection {
     let pending = ownership
-        .current_effect_producer(effect)
-        .map(|producer| producer.mint_pending_binding())
+        .exact_pending_adapter_effect_binding(effect)
         .expect("mint ordinal-free pending lifecycle binding");
     authority_free_admission_projection(
         lifecycle_context(&fixture.context),
@@ -383,8 +382,7 @@ fn prepare_direct_signed(
     ownership: &RuntimeEffectOwnership,
 ) -> super::super::work_registry::PreparedLifecycleAdmissionV1 {
     let pending = ownership
-        .current_effect_producer(effect)
-        .map(|producer| producer.mint_pending_binding())
+        .exact_pending_adapter_effect_binding(effect)
         .expect("mint exact direct-signed pending owner");
     coordinator
         .prepare_direct_signed_lifecycle_admission(&fixture.verified, effect.clone(), pending)
@@ -414,8 +412,7 @@ fn certified_validate_candidate(
         .project_store_for_test(store, receipt)
         .expect("project exact certified Store evidence");
     let validate_pending = validate_owner
-        .current_effect_producer(validate)
-        .map(|producer| producer.mint_pending_binding())
+        .exact_pending_adapter_effect_binding(validate)
         .expect("retain exact Validate pending binding");
     let validate_evidence = store_evidence
         .project_validate(store, receipt, validate, &validate_pending)
@@ -459,8 +456,7 @@ fn assert_candidate_shape(
             .contains(&slot.id())
     );
     let authority = ownership
-        .current_effect_producer(effect)
-        .map(|producer| producer.mint_pending_binding())
+        .exact_pending_adapter_effect_binding(effect)
         .expect("the tested effect remains exactly bound");
     assert_eq!(
         slot.digest(),
@@ -2055,8 +2051,7 @@ fn every_adapter_effect_class_and_specialized_phase_projects_ready_one_slot_work
             ));
         } else {
             let pending = ownership
-                .current_effect_producer(&effect)
-                .map(|producer| producer.mint_pending_binding())
+                .exact_pending_adapter_effect_binding(&effect)
                 .expect("mint exact unsupported pending owner");
             assert!(matches!(
                 coordinator.prepare_direct_signed_lifecycle_admission(
@@ -2136,8 +2131,7 @@ fn certified_store_and_validate_inherit_authority_but_require_receipt_bound_stag
     let coordinator = fixture.coordinator();
     for (effect, ownership) in [(&store, &store_owner), (&validate, &validate_owner)] {
         let pending = ownership
-            .current_effect_producer(effect)
-            .map(|producer| producer.mint_pending_binding())
+            .exact_pending_adapter_effect_binding(effect)
             .expect("mint exact receipt-bound pending owner");
         assert!(matches!(
             coordinator.prepare_direct_signed_lifecycle_admission(
@@ -2351,19 +2345,25 @@ fn coordinator_method_enforces_zero_to_one_retry_and_foreign_owner_rejection() {
     assert_eq!(coordinator.records.len(), 1);
 }
 #[test]
-fn unbound_and_foreign_context_effects_fail_before_admission() {
+fn mismatched_and_foreign_context_effects_fail_before_admission() {
     let fixture = Fixture::new();
     let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::Vote(fixture.prepare_vote.clone()),
     ));
-    let unbound = RuntimeEffectOwnership::fresh_for_test(fixture.tag, 40);
+    let other_effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::Vote(fixture.commit_vote.clone()),
+    ));
+    let mismatched = bound_ownership(&other_effect, fixture.tag, 40);
     let coordinator = fixture.coordinator();
-    assert!(unbound.current_effect_producer(&effect).is_none());
+    assert!(
+        mismatched
+            .exact_pending_adapter_effect_binding(&effect)
+            .is_err()
+    );
     assert!(coordinator.records.is_empty());
     let ownership = bound_ownership(&effect, fixture.tag, 41);
     let pending = ownership
-        .current_effect_producer(&effect)
-        .map(|producer| producer.mint_pending_binding())
+        .exact_pending_adapter_effect_binding(&effect)
         .expect("mint exact foreign-context pending owner");
     let foreign_context = LifecycleContext::new(LifecycleDigest::new([0xFF; 32]), 1);
     let foreign = LifecycleCoordinator::new(
@@ -2475,8 +2475,7 @@ fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
         let ownership = bound_ownership(&effect, fixture.tag, ordinal);
         let coordinator = fixture.coordinator();
         let pending = ownership
-            .current_effect_producer(&effect)
-            .map(|producer| producer.mint_pending_binding())
+            .exact_pending_adapter_effect_binding(&effect)
             .expect("mint exact auxiliary broadcast pending owner");
         assert!(matches!(
             coordinator.prepare_direct_signed_lifecycle_admission(
@@ -2586,8 +2585,7 @@ fn bound_but_drifted_carriers_fail_closed_without_records() {
         let ownership = bound_ownership(&effect, fixture.tag, ordinal);
         let coordinator = fixture.coordinator();
         let pending = ownership
-            .current_effect_producer(&effect)
-            .map(|producer| producer.mint_pending_binding())
+            .exact_pending_adapter_effect_binding(&effect)
             .expect("mint exact unsupported drifted pending owner");
         assert!(matches!(
             coordinator.prepare_direct_signed_lifecycle_admission(
@@ -2602,8 +2600,7 @@ fn bound_but_drifted_carriers_fail_closed_without_records() {
     let ownership = bound_ownership(&foreign_protocol, fixture.tag, 92);
     let coordinator = fixture.coordinator();
     let pending = ownership
-        .current_effect_producer(&foreign_protocol)
-        .map(|producer| producer.mint_pending_binding())
+        .exact_pending_adapter_effect_binding(&foreign_protocol)
         .expect("mint exact foreign-protocol pending owner");
     assert!(matches!(
         coordinator.prepare_direct_signed_lifecycle_admission(

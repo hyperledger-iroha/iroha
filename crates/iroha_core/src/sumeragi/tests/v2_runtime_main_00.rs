@@ -21,23 +21,10 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
     let owner = RuntimeEffectOwnership::fresh_for_test(tag, 71);
     let bound = bind_adapter_effect_batch_ownership(&[store.clone()], vec![owner])
         .expect("one exact StoreBody candidate is within the bound");
-    assert!(bound[0].validate_bound_exact());
-    let mut missing_producer = bound[0].clone();
-    missing_producer.producer = None;
-    assert!(!missing_producer.validate_bound_exact());
-    assert!(missing_producer.current_effect_producer(&store).is_none());
-    let mut corrupted_producer = bound[0].clone();
-    corrupted_producer
-        .producer
-        .as_mut()
-        .expect("bound ownership retains its producer")
-        .projection_hash = Hash::new(b"mutated producer projection");
-    assert!(!corrupted_producer.validate_bound_exact());
-    assert!(corrupted_producer.current_effect_producer(&store).is_none());
+    assert!(bound[0].validate_exact());
     let pending = bound[0]
-        .current_effect_producer(&store)
-        .expect("exact bound effect seals one producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(&store)
+        .expect("exact bound effect mints one pending binding");
     assert!(pending.exactly_binds_adapter_effect(&store));
     let different_scheduler_ordinal = bind_adapter_effect_batch_ownership(
         &[store.clone()],
@@ -45,25 +32,24 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
     )
     .expect("same effect remains bindable under a different scheduler ordinal");
     let mut different_pending = different_scheduler_ordinal[0]
-        .current_effect_producer(&store)
-        .expect("different scheduler ordinal retains the same producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(&store)
+        .expect("different scheduler owner mints one pending binding");
     assert_eq!(
         pending, different_pending,
         "pending admission authority deliberately excludes runtime scheduling ordinals"
     );
-    let exact_effect_kind = different_pending.binding.effect_kind;
-    different_pending.binding.effect_kind = 0;
+    let exact_effect_kind = different_pending.effect_kind;
+    different_pending.effect_kind = 0;
     assert!(!different_pending.exactly_binds_adapter_effect(&store));
-    different_pending.binding.effect_kind = exact_effect_kind;
-    let exact_candidate_kind = different_pending.binding.candidate_kind;
-    different_pending.binding.candidate_kind = RUNTIME_CANDIDATE_KIND_NONE;
+    different_pending.effect_kind = exact_effect_kind;
+    let exact_candidate_kind = different_pending.candidate_kind;
+    different_pending.candidate_kind = RUNTIME_CANDIDATE_KIND_NONE;
     assert!(!different_pending.exactly_binds_adapter_effect(&store));
-    different_pending.binding.candidate_kind = exact_candidate_kind;
-    let exact_projection_hash = different_pending.binding.projection_hash;
-    different_pending.binding.projection_hash = Hash::new(b"mutated pending projection");
+    different_pending.candidate_kind = exact_candidate_kind;
+    let exact_projection_hash = different_pending.projection_hash;
+    different_pending.projection_hash = Hash::new(b"mutated pending projection");
     assert!(!different_pending.exactly_binds_adapter_effect(&store));
-    different_pending.binding.projection_hash = exact_projection_hash;
+    different_pending.projection_hash = exact_projection_hash;
     assert!(different_pending.exactly_binds_adapter_effect(&store));
     let first_owner_projection = production_adapter_effect_candidate_trace_projection(
         &store, &bound[0], 1, 1, 1, 1, 0, 1, true,
@@ -352,7 +338,7 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
     assert_eq!(three_bound.len(), 3);
     for (index, (effect, ownership)) in three_candidates.iter().zip(&three_bound).enumerate() {
         let position = u8::try_from(index + 1).expect("three positions fit in u8");
-        assert!(ownership.validate_bound_exact());
+        assert!(ownership.validate_exact());
         let projection = production_adapter_effect_candidate_trace_projection(
             effect, ownership, position, 3, position, 3, 0, 1, true,
         )
@@ -369,11 +355,7 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         "a fourth causal successor must fail before retention"
     );
     let mut forged = bound[0].clone();
-    forged
-        .binding
-        .as_mut()
-        .expect("bound ownership has positional evidence")
-        .effect_position = 2;
+    forged.binding.effect_position = 2;
     assert!(!forged.validate_exact());
     assert!(
         production_adapter_effect_candidate_trace_projection(
@@ -459,11 +441,7 @@ fn certified_body_pipeline_retains_statement_and_owner_across_stage_kinds() {
     let fresh_store = production_adapter_effect_candidate_statement(&store)
         .expect("Store is a candidate")
         .1;
-    lost_phase_and_commitment
-        .binding
-        .as_mut()
-        .expect("Store has exact binding")
-        .candidate_statement = Some(fresh_store);
+    lost_phase_and_commitment.binding.candidate_statement = Some(fresh_store);
     assert!(
         !lost_phase_and_commitment.validate_exact(),
         "dropping inherited phase and commitment invalidates the sealed binding"
@@ -918,8 +896,8 @@ fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
     assert_eq!(relation, RuntimeFetchAuthorityRelation::Upgrade);
     assert_eq!(adopted.owner(), ordinary.owner());
     assert_eq!(adopted.causality(), ordinary.causality());
-    let adopted_binding = adopted.binding().expect("adopted carrier is bound");
-    let incoming_binding = incoming.binding().expect("incoming carrier is bound");
+    let adopted_binding = adopted.binding();
+    let incoming_binding = incoming.binding();
     assert_eq!(
         adopted_binding.effect_position,
         incoming_binding.effect_position

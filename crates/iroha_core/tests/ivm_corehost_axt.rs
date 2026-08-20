@@ -29,8 +29,8 @@ use iroha_data_model::{
         TransferTranscript,
     },
     nexus::{
-        AxtBinding, AxtDescriptor, AxtEffectBinding, AxtEnvelopeRecord, AxtHandleFragment,
-        AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
+        AxtBinding, AxtDescriptor, AxtEffectBinding, AxtEnvelopeRecord, AxtHandleBudgetKey,
+        AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
         AxtPolicySnapshotValidationError, AxtRejectReason, AxtRemoteSpendClaimV1, AxtReplayRecord,
         AxtTouchSpec, LaneId,
     },
@@ -51,7 +51,7 @@ use nonzero_ext::nonzero;
 #[cfg(feature = "app_api")]
 use std::collections::BTreeMap;
 use std::{num::NonZeroU64, sync::Arc, time::Duration};
-fn ensure_alias_resolver() {}
+
 const FIXTURE_AUTHORITY_PUBLIC_KEY: &str =
     "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
 const AXT_TEST_CHAIN_ID: &[u8] = b"iroha-corehost-axt-test-chain";
@@ -90,6 +90,17 @@ fn axt_test_asset_definition_id() -> iroha_data_model::asset::AssetDefinitionId 
     ])
     .expect("valid AXT fixture asset id")
 }
+fn axt_test_asset_incarnation() -> iroha_data_model::nexus::AxtAssetIncarnationV1 {
+    iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
+        &axt_test_network_id(),
+        &axt_test_asset_definition_id(),
+        &HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"iroha-corehost-axt-test-registration-header",
+        )),
+        &Hash::new(b"iroha-corehost-axt-test-registration-execution"),
+        0,
+    )
+}
 fn axt_test_issuer_context(
     dataspace: DataSpaceId,
     manifest_root: [u8; 32],
@@ -97,6 +108,7 @@ fn axt_test_issuer_context(
     iroha_data_model::nexus::AxtHandleIssuerContextV1 {
         network_id: axt_test_network_id(),
         asset_dsid: dataspace,
+        asset_definition_incarnation: axt_test_asset_incarnation(),
         issuer: axt_test_issuer_id(),
         issuer_manifest_root: manifest_root,
         code_root: [0; 32],
@@ -114,41 +126,7 @@ fn signed_model_handle(
         .expect("sign AXT issuer fixture")
 }
 fn signed_abi_handle(handle: AssetHandle, dataspace: DataSpaceId) -> AssetHandle {
-    let binding = handle
-        .binding_array()
-        .expect("fixture AXT binding must be 32 bytes");
-    let manifest_root: [u8; 32] = handle
-        .manifest_view_root
-        .as_slice()
-        .try_into()
-        .expect("fixture manifest root must be 32 bytes");
-    let model = signed_model_handle(
-        iroha_data_model::nexus::AssetHandleDraft {
-            asset_definition_id: handle.asset_definition_id,
-            scope: handle.scope,
-            subject: iroha_data_model::nexus::HandleSubject {
-                account: handle.subject.account,
-                origin_dsid: handle.subject.origin_dsid,
-            },
-            budget: iroha_data_model::nexus::HandleBudget {
-                remaining: handle.budget.remaining,
-                per_use: handle.budget.per_use,
-            },
-            handle_era: handle.handle_era,
-            sub_nonce: handle.sub_nonce,
-            group_binding: iroha_data_model::nexus::GroupBinding {
-                composability_group_id: handle.group_binding.composability_group_id,
-                epoch_id: handle.group_binding.epoch_id,
-            },
-            target_lane: handle.target_lane,
-            axt_binding: AxtBinding::new(binding),
-            manifest_view_root: manifest_root,
-            expiry_slot: handle.expiry_slot,
-            max_clock_skew_ms: handle.max_clock_skew_ms,
-        },
-        dataspace,
-    );
-    abi_asset_handle_from_signed_model(model)
+    signed_abi_handle_with_incarnation(handle, dataspace, axt_test_asset_incarnation())
 }
 fn abi_asset_handle_from_signed_model(handle: iroha_data_model::nexus::AssetHandle) -> AssetHandle {
     AssetHandle {
@@ -185,6 +163,10 @@ fn configure_axt_test_host(
     host.set_axt_asset_policy_for_tests(
         axt_test_asset_definition_id(),
         iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+    );
+    host.set_axt_asset_incarnation_for_tests(
+        axt_test_asset_definition_id(),
+        axt_test_asset_incarnation(),
     );
 }
 fn configure_axt_test_host_without_asset(
@@ -565,6 +547,7 @@ fn proof_blob_for_remote_spends_with_committed_amount(
             AxtRemoteSpendClaimV1::new(
                 AxtHandleReplayKey::from_parts(
                     intent.asset_dsid,
+                    handle.issuer_context.asset_definition_incarnation,
                     handle.binding_array().expect("fixture handle binding"),
                     handle.handle_era,
                     handle.sub_nonce,
@@ -1260,7 +1243,6 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use std::collections::BTreeMap;
-    ensure_alias_resolver();
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(99);
     let lane = LaneId::new(0);
@@ -1525,7 +1507,6 @@ fn axt_replay_ledger_persists_through_kura_replay() {
 }
 #[test]
 fn axt_replay_ledger_rejects_reuse_after_restart() {
-    ensure_alias_resolver();
     let authority: AccountId = ALICE_ID.clone();
     let dsid = DataSpaceId::new(48);
     let lane = LaneId::new(1);
@@ -1544,29 +1525,21 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
         },
     );
     let binding = AxtBinding::new([0xBE; 32]);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 25, 0);
-    let mut block = state.block(header);
-    {
-        use iroha_data_model::nexus::{
-            AssetHandle as ModelAssetHandle, GroupBinding as ModelGroupBinding,
-            HandleBudget as ModelHandleBudget, HandleSubject as ModelHandleSubject,
-            RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
-        };
-        let mut stx = block.transaction();
-        let handle = ModelAssetHandle {
+    let model_handle = signed_model_handle(
+        iroha_data_model::nexus::AssetHandleDraft {
             asset_definition_id: axt_test_asset_definition_id(),
             scope: vec!["transfer".into()],
-            subject: ModelHandleSubject {
+            subject: iroha_data_model::nexus::HandleSubject {
                 account: authority.to_string(),
                 origin_dsid: Some(dsid),
             },
-            budget: ModelHandleBudget {
+            budget: iroha_data_model::nexus::HandleBudget {
                 remaining: Quantity::from(10_u64),
                 per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
-            group_binding: ModelGroupBinding {
+            group_binding: iroha_data_model::nexus::GroupBinding {
                 composability_group_id: vec![0; 32],
                 epoch_id: 1,
             },
@@ -1575,9 +1548,17 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
             manifest_view_root: manifest_root,
             expiry_slot: 50,
             max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
+        },
+        dsid,
+    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 25, 0);
+    let committed_header = header.clone();
+    let mut block = state.block(header);
+    {
+        use iroha_data_model::nexus::{
+            RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
         };
+        let mut stx = block.transaction();
         let envelope = AxtEnvelopeRecord {
             binding,
             lane,
@@ -1592,7 +1573,7 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
             touches: Vec::new(),
             proofs: Vec::new(),
             handles: vec![AxtHandleFragment {
-                handle: handle.clone(),
+                handle: model_handle.clone(),
                 intent: ModelRemoteSpendIntent {
                     asset_dsid: dsid,
                     op: ModelSpendOp {
@@ -1614,6 +1595,8 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
         stx.apply();
     }
     block.commit().expect("commit replay ledger setup");
+    state.push_block_hash_for_testing(committed_header.hash());
+    state.update_latest_block_header_cache_for_tests(committed_header);
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -1647,31 +1630,7 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-    let handle = AssetHandle {
-        asset_definition_id: axt_test_asset_definition_id(),
-        scope: vec!["transfer".into()],
-        subject: HandleSubject {
-            account: authority.to_string(),
-            origin_dsid: Some(dsid),
-        },
-        budget: HandleBudget {
-            remaining: Quantity::from(10_u64),
-            per_use: Some(Quantity::from(10_u64)),
-        },
-        handle_era: 1,
-        sub_nonce: 1,
-        group_binding: GroupBinding {
-            composability_group_id: vec![0; 32],
-            epoch_id: 1,
-        },
-        target_lane: lane,
-        axt_binding: binding.as_bytes().to_vec(),
-        manifest_view_root: manifest_root.to_vec(),
-        expiry_slot: 50,
-        max_clock_skew_ms: Some(0),
-        issuer_context: Default::default(),
-        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-    };
+    let handle = abi_asset_handle_from_signed_model(model_handle);
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
@@ -1704,7 +1663,6 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
 }
 #[test]
 fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
-    ensure_alias_resolver();
     let authority: AccountId = ALICE_ID.clone();
     let dsid = DataSpaceId::new(49);
     let lane = LaneId::new(2);
@@ -1811,7 +1769,6 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
 }
 #[test]
 fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
-    ensure_alias_resolver();
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(17);
     let target_lane = LaneId::new(0);
@@ -2506,37 +2463,36 @@ fn axt_replay_entries_expire_after_retention_window() {
         },
     );
     // Seed the replay ledger with a stale entry that should expire once the retention window elapses.
+    let stale_handle = ModelAssetHandle {
+        asset_definition_id: axt_test_asset_definition_id(),
+        scope: vec!["transfer".into()],
+        subject: ModelHandleSubject {
+            account: authority.to_string(),
+            origin_dsid: Some(dsid),
+        },
+        budget: ModelHandleBudget {
+            remaining: Quantity::from(10_u64),
+            per_use: Some(Quantity::from(10_u64)),
+        },
+        handle_era: 1,
+        sub_nonce: 1,
+        group_binding: ModelGroupBinding {
+            composability_group_id: vec![0; 32],
+            epoch_id: 1,
+        },
+        target_lane: lane,
+        axt_binding: binding,
+        manifest_view_root: manifest_root,
+        expiry_slot: 50,
+        max_clock_skew_ms: Some(0),
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
+    };
     state.insert_axt_replay_entry_for_tests(
-        AxtHandleReplayKey::from_handle(
-            dsid,
-            &ModelAssetHandle {
-                asset_definition_id: axt_test_asset_definition_id(),
-                scope: vec!["transfer".into()],
-                subject: ModelHandleSubject {
-                    account: authority.to_string(),
-                    origin_dsid: Some(dsid),
-                },
-                budget: ModelHandleBudget {
-                    remaining: Quantity::from(10_u64),
-                    per_use: Some(Quantity::from(10_u64)),
-                },
-                handle_era: 1,
-                sub_nonce: 1,
-                group_binding: ModelGroupBinding {
-                    composability_group_id: vec![0; 32],
-                    epoch_id: 1,
-                },
-                target_lane: lane,
-                axt_binding: binding,
-                manifest_view_root: manifest_root,
-                expiry_slot: 50,
-                max_clock_skew_ms: Some(0),
-                issuer_context: Default::default(),
-                issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-            },
-        ),
+        AxtHandleReplayKey::from_handle(dsid, &stale_handle),
         AxtReplayRecord {
             dataspace: dsid,
+            budget_key: AxtHandleBudgetKey::from_handle(&stale_handle),
             used_slot: 1,
             retain_until_slot: 3,
         },
@@ -2918,7 +2874,6 @@ fn core_host_requires_proof_for_all_dataspaces() {
 }
 #[test]
 fn core_host_rejects_invalid_descriptor() {
-    ensure_alias_resolver();
     let authority = fixture_authority();
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority);

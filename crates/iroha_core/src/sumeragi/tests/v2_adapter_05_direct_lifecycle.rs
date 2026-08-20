@@ -1323,7 +1323,7 @@ fn direct_validation_rejects_foreign_receipts_and_commitments_without_mutation()
     assert_registry_eq(&adapter.registry, &registry_with_commitment);
 }
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
-    direct_validation_preview_surface_is_closed_move_only_and_unwired
+    direct_validation_preview_surface_is_closed_move_only_and_lifecycle_wired
 );
 #[test]
 fn direct_validation_failed_no_effect_preview_is_drop_inert() {
@@ -1519,9 +1519,8 @@ fn direct_validation_failed_report_carries_exact_registered_prepare_qc() {
     .expect("bind one ordinary Store owner")
     .pop()
     .expect("one ordinary Store owner")
-    .current_effect_producer(&store_effect)
-    .expect("ordinary Store retains one producer")
-    .mint_pending_binding();
+    .exact_pending_adapter_effect_binding(&store_effect)
+    .expect("ordinary Store retains one pending binding");
     let ordinary_validate_pending = ordinary_store_pending
         .project_store_validate_successor(&store_effect, &validate_effect)
         .expect("ordinary Store projects its exact Validate owner");
@@ -1568,9 +1567,8 @@ fn direct_validation_failed_report_carries_exact_registered_prepare_qc() {
     .expect("bind one Prepare-certified Fetch owner")
     .pop()
     .expect("one Prepare-certified Fetch owner")
-    .current_effect_producer(&certified_fetch_effect)
-    .expect("certified Fetch retains one producer")
-    .mint_pending_binding();
+    .exact_pending_adapter_effect_binding(&certified_fetch_effect)
+    .expect("certified Fetch retains one pending binding");
     let certified_store_pending = certified_fetch_pending
         .project_certified_fetch_store_successor(&certified_fetch_effect, &store_effect)
         .expect("certified Fetch projects its exact Store owner");
@@ -1795,7 +1793,7 @@ fn direct_validation_failed_rejects_foreign_receipts_without_mutation() {
     );
 }
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
-    direct_validation_failed_surface_is_closed_move_only_and_unwired
+    direct_validation_failed_surface_is_closed_move_only_and_lifecycle_wired
 );
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1988,8 +1986,11 @@ fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
     assert!(bridge.contains("authority: ReadyValidatedAdapterAuthority<'_>"));
     assert!(bridge.contains("authority: ReadyRejectedAdapterAuthority<'_>"));
     assert_eq!(bridge.matches("authority.into_parts()").count(), 2);
-    assert!(bridge.contains("self.prepare_direct_validation_succeeded("));
-    assert!(bridge.contains("self.prepare_direct_validation_failed("));
+    assert!(
+        bridge.contains("self.prepare_direct_validation_succeeded_with_local_origin_manifest(")
+    );
+    assert!(bridge.contains("self.prepare_direct_validation_failed_with_local_origin_manifest("));
+    assert_eq!(bridge.matches("local_origin_manifest.as_ref()").count(), 2);
     assert!(bridge.contains("SealedReadyDurableValidateAdapterPreview(match preview"));
     for forbidden in [
         "PreparedReadyDurableValidateExecution",

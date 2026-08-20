@@ -109,10 +109,10 @@ use iroha_data_model::{
     name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, AxtEnvelopeRecord, AxtHandleBudgetKey, AxtHandleBudgetRecord,
-        AxtHandleCounterRecord, AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding,
-        AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError, AxtReplayRecord,
-        DataSpaceCatalog, DataSpaceId,
+        AUTOSCALE_META_MANAGED, AxtAssetIncarnationV1, AxtEnvelopeRecord, AxtHandleBudgetKey,
+        AxtHandleBudgetRecord, AxtHandleCounterError, AxtHandleCounterRecord, AxtHandleFragment,
+        AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
+        AxtPolicySnapshotValidationError, AxtReplayRecord, DataSpaceCatalog, DataSpaceId,
         DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementRecord,
         FeeDebitSource, FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey, FeeSponsorEnrollment,
         FeeSponsorEnrollmentKey, FeeSponsorProgram, FeeSponsorProgramId,
@@ -495,98 +495,7 @@ pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
 pub(crate) fn current_axt_slot_from_block(header: &BlockHeader, slot_length_ms: NonZeroU64) -> u64 {
     header.creation_time_ms / slot_length_ms.get()
 }
-pub(crate) fn retain_until_slot_for_handle(
-    handle: &AxtHandleFragment,
-    nexus: &iroha_config::parameters::actual::Nexus,
-    current_slot: u64,
-) -> u64 {
-    let expiry_slot = ivm::axt::expiry_slot_with_skew(
-        handle.handle.expiry_slot,
-        nexus.axt.slot_length_ms,
-        nexus.axt.max_clock_skew_ms,
-        handle.handle.max_clock_skew_ms,
-    );
-    let retention_cap = current_slot.saturating_add(nexus.axt.replay_retention_slots.get());
-    expiry_slot.max(retention_cap)
-}
-fn resolve_axt_handle_budget_amount(
-    record: &AxtEnvelopeRecord,
-    fragment: &AxtHandleFragment,
-) -> Result<Quantity, Error> {
-    let selected_proof = fragment.proof.as_ref().or_else(|| {
-        record
-            .proofs
-            .iter()
-            .find(|proof| proof.dsid == fragment.intent.asset_dsid)
-            .map(|proof| &proof.proof)
-    });
-    let resolved = ivm::axt::resolve_handle_amount_components(
-        fragment.intent.asset_dsid,
-        fragment.intent.op.amount.as_ref(),
-        selected_proof.map(|proof| proof.payload.as_slice()),
-    )
-    .map_err(|error| {
-        Error::InvariantViolation(
-            format!("committed AXT handle amount cannot be resolved: {error:?}").into(),
-        )
-    })?;
-    let fragment_amount_matches = fragment.intent.op.amount.as_ref().map_or_else(
-        || fragment.amount.is_none(),
-        |amount| fragment.amount.as_ref() == Some(amount),
-    );
-    if !fragment_amount_matches || fragment.amount_commitment != resolved.amount_commitment {
-        return Err(Error::InvariantViolation(
-            "committed AXT handle amount fields do not match the selected proof statement".into(),
-        ));
-    }
-    Ok(resolved.amount)
-}
-fn advance_axt_policy_for_handle(
-    mut policy: AxtPolicyEntry,
-    handle: &AxtHandleFragment,
-    current_slot: u64,
-) -> Result<AxtPolicyEntry, Error> {
-    let dsid = handle.intent.asset_dsid;
-    if handle.handle.manifest_view_root != policy.manifest_root {
-        return Err(Error::InvariantViolation(
-            format!(
-                "AXT handle for dataspace {} does not match the committed manifest root",
-                dsid.as_u64()
-            )
-            .into(),
-        ));
-    }
-    if handle.handle.target_lane != policy.target_lane {
-        return Err(Error::InvariantViolation(
-            format!(
-                "AXT handle for dataspace {} targets lane {}, expected {}",
-                dsid.as_u64(),
-                handle.handle.target_lane,
-                policy.target_lane
-            )
-            .into(),
-        ));
-    }
-    policy.next_handle_counter =
-        iroha_data_model::nexus::next_axt_handle_sub_nonce(&policy, &handle.handle).map_err(
-            |error| {
-                Error::InvariantViolation(
-                    format!(
-                        "AXT handle for dataspace {} violates the committed sequence: {error}",
-                        dsid.as_u64()
-                    )
-                    .into(),
-                )
-            },
-        )?;
-    policy.current_slot = current_slot;
-    Ok(policy)
-}
-fn axt_policy_identity_matches(left: &AxtPolicyEntry, right: &AxtPolicyEntry) -> bool {
-    left.manifest_root == right.manifest_root
-        && left.target_lane == right.target_lane
-        && left.active_handle_era == right.active_handle_era
-}
+include!("state/axt_handle_budget.rs");
 /// Helper utilities for mutating MV cells that store vectors.
 pub trait CellVecExt<T: MvValue> {
     /// Apply a mutation to the vector contents within a transaction boundary.
@@ -737,6 +646,7 @@ macro_rules! with_world_overlay_fields {
             space_directory_manifests,
             axt_policies,
             axt_handle_counters,
+            axt_asset_incarnations,
             axt_replay_ledger,
             axt_handle_budget_ledger,
             sccp_registry,
@@ -934,6 +844,8 @@ macro_rules! build_world_transaction_from_fields {
     ) => {
         WorldTransaction {
             dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
+            axt_last_authorization_identities: axt_authorization_identities($state),
+            axt_authorization_transitioned: BTreeSet::new(),
             $($prefix: $state.$prefix.transaction(),)*
             $($privacy: $state.$privacy.transaction(),)*
             $($suffix: $state.$suffix.transaction(),)*
@@ -3750,10 +3662,12 @@ pub struct World {
     /// Capability manifest records keyed by UAID (Space Directory).
     #[norito(skip)]
     pub(crate) space_directory_manifests: Storage<UniversalAccountId, SpaceDirectoryManifestSet>,
-    /// Consensus-persisted per-dataspace AXT policy and handle-counter ratchets.
+    /// Consensus-persisted per-dataspace AXT policy projections.
     pub(crate) axt_policies: Storage<DataSpaceId, AxtPolicyEntry>,
     /// Permanent per-dataspace AXT handle-counter ratchets.
     pub(crate) axt_handle_counters: Storage<DataSpaceId, AxtHandleCounterRecord>,
+    /// Consensus-persisted live incarnation of each registered asset definition.
+    pub(crate) axt_asset_incarnations: Storage<AssetDefinitionId, AxtAssetIncarnationV1>,
     /// Consensus-persisted replay ledger for unexpired AXT handles.
     pub(crate) axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord>,
     /// Consensus-persisted cumulative spend for issuer-signed AXT handle families.
@@ -4412,11 +4326,13 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) space_directory_manifests:
         StorageBlock<'world, UniversalAccountId, SpaceDirectoryManifestSet>,
-    /// Consensus-persisted per-dataspace AXT policy and handle-counter ratchets.
+    /// Consensus-persisted per-dataspace AXT policy projections.
     pub(crate) axt_policies: StorageBlock<'world, DataSpaceId, AxtPolicyEntry>,
     /// Permanent per-dataspace AXT handle-counter ratchets for this block scope.
-    pub(crate) axt_handle_counters:
-        StorageBlock<'world, DataSpaceId, AxtHandleCounterRecord>,
+    pub(crate) axt_handle_counters: StorageBlock<'world, DataSpaceId, AxtHandleCounterRecord>,
+    /// Live asset-definition incarnations for this block scope.
+    pub(crate) axt_asset_incarnations:
+        StorageBlock<'world, AssetDefinitionId, AxtAssetIncarnationV1>,
     /// Consensus-persisted replay ledger for unexpired AXT handles.
     pub(crate) axt_replay_ledger: StorageBlock<'world, AxtHandleReplayKey, AxtReplayRecord>,
     /// Consensus-persisted cumulative AXT handle-family spend for this block scope.
@@ -4991,6 +4907,11 @@ impl<'world> WorldBlock<'world> {
         );
         collect_reverts!(self.assets, Asset);
         collect_reverts!(self.asset_metadata, AssetMetadata);
+        collect_reverts!(self.axt_policies, AxtPolicy);
+        collect_reverts!(self.axt_handle_counters, AxtHandleCounter);
+        collect_reverts!(self.axt_asset_incarnations, AxtAssetIncarnation);
+        collect_reverts!(self.axt_replay_ledger, AxtReplay);
+        collect_reverts!(self.axt_handle_budget_ledger, AxtHandleBudget);
         collect_reverts!(self.nfts, Nft);
         collect_reverts!(self.rwas, Rwa);
         collect_reverts!(self.roles, Role);
@@ -5067,6 +4988,11 @@ impl<'world> WorldBlock<'world> {
         );
         collect_payload!(self.assets, Asset);
         collect_payload!(self.asset_metadata, AssetMetadata);
+        collect_payload!(self.axt_policies, AxtPolicy);
+        collect_payload!(self.axt_handle_counters, AxtHandleCounter);
+        collect_payload!(self.axt_asset_incarnations, AxtAssetIncarnation);
+        collect_payload!(self.axt_replay_ledger, AxtReplay);
+        collect_payload!(self.axt_handle_budget_ledger, AxtHandleBudget);
         collect_payload!(self.nfts, Nft);
         collect_payload!(self.rwas, Rwa);
         collect_payload!(self.roles, Role);
@@ -5241,6 +5167,7 @@ impl<'world> WorldBlock<'world> {
             space_directory_manifests,
             axt_policies,
             axt_handle_counters,
+            axt_asset_incarnations,
             axt_replay_ledger,
             axt_handle_budget_ledger,
             sccp_outbound_pending_messages,
@@ -5612,6 +5539,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Permanent per-dataspace AXT handle-counter ratchets.
     pub(crate) axt_handle_counters:
         StorageTransaction<'block, 'world, DataSpaceId, AxtHandleCounterRecord>,
+    /// Live asset-definition incarnations for this transaction.
+    pub(crate) axt_asset_incarnations:
+        StorageTransaction<'block, 'world, AssetDefinitionId, AxtAssetIncarnationV1>,
     /// Bounded replay ledger for AXT handles.
     pub(crate) axt_replay_ledger:
         StorageTransaction<'block, 'world, AxtHandleReplayKey, AxtReplayRecord>,
@@ -6150,6 +6080,10 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) axt_current_slot: u64,
     /// Dataspace-to-lane map used when deriving AXT policy caches.
     pub(crate) axt_lane_map: BTreeMap<DataSpaceId, LaneId>,
+    /// Last authorization identity observed inside this transaction.
+    axt_last_authorization_identities: BTreeMap<DataSpaceId, AxtAuthorizationId>,
+    /// Sticky authorization transitions produced by this transaction.
+    axt_authorization_transitioned: BTreeSet<DataSpaceId>,
     /// Dataspace context for this world-transaction execution scope.
     pub(crate) current_dataspace_id: Option<DataSpaceId>,
     /// State telemetry handle used to mirror data events into metrics.
@@ -6260,6 +6194,45 @@ impl Drop for GovernanceProposalsMutForTesting<'_, '_, '_> {
 }
 #[allow(single_use_lifetimes)]
 impl<'block, 'world> WorldTransaction<'block, 'world> {
+    fn observe_axt_authorization_identities(&mut self) {
+        let current = axt_authorization_identities(self);
+        let dataspaces: BTreeSet<_> = self
+            .axt_last_authorization_identities
+            .keys()
+            .chain(current.keys())
+            .copied()
+            .collect();
+        for dataspace in dataspaces {
+            if self.axt_last_authorization_identities.get(&dataspace) != current.get(&dataspace) {
+                self.axt_authorization_transitioned.insert(dataspace);
+            }
+        }
+        self.axt_last_authorization_identities = current;
+    }
+
+    fn mark_axt_lane_incarnation_transitions(
+        &mut self,
+        previous: &BTreeMap<LaneId, Hash>,
+        next: &BTreeMap<LaneId, Hash>,
+    ) {
+        let changed_lanes: BTreeSet<_> = previous
+            .keys()
+            .chain(next.keys())
+            .copied()
+            .filter(|lane| previous.get(lane) != next.get(lane))
+            .collect();
+        if changed_lanes.is_empty() {
+            return;
+        }
+        self.axt_authorization_transitioned.extend(
+            self.axt_policies
+                .view()
+                .iter()
+                .filter(|(_, policy)| changed_lanes.contains(&policy.target_lane))
+                .map(|(dataspace, _)| *dataspace),
+        );
+    }
+
     /// Mutable Musubi namespace-binding storage used by registry execution.
     pub fn musubi_namespace_bindings_mut(
         &mut self,
@@ -6602,6 +6575,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> Option<AssetDefinition> {
         let removed = self.asset_definitions.remove(definition_id.clone());
         if let Some(definition) = removed.as_ref() {
+            self.axt_asset_incarnations.remove(definition_id.clone());
             if let Some(transition) = definition.confidential_policy().pending_transition() {
                 self.untrack_confidential_policy_transition(
                     definition_id,
@@ -7712,6 +7686,9 @@ pub struct WorldView<'world> {
     pub(crate) axt_policies: StorageView<'world, DataSpaceId, AxtPolicyEntry>,
     /// Permanent per-dataspace AXT handle-counter ratchets.
     pub(crate) axt_handle_counters: StorageView<'world, DataSpaceId, AxtHandleCounterRecord>,
+    /// Live asset-definition incarnations.
+    pub(crate) axt_asset_incarnations:
+        StorageView<'world, AssetDefinitionId, AxtAssetIncarnationV1>,
     /// Bounded replay ledger for AXT handles.
     pub(crate) axt_replay_ledger: StorageView<'world, AxtHandleReplayKey, AxtReplayRecord>,
     /// Consensus-persisted cumulative AXT handle-family spend view.
@@ -11378,6 +11355,42 @@ pub struct AxtBlockStartSnapshot {
             crate::nexus::space_directory::AxtIssuerResolutionError,
         >,
     >,
+    lane_incarnations: BTreeMap<DataSpaceId, Option<Hash>>,
+}
+/// Complete block-local identity whose replacement revokes unused AXT nonces.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AxtAuthorizationId {
+    manifest_root: [u8; 32],
+    target_lane: LaneId,
+    active_handle_era: u64,
+    issuer: Result<
+        crate::nexus::space_directory::AxtIssuerBinding,
+        crate::nexus::space_directory::AxtIssuerResolutionError,
+    >,
+}
+fn axt_authorization_identities(
+    world: &(impl WorldReadOnly + ?Sized),
+) -> BTreeMap<DataSpaceId, AxtAuthorizationId> {
+    world
+        .axt_policies()
+        .iter()
+        .filter(|(_, policy)| axt_policy_is_active(policy))
+        .map(|(dataspace, policy)| {
+            (
+                *dataspace,
+                AxtAuthorizationId {
+                    manifest_root: policy.manifest_root,
+                    target_lane: policy.target_lane,
+                    active_handle_era: policy.active_handle_era,
+                    issuer: crate::nexus::space_directory::resolve_axt_issuer_binding(
+                        world,
+                        *dataspace,
+                        policy.manifest_root,
+                    ),
+                },
+            )
+        })
+        .collect()
 }
 
 /// Project permanent per-dataspace handle counters into a policy snapshot.
@@ -11393,6 +11406,7 @@ pub(crate) fn project_axt_handle_counters(
     for binding in &mut snapshot.entries {
         if let Some(record) = counters.get(&binding.dsid) {
             binding.policy.next_handle_counter = record.next();
+            binding.policy.active_handle_era = record.authorization_generation();
         }
     }
     snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
@@ -11433,9 +11447,23 @@ impl AxtBlockStartSnapshot {
                 )
             })
             .collect();
+        let lane_incarnations = policy_snapshot
+            .entries
+            .iter()
+            .map(|binding| {
+                (
+                    binding.dsid,
+                    state_block
+                        .lane_incarnations
+                        .get(&binding.policy.target_lane)
+                        .copied(),
+                )
+            })
+            .collect();
         Self {
             policy_snapshot,
             issuer_bindings,
+            lane_incarnations,
         }
     }
     /// Return the exact policy identity and initial counters captured at block start.
@@ -11462,6 +11490,43 @@ impl AxtBlockStartSnapshot {
             .ok_or(crate::nexus::space_directory::AxtIssuerResolutionError::MissingManifest)?
             .as_ref()
             .map_err(|error| *error)
+    }
+    pub(crate) fn authorization_identity_changed(
+        &self,
+        world: &(impl WorldReadOnly + ?Sized),
+        final_lane_incarnations: &BTreeMap<LaneId, Hash>,
+        dataspace: DataSpaceId,
+        final_policy: Option<&AxtPolicyEntry>,
+    ) -> bool {
+        let previous_policy = self
+            .policy_snapshot
+            .entries
+            .iter()
+            .find(|binding| binding.dsid == dataspace)
+            .map(|binding| &binding.policy);
+        if axt_policy_identity_changed(previous_policy, final_policy) {
+            return true;
+        }
+        let (Some(previous_policy), Some(final_policy)) = (previous_policy, final_policy) else {
+            return false;
+        };
+        if !axt_policy_is_active(previous_policy) {
+            return false;
+        }
+        let previous_issuer = self.issuer_bindings.get(&dataspace);
+        let final_issuer = crate::nexus::space_directory::resolve_axt_issuer_binding(
+            world,
+            dataspace,
+            final_policy.manifest_root,
+        );
+        if previous_issuer != Some(&final_issuer) {
+            return true;
+        }
+        let previous_incarnation = self.lane_incarnations.get(&dataspace).copied().flatten();
+        let final_incarnation = final_lane_incarnations
+            .get(&final_policy.target_lane)
+            .copied();
+        previous_incarnation != final_incarnation
     }
     fn policy_with_counters(&self, counters: &BTreeMap<DataSpaceId, u64>) -> AxtPolicySnapshot {
         let mut snapshot = self.policy_snapshot.clone();
@@ -11576,8 +11641,8 @@ pub struct StateBlock<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
-    /// Deterministic ledger time used by queries in this block scope.
-    query_ledger_time_ms: u64,
+    /// Authenticated ledger time used by queries in this block scope.
+    query_ledger_time_ms: Option<u64>,
     /// Optional shared Soracloud runtime handle used for ordered mailbox execution.
     pub soracloud_runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,
     /// Cached snapshot of account identifiers for this block.
@@ -11642,6 +11707,8 @@ pub struct StateBlock<'state> {
     axt_block_start_snapshot: Option<Arc<AxtBlockStartSnapshot>>,
     /// Transactional next-counter state advanced under the frozen AXT policy.
     axt_next_handle_counters: BTreeMap<DataSpaceId, u64>,
+    /// Dataspaces whose authorization changed at least once during this block.
+    axt_authorization_transitioned: BTreeSet<DataSpaceId>,
     /// Durable native independent-batch leg outcomes keyed by entrypoint hash.
     batch_transfer_outcomes:
         BTreeMap<HashOf<TransactionEntrypoint>, Vec<data_pre::AssetBatchTransferOutcome>>,
@@ -11694,6 +11761,8 @@ pub struct StateBlock<'state> {
     autoscale_sample_history: VecDeque<AutoscaleSampleRecord>,
     /// Whether this block appended a canonical autoscale sample record.
     autoscale_sample_history_dirty: bool,
+    /// Canonical raw fragment count used for this block's one autoscale decision.
+    autoscale_evaluated_committed_fragment_count: Option<u64>,
     /// Transaction hashes committed by direct standalone lane-block application.
     direct_committed_entrypoints: HashSet<HashOf<TransactionEntrypoint>>,
     /// Resolved certified merge entry staged before ordinary carrier-block effects.
@@ -11711,6 +11780,8 @@ pub struct StateBlock<'state> {
     pending_nexus_fee_receipt_source_ids: BTreeSet<[u8; 32]>,
     /// Whether deterministic start-of-block effects have already been applied.
     start_of_block_effects_applied: bool,
+    /// Whether the permanent AXT counter ratchets reflect the final policy identity.
+    axt_policy_transition_ratchets_finalized: bool,
     pub(crate) _curr_block: BlockHeader,
     #[cfg(feature = "zk-preverify")]
     pub(crate) zk_dedup: crate::zk::DedupCache,
@@ -11761,6 +11832,101 @@ impl<'state> StateBlock<'state> {
     ) -> Option<&AxtHandleBudgetRecord> {
         self.world.axt_handle_budget_ledger.get_before_block(key)
     }
+    /// Read one permanent dataspace counter from the immutable parent WSV.
+    pub(crate) fn axt_handle_counter_at_block_start(
+        &self,
+        dataspace: &DataSpaceId,
+    ) -> Option<&AxtHandleCounterRecord> {
+        self.world.axt_handle_counters.get_before_block(dataspace)
+    }
+    /// Read one asset-definition incarnation from the immutable parent WSV.
+    ///
+    /// A definition registered or re-registered in this candidate has no
+    /// block-start incarnation, while an unregistered definition retains its
+    /// prior token in the storage undo log. AXT admission requires the current
+    /// and block-start tokens to be identical.
+    pub(crate) fn axt_asset_incarnation_at_block_start(
+        &self,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> Option<&AxtAssetIncarnationV1> {
+        self.world
+            .axt_asset_incarnations
+            .get_before_block(asset_definition_id)
+    }
+    /// Validate the live asset-definition/incarnation bijection before AXT
+    /// post-state is advertised or committed.
+    ///
+    /// Genesis may contain fixture definitions that predate instruction
+    /// execution. Only the empty-parent height-one boundary seeds those rows;
+    /// every later block must have obtained its token from the exact Register
+    /// execution that created the live definition.
+    pub(crate) fn finalize_axt_asset_incarnations(&mut self) -> Result<(), String> {
+        let genesis_boundary = self._curr_block.height().get() == 1 && self.block_hashes.is_empty();
+        if genesis_boundary {
+            let missing: Vec<_> = self
+                .world
+                .asset_definitions
+                .iter()
+                .filter(|(asset_definition_id, _)| {
+                    self.world
+                        .axt_asset_incarnations
+                        .get(asset_definition_id)
+                        .is_none()
+                })
+                .map(|(asset_definition_id, _)| asset_definition_id.clone())
+                .collect();
+            let registration_header_hash = self._curr_block.hash();
+            let execution_identity = Hash::new_from_chunks(&[
+                b"iroha:axt:genesis-asset-incarnation:v1\0",
+                registration_header_hash.as_ref(),
+            ]);
+            for (ordinal, asset_definition_id) in missing.into_iter().enumerate() {
+                let ordinal = u64::try_from(ordinal)
+                    .map_err(|_| "genesis asset-incarnation ordinal overflow".to_owned())?;
+                let incarnation = AxtAssetIncarnationV1::derive(
+                    &self.network_id,
+                    &asset_definition_id,
+                    &registration_header_hash,
+                    &execution_identity,
+                    ordinal,
+                );
+                self.world
+                    .axt_asset_incarnations
+                    .insert(asset_definition_id, incarnation);
+            }
+        }
+
+        for (asset_definition_id, incarnation) in self.world.axt_asset_incarnations.iter() {
+            incarnation.validate().map_err(|error| {
+                format!(
+                    "invalid AXT incarnation for asset definition {asset_definition_id}: {error}"
+                )
+            })?;
+            if self
+                .world
+                .asset_definitions
+                .get(asset_definition_id)
+                .is_none()
+            {
+                return Err(format!(
+                    "AXT incarnation exists for unregistered asset definition {asset_definition_id}"
+                ));
+            }
+        }
+        for (asset_definition_id, _) in self.world.asset_definitions.iter() {
+            if self
+                .world
+                .axt_asset_incarnations
+                .get(asset_definition_id)
+                .is_none()
+            {
+                return Err(format!(
+                    "registered asset definition {asset_definition_id} has no AXT incarnation"
+                ));
+            }
+        }
+        Ok(())
+    }
     /// Read one exact-use guard from the immutable parent WSV.
     ///
     /// Candidate execution may already have inserted or refreshed the same
@@ -11775,6 +11941,104 @@ impl<'state> StateBlock<'state> {
     fn axt_execution_policy_snapshot(&self) -> AxtPolicySnapshot {
         self.axt_block_start_snapshot()
             .policy_with_counters(&self.axt_next_handle_counters)
+    }
+    /// Finalize the permanent handle-counter ratchets for this block's effective
+    /// authorization transition.
+    ///
+    /// Block-start policy, issuer key, and lane-incarnation state is frozen for
+    /// handle admission. After all accepted handles have consumed their own
+    /// counter steps, one additional step revokes the old identity's unused
+    /// next nonce whenever the effective block-final authorization differs.
+    /// Repeated calls are idempotent.
+    pub(crate) fn finalize_axt_policy_transition_ratchets(
+        &mut self,
+    ) -> Result<(), AxtHandleCounterError> {
+        if self.axt_policy_transition_ratchets_finalized {
+            return Ok(());
+        }
+        let block_start = Arc::clone(
+            self.axt_block_start_snapshot
+                .as_ref()
+                .expect("StateBlock constructors must freeze AXT authorization before use"),
+        );
+        let previous_policies: BTreeMap<_, _> = block_start
+            .policy_snapshot()
+            .entries
+            .iter()
+            .map(|binding| (binding.dsid, binding.policy))
+            .collect();
+        // Read the unprojected candidate rows before synchronizing the durable
+        // ratchet. Their era carries the manifest-derived lower bound for the
+        // next authorization generation; a public snapshot must never supply
+        // that minimum itself.
+        let final_policies: BTreeMap<_, _> = self
+            .world
+            .axt_policies
+            .iter()
+            .map(|(dataspace, policy)| (*dataspace, *policy))
+            .collect();
+        let dataspaces: BTreeSet<_> = previous_policies
+            .keys()
+            .chain(final_policies.keys())
+            .chain(self.axt_authorization_transitioned.iter())
+            .copied()
+            .collect();
+        let mut counter_updates = BTreeMap::new();
+        for dataspace in dataspaces {
+            let previous_policy = previous_policies.get(&dataspace);
+            let final_policy = final_policies.get(&dataspace);
+            let endpoint_identity_changed = block_start.authorization_identity_changed(
+                &self.world,
+                &self.lane_incarnations,
+                dataspace,
+                final_policy,
+            );
+            if endpoint_identity_changed {
+                self.axt_authorization_transitioned.insert(dataspace);
+            }
+            let authorization_identity_changed =
+                self.axt_authorization_transitioned.contains(&dataspace);
+            let minimum_generation =
+                axt_policy_generation_minimum(&self.world, dataspace, final_policy);
+            let counter = axt_counter_after_block_boundary(
+                previous_policy,
+                final_policy,
+                minimum_generation,
+                authorization_identity_changed,
+                self.axt_handle_counter_at_block_start(&dataspace).copied(),
+                self.world.axt_handle_counters.get(&dataspace).copied(),
+            )?;
+            if let Some(counter) = counter {
+                counter_updates.insert(dataspace, counter);
+            }
+        }
+        for (dataspace, counter) in &counter_updates {
+            self.world.axt_handle_counters.insert(*dataspace, *counter);
+        }
+        let policy_dataspaces: Vec<_> = self
+            .world
+            .axt_policies
+            .iter()
+            .map(|(dataspace, _)| *dataspace)
+            .collect();
+        for dataspace in policy_dataspaces {
+            let Some(mut policy) = self.world.axt_policies.get(&dataspace).copied() else {
+                continue;
+            };
+            policy.next_handle_counter = self
+                .world
+                .axt_handle_counters
+                .get(&dataspace)
+                .map_or(0, AxtHandleCounterRecord::next);
+            policy.active_handle_era = self
+                .world
+                .axt_handle_counters
+                .get(&dataspace)
+                .map_or(0, AxtHandleCounterRecord::authorization_generation);
+            self.world.axt_policies.insert(dataspace, policy);
+        }
+        self.axt_policy_transition_ratchets_finalized = true;
+        Ok(())
     }
     /// Return the staged lane-incarnation lineage used by canonical snapshot hashing.
     pub(crate) fn lane_incarnation_lineage_for_snapshot(
@@ -12105,7 +12369,37 @@ impl<'state> StateBlock<'state> {
             let replay_key =
                 AxtHandleReplayKey::from_handle(handle.intent.asset_dsid, &handle.handle);
             let budget_key = AxtHandleBudgetKey::from_handle(&handle.handle);
-            if self.world.axt_replay_ledger.get(&replay_key).is_none() {
+            if let Some(replay_record) = self.world.axt_replay_ledger.get(&replay_key) {
+                assert_eq!(
+                    replay_record.budget_key, budget_key,
+                    "persisted AXT replay key must reference the exact consumed budget family"
+                );
+                replay_record
+                    .validate_for_key(&replay_key)
+                    .expect("persisted AXT replay record must remain canonical");
+                let counter = counter_updates
+                    .get(&handle.intent.asset_dsid)
+                    .copied()
+                    .or_else(|| {
+                        self.world
+                            .axt_handle_counters
+                            .get(&handle.intent.asset_dsid)
+                            .copied()
+                    })
+                    .expect("persisted AXT replay key must retain its permanent counter ratchet");
+                assert!(
+                    counter.next() > handle.handle.sub_nonce,
+                    "persisted AXT replay key must have an already-advanced counter ratchet"
+                );
+                self.world
+                    .axt_handle_budget_ledger
+                    .get(&replay_record.budget_key)
+                    .expect(
+                        "persisted AXT replay key must retain its cumulative family budget record",
+                    )
+                    .validate_for_key(&replay_record.budget_key)
+                    .expect("persisted AXT replay budget evidence must remain canonical");
+            } else {
                 let counter = counter_updates
                     .entry(handle.intent.asset_dsid)
                     .or_insert_with(|| {
@@ -12113,10 +12407,12 @@ impl<'state> StateBlock<'state> {
                             .axt_handle_counters
                             .get(&handle.intent.asset_dsid)
                             .copied()
-                            .unwrap_or_else(AxtHandleCounterRecord::initial)
+                            .unwrap_or_else(|| {
+                                AxtHandleCounterRecord::initial(handle.handle.handle_era)
+                            })
                     });
                 counter
-                    .try_advance(handle.handle.sub_nonce)
+                    .try_advance(handle.handle.handle_era, handle.handle.sub_nonce)
                     .expect("committed AXT replay must advance the permanent dataspace counter");
                 assert_eq!(
                     budget_key.asset_dsid(),
@@ -12135,46 +12431,31 @@ impl<'state> StateBlock<'state> {
                 budget_record
                     .try_consume(&budget_key, &amount, retain_until_slot)
                     .expect("committed AXT replay must remain within its signed family budget");
-            } else {
-                let counter = counter_updates
-                    .get(&handle.intent.asset_dsid)
-                    .copied()
-                    .or_else(|| {
-                        self.world
-                            .axt_handle_counters
-                            .get(&handle.intent.asset_dsid)
-                            .copied()
-                    })
-                    .expect("persisted AXT replay key must retain its permanent counter ratchet");
-                assert!(
-                    counter.next() > handle.handle.sub_nonce,
-                    "persisted AXT replay key must have an already-advanced counter ratchet"
-                );
-                assert!(
-                    self.world
-                        .axt_handle_budget_ledger
-                        .get(&budget_key)
-                        .is_some(),
-                    "persisted AXT replay key must retain its cumulative family budget record"
-                );
+                replay_records.push((
+                    replay_key,
+                    handle.intent.asset_dsid,
+                    budget_key,
+                    retain_until_slot,
+                ));
             }
-            replay_records.push((replay_key, handle.intent.asset_dsid, retain_until_slot));
         }
         for (dataspace, counter) in counter_updates {
             self.world.axt_handle_counters.insert(dataspace, counter);
             if let Some(mut policy) = self.world.axt_policies.get(&dataspace).copied() {
                 policy.next_handle_counter = counter.next();
+                policy.active_handle_era = counter.authorization_generation();
                 self.world.axt_policies.insert(dataspace, policy);
             }
         }
         for (key, record) in budget_updates {
             self.world.axt_handle_budget_ledger.insert(key, record);
         }
-        for (key, dataspace, retain_until_slot) in replay_records {
+        for (key, dataspace, budget_key, retain_until_slot) in replay_records {
             self.world.axt_replay_ledger.insert(
                 key,
                 AxtReplayRecord {
                     dataspace,
+                    budget_key,
                     used_slot: current_slot,
                     retain_until_slot,
                 },
@@ -12210,6 +12491,10 @@ impl<'state> StateBlock<'state> {
     pub fn axt_policy_snapshot(&self) -> AxtPolicySnapshot {
         StateReadOnly::axt_policy_snapshot(self)
     }
+    /// Return every dataspace whose AXT authorization changed during this block.
+    pub(crate) fn axt_authorization_transitioned(&self) -> &BTreeSet<DataSpaceId> {
+        &self.axt_authorization_transitioned
+    }
     /// Replace the cached AXT policies for this block scope with `snapshot`.
     ///
     /// # Errors
@@ -12221,52 +12506,38 @@ impl<'state> StateBlock<'state> {
         snapshot: &AxtPolicySnapshot,
     ) -> Result<(), AxtPolicySnapshotValidationError> {
         snapshot.validate()?;
-        let mut initialize_counters = Vec::new();
         for binding in &snapshot.entries {
-            let expected_counter = self
+            let ratchet_next = self
                 .world
                 .axt_handle_counters
                 .get(&binding.dsid)
-                .copied()
-                .map_or_else(
-                    || {
-                        if binding.policy.manifest_root == [0; 32] {
-                            0
-                        } else {
-                            AxtHandleCounterRecord::initial().next()
-                        }
-                    },
-                    |record| record.next(),
-                );
-            if binding.policy.next_handle_counter != expected_counter {
-                return Err(
-                    AxtPolicySnapshotValidationError::CounterRatchetMismatch {
-                        dataspace: binding.dsid,
-                        policy_next: binding.policy.next_handle_counter,
-                        ratchet_next: expected_counter,
-                    },
-                );
+                .map_or(0, AxtHandleCounterRecord::next);
+            if binding.policy.next_handle_counter != ratchet_next {
+                return Err(AxtPolicySnapshotValidationError::CounterRatchetMismatch {
+                    dataspace: binding.dsid,
+                    policy_next: binding.policy.next_handle_counter,
+                    ratchet_next,
+                });
             }
-            if binding.policy.manifest_root != [0; 32]
-                && self
-                    .world
-                    .axt_handle_counters
-                    .get(&binding.dsid)
-                    .is_none()
-            {
-                initialize_counters.push(binding.dsid);
-            }
-        }
-        for dataspace in initialize_counters {
-            self.world
+            let ratchet_generation = self
+                .world
                 .axt_handle_counters
-                .insert(dataspace, AxtHandleCounterRecord::initial());
+                .get(&binding.dsid)
+                .map_or(0, AxtHandleCounterRecord::authorization_generation);
+            if binding.policy.active_handle_era != ratchet_generation {
+                return Err(
+                    AxtPolicySnapshotValidationError::AuthorizationGenerationRatchetMismatch {
+                        dataspace: binding.dsid,
+                        policy_generation: binding.policy.active_handle_era,
+                        ratchet_generation,
+                    },
+                );
+            }
         }
-        if self.axt_policy_snapshot() == *snapshot {
-            #[cfg(feature = "telemetry")]
-            self.telemetry.set_axt_policy_snapshot_version(snapshot);
-            return Ok(());
-        }
+        self.replace_axt_policy_projection(snapshot);
+        Ok(())
+    }
+    fn replace_axt_policy_projection(&mut self, snapshot: &AxtPolicySnapshot) {
         let stale: Vec<_> = self
             .world
             .axt_policies
@@ -12281,7 +12552,6 @@ impl<'state> StateBlock<'state> {
         }
         #[cfg(feature = "telemetry")]
         self.telemetry.set_axt_policy_snapshot_version(snapshot);
-        Ok(())
     }
     fn refresh_axt_policies_from_directory(&mut self) -> Option<AxtPolicySnapshot> {
         let valid_lanes = axt_cached_policy_retain_lane_ids_at_height(
@@ -12327,17 +12597,18 @@ impl<'state> StateBlock<'state> {
         for binding in &mut snap.entries {
             if let Some(record) = self.world.axt_handle_counters.get(&binding.dsid) {
                 binding.policy.next_handle_counter = record.next();
+                binding.policy.active_handle_era = record.authorization_generation();
             } else if binding.policy.manifest_root != [0; 32] {
-                let initial = AxtHandleCounterRecord::initial();
+                let initial = AxtHandleCounterRecord::initial(binding.policy.active_handle_era);
                 binding.policy.next_handle_counter = initial.next();
-                self.world
-                    .axt_handle_counters
-                    .insert(binding.dsid, initial);
+                binding.policy.active_handle_era = initial.authorization_generation();
+                self.world.axt_handle_counters.insert(binding.dsid, initial);
             }
         }
         snap.version = AxtPolicySnapshot::compute_version(&snap.entries);
-        self.install_axt_policy_snapshot(snap)
+        snap.validate()
             .expect("directory-derived AXT policy snapshot must be canonical");
+        self.replace_axt_policy_projection(snap);
         snapshot
     }
     /// Provides read-only access to the current commit topology for this block.
@@ -12467,8 +12738,8 @@ pub struct StateTransaction<'block, 'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
-    /// Deterministic ledger time used by queries in this transaction scope.
-    query_ledger_time_ms: u64,
+    /// Authenticated ledger time used by queries in this transaction scope.
+    query_ledger_time_ms: Option<u64>,
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
@@ -12626,8 +12897,8 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) replay_compatibility: bool,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
-    /// Deterministic per-execution ordinal for contract lifecycle transitions.
-    pub(crate) contract_lifecycle_transition_ordinal: u64,
+    /// Deterministic per-execution ordinal shared by authority-lifecycle transitions.
+    pub(crate) lifecycle_transition_ordinal: u64,
     /// Remaining governed fuel for runtime executor validation in this transaction.
     ///
     /// Every state transaction snapshots `executor.fuel` at creation, including
@@ -12648,6 +12919,8 @@ pub struct StateTransaction<'block, 'state> {
     block_axt_next_handle_counters: &'block mut BTreeMap<DataSpaceId, u64>,
     /// Transaction-local AXT counters used for admission and envelope recording.
     axt_next_handle_counters_after_block: BTreeMap<DataSpaceId, u64>,
+    /// Parent block's sticky set of successful authorization transitions.
+    block_axt_authorization_transitioned: &'block mut BTreeSet<DataSpaceId>,
     /// Block-level accumulator for durable native independent-batch outcomes.
     block_batch_transfer_outcomes: &'block mut BTreeMap<
         HashOf<TransactionEntrypoint>,
@@ -12827,8 +13100,8 @@ pub struct StateView<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
-    /// Latest committed ledger time captured with this view.
-    query_ledger_time_ms: u64,
+    /// Latest authenticated committed ledger time captured with this view.
+    query_ledger_time_ms: Option<u64>,
     /// Cached snapshot of account identifiers for this view.
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// State telemetry
@@ -12901,8 +13174,8 @@ pub struct StateQueryView<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
-    /// Latest committed ledger time captured with this query view.
-    query_ledger_time_ms: u64,
+    /// Latest authenticated committed ledger time captured with this query view.
+    query_ledger_time_ms: Option<u64>,
     /// Cached snapshot of account identifiers for this view.
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// State telemetry.
@@ -18860,6 +19133,8 @@ macro_rules! world_ro_accessors {
             storage axt_policies: DataSpaceId => AxtPolicyEntry;
             /// Permanent per-dataspace AXT handle-counter ratchets.
             storage axt_handle_counters: DataSpaceId => AxtHandleCounterRecord;
+            /// Live incarnation token for every registered asset definition.
+            storage axt_asset_incarnations: AssetDefinitionId => AxtAssetIncarnationV1;
             /// Bounded replay ledger keyed by handle fingerprint.
             storage axt_replay_ledger: AxtHandleReplayKey => AxtReplayRecord;
             /// Cumulative spend keyed by the complete issuer-signed handle family.
@@ -20446,6 +20721,7 @@ impl<'world> WorldBlock<'world> {
             uaid_dataspaces,
             axt_policies,
             axt_handle_counters,
+            axt_asset_incarnations,
             axt_replay_ledger,
             axt_handle_budget_ledger,
             sccp_registry,
@@ -20783,6 +21059,7 @@ impl<'world> WorldBlock<'world> {
         uaid_dataspaces.commit();
         axt_policies.commit();
         axt_handle_counters.commit();
+        axt_asset_incarnations.commit();
         axt_replay_ledger.commit();
         axt_handle_budget_ledger.commit();
         sccp_registry.commit();
@@ -21222,6 +21499,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             for dsid in stale {
                 self.axt_policies.remove(dsid);
             }
+            self.observe_axt_authorization_identities();
             return None;
         }
         let mut bindings: BTreeMap<DataSpaceId, (AxtPolicyEntry, Option<u64>)> = BTreeMap::new();
@@ -21249,13 +21527,17 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                     };
                     let mut manifest_root = [0u8; 32];
                     manifest_root.copy_from_slice(record.manifest_hash.as_ref());
+                    let derived_generation = record
+                        .lifecycle
+                        .activated_epoch
+                        .unwrap_or(record.manifest.activation_epoch);
                     let entry = AxtPolicyEntry {
                         manifest_root,
                         target_lane,
-                        active_handle_era: record
-                            .lifecycle
-                            .activated_epoch
-                            .unwrap_or(record.manifest.activation_epoch),
+                        active_handle_era: durable_counters.get(dsid).map_or(
+                            derived_generation,
+                            AxtHandleCounterRecord::authorization_generation,
+                        ),
                         next_handle_counter: durable_counters
                             .get(dsid)
                             .map_or(1, AxtHandleCounterRecord::next),
@@ -21295,7 +21577,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                         let entry = AxtPolicyEntry {
                             manifest_root: [0; 32],
                             target_lane,
-                            active_handle_era: 0,
+                            active_handle_era: durable_counters
+                                .get(dsid)
+                                .map_or(0, AxtHandleCounterRecord::authorization_generation),
                             next_handle_counter: durable_counters
                                 .get(dsid)
                                 .map_or(0, AxtHandleCounterRecord::next),
@@ -21318,6 +21602,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 for dsid in stale {
                     self.axt_policies.remove(dsid);
                 }
+                self.observe_axt_authorization_identities();
                 return None;
             }
             let stale: Vec<_> = self
@@ -21329,6 +21614,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             for dsid in stale {
                 self.axt_policies.remove(dsid);
             }
+            self.observe_axt_authorization_identities();
             return None;
         }
         let mut snapshot_entries = Vec::with_capacity(bindings.len());
@@ -21340,8 +21626,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .collect();
         for (dsid, (policy, _)) in &bindings {
             if policy.manifest_root != [0; 32] && !durable_counters.contains_key(dsid) {
-                self.axt_handle_counters
-                    .insert(*dsid, AxtHandleCounterRecord::initial());
+                self.axt_handle_counters.insert(
+                    *dsid,
+                    AxtHandleCounterRecord::initial(policy.active_handle_era),
+                );
             }
             self.axt_policies.insert(*dsid, *policy);
             stale.remove(dsid);
@@ -21354,10 +21642,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             self.axt_policies.remove(dsid);
         }
         let version = AxtPolicySnapshot::compute_version(&snapshot_entries);
-        Some(AxtPolicySnapshot {
+        let snapshot = AxtPolicySnapshot {
             version,
             entries: snapshot_entries,
-        })
+        };
+        self.observe_axt_authorization_identities();
+        Some(snapshot)
     }
     pub(crate) fn expire_space_directory_manifest_record(
         &mut self,
@@ -21951,6 +22241,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             uaid_dataspaces,
             axt_policies,
             axt_handle_counters,
+            axt_asset_incarnations,
             axt_replay_ledger,
             axt_handle_budget_ledger,
             sccp_registry,
@@ -22116,6 +22407,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             axt_lane_config: _,
             axt_current_slot: _,
             axt_lane_map: _,
+            axt_last_authorization_identities: _,
+            axt_authorization_transitioned: _,
             current_dataspace_id: _,
         } = self;
         if !external_event_buf.is_empty() {
@@ -22298,6 +22591,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         uaid_dataspaces.apply();
         axt_policies.apply();
         axt_handle_counters.apply();
+        axt_asset_incarnations.apply();
         axt_replay_ledger.apply();
         axt_handle_budget_ledger.apply();
         sccp_registry.apply();
@@ -22788,6 +23082,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 })) => {
                     self.remove_account_scope_accounts_index_entry(account_id);
                     self.account_scope_directory.remove(account_id.clone());
+                    axt_policy_dirty = true;
+                }
+                DataEvent::Account(data_pre::AccountEvent::ControllerReplaced(_))
+                | DataEvent::Domain(data_pre::DomainEvent::Account(data_pre::ScopedAccount {
+                    event: data_pre::AccountEvent::ControllerReplaced(_),
+                    ..
+                })) => {
+                    axt_policy_dirty = true;
                 }
                 _ => {}
             }
@@ -24338,23 +24640,40 @@ impl State {
     }
     /// Install or update a dataspace AXT policy entry.
     pub fn set_axt_policy(&mut self, dsid: DataSpaceId, mut policy: AxtPolicyEntry) {
+        let previous_policy = self.world.axt_policies.view().get(&dsid).copied();
         let existing_counter = self.world.axt_handle_counters.view().get(&dsid).copied();
         let requested_counter = if policy.next_handle_counter == 0 {
             None
         } else {
             Some(
-                AxtHandleCounterRecord::try_from_next(policy.next_handle_counter)
-                    .expect("explicit AXT policy counter must be non-zero"),
+                AxtHandleCounterRecord::try_from_parts(
+                    policy.next_handle_counter,
+                    policy.active_handle_era,
+                )
+                .expect("explicit AXT policy counter must be non-zero"),
             )
         };
-        let counter = match (existing_counter, requested_counter) {
-            (Some(existing), Some(requested)) if existing.next() >= requested.next() => {
-                Some(existing)
-            }
-            (Some(_), Some(requested)) | (None, Some(requested)) => Some(requested),
-            (Some(existing), None) => Some(existing),
-            (None, None) => None,
-        };
+        // Once a durable ratchet exists, neither caller-supplied counter nor
+        // era may replace it. The requested era is only a lower bound for an
+        // authenticated identity transition below.
+        let mut counter = existing_counter.or(requested_counter);
+        let previous_was_active = previous_policy.as_ref().is_some_and(axt_policy_is_active);
+        let next_is_active = axt_policy_is_active(&policy);
+        let revokes_authority = previous_was_active
+            || (existing_counter.is_some() && !previous_was_active && next_is_active);
+        let raises_generation_floor = counter
+            .as_ref()
+            .is_some_and(|counter| policy.active_handle_era > counter.authorization_generation());
+        if revokes_authority
+            && (axt_policy_identity_changed(previous_policy.as_ref(), Some(&policy))
+                || raises_generation_floor)
+        {
+            counter
+                .as_mut()
+                .expect("an authorized AXT policy must retain its permanent counter")
+                .try_revoke_for_policy_transition(policy.active_handle_era)
+                .expect("explicit AXT policy transition exhausted its permanent counter");
+        }
         if policy.manifest_root != [0; 32] {
             assert!(
                 counter.is_some(),
@@ -24363,6 +24682,7 @@ impl State {
         }
         if let Some(counter) = counter {
             policy.next_handle_counter = counter.next();
+            policy.active_handle_era = counter.authorization_generation();
             let mut block = self.world.axt_handle_counters.block();
             block.insert(dsid, counter);
             block.commit();
@@ -24456,15 +24776,23 @@ impl State {
             }
             if let Some(record) = durable_counters.get(&binding.dsid) {
                 binding.policy.next_handle_counter = record.next();
+                binding.policy.active_handle_era = record.authorization_generation();
             } else if binding.policy.manifest_root != [0; 32] {
-                binding.policy.next_handle_counter = AxtHandleCounterRecord::initial().next();
+                let initial = AxtHandleCounterRecord::initial(binding.policy.active_handle_era);
+                binding.policy.next_handle_counter = initial.next();
+                binding.policy.active_handle_era = initial.authorization_generation();
                 initial_counter_dsids.push(binding.dsid);
             }
         }
         if !initial_counter_dsids.is_empty() {
             let mut block = self.world.axt_handle_counters.block();
             for dsid in initial_counter_dsids {
-                block.insert(dsid, AxtHandleCounterRecord::initial());
+                let generation = snap
+                    .entries
+                    .iter()
+                    .find(|binding| binding.dsid == dsid)
+                    .map_or(0, |binding| binding.policy.active_handle_era);
+                block.insert(dsid, AxtHandleCounterRecord::initial(generation));
             }
             block.commit();
         }
@@ -24484,6 +24812,27 @@ impl State {
     }
     /// Remove a dataspace AXT policy entry.
     pub fn remove_axt_policy(&mut self, dsid: &DataSpaceId) {
+        let previous_policy = self.world.axt_policies.view().get(dsid).copied();
+        let existing_counter = self.world.axt_handle_counters.view().get(dsid).copied();
+        if previous_policy.as_ref().is_some_and(axt_policy_is_active) {
+            let mut counter = existing_counter.or_else(|| {
+                previous_policy.and_then(|policy| {
+                    AxtHandleCounterRecord::try_from_parts(
+                        policy.next_handle_counter,
+                        policy.active_handle_era,
+                    )
+                    .ok()
+                })
+            });
+            counter
+                .as_mut()
+                .expect("an authorized AXT policy must retain its permanent counter")
+                .try_revoke_for_policy_transition(0)
+                .expect("explicit AXT policy removal exhausted its permanent counter");
+            let mut counters = self.world.axt_handle_counters.block();
+            counters.insert(*dsid, counter.expect("counter was initialized above"));
+            counters.commit();
+        }
         let mut block = self.world.axt_policies.block();
         block.remove(*dsid);
         block.commit();
@@ -25968,8 +26317,9 @@ impl State {
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
             query_handle: &self.query_handle,
-            query_ledger_time_ms: u64::try_from(curr_block.creation_time().as_millis())
-                .unwrap_or(u64::MAX),
+            query_ledger_time_ms: Some(
+                u64::try_from(curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
+            ),
             soracloud_runtime: self.soracloud_runtime(),
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
@@ -26002,6 +26352,7 @@ impl State {
             axt_envelopes: Vec::new(),
             axt_block_start_snapshot: None,
             axt_next_handle_counters: BTreeMap::new(),
+            axt_authorization_transitioned: BTreeSet::new(),
             batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
@@ -26010,6 +26361,7 @@ impl State {
             pending_autoscale_lifecycle: None,
             autoscale_sample_history: self.autoscale_sample_history_snapshot(),
             autoscale_sample_history_dirty: false,
+            autoscale_evaluated_committed_fragment_count: None,
             direct_committed_entrypoints: HashSet::new(),
             staged_merge_entry: None,
             staged_queue_plan_admissions: Vec::new(),
@@ -26017,6 +26369,7 @@ impl State {
             canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
+            axt_policy_transition_ratchets_finalized: false,
             exec_witness: None,
             gas_used_in_block: 0,
             confidential_gas_used_in_block: 0,
@@ -26875,8 +27228,9 @@ impl State {
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
             query_handle: &self.query_handle,
-            query_ledger_time_ms: u64::try_from(curr_block.creation_time().as_millis())
-                .unwrap_or(u64::MAX),
+            query_ledger_time_ms: Some(
+                u64::try_from(curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
+            ),
             soracloud_runtime: self.soracloud_runtime(),
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
@@ -26909,6 +27263,7 @@ impl State {
             axt_envelopes: Vec::new(),
             axt_block_start_snapshot: None,
             axt_next_handle_counters: BTreeMap::new(),
+            axt_authorization_transitioned: BTreeSet::new(),
             batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
@@ -26917,6 +27272,7 @@ impl State {
             pending_autoscale_lifecycle: None,
             autoscale_sample_history: self.autoscale_sample_history_snapshot(),
             autoscale_sample_history_dirty: false,
+            autoscale_evaluated_committed_fragment_count: None,
             direct_committed_entrypoints: HashSet::new(),
             staged_merge_entry: None,
             staged_queue_plan_admissions: Vec::new(),
@@ -26924,6 +27280,7 @@ impl State {
             canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
+            axt_policy_transition_ratchets_finalized: false,
             exec_witness: None,
             gas_used_in_block: 0,
             confidential_gas_used_in_block: 0,
@@ -26992,8 +27349,9 @@ impl State {
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
             query_handle: &self.query_handle,
-            query_ledger_time_ms: u64::try_from(curr_block.creation_time().as_millis())
-                .unwrap_or(u64::MAX),
+            query_ledger_time_ms: Some(
+                u64::try_from(curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
+            ),
             soracloud_runtime: self.soracloud_runtime(),
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
@@ -27026,6 +27384,7 @@ impl State {
             axt_envelopes: Vec::new(),
             axt_block_start_snapshot: None,
             axt_next_handle_counters: BTreeMap::new(),
+            axt_authorization_transitioned: BTreeSet::new(),
             batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
@@ -27034,6 +27393,7 @@ impl State {
             pending_autoscale_lifecycle: None,
             autoscale_sample_history,
             autoscale_sample_history_dirty: false,
+            autoscale_evaluated_committed_fragment_count: None,
             direct_committed_entrypoints: HashSet::new(),
             staged_merge_entry: None,
             staged_queue_plan_admissions: Vec::new(),
@@ -27041,6 +27401,7 @@ impl State {
             canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
+            axt_policy_transition_ratchets_finalized: false,
             exec_witness: None,
             gas_used_in_block: 0,
             confidential_gas_used_in_block: 0,
@@ -27192,7 +27553,7 @@ impl State {
             let block_hashes: Vec<HashOf<BlockHeader>> =
                 self.block_hashes.view().iter().copied().collect();
             let block_hashes_wait = block_hashes_start.elapsed();
-            let query_ledger_time_ms = self.latest_block_creation_time_ms_fast().unwrap_or(0);
+            let query_ledger_time_ms = self.latest_block_creation_time_ms_fast();
             let world_start = Instant::now();
             let world = self.world.view();
             let world_wait = world_start.elapsed();
@@ -27372,16 +27733,30 @@ impl State {
     pub fn latest_block_header_fast(&self) -> Option<BlockHeader> {
         self.latest_block_header.read().clone()
     }
-    /// Latest committed block creation time from the in-memory header cache.
+    /// Latest authenticated committed block creation time.
     ///
     /// Unlike [`StateReadOnly::latest_block`], this never loads or decodes a
     /// block body from Kura when a query needs only deterministic ledger time.
+    /// A hash-only snapshot bootstrap falls back to its authenticated anchor.
     #[must_use]
     pub fn latest_block_creation_time_ms_fast(&self) -> Option<u64> {
-        self.latest_block_header
+        let latest_hash = self.latest_block_hash_fast();
+        let cached = self
+            .latest_block_header
             .read()
             .as_ref()
-            .map(|header| u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX))
+            .filter(|header| Some(header.hash()) == latest_hash)
+            .map(|header| u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX));
+        cached.or_else(|| {
+            let anchor = self
+                .authenticated_snapshot_v2_bootstrap
+                .as_ref()?
+                .context
+                .snapshot_bootstrap
+                .as_ref()?;
+            (Some(anchor.snapshot_block_hash) == latest_hash)
+                .then_some(anchor.snapshot_block_creation_time_ms)
+        })
     }
     fn update_latest_block_header_cache(&self, header: BlockHeader) {
         *self.latest_block_header.write() = Some(header);
@@ -27804,7 +28179,7 @@ impl State {
             let block_hashes: Vec<HashOf<BlockHeader>> =
                 self.block_hashes.view().iter().copied().collect();
             let block_hashes_wait = block_hashes_start.elapsed();
-            let query_ledger_time_ms = self.latest_block_creation_time_ms_fast().unwrap_or(0);
+            let query_ledger_time_ms = self.latest_block_creation_time_ms_fast();
             let nexus_start = Instant::now();
             let nexus = self.nexus_snapshot();
             let lane_incarnations = self.lane_incarnations_snapshot();
@@ -41016,725 +41391,7 @@ fn dir_size(path: &Path) -> io::Result<u64> {
     }
     Ok(total)
 }
-struct LaneTopologyDiff<'a> {
-    added: Vec<&'a iroha_config::parameters::actual::LaneConfigEntry>,
-    retired: Vec<&'a iroha_config::parameters::actual::LaneConfigEntry>,
-    replacements: Vec<(
-        &'a iroha_config::parameters::actual::LaneConfigEntry,
-        &'a iroha_config::parameters::actual::LaneConfigEntry,
-    )>,
-    relabelled: Vec<(
-        &'a iroha_config::parameters::actual::LaneConfigEntry,
-        &'a iroha_config::parameters::actual::LaneConfigEntry,
-    )>,
-}
-#[derive(Clone)]
-struct LaneLifecycleCatalogUpdate {
-    previous_catalog: LaneCatalog,
-    previous_dataspace_catalog: DataSpaceCatalog,
-    previous_routing_policy: LaneRoutingPolicy,
-    previous_autoscale: iroha_config::parameters::actual::Autoscale,
-    updated_catalog: LaneCatalog,
-    previous_lane_config: iroha_config::parameters::actual::LaneConfig,
-    updated_lane_config: iroha_config::parameters::actual::LaneConfig,
-    previous_lane_incarnations: BTreeMap<LaneId, Hash>,
-    updated_lane_incarnations: BTreeMap<LaneId, Hash>,
-    previous_lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
-    updated_lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
-    previous_lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
-    updated_lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
-    lanes_to_reset: BTreeSet<LaneId>,
-    replaced_lane_ids: BTreeSet<LaneId>,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct LaneIncarnationLineage {
-    pub(crate) generation: u64,
-    pub(crate) incarnation: Hash,
-    pub(crate) activation_height: u64,
-}
-struct ConfiguredPrimaryReplayGeometry {
-    catalog: LaneCatalog,
-    lane_config: iroha_config::parameters::actual::LaneConfig,
-    incarnations: BTreeMap<LaneId, Hash>,
-    activation_heights: BTreeMap<LaneId, u64>,
-    lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
-    primary_incarnation: Hash,
-}
-const STATIC_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v2\0";
-const CONFIG_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:config:v1\0";
-const LIFECYCLE_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:lifecycle:v1\0";
-const LANE_INCARNATION_LINEAGE_ROOT_DOMAIN: &[u8] =
-    b"iroha:nexus:lane-incarnation-lineage-root:v1\0";
-pub(crate) fn lane_incarnation_lineage_root(
-    network_id: &iroha_data_model::NetworkId,
-    lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
-) -> Hash {
-    let entries = lineage
-        .iter()
-        .map(|(&lane_id, entry)| {
-            (
-                lane_id,
-                entry.generation,
-                entry.incarnation,
-                entry.activation_height,
-            )
-        })
-        .collect::<Vec<_>>();
-    let encoded = (network_id.clone(), entries).encode();
-    Hash::new_from_chunks(&[LANE_INCARNATION_LINEAGE_ROOT_DOMAIN, encoded.as_slice()])
-}
-#[cfg(test)]
-const SYNTHETIC_LANE_LIFECYCLE_HEADER_DOMAIN: &[u8] =
-    b"iroha:nexus:lane-incarnation:synthetic-header:v1\0";
-fn lane_incarnation_is_zero(incarnation: Hash) -> bool {
-    incarnation.as_ref().iter().all(|byte| *byte == 0)
-}
-fn lane_incarnation_matches_at_height(
-    incarnations: &BTreeMap<LaneId, Hash>,
-    activation_heights: &BTreeMap<LaneId, u64>,
-    lane_id: LaneId,
-    proposal_height: u64,
-    actual: Hash,
-) -> bool {
-    incarnations.get(&lane_id) == Some(&actual)
-        && activation_heights
-            .get(&lane_id)
-            .is_some_and(|activation_height| proposal_height > *activation_height)
-}
-#[cfg(test)]
-fn synthetic_lane_lifecycle_header_hash(
-    network_id: &iroha_data_model::NetworkId,
-    current_block_height: u64,
-    plan: &iroha_data_model::nexus::LaneLifecyclePlan,
-) -> HashOf<BlockHeader> {
-    let encoded = (network_id.clone(), current_block_height, plan.clone()).encode();
-    HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
-        SYNTHETIC_LANE_LIFECYCLE_HEADER_DOMAIN,
-        encoded.as_slice(),
-    ]))
-}
-/// Derive the generation-zero lane identities committed by genesis.
-///
-/// Exact network identity is deliberately absent: `NetworkId` is the final signed-genesis hash,
-/// while these values participate in the Nexus/AMX commitment embedded in that same signed block.
-/// Including it would require a cryptographic fixed point. Transactions and live height and
-/// availability carriers authenticate `NetworkId` separately, while later lifecycle derivation
-/// remains network-bound, so this non-circular genesis seed does not weaken replay protection.
-pub(crate) fn derive_static_lane_incarnations(catalog: &LaneCatalog) -> BTreeMap<LaneId, Hash> {
-    let catalog_hash = merge_lane_consensus_catalog_hash(catalog);
-    catalog
-        .lanes()
-        .iter()
-        .map(|lane| {
-            let encoded = (catalog_hash, lane.id, merge_lane_config_hash(lane)).encode();
-            (
-                lane.id,
-                Hash::new_from_chunks(&[STATIC_LANE_INCARNATION_DOMAIN, encoded.as_slice()]),
-            )
-        })
-        .collect()
-}
-fn configured_primary_replay_geometry(
-    configured_lane_catalog: &LaneCatalog,
-) -> Result<ConfiguredPrimaryReplayGeometry, LaneLifecycleError> {
-    let primary = configured_lane_catalog
-        .lanes()
-        .first()
-        .cloned()
-        .ok_or_else(|| {
-            LaneLifecycleError::ConfiguredCatalogBaseline(
-                "configured lane catalog has no primary lane".to_owned(),
-            )
-        })?;
-    let catalog = LaneCatalog::new(configured_lane_catalog.lane_count(), vec![primary])
-        .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
-    let incarnations = derive_static_lane_incarnations(&catalog);
-    let primary_incarnation = incarnations.get(&LaneId::SINGLE).copied().ok_or_else(|| {
-        LaneLifecycleError::ConfiguredCatalogBaseline(
-            "configured primary catalog does not contain lane zero".to_owned(),
-        )
-    })?;
-    let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
-    let lineage = BTreeMap::from([(
-        LaneId::SINGLE,
-        LaneIncarnationLineage {
-            generation: 0,
-            incarnation: primary_incarnation,
-            activation_height: 0,
-        },
-    )]);
-    let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
-    Ok(ConfiguredPrimaryReplayGeometry {
-        catalog,
-        lane_config,
-        incarnations,
-        activation_heights,
-        lineage,
-        primary_incarnation,
-    })
-}
-fn validate_lane_incarnation_map(
-    catalog: &LaneCatalog,
-    incarnations: &BTreeMap<LaneId, Hash>,
-) -> Result<(), LaneLifecycleError> {
-    let expected: BTreeSet<_> = catalog.lanes().iter().map(|lane| lane.id).collect();
-    let actual: BTreeSet<_> = incarnations.keys().copied().collect();
-    if expected != actual {
-        return Err(LaneLifecycleError::LaneIncarnationState(format!(
-            "active lane ids {expected:?} do not match incarnation ids {actual:?}"
-        )));
-    }
-    if let Some(lane) = incarnations
-        .iter()
-        .find_map(|(lane, incarnation)| lane_incarnation_is_zero(*incarnation).then_some(*lane))
-    {
-        return Err(LaneLifecycleError::LaneIncarnationState(format!(
-            "lane {lane} has an all-zero incarnation commitment"
-        )));
-    }
-    let mut unique = BTreeSet::new();
-    if let Some((lane, _)) = incarnations
-        .iter()
-        .find(|(_, incarnation)| !unique.insert(**incarnation))
-    {
-        return Err(LaneLifecycleError::LaneIncarnationState(format!(
-            "lane {lane} reuses another active lane's incarnation commitment"
-        )));
-    }
-    Ok(())
-}
-fn validate_lane_incarnation_lineage(
-    catalog: &LaneCatalog,
-    active_incarnations: &BTreeMap<LaneId, Hash>,
-    active_activation_heights: &BTreeMap<LaneId, u64>,
-    lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
-) -> Result<(), LaneLifecycleError> {
-    validate_lane_incarnation_map(catalog, active_incarnations)?;
-    validate_lane_incarnation_activation_heights(catalog, active_activation_heights)?;
-    let mut unique = BTreeSet::new();
-    for (&lane_id, entry) in lineage {
-        if lane_incarnation_is_zero(entry.incarnation) {
-            return Err(LaneLifecycleError::LaneIncarnationState(format!(
-                "retained lineage lane {lane_id} has an all-zero incarnation commitment"
-            )));
-        }
-        if !unique.insert(entry.incarnation) {
-            return Err(LaneLifecycleError::LaneIncarnationState(format!(
-                "retained lineage lane {lane_id} reuses another lane's latest incarnation commitment"
-            )));
-        }
-    }
-    for (&lane_id, &incarnation) in active_incarnations {
-        let Some(entry) = lineage.get(&lane_id) else {
-            return Err(LaneLifecycleError::LaneIncarnationState(format!(
-                "active lane {lane_id} is missing its retained incarnation lineage"
-            )));
-        };
-        if entry.incarnation != incarnation
-            || active_activation_heights.get(&lane_id) != Some(&entry.activation_height)
-        {
-            return Err(LaneLifecycleError::LaneIncarnationState(format!(
-                "active lane {lane_id} incarnation or activation does not match its retained lineage"
-            )));
-        }
-    }
-    Ok(())
-}
-fn derive_config_lane_incarnation(
-    network_id: &iroha_data_model::NetworkId,
-    previous_catalog: &LaneCatalog,
-    current_block_height: u64,
-    lane: &iroha_data_model::nexus::LaneConfig,
-    prior: LaneIncarnationLineage,
-    next_generation: u64,
-    updated_catalog_hash: Hash,
-) -> Hash {
-    let previous_catalog_hash = merge_lane_consensus_catalog_hash(previous_catalog);
-    let encoded = (
-        network_id.clone(),
-        previous_catalog_hash,
-        updated_catalog_hash,
-        current_block_height,
-        lane.id,
-        merge_lane_config_hash(lane),
-        prior.generation,
-        prior.incarnation,
-        prior.activation_height,
-        next_generation,
-    )
-        .encode();
-    Hash::new_from_chunks(&[CONFIG_LANE_INCARNATION_DOMAIN, encoded.as_slice()])
-}
-fn validate_lane_incarnation_activation_heights(
-    catalog: &LaneCatalog,
-    activation_heights: &BTreeMap<LaneId, u64>,
-) -> Result<(), LaneLifecycleError> {
-    let expected: BTreeSet<_> = catalog.lanes().iter().map(|lane| lane.id).collect();
-    let actual: BTreeSet<_> = activation_heights.keys().copied().collect();
-    if expected != actual {
-        return Err(LaneLifecycleError::LaneIncarnationState(format!(
-            "active lane ids {expected:?} do not match incarnation activation ids {actual:?}"
-        )));
-    }
-    Ok(())
-}
-fn derive_lifecycle_lane_incarnation_activation_heights(
-    previous_catalog: &LaneCatalog,
-    updated_catalog: &LaneCatalog,
-    previous: &BTreeMap<LaneId, u64>,
-    plan: &iroha_data_model::nexus::LaneLifecyclePlan,
-    committing_height: u64,
-) -> Result<BTreeMap<LaneId, u64>, LaneLifecycleError> {
-    validate_lane_incarnation_activation_heights(previous_catalog, previous)?;
-    let additions: BTreeSet<_> = plan.additions.iter().map(|lane| lane.id).collect();
-    let updated = updated_catalog
-        .lanes()
-        .iter()
-        .map(|lane| {
-            let activation_height = if additions.contains(&lane.id) {
-                committing_height
-            } else {
-                previous.get(&lane.id).copied().ok_or_else(|| {
-                    LaneLifecycleError::LaneIncarnationState(format!(
-                        "unchanged lane {} is missing its activation height",
-                        lane.id
-                    ))
-                })?
-            };
-            Ok((lane.id, activation_height))
-        })
-        .collect::<Result<BTreeMap<_, _>, LaneLifecycleError>>()?;
-    validate_lane_incarnation_activation_heights(updated_catalog, &updated)?;
-    Ok(updated)
-}
-fn lane_lifecycle_incarnation_root(
-    catalog: &LaneCatalog,
-    incarnations: &BTreeMap<LaneId, Hash>,
-) -> Result<Hash, LaneLifecycleError> {
-    let entries = iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations(
-        catalog,
-        incarnations,
-    )
-    .map_err(|err| LaneLifecycleError::LaneIncarnationState(err.to_string()))?;
-    Ok(iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(&entries))
-}
-fn derive_lifecycle_lane_incarnations(
-    network_id: &iroha_data_model::NetworkId,
-    committing_header_hash: HashOf<BlockHeader>,
-    previous_catalog: &LaneCatalog,
-    updated_catalog: &LaneCatalog,
-    previous_incarnations: &BTreeMap<LaneId, Hash>,
-    previous_activation_heights: &BTreeMap<LaneId, u64>,
-    previous_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
-    plan: &iroha_data_model::nexus::LaneLifecyclePlan,
-) -> Result<BTreeMap<LaneId, Hash>, LaneLifecycleError> {
-    validate_lane_incarnation_lineage(
-        previous_catalog,
-        previous_incarnations,
-        previous_activation_heights,
-        previous_lineage,
-    )?;
-    let changed_lanes: BTreeSet<_> = plan.additions.iter().map(|lane| lane.id).collect();
-    let previous_catalog_hash = merge_lane_consensus_catalog_hash(previous_catalog);
-    let mut updated = BTreeMap::new();
-    for lane in updated_catalog.lanes() {
-        let incarnation = if changed_lanes.contains(&lane.id) {
-            let prior = previous_lineage.get(&lane.id).copied();
-            let prior_present = [u8::from(prior.is_some())];
-            let prior = prior.unwrap_or(LaneIncarnationLineage {
-                generation: 0,
-                incarnation: Hash::prehashed([0; Hash::LENGTH]),
-                activation_height: 0,
-            });
-            let next_generation = if prior_present[0] == 0 {
-                0
-            } else {
-                prior.generation.checked_add(1).ok_or_else(|| {
-                    LaneLifecycleError::LaneIncarnationState(format!(
-                        "lane {} incarnation generation overflow",
-                        lane.id
-                    ))
-                })?
-            };
-            let encoded = (
-                network_id.clone(),
-                previous_catalog_hash,
-                lane.id,
-                merge_lane_config_hash(lane),
-                prior.generation,
-                prior.incarnation,
-                prior.activation_height,
-                next_generation,
-            )
-                .encode();
-            Hash::new_from_chunks(&[
-                LIFECYCLE_LANE_INCARNATION_DOMAIN,
-                committing_header_hash.as_ref(),
-                prior_present.as_slice(),
-                encoded.as_slice(),
-            ])
-        } else {
-            previous_incarnations
-                .get(&lane.id)
-                .copied()
-                .ok_or_else(|| {
-                    LaneLifecycleError::LaneIncarnationState(format!(
-                        "unchanged lane {} is missing its prior incarnation",
-                        lane.id
-                    ))
-                })?
-        };
-        if lane_incarnation_is_zero(incarnation) {
-            return Err(LaneLifecycleError::LaneIncarnationState(format!(
-                "derived all-zero incarnation for lane {}",
-                lane.id
-            )));
-        }
-        updated.insert(lane.id, incarnation);
-    }
-    validate_lane_incarnation_map(updated_catalog, &updated)?;
-    Ok(updated)
-}
-struct PendingDaCommitmentBundle {
-    block_height: u64,
-    bundle: iroha_data_model::da::commitment::DaCommitmentBundle,
-}
-struct PendingDaPinIntentBundle {
-    block_height: u64,
-    intents: Vec<iroha_data_model::da::pin_intent::DaPinIntent>,
-    quota_writes: crate::da::quota::DaIngestQuotaWrites,
-}
-#[derive(Default)]
-struct DaPinIntentIndexPruneKeys {
-    tickets: BTreeSet<StorageTicketId>,
-    aliases: BTreeSet<String>,
-    manifests: BTreeSet<ManifestDigest>,
-    lane_epochs: BTreeSet<(LaneId, u64, u64)>,
-}
-impl DaPinIntentIndexPruneKeys {
-    fn is_empty(&self) -> bool {
-        self.tickets.is_empty()
-            && self.aliases.is_empty()
-            && self.manifests.is_empty()
-            && self.lane_epochs.is_empty()
-    }
-}
-#[derive(Clone)]
-struct PendingAutoscaleLaneLifecycle {
-    catalog_update: LaneLifecycleCatalogUpdate,
-    updated_lane_manifests: LaneManifestRegistryHandle,
-    plan: iroha_data_model::nexus::LaneLifecyclePlan,
-    transition: PendingAutoscaleTransition,
-    transition_height: u64,
-    expected_incarnation_root: Hash,
-}
-impl PendingAutoscaleLaneLifecycle {
-    fn exact_scale_in_binding(
-        &self,
-    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
-        let PendingAutoscaleTransition::ScaleIn { lane, .. } = &self.transition else {
-            return Ok(None);
-        };
-        ensure_autoscale_transition_matches_plan(&self.plan, &self.transition)?;
-        let previous_lane = self
-            .catalog_update
-            .previous_catalog
-            .lanes()
-            .iter()
-            .find(|candidate| candidate.id == *lane)
-            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
-                lane: *lane,
-                reason: "final Queue veto cannot resolve the retiring lane in the previous catalog",
-            })?;
-        let incarnation = self
-            .catalog_update
-            .previous_lane_incarnations
-            .get(lane)
-            .copied()
-            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
-                lane: *lane,
-                reason: "final Queue veto cannot resolve the retiring lane incarnation",
-            })?;
-        Ok(Some((*lane, previous_lane.dataspace_id, incarnation)))
-    }
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AutoscaleScaleInAction {
-    RequestDrain(LaneId),
-    Retire(LaneId),
-}
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum PendingAutoscaleTransition {
-    Manual,
-    DrainIntent {
-        lane: LaneId,
-        intent: LaneDrainIntentV1,
-        active_lanes: u64,
-        autoscale_capacity_lanes: u64,
-        in_latency_ratio_permille: u64,
-        in_utilization_p95_permille: u64,
-    },
-    DrainCommitment {
-        lane: LaneId,
-        commitment: LaneDrainCommitmentV1,
-    },
-    ScaleOut {
-        lane: LaneId,
-        active_lanes: u64,
-        autoscale_capacity_lanes: u64,
-        out_latency_ratio_permille: u64,
-        out_utilization_p95_permille: u64,
-    },
-    ScaleIn {
-        lane: LaneId,
-        active_lanes: u64,
-        autoscale_capacity_lanes: u64,
-        in_latency_ratio_permille: u64,
-        in_utilization_p95_permille: u64,
-    },
-}
-impl PendingAutoscaleTransition {
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Manual => "manual",
-            Self::DrainIntent { .. } => "drain-intent",
-            Self::DrainCommitment { .. } => "drain-commitment",
-            Self::ScaleOut { .. } => "scale-out",
-            Self::ScaleIn { .. } => "scale-in",
-        }
-    }
-    fn log(&self, height: u64) {
-        match self {
-            Self::Manual => {
-                info!(
-                    height,
-                    "applied consensus-replayed manual lane lifecycle transition"
-                );
-            }
-            Self::DrainIntent {
-                lane,
-                intent,
-                active_lanes,
-                autoscale_capacity_lanes,
-                in_latency_ratio_permille,
-                in_utilization_p95_permille,
-            } => {
-                info!(
-                    height,
-                    lane = lane.as_u32(),
-                    close_global_height = intent.close_global_height,
-                    initial_merged_lane_height = intent.initial_frontier.lane_block_height,
-                    active_lanes,
-                    autoscale_capacity_lanes,
-                    in_latency_ratio_permille,
-                    in_utilization_p95_permille,
-                    "committed deterministic lane autoscale drain intent"
-                );
-            }
-            Self::DrainCommitment { lane, commitment } => {
-                info!(
-                    height,
-                    lane = lane.as_u32(),
-                    carrier_height = commitment.carrier_height,
-                    final_lane_block_height = commitment.frontier.lane_block_height,
-                    "committed globally certified lane autoscale drain frontier"
-                );
-            }
-            Self::ScaleOut {
-                lane,
-                active_lanes,
-                autoscale_capacity_lanes,
-                out_latency_ratio_permille,
-                out_utilization_p95_permille,
-            } => {
-                info!(
-                    height,
-                    lane = lane.as_u32(),
-                    active_lanes,
-                    autoscale_capacity_lanes,
-                    out_latency_ratio_permille,
-                    out_utilization_p95_permille,
-                    "applied deterministic lane autoscale scale-out transition"
-                );
-            }
-            Self::ScaleIn {
-                lane,
-                active_lanes,
-                autoscale_capacity_lanes,
-                in_latency_ratio_permille,
-                in_utilization_p95_permille,
-            } => {
-                info!(
-                    height,
-                    lane = lane.as_u32(),
-                    active_lanes,
-                    autoscale_capacity_lanes,
-                    in_latency_ratio_permille,
-                    in_utilization_p95_permille,
-                    "applied deterministic lane autoscale scale-in transition"
-                );
-            }
-        }
-    }
-    const fn requires_geometry(&self) -> bool {
-        !matches!(
-            self,
-            Self::DrainIntent { .. } | Self::DrainCommitment { .. }
-        )
-    }
-    const fn advances_autoscale_cooldown(&self) -> bool {
-        matches!(
-            self,
-            Self::DrainIntent { .. } | Self::ScaleOut { .. } | Self::ScaleIn { .. }
-        )
-    }
-}
-const LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON: &str =
-    "it contains live shared-dataspace staking state across a canonical owner reset or change";
-
-fn static_staking_owner_for_dataspace_at_height(
-    nexus: &iroha_config::parameters::actual::Nexus,
-    dataspace_id: DataSpaceId,
-    block_height: u64,
-) -> Option<LaneId> {
-    nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .filter(|lane| !lane_uses_reserved_autoscale_metadata(lane))
-        .filter(|lane| {
-            nexus_active_lane_dataspace_at_height(lane.id, nexus, block_height)
-                == Some(dataspace_id)
-        })
-        .filter(|lane| {
-            matches!(
-                nexus.staking.validator_mode(lane.id, &nexus.lane_catalog),
-                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-            )
-        })
-        .map(|lane| lane.id)
-        .min()
-}
-
-fn live_staking_projection_lane_for_lanes(
-    world: &impl WorldReadOnly,
-    lanes: &BTreeSet<LaneId>,
-) -> Option<LaneId> {
-    let validator_lanes = world
-        .public_lane_validators()
-        .iter()
-        .filter(|(_, record)| {
-            !matches!(record.status, PublicLaneValidatorStatus::Exited)
-                || !record.total_stake.is_zero()
-                || !record.self_stake.is_zero()
-        })
-        .filter_map(|(key, record)| {
-            lanes
-                .contains(&key.0)
-                .then_some(key.0)
-                .or_else(|| lanes.contains(&record.lane_id).then_some(record.lane_id))
-        });
-    let share_lanes = world
-        .public_lane_stake_shares()
-        .iter()
-        .filter(|(_, share)| !share.bonded.is_zero() || !share.pending_unbonds.is_empty())
-        .filter_map(|(key, share)| {
-            lanes
-                .contains(&key.0)
-                .then_some(key.0)
-                .or_else(|| lanes.contains(&share.lane_id).then_some(share.lane_id))
-        });
-    validator_lanes.chain(share_lanes).min()
-}
-
-fn ensure_live_shared_dataspace_staking_owner_is_not_reset(
-    world: &impl WorldReadOnly,
-    nexus: &iroha_config::parameters::actual::Nexus,
-    prospective_nexus: &iroha_config::parameters::actual::Nexus,
-    lanes_to_reset: &BTreeSet<LaneId>,
-    block_height: u64,
-) -> Result<(), LaneLifecycleError> {
-    let dataspaces = nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .filter(|lane| !lane_uses_reserved_autoscale_metadata(lane))
-        .map(|lane| lane.dataspace_id)
-        .collect::<BTreeSet<_>>();
-    for dataspace_id in dataspaces {
-        let current_owner =
-            static_staking_owner_for_dataspace_at_height(nexus, dataspace_id, block_height);
-        let prospective_owner = static_staking_owner_for_dataspace_at_height(
-            prospective_nexus,
-            dataspace_id,
-            block_height,
-        );
-        let current_dataspace_lanes = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .filter(|lane| {
-                lane.dataspace_id == dataspace_id && !lane_uses_reserved_autoscale_metadata(lane)
-            })
-            .map(|lane| lane.id)
-            .collect::<BTreeSet<_>>();
-        let prospective_dataspace_lanes = prospective_nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .filter(|lane| {
-                lane.dataspace_id == dataspace_id && !lane_uses_reserved_autoscale_metadata(lane)
-            })
-            .map(|lane| lane.id)
-            .collect::<BTreeSet<_>>();
-        let full_dataspace_retirement = prospective_dataspace_lanes.is_empty()
-            && current_dataspace_lanes
-                .iter()
-                .all(|lane| lanes_to_reset.contains(lane));
-        if full_dataspace_retirement {
-            continue;
-        }
-        let sibling_survives = prospective_nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .any(|candidate| {
-                Some(candidate.id) != current_owner
-                    && !lane_uses_reserved_autoscale_metadata(candidate)
-                    && nexus_active_lane_dataspace_at_height(
-                        candidate.id,
-                        prospective_nexus,
-                        block_height,
-                    ) == Some(dataspace_id)
-                    && matches!(
-                        prospective_nexus
-                            .staking
-                            .validator_mode(candidate.id, &prospective_nexus.lane_catalog),
-                        iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-                    )
-            });
-        let owner_changes = current_owner != prospective_owner;
-        let owner_is_reset_while_sibling_survives =
-            current_owner.is_some_and(|lane| lanes_to_reset.contains(&lane) && sibling_survives);
-        if !owner_changes && !owner_is_reset_while_sibling_survives {
-            continue;
-        }
-
-        let relevant_lanes = if owner_changes {
-            current_dataspace_lanes
-        } else {
-            BTreeSet::from([current_owner.expect("reset owner must exist")])
-        };
-        if let Some(live_lane) = live_staking_projection_lane_for_lanes(world, &relevant_lanes) {
-            return Err(LaneLifecycleError::UnsafeRetirement {
-                lane: current_owner.unwrap_or(live_lane),
-                reason: LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON,
-            });
-        }
-    }
-
-    Ok(())
-}
+include!("state/lane_lifecycle_support.rs");
 fn prepare_lane_lifecycle_update(
     nexus: &iroha_config::parameters::actual::Nexus,
     previous_lane_incarnations: &BTreeMap<LaneId, Hash>,
@@ -43329,6 +42986,12 @@ pub trait StateReadOnly: WorldStateSnapshot {
     /// Committed views capture the latest cached block-header time. Block and
     /// transaction scopes use the header of the block they are executing.
     fn query_ledger_time_ms(&self) -> u64;
+    /// Return the authenticated ledger time when this state scope has one.
+    ///
+    /// Unlike [`Self::query_ledger_time_ms`], this preserves the distinction
+    /// between a valid timestamp of zero and an unavailable post-genesis time
+    /// anchor. Security-sensitive expiry checks must use this accessor.
+    fn authenticated_query_ledger_time_ms(&self) -> Option<u64>;
     /// Build the exact privacy capability snapshot from this committed view.
     ///
     /// # Errors
@@ -43595,6 +43258,9 @@ macro_rules! impl_state_ro {
                 &self.query_handle
             }
             fn query_ledger_time_ms(&self) -> u64 {
+                self.query_ledger_time_ms.unwrap_or(0)
+            }
+            fn authenticated_query_ledger_time_ms(&self) -> Option<u64> {
                 self.query_ledger_time_ms
             }
             #[cfg(feature = "telemetry")]
@@ -46776,7 +46442,7 @@ impl<'state> StateBlock<'state> {
             privacy_transaction_intent_binding: None,
             current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
-            contract_lifecycle_transition_ordinal: 0,
+            lifecycle_transition_ordinal: 0,
             executor_fuel_remaining,
             replay_compatibility: self.replay_compatibility,
             fastpq_transcripts: &mut self.fastpq_transcripts,
@@ -46786,6 +46452,7 @@ impl<'state> StateBlock<'state> {
             axt_block_start_snapshot,
             block_axt_next_handle_counters: &mut self.axt_next_handle_counters,
             axt_next_handle_counters_after_block,
+            block_axt_authorization_transitioned: &mut self.axt_authorization_transitioned,
             block_batch_transfer_outcomes: &mut self.batch_transfer_outcomes,
             pending_batch_transfer_outcomes: BTreeMap::new(),
             block_verified_lane_relay_records: &mut self.verified_lane_relay_records,
@@ -46856,6 +46523,7 @@ impl<'state> StateBlock<'state> {
                 .is_some()
             || self.world.axt_replay_ledger.is_dirty()
             || self.world.axt_handle_counters.is_dirty()
+            || self.world.axt_asset_incarnations.is_dirty()
             || self.world.axt_handle_budget_ledger.is_dirty()
             || !self.world.merge_execution_write_set_bytes().is_empty()
             || !self.world.external_event_buf.is_empty()
@@ -47973,6 +47641,10 @@ impl<'state> StateBlock<'state> {
         >,
     ) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
+        self.finalize_axt_asset_incarnations()
+            .map_err(|_| TransactionsBlockError::AxtAssetIncarnation)?;
+        self.finalize_axt_policy_transition_ratchets()
+            .map_err(|_| TransactionsBlockError::AxtCounterRatchet)?;
         let block_height = self._curr_block.height().get();
         let block_header_hash = self._curr_block.hash();
         let current_axt_slot =
@@ -48025,7 +47697,6 @@ impl<'state> StateBlock<'state> {
             pending_nexus_fee_receipt_source_ids,
             direct_committed_entrypoints,
             _curr_block,
-            committed_fragments,
             #[cfg(feature = "zk-preverify")]
                 zk_dedup: _,
             ..
@@ -48112,30 +47783,25 @@ impl<'state> StateBlock<'state> {
                 let staged_previous_topology =
                     prev_committed_topology.iter().cloned().collect::<Vec<_>>();
                 let staged_next_topology = committed_topology.iter().cloned().collect::<Vec<_>>();
-                let expected_sample = AutoscaleSampleRecord {
-                    block_height,
-                    block_hash: block_header_hash,
-                    creation_time_ms: u64::try_from(_curr_block.creation_time().as_millis())
-                        .unwrap_or(u64::MAX),
-                    work_count: autoscale_block_work_count(
-                        0,
-                        Some(u64::try_from(committed_fragments).unwrap_or(u64::MAX)),
-                    ),
-                };
+                let authorized_sample = carrier_authorization.autoscale_sample;
                 let mut expected_history = state_ref.autoscale_sample_history_snapshot();
                 append_autoscale_sample_record(
                     &mut expected_history,
-                    expected_sample,
+                    authorized_sample,
                     autoscale_sample_history_cap(&state_ref.nexus_snapshot().autoscale),
                 );
                 if carrier_authorization.entry_hash != entry.canonical_hash()
                     || carrier_authorization.carrier_height != block_height
                     || carrier_authorization.carrier_hash != block_header_hash
+                    || authorized_sample.block_height != block_height
+                    || authorized_sample.block_hash != block_header_hash
+                    || authorized_sample.creation_time_ms
+                        != u64::try_from(_curr_block.creation_time().as_millis())
+                            .unwrap_or(u64::MAX)
                     || carrier_authorization.post_finality_write_set_root != current_write_set_root
                     || carrier_authorization.previous_commit_topology != previous_commit_topology
                     || staged_previous_topology != previous_commit_topology
                     || carrier_authorization.next_commit_topology != staged_next_topology
-                    || carrier_authorization.autoscale_sample != expected_sample
                     || !autoscale_sample_history_dirty
                     || autoscale_sample_history != expected_history
                 {
@@ -48820,6 +48486,12 @@ impl<'state> StateBlock<'state> {
                     .to_owned(),
             ));
         }
+        let committed_fragment_count =
+            signed_block.committed_fragment_count().ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "finalized autonomous carrier lacks its committed fragment count".to_owned(),
+                )
+            })?;
         let autoscale_sample = AutoscaleSampleRecord {
             block_height: carrier_height,
             block_hash: carrier_hash,
@@ -48827,7 +48499,7 @@ impl<'state> StateBlock<'state> {
                 .unwrap_or(u64::MAX),
             work_count: autoscale_block_work_count(
                 signed_block.external_transactions().len(),
-                Some(u64::try_from(self.committed_fragment_count()).unwrap_or(u64::MAX)),
+                Some(committed_fragment_count),
             ),
         };
         let mut expected_history = self.state_ref.autoscale_sample_history_snapshot();
@@ -49086,10 +48758,15 @@ impl<'state> StateBlock<'state> {
                 self.apply_replayed_axt_envelopes(envelopes, current_slot);
             }
         }
-        if let Some(snapshot) = block.as_ref().axt_policy_snapshot() {
-            self.install_axt_policy_snapshot(snapshot)
-                .expect("committed block must contain a canonical AXT policy snapshot");
-        }
+        let snapshot = signed_block
+            .axt_policy_snapshot()
+            .expect("committed block must contain its required AXT policy snapshot");
+        snapshot
+            .validate()
+            .expect("committed block must contain a canonical AXT policy snapshot");
+        let committed_fragment_count = signed_block
+            .committed_fragment_count()
+            .expect("committed block must contain its required fragment count");
         if let Some(effects) = signed_block.npos_consensus_effects() {
             let now_ms = signed_block.header().creation_time_ms;
             #[cfg(feature = "telemetry")]
@@ -49223,7 +48900,17 @@ impl<'state> StateBlock<'state> {
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
         self.stage_native_amx_participant_frontiers(block.as_ref())
             .expect("committed Native AMX participant frontiers must be canonical");
-        self.maybe_apply_nexus_autoscale(block);
+        self.evaluate_nexus_autoscale(signed_block, committed_fragment_count)
+            .expect("committed block must carry canonical autoscale inputs");
+        self.axt_authorization_transitioned = signed_block
+            .axt_transitioned_dataspaces()
+            .expect("committed block must contain its required AXT transition set")
+            .clone();
+        self.replace_axt_policy_projection(snapshot);
+        self.finalize_axt_policy_transition_ratchets()
+            .expect("committed AXT transition set must not exhaust its permanent counter");
+        self.install_axt_policy_snapshot(snapshot)
+            .expect("committed AXT policy snapshot must match its permanent counter ratchets");
         let merge_event_authorization = if self
             .staged_merge_entry
             .as_ref()
@@ -49793,6 +49480,25 @@ impl<'state> StateBlock<'state> {
                 first_proposal_height,
             )?;
         }
+        let changed_lanes: BTreeSet<_> = self
+            .lane_incarnations
+            .keys()
+            .chain(lifecycle_update.updated_lane_incarnations.keys())
+            .copied()
+            .filter(|lane| {
+                self.lane_incarnations.get(lane)
+                    != lifecycle_update.updated_lane_incarnations.get(lane)
+            })
+            .collect();
+        let transitioned_dataspaces: Vec<_> = self
+            .world
+            .axt_policies
+            .iter()
+            .filter(|(_, policy)| changed_lanes.contains(&policy.target_lane))
+            .map(|(dataspace, _)| *dataspace)
+            .collect();
+        self.axt_authorization_transitioned
+            .extend(transitioned_dataspaces);
         self.nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
         self.nexus.lane_config = lifecycle_update.updated_lane_config.clone();
         self.lane_incarnations = lifecycle_update.updated_lane_incarnations.clone();
@@ -49862,24 +49568,39 @@ impl<'state> StateBlock<'state> {
         }
         Ok(())
     }
-    fn maybe_apply_nexus_autoscale(&mut self, block: &CommittedBlock) {
-        if !self.stage_autoscale_sample_record(block) {
-            return;
+    pub(crate) fn evaluate_nexus_autoscale(
+        &mut self,
+        block: &SignedBlock,
+        committed_fragment_count: u64,
+    ) -> Result<(), String> {
+        if !self.stage_autoscale_sample_record_for_count(block, committed_fragment_count)? {
+            return Ok(());
         }
+        self.apply_staged_nexus_autoscale(block);
+        Ok(())
+    }
+    #[cfg(test)]
+    fn maybe_apply_nexus_autoscale(&mut self, block: &CommittedBlock) {
+        let committed_fragment_count =
+            u64::try_from(self.committed_fragment_count()).unwrap_or(u64::MAX);
+        self.evaluate_nexus_autoscale(block.as_ref(), committed_fragment_count)
+            .expect("test autoscale input must match its active StateBlock");
+    }
+    fn apply_staged_nexus_autoscale(&mut self, block: &SignedBlock) {
         if self
             .staged_merge_entry
             .as_ref()
             .is_some_and(|entry| entry.execution_batch.is_some())
         {
             debug!(
-                height = block.as_ref().header().height().get(),
+                height = block.header().height().get(),
                 "deferring autoscale lifecycle transition on autonomous execution carrier"
             );
             return;
         }
         if self.pending_autoscale_lifecycle.is_some() {
             debug!(
-                height = block.as_ref().header().height().get(),
+                height = block.header().height().get(),
                 "skipping autoscale because this block already staged a lane lifecycle transition"
             );
             return;
@@ -49888,7 +49609,7 @@ impl<'state> StateBlock<'state> {
         if !autoscale.enabled {
             return;
         }
-        let block_height = block.as_ref().header().height().get();
+        let block_height = block.header().height().get();
         if let Err(err) = ensure_autoscale_runtime_lane_bounds(&autoscale) {
             warn!(
                 ?err,
@@ -49936,7 +49657,7 @@ impl<'state> StateBlock<'state> {
                     .is_some()
             });
         let scale_in_action = (autoscale_capacity_lanes > 1)
-            .then(|| self.select_autoscale_scale_in_action(block.as_ref()))
+            .then(|| self.select_autoscale_scale_in_action(block))
             .flatten();
         if drain_in_progress {
             let Some(AutoscaleScaleInAction::Retire(retire_lane_id)) = scale_in_action else {
@@ -50142,8 +49863,18 @@ impl<'state> StateBlock<'state> {
     fn next_autoscale_lane_id(&self, min_lanes: u32, max_lanes: u32) -> Option<LaneId> {
         autoscale_next_lane_id(self.nexus.lane_catalog.lanes(), min_lanes, max_lanes)
     }
+    #[cfg(test)]
     fn stage_autoscale_sample_record(&mut self, block: &CommittedBlock) -> bool {
-        let block = block.as_ref();
+        let committed_fragment_count =
+            u64::try_from(self.committed_fragment_count()).unwrap_or(u64::MAX);
+        self.stage_autoscale_sample_record_for_count(block.as_ref(), committed_fragment_count)
+            .unwrap_or(false)
+    }
+    fn stage_autoscale_sample_record_for_count(
+        &mut self,
+        block: &SignedBlock,
+        committed_fragment_count: u64,
+    ) -> Result<bool, String> {
         let block_header = block.header();
         if block_header.height() != self._curr_block.height()
             || block_header.hash() != self._curr_block.hash()
@@ -50155,7 +49886,7 @@ impl<'state> StateBlock<'state> {
                 expected_hash = %self._curr_block.hash(),
                 "refusing to stage an autoscale sample from a block that does not match the active state block"
             );
-            return false;
+            return Err("autoscale sample belongs to a different StateBlock".to_owned());
         }
         let record = AutoscaleSampleRecord {
             block_height: block_header.height().get(),
@@ -50164,16 +49895,32 @@ impl<'state> StateBlock<'state> {
                 .unwrap_or(u64::MAX),
             work_count: autoscale_block_work_count(
                 block.external_transactions().len(),
-                Some(u64::try_from(self.committed_fragment_count()).unwrap_or(u64::MAX)),
+                Some(committed_fragment_count),
             ),
         };
+        if let Some(previous_count) = self.autoscale_evaluated_committed_fragment_count {
+            if previous_count != committed_fragment_count {
+                return Err(format!(
+                    "autoscale was already evaluated with committed fragment count {previous_count}, not {committed_fragment_count}"
+                ));
+            }
+            if self.autoscale_sample_history.back() != Some(&record)
+                || !self.autoscale_sample_history_dirty
+            {
+                return Err(
+                    "autoscale's one-shot sample no longer matches its canonical input".to_owned(),
+                );
+            }
+            return Ok(false);
+        }
         append_autoscale_sample_record(
             &mut self.autoscale_sample_history,
             record,
             autoscale_sample_history_cap(&self.nexus.autoscale),
         );
         self.autoscale_sample_history_dirty = true;
-        true
+        self.autoscale_evaluated_committed_fragment_count = Some(committed_fragment_count);
+        Ok(true)
     }
     fn select_autoscale_scale_in_action(
         &self,
@@ -50549,6 +50296,12 @@ impl<'state> StateBlock<'state> {
             Self::time_trigger_nft_seq_base(self._curr_block.height().get(), invocation_index);
         let current_block_height = self._curr_block.height().get();
         let mut transaction = self.transaction();
+        transaction.seed_time_trigger_invocation_call_hash(
+            trg_id,
+            action.authority(),
+            time_event,
+            invocation_index,
+        );
         let mut entrypoint = TimeTriggerEntrypoint {
             id: trg_id.clone(),
             instructions: ConstVec::new_empty().into(),
@@ -51093,6 +50846,10 @@ mod tiered_snapshot_diff_tests {
     use iroha_data_model::bridge::{
         BridgeNativeProofBackendV1, SccpGovernedLaneV1, SccpGovernedRouteV1,
         SccpNativeTrustAnchorV1, SccpRegistryV1, SccpRouteActivationV1,
+    };
+    use iroha_data_model::nexus::{
+        AssetHandleIssuerPayloadV1, AxtBinding, AxtHandleIssuerContextV1, GroupBinding,
+        HandleBudget, HandleSubject,
     };
     const SCCP_SNAPSHOT_CHAIN_ID: &str = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1;
     fn authenticated_sccp_archive_kura() -> Arc<Kura> {
@@ -51808,6 +51565,72 @@ mod tiered_snapshot_diff_tests {
             contract_binding,
         )
     }
+    fn sample_axt_tiered_entries() -> (
+        DataSpaceId,
+        AxtHandleCounterRecord,
+        AssetDefinitionId,
+        AxtAssetIncarnationV1,
+        AxtHandleBudgetKey,
+        AxtHandleBudgetRecord,
+    ) {
+        let definition_id = AssetDefinitionId::from_uuid_bytes([
+            0x31, 0x53, 0x75, 0x97, 0xb9, 0xdb, 0x4d, 0xef, 0x80, 0x21, 0x32, 0x43, 0x54, 0x65,
+            0x76, 0x87,
+        ])
+        .expect("AXT tiered-state fixture UUID is valid");
+        let default_context = AxtHandleIssuerContextV1::default();
+        let registration_header = HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"tiered AXT asset registration"),
+        );
+        let incarnation = AxtAssetIncarnationV1::derive(
+            &default_context.network_id,
+            &definition_id,
+            &registration_header,
+            &iroha_crypto::Hash::new(b"tiered AXT asset registration execution"),
+            0,
+        );
+        let context = AxtHandleIssuerContextV1 {
+            asset_definition_incarnation: incarnation,
+            ..default_context
+        };
+        let payload = AssetHandleIssuerPayloadV1 {
+            context,
+            asset_definition_id: definition_id.clone(),
+            scope: vec!["transfer".to_owned()],
+            subject: HandleSubject {
+                account: "tiered-axt-subject".to_owned(),
+                origin_dsid: Some(DataSpaceId::UNIVERSAL),
+            },
+            budget: HandleBudget {
+                remaining: Quantity::from(10_u64),
+                per_use: None,
+            },
+            active_handle_era: 7,
+            next_handle_counter: 1,
+            group_binding: GroupBinding {
+                composability_group_id: b"tiered-axt".to_vec(),
+                epoch_id: 3,
+            },
+            target_lane: LaneId::SINGLE,
+            axt_binding: AxtBinding::new([0xA7; 32]),
+            manifest_view_root: [0xB7; 32],
+            expiry_slot: 100,
+            max_clock_skew_ms: None,
+        };
+        let budget_key = AxtHandleBudgetKey::from_issuer_payload_v1(&payload);
+        let mut budget_record = AxtHandleBudgetRecord::empty();
+        budget_record
+            .try_consume(&budget_key, &Quantity::from(3_u64), 100)
+            .expect("AXT tiered-state fixture fits its signed family budget");
+        (
+            context.asset_dsid,
+            AxtHandleCounterRecord::initial(payload.active_handle_era),
+            definition_id,
+            incarnation,
+            budget_key,
+            budget_record,
+        )
+    }
     #[test]
     fn contract_upload_json_keys_are_stable_text_and_reject_trailing_components() {
         use mv::json::JsonKeyCodec;
@@ -51915,6 +51738,21 @@ mod tiered_snapshot_diff_tests {
     fn world_block_tiered_snapshot_diff_collects_changed_keys() {
         let world = World::default();
         let mut block = world.block();
+        let (
+            axt_dsid,
+            axt_counter,
+            axt_definition_id,
+            axt_incarnation,
+            axt_budget_key,
+            axt_budget_record,
+        ) = sample_axt_tiered_entries();
+        block.axt_handle_counters.insert(axt_dsid, axt_counter);
+        block
+            .axt_asset_incarnations
+            .insert(axt_definition_id.clone(), axt_incarnation);
+        block
+            .axt_handle_budget_ledger
+            .insert(axt_budget_key.clone(), axt_budget_record);
         let (definition_id, asset_binding, contract_address, contract_binding) =
             sample_alias_bindings();
         block
@@ -51988,11 +51826,35 @@ mod tiered_snapshot_diff_tests {
         assert!(diff.entries().iter().any(|entry| {
             matches!(entry, TieredKeyHandle::ContractAliasBinding(key) if *key == contract_address)
         }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AxtHandleCounter(key) if *key == axt_dsid)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AxtAssetIncarnation(key) if *key == axt_definition_id)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AxtHandleBudget(key) if *key == axt_budget_key)
+        }));
     }
     #[test]
     fn world_block_tiered_snapshot_payload_collects_changed_keys() {
         let world = World::default();
         let mut block = world.block();
+        let (
+            axt_dsid,
+            axt_counter,
+            axt_definition_id,
+            axt_incarnation,
+            axt_budget_key,
+            axt_budget_record,
+        ) = sample_axt_tiered_entries();
+        block.axt_handle_counters.insert(axt_dsid, axt_counter);
+        block
+            .axt_asset_incarnations
+            .insert(axt_definition_id.clone(), axt_incarnation);
+        block
+            .axt_handle_budget_ledger
+            .insert(axt_budget_key.clone(), axt_budget_record);
         let (definition_id, asset_binding, contract_address, contract_binding) =
             sample_alias_bindings();
         block
@@ -52066,6 +51928,15 @@ mod tiered_snapshot_diff_tests {
         }));
         assert!(diff.entries().iter().any(|entry| {
             matches!(entry, TieredKeyHandle::ContractAliasBinding(key) if *key == contract_address)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AxtHandleCounter(key) if *key == axt_dsid)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AxtAssetIncarnation(key) if *key == axt_definition_id)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AxtHandleBudget(key) if *key == axt_budget_key)
         }));
     }
     #[test]
@@ -55747,6 +55618,10 @@ impl StateTransaction<'_, '_> {
             &lifecycle_update.updated_catalog,
             &self.nexus.governance,
         )?;
+        self.world.mark_axt_lane_incarnation_transitions(
+            &self.lane_incarnations,
+            &lifecycle_update.updated_lane_incarnations,
+        );
         self.nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
         self.nexus.lane_config = lifecycle_update.updated_lane_config.clone();
         self.lane_incarnations = lifecycle_update.updated_lane_incarnations.clone();
@@ -56552,7 +56427,9 @@ impl StateTransaction<'_, '_> {
                     .axt_handle_counters
                     .get(&dsid)
                     .copied()
-                    .unwrap_or_else(AxtHandleCounterRecord::initial)
+                    .unwrap_or_else(|| {
+                        AxtHandleCounterRecord::initial(frozen_policy.active_handle_era)
+                    })
             });
             if counter.next() != next_handle_counter {
                 return Err(Error::InvariantViolation(
@@ -56565,15 +56442,28 @@ impl StateTransaction<'_, '_> {
                     .into(),
                 ));
             }
-            counter.try_advance(handle.handle.sub_nonce).map_err(|error| {
-                Error::InvariantViolation(
+            if counter.authorization_generation() != frozen_policy.active_handle_era {
+                return Err(Error::InvariantViolation(
                     format!(
-                        "AXT envelope failed permanent counter advancement for dataspace {}: {error}",
-                        dsid.as_u64()
+                        "AXT authorization generation {} for dataspace {} disagrees with frozen policy era {}",
+                        counter.authorization_generation(),
+                        dsid.as_u64(),
+                        frozen_policy.active_handle_era
                     )
                     .into(),
-                )
-            })?;
+                ));
+            }
+            counter
+                .try_advance(handle.handle.handle_era, handle.handle.sub_nonce)
+                .map_err(|error| {
+                    Error::InvariantViolation(
+                        format!(
+                            "AXT envelope failed permanent counter advancement for dataspace {}: {error}",
+                            dsid.as_u64()
+                        )
+                        .into(),
+                    )
+                })?;
             advanced.insert(
                 dsid,
                 advance_axt_policy_for_handle(policy, handle, current_slot)?,
@@ -56587,6 +56477,7 @@ impl StateTransaction<'_, '_> {
                 .insert(dsid, policy.next_handle_counter);
             if let Some(mut current_policy) = self.world.axt_policies.get(&dsid).copied() {
                 current_policy.next_handle_counter = policy.next_handle_counter;
+                current_policy.active_handle_era = policy.active_handle_era;
                 self.world.axt_policies.insert(dsid, current_policy);
             }
         }
@@ -56612,6 +56503,7 @@ impl StateTransaction<'_, '_> {
                 key,
                 AxtReplayRecord {
                     dataspace: handle.intent.asset_dsid,
+                    budget_key: AxtHandleBudgetKey::from_handle(&handle.handle),
                     used_slot: current_slot,
                     retain_until_slot,
                 },
@@ -56637,20 +56529,16 @@ impl StateTransaction<'_, '_> {
     }
     /// Return the deterministic identity of the current direct/internal execution slot.
     ///
-    /// The identity is bound to the complete canonical block header and the next
-    /// committed-fragment position, not merely block height. Applying a transaction advances the
-    /// fragment before another transaction can commit in the same block.
+    /// The identity is bound to the consensus block-header hash and the next
+    /// committed-fragment position, not merely block height. The header hash
+    /// deliberately excludes execution results, so proposal execution and
+    /// validation/Kura replay derive the same identity. Applying a transaction
+    /// advances the fragment before another transaction can commit in the same block.
     pub(crate) fn direct_execution_identity(&self) -> Result<iroha_crypto::Hash, &'static str> {
-        let block_header = ivm::codec::encode_canonical_norito(&self._curr_block)
-            .map_err(|_| "failed to encode direct execution block identity")?;
+        let block_header_hash = self._curr_block.hash();
         let fragment = u64::try_from(*self.committed_fragments).unwrap_or(u64::MAX);
         let mut preimage = Vec::from(&b"iroha:direct-execution:v1\0"[..]);
-        preimage.extend_from_slice(
-            &u64::try_from(block_header.len())
-                .unwrap_or(u64::MAX)
-                .to_le_bytes(),
-        );
-        preimage.extend_from_slice(&block_header);
+        preimage.extend_from_slice(block_header_hash.as_ref());
         preimage.extend_from_slice(&fragment.to_le_bytes());
         preimage.extend_from_slice(
             &self
@@ -56665,17 +56553,17 @@ impl StateTransaction<'_, '_> {
     /// Signed transactions and trigger execution supply `tx_call_hash`. Direct internal
     /// execution uses [`Self::direct_execution_identity`]. The per-execution ordinal distinguishes
     /// multiple transitions staged by one transaction.
-    pub(crate) fn next_contract_lifecycle_transition_seed(
+    pub(crate) fn next_lifecycle_transition_seed(
         &mut self,
     ) -> Result<(iroha_crypto::Hash, u64), &'static str> {
         let execution_identity = match self.tx_call_hash {
             Some(call_hash) => call_hash,
             None => self.direct_execution_identity()?,
         };
-        let ordinal = self.contract_lifecycle_transition_ordinal;
-        self.contract_lifecycle_transition_ordinal = ordinal
+        let ordinal = self.lifecycle_transition_ordinal;
+        self.lifecycle_transition_ordinal = ordinal
             .checked_add(1)
-            .ok_or("contract lifecycle transition ordinal overflow")?;
+            .ok_or("authority lifecycle transition ordinal overflow")?;
         Ok((execution_identity, ordinal))
     }
     /// Apply transaction making it's changes visible
@@ -56685,7 +56573,7 @@ impl StateTransaction<'_, '_> {
         let Self {
             committed_fragments,
             touched_lanes,
-            world,
+            mut world,
             block_hashes,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
@@ -56728,6 +56616,7 @@ impl StateTransaction<'_, '_> {
             mut pending_axt_envelopes,
             block_axt_next_handle_counters,
             axt_next_handle_counters_after_block,
+            block_axt_authorization_transitioned,
             block_batch_transfer_outcomes,
             pending_batch_transfer_outcomes,
             block_verified_lane_relay_records,
@@ -56826,6 +56715,7 @@ impl StateTransaction<'_, '_> {
             block_axt_envelopes.append(&mut pending_axt_envelopes);
         }
         *block_axt_next_handle_counters = axt_next_handle_counters_after_block;
+        block_axt_authorization_transitioned.append(&mut world.axt_authorization_transitioned);
         for (entrypoint_hash, mut outcomes) in pending_batch_transfer_outcomes {
             block_batch_transfer_outcomes
                 .entry(entrypoint_hash)
@@ -58379,6 +58269,28 @@ impl StateTransaction<'_, '_> {
         buf.extend_from_slice(&trigger_id.encode());
         buf.extend_from_slice(&authority.encode());
         buf.extend_from_slice(&args.encode());
+        self.tx_call_hash = Some(iroha_crypto::Hash::new(buf));
+    }
+    fn seed_time_trigger_invocation_call_hash(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        event: &TimeEvent,
+        invocation_index: usize,
+    ) {
+        use norito::codec::Encode as _;
+
+        if self.tx_call_hash.is_some() {
+            return;
+        }
+        let invocation_index = u64::try_from(invocation_index)
+            .expect("time-trigger invocation count is bounded by u32");
+        let mut buf = Vec::from(&b"iroha:time-trigger:execution:v1\0"[..]);
+        buf.extend_from_slice(self._curr_block.hash().as_ref());
+        buf.extend_from_slice(&invocation_index.to_be_bytes());
+        buf.extend_from_slice(&id.encode());
+        buf.extend_from_slice(&authority.encode());
+        buf.extend_from_slice(&event.encode());
         self.tx_call_hash = Some(iroha_crypto::Hash::new(buf));
     }
     fn seed_time_trigger_call_hash(

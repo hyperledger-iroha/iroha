@@ -1844,6 +1844,31 @@ impl TieredStateBackend {
             AssetMetadata,
             world.asset_metadata
         );
+        collect_map!(
+            TieredSegment::AxtPolicies,
+            AxtPolicy,
+            world.axt_policies
+        );
+        collect_map!(
+            TieredSegment::AxtHandleCounters,
+            AxtHandleCounter,
+            world.axt_handle_counters
+        );
+        collect_map!(
+            TieredSegment::AxtAssetIncarnations,
+            AxtAssetIncarnation,
+            world.axt_asset_incarnations
+        );
+        collect_map!(
+            TieredSegment::AxtReplayLedger,
+            AxtReplay,
+            world.axt_replay_ledger
+        );
+        collect_map!(
+            TieredSegment::AxtHandleBudgetLedger,
+            AxtHandleBudget,
+            world.axt_handle_budget_ledger
+        );
         collect_map!(TieredSegment::Nfts, Nft, world.nfts);
         collect_map!(TieredSegment::Rwas, Rwa, world.rwas);
         collect_map!(TieredSegment::Roles, Role, world.roles);
@@ -2584,7 +2609,9 @@ mod measured_bytes_impls {
         metadata::Metadata,
         name::Name,
         nexus::{
-            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, UniversalAccountId,
+            AxtAssetIncarnationV1, AxtHandleBudgetRecord, AxtHandleCounterRecord,
+            AxtPolicyEntry, AxtReplayRecord, LanePrivacyMerkleWitness, LanePrivacyProof,
+            LanePrivacyWitness, UniversalAccountId,
         },
         nft::NftData,
         peer::PeerId,
@@ -2697,6 +2724,9 @@ mod measured_bytes_impls {
         PrivacyRootHeadRecordV1,
         PrivacyRootProvenanceV1,
         PrivacyStateItemRecordV1,
+        AxtAssetIncarnationV1,
+        AxtHandleCounterRecord,
+        AxtPolicyEntry,
     );
     impl<T: MeasuredBytes, const N: usize> MeasuredBytes for [T; N] {
         fn measured_bytes(&self) -> usize {
@@ -2837,6 +2867,18 @@ mod measured_bytes_impls {
     impl MeasuredBytes for Quantity {
         fn measured_bytes(&self) -> usize {
             size_of::<Quantity>().saturating_add(self.mantissa().measured_bytes_extra())
+        }
+    }
+    impl MeasuredBytes for AxtHandleBudgetRecord {
+        fn measured_bytes(&self) -> usize {
+            size_of::<AxtHandleBudgetRecord>()
+                .saturating_add(self.consumed().measured_bytes_extra())
+        }
+    }
+    impl MeasuredBytes for AxtReplayRecord {
+        fn measured_bytes(&self) -> usize {
+            size_of::<AxtReplayRecord>()
+                .saturating_add(self.budget_key.allocated_heap_bytes())
         }
     }
     impl<T> MeasuredBytes for HashOf<T> {
@@ -4027,6 +4069,11 @@ enum TieredSegment {
     AssetDefinitionAliasBindings,
     Assets,
     AssetMetadata,
+    AxtPolicies,
+    AxtHandleCounters,
+    AxtAssetIncarnations,
+    AxtReplayLedger,
+    AxtHandleBudgetLedger,
     Nfts,
     Rwas,
     Roles,
@@ -4083,6 +4130,11 @@ impl TieredSegment {
             TieredSegment::AssetDefinitionAliasBindings => "asset_definition_alias_bindings",
             TieredSegment::Assets => "assets",
             TieredSegment::AssetMetadata => "asset_metadata",
+            TieredSegment::AxtPolicies => "axt_policies",
+            TieredSegment::AxtHandleCounters => "axt_handle_counters",
+            TieredSegment::AxtAssetIncarnations => "axt_asset_incarnations",
+            TieredSegment::AxtReplayLedger => "axt_replay_ledger",
+            TieredSegment::AxtHandleBudgetLedger => "axt_handle_budget_ledger",
             TieredSegment::Nfts => "nfts",
             TieredSegment::Rwas => "rwas",
             TieredSegment::Roles => "roles",
@@ -4151,6 +4203,11 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "asset_definition_alias_bindings" => TieredSegment::AssetDefinitionAliasBindings,
             "assets" => TieredSegment::Assets,
             "asset_metadata" => TieredSegment::AssetMetadata,
+            "axt_policies" => TieredSegment::AxtPolicies,
+            "axt_handle_counters" => TieredSegment::AxtHandleCounters,
+            "axt_asset_incarnations" => TieredSegment::AxtAssetIncarnations,
+            "axt_replay_ledger" => TieredSegment::AxtReplayLedger,
+            "axt_handle_budget_ledger" => TieredSegment::AxtHandleBudgetLedger,
             "nfts" => TieredSegment::Nfts,
             "rwas" => TieredSegment::Rwas,
             "roles" => TieredSegment::Roles,
@@ -4348,6 +4405,11 @@ pub(crate) enum TieredKeyHandle {
     AssetDefinitionAliasBinding(iroha_data_model::asset::AssetDefinitionId),
     Asset(iroha_data_model::asset::AssetId),
     AssetMetadata(iroha_data_model::asset::AssetId),
+    AxtPolicy(iroha_data_model::nexus::DataSpaceId),
+    AxtHandleCounter(iroha_data_model::nexus::DataSpaceId),
+    AxtAssetIncarnation(iroha_data_model::asset::AssetDefinitionId),
+    AxtReplay(iroha_data_model::nexus::AxtHandleReplayKey),
+    AxtHandleBudget(iroha_data_model::nexus::AxtHandleBudgetKey),
     Nft(iroha_data_model::nft::NftId),
     Rwa(iroha_data_model::rwa::RwaId),
     Role(iroha_data_model::role::RoleId),
@@ -4406,6 +4468,11 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::Asset(_) => TieredSegment::Assets,
             TieredKeyHandle::AssetMetadata(_) => TieredSegment::AssetMetadata,
+            TieredKeyHandle::AxtPolicy(_) => TieredSegment::AxtPolicies,
+            TieredKeyHandle::AxtHandleCounter(_) => TieredSegment::AxtHandleCounters,
+            TieredKeyHandle::AxtAssetIncarnation(_) => TieredSegment::AxtAssetIncarnations,
+            TieredKeyHandle::AxtReplay(_) => TieredSegment::AxtReplayLedger,
+            TieredKeyHandle::AxtHandleBudget(_) => TieredSegment::AxtHandleBudgetLedger,
             TieredKeyHandle::Nft(_) => TieredSegment::Nfts,
             TieredKeyHandle::Rwa(_) => TieredSegment::Rwas,
             TieredKeyHandle::Role(_) => TieredSegment::Roles,
@@ -4473,6 +4540,11 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::Asset(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AssetMetadata(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AxtPolicy(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AxtHandleCounter(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AxtAssetIncarnation(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AxtReplay(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AxtHandleBudget(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Nft(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Rwa(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Role(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4558,6 +4630,15 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
             TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
+            TieredKeyHandle::AxtPolicy(id) => fetch!(world.axt_policies, id),
+            TieredKeyHandle::AxtHandleCounter(id) => fetch!(world.axt_handle_counters, id),
+            TieredKeyHandle::AxtAssetIncarnation(id) => {
+                fetch!(world.axt_asset_incarnations, id)
+            }
+            TieredKeyHandle::AxtReplay(id) => fetch!(world.axt_replay_ledger, id),
+            TieredKeyHandle::AxtHandleBudget(id) => {
+                fetch!(world.axt_handle_budget_ledger, id)
+            }
             TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
             TieredKeyHandle::Rwa(id) => fetch!(world.rwas, id),
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
@@ -4656,6 +4737,15 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
             TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
+            TieredKeyHandle::AxtPolicy(id) => fetch!(world.axt_policies, id),
+            TieredKeyHandle::AxtHandleCounter(id) => fetch!(world.axt_handle_counters, id),
+            TieredKeyHandle::AxtAssetIncarnation(id) => {
+                fetch!(world.axt_asset_incarnations, id)
+            }
+            TieredKeyHandle::AxtReplay(id) => fetch!(world.axt_replay_ledger, id),
+            TieredKeyHandle::AxtHandleBudget(id) => {
+                fetch!(world.axt_handle_budget_ledger, id)
+            }
             TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
             TieredKeyHandle::Rwa(id) => fetch!(world.rwas, id),
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
@@ -4744,6 +4834,23 @@ impl fmt::Display for TieredKeyHandle {
             }
             TieredKeyHandle::Asset(id) => write!(f, "asset:{id}"),
             TieredKeyHandle::AssetMetadata(id) => write!(f, "asset_metadata:{id}"),
+            TieredKeyHandle::AxtPolicy(id) => write!(f, "axt_policy:{id}"),
+            TieredKeyHandle::AxtHandleCounter(id) => write!(f, "axt_handle_counter:{id}"),
+            TieredKeyHandle::AxtAssetIncarnation(id) => {
+                write!(f, "axt_asset_incarnation:{id}")
+            }
+            TieredKeyHandle::AxtReplay(id) => write!(
+                f,
+                "axt_replay:{}:{}:{}:{}",
+                id.asset_dsid, id.handle_era, id.sub_nonce, id.target_lane
+            ),
+            TieredKeyHandle::AxtHandleBudget(id) => write!(
+                f,
+                "axt_handle_budget:{}:{}:{}",
+                id.asset_dsid(),
+                id.authorization_generation(),
+                id.target_lane()
+            ),
             TieredKeyHandle::Nft(id) => write!(f, "nft:{id}"),
             TieredKeyHandle::Rwa(id) => write!(f, "rwa:{id}"),
             TieredKeyHandle::Role(id) => write!(f, "role:{id}"),
@@ -4915,9 +5022,11 @@ impl TieredManifestEntry {
 mod tests {
     use super::*;
     use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
-    use iroha_crypto::Hash;
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         account::OpaqueAccountId,
+        asset::AssetDefinitionId,
+        block::BlockHeader,
         bridge::{
             BridgeNativeProofBackendV1, SccpNativeTrustAnchorV1, SccpOutboundMessageKeyV1,
             SccpOutboundProofRecordV1,
@@ -4925,9 +5034,14 @@ mod tests {
                 SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
             },
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId},
+        nexus::{
+            AssetHandleIssuerPayloadV1, AxtAssetIncarnationV1, AxtBinding, AxtHandleBudgetKey,
+            AxtHandleBudgetRecord, AxtHandleCounterRecord, AxtHandleIssuerContextV1, DataSpaceId,
+            GroupBinding, HandleBudget, HandleSubject, LaneCatalog, LaneConfig, LaneId,
+        },
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
     };
+    use iroha_primitives::numeric::Quantity;
     use nonzero_ext::nonzero;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
@@ -4994,187 +5108,7 @@ mod tests {
         assert!(record.is_well_formed_for_key(&key));
         (key, record)
     }
-    #[test]
-    fn streamed_hash_matches_canonical_json() {
-        let value: norito::json::Value = norito::json::from_str(
-            r#"{
-                "domain": "wonderland",
-                "accounts": [
-                    {"id": "i105-subject-alice", "metadata": {"email": "alice@example.com"}},
-                    {"id": "i105-subject-bob", "metadata": {"roles": ["admin", "auditor"]}}
-                ],
-                "supply": 42,
-                "flags": {
-                    "enabled": true,
-                    "threshold": 0.5
-                }
-            }"#,
-        )
-        .expect("valid JSON fixture");
-        let (stream_hash, stream_len) =
-            compute_json_hash(&value).expect("streamed hash computation");
-        let encoded = norito::json::to_vec(&value).expect("direct encode");
-        assert_eq!(stream_len, encoded.len());
-        assert_eq!(stream_hash, sha256(&encoded));
-    }
-    #[test]
-    fn hot_bytes_account_for_vec_capacity() {
-        let mut value = Vec::with_capacity(12);
-        value.extend_from_slice(&[1_u8, 2, 3, 4, 5, 6, 7, 8]);
-        let expected =
-            std::mem::size_of::<Vec<u8>>() + value.capacity() * std::mem::size_of::<u8>();
-        let measured = compute_hot_bytes(&value).expect("hot byte measurement");
-        assert_eq!(measured, expected);
-    }
-    #[test]
-    fn measured_bytes_account_for_proof_attachment_list_capacity() {
-        let attachment = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
-            VerifyingKeyId::new("halo2/ipa", "tiered-capacity-fixture"),
-        );
-        let mut compact = Vec::with_capacity(1);
-        compact.push(attachment.clone());
-        let mut reserved = Vec::with_capacity(8);
-        reserved.push(attachment);
-        let compact = ProofAttachmentList::try_from(compact).expect("valid compact list");
-        let reserved = ProofAttachmentList::try_from(reserved).expect("valid reserved list");
-        assert_eq!(compact.as_slice(), reserved.as_slice());
-        let capacity_delta = reserved
-            .capacity()
-            .checked_sub(compact.capacity())
-            .expect("reserved fixture has greater capacity");
-        assert!(capacity_delta > 0);
-        let measured_delta = MeasuredBytes::measured_bytes(&reserved)
-            .checked_sub(MeasuredBytes::measured_bytes(&compact))
-            .expect("reserved fixture has greater measured size");
-        assert_eq!(
-            measured_delta,
-            capacity_delta.saturating_mul(std::mem::size_of::<ProofAttachment>())
-        );
-    }
-    #[test]
-    fn measured_bytes_track_governance_approval_sizes() {
-        use std::collections::BTreeSet;
-        let mut approval = crate::state::GovernanceStageApproval {
-            epoch: 1,
-            approvers: BTreeSet::new(),
-            rejections: BTreeSet::new(),
-            abstentions: BTreeSet::new(),
-            required: 2,
-            quorum_bps: 5000,
-        };
-        let empty_bytes = MeasuredBytes::measured_bytes(&approval);
-        let keypair = iroha_crypto::KeyPair::try_from_seed(
-            b"tiered-approval".to_vec(),
-            iroha_crypto::Algorithm::Ed25519,
-        )
-        .expect("fixture seed must derive a valid keypair");
-        assert!(
-            iroha_crypto::KeyPair::try_from_seed(vec![0; 32], iroha_crypto::Algorithm::Ed25519)
-                .is_err(),
-            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
-        );
-        approval
-            .approvers
-            .insert(iroha_data_model::account::AccountId::new(
-                keypair.public_key().clone(),
-            ));
-        let filled_bytes = MeasuredBytes::measured_bytes(&approval);
-        assert!(filled_bytes >= empty_bytes);
-        let mut approvals = crate::state::GovernanceStageApprovals::default();
-        let base_bytes = MeasuredBytes::measured_bytes(&approvals);
-        approvals.stages.insert(
-            iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
-            approval,
-        );
-        let updated_bytes = MeasuredBytes::measured_bytes(&approvals);
-        assert!(updated_bytes >= base_bytes);
-    }
-    #[test]
-    fn measured_bytes_cover_trigger_filters() {
-        use iroha_data_model::{
-            events::{EventFilterBox, data::DataEventFilter},
-            trigger::{TriggerId, action::Repeats},
-        };
-        let trigger_id: TriggerId = "audit_trigger".parse().expect("trigger id");
-        let repeats = Repeats::Exactly(1);
-        let filter = EventFilterBox::Data(DataEventFilter::Any);
-        assert!(MeasuredBytes::measured_bytes(&trigger_id) >= std::mem::size_of::<TriggerId>());
-        assert_eq!(
-            MeasuredBytes::measured_bytes(&repeats),
-            std::mem::size_of::<Repeats>()
-        );
-        assert!(MeasuredBytes::measured_bytes(&filter) >= std::mem::size_of::<EventFilterBox>());
-    }
-    #[test]
-    fn measured_bytes_cover_opaque_account_id() {
-        let opaque = OpaqueAccountId::from_hash(Hash::new([7_u8; 32]));
-        assert_eq!(
-            MeasuredBytes::measured_bytes(&opaque),
-            std::mem::size_of::<OpaqueAccountId>()
-        );
-    }
-    #[test]
-    fn measured_bytes_cover_opaque_asset_definition_id() {
-        use iroha_data_model::asset::AssetDefinitionId;
-        let opaque = AssetDefinitionId::from_uuid_bytes([
-            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x4d, 0xef, 0x80, 0x11, 0x22, 0x33, 0x44, 0x55,
-            0x66, 0x77,
-        ])
-        .expect("measured-bytes fixture UUID is valid");
-        assert_eq!(
-            MeasuredBytes::measured_bytes(&opaque),
-            std::mem::size_of::<AssetDefinitionId>()
-        );
-    }
-    fn dummy_state_entry(seed: u8) -> (StatePath, Vec<u8>) {
-        (
-            format!("tiered_state_{seed}")
-                .parse()
-                .expect("valid tiered-state fixture path"),
-            vec![seed; usize::from(seed).saturating_add(2)],
-        )
-    }
-    #[test]
-    fn snapshot_failure_leaves_existing_snapshot_intact() {
-        let temp = tempdir().expect("tmpdir");
-        let root = temp.path().to_path_buf();
-        let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), None, 0, 0);
-        let existing_dir = root.join(format!("{:020}", 1_u64));
-        fs::create_dir_all(&existing_dir).expect("create existing snapshot");
-        let marker = existing_dir.join("marker.txt");
-        fs::write(&marker, b"keep me").expect("write marker");
-        let plan = TieredSnapshotPlan {
-            root: root.clone(),
-            snapshot_dir: existing_dir.clone(),
-            manifest: TieredSnapshotManifest {
-                snapshot_index: 1,
-                total_entries: 0,
-                hot_entries: Vec::new(),
-                cold_entries: Vec::new(),
-                cold_bytes_total: 0,
-                cold_reused_entries: 0,
-                cold_reused_bytes: 0,
-                hot_promotions: 0,
-                hot_demotions: 0,
-                hot_grace_overflow_keys: 0,
-                hot_grace_overflow_bytes: 0,
-            },
-            cold_entries: Vec::new(),
-        };
-        let staging_path = plan.snapshot_dir.with_extension("staging");
-        fs::write(&staging_path, b"block staging dir creation").expect("write staging file");
-        let result = backend.execute_snapshot_plan(plan, &World::default());
-        assert!(
-            result.is_err(),
-            "expected staging collision to fail snapshot"
-        );
-        assert!(
-            marker.exists(),
-            "existing snapshot directory should remain when staging fails"
-        );
-    }
+    include!("tiered_security_and_measured_bytes_tests.rs");
     #[test]
     fn partial_contract_upload_roundtrips_through_cold_tier_disk() {
         let temp = tempdir().expect("tmpdir");

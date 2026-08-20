@@ -775,7 +775,6 @@ def test_bootstrap_protected_validation_accepts_real_terminal_receipt(
         ("formal_completion", "formal"),
         ("seed_completion", "seed"),
         ("chaos_completion", "chaos"),
-        ("taira_completion", "taira"),
         ("scaling_manifest", "scaling"),
         ("g4p_completion", "g4p"),
         ("g12_seed_completion", "g12-seed"),
@@ -991,7 +990,6 @@ def test_full_bootstrap_succeeds_with_real_terminal_receipt_validator(
         ("formal_completion", "formal"),
         ("seed_completion", "seed"),
         ("chaos_completion", "chaos"),
-        ("taira_completion", "taira"),
         ("g4p_completion", "g4p"),
         ("g12_seed_completion", "g12-seed"),
         ("g12_soak_completion", "g12-soak"),
@@ -1207,7 +1205,6 @@ receipt_arguments=( \
     --formal-completion {evidence_path("formal_completion")} \
     --seed-completion {evidence_path("seed_completion")} \
     --chaos-completion {evidence_path("chaos_completion")} \
-    --taira-completion {evidence_path("taira_completion")} \
     --g4p-completion {evidence_path("g4p_completion")} \
     --g12-seed-completion {evidence_path("g12_seed_completion")} \
     --g12-fault-soak-completion {evidence_path("g12_soak_completion")} \

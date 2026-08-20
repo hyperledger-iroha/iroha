@@ -18160,7 +18160,7 @@ impl Queue {
     fn remove_transaction_locked(
         &self,
         tx: &CheckedTransaction<'static>,
-        routing_plan: &RoutingPlan,
+        _routing_plan: &RoutingPlan,
         telemetry: Option<&StateTelemetry>,
     ) {
         let hash = tx.hash_as_entrypoint();

@@ -439,10 +439,9 @@ configuration for every qualified release.
 Keep the seal directory separate from the release-policy parent, artifact tree,
 and executable path. Publishing a directory entry changes that directory's
 identity, so placing the seal in a qualified source path would invalidate the
-snapshot it is meant to attest. Taira reset packaging injects a path of the
-form
-`/Library/SORA/Taira/seals/kagemusha-v4-<release-tree-sha256>.norito`; the
-digest is deliberately not hard-coded in the checked-in configuration.
+snapshot it is meant to attest. For Taira, deployment configuration owns the
+exact `kagemusha_catalog_qualification_seal_path`; there is no reset-packaging
+injector or checked-in deployment-specific destination.
 Qualification also requires the configured policy, complete artifact tree, and
 running executable path chains to be root-owned and not group- or
 world-writable. They may be read by the non-root validator after qualification,
@@ -1019,6 +1018,62 @@ seal digests, signed transaction hash, and committed block identity. Until
 those source contracts, four validator lanes, and runtime-only governance
 inputs exist, verification success is not promotion and no activation write is
 authorized.
+
+The data-model boundary for that future live operator is now explicit.
+`KagemushaV4ValidatorQualificationSealV1` is signed by the validator's exact
+`PeerId` and binds a nonzero promotion id, network, reviewed closure, canonical
+manifest and release record, exact release-policy source, canonical governed
+device-policy bytes, ordinary genesis-rooted signed-genesis bytes, logical
+catalog policy, and the protocol `execution_policy_hash`. It also binds that
+host's exact `iroha3d`, flattened TOML source, and canonical catalog
+qualification-seal bytes. Those three identities are intentionally per-host:
+the catalog seal includes local path/stat identity and a heterogeneous
+four-validator fleet may run separately reviewed target binaries. Only the
+release, policy, genesis, logical catalog, and execution-policy identities are
+required to agree across all four seals. "Flattened TOML source" does not mean
+runtime-effective configuration; environment, command-line, and profile
+overlays remain outside those bytes and must still be excluded by the protected
+exact-environment launcher.
+
+`KagemushaV4ActivationFinalityReceiptV1` retains those four strictly ordered,
+distinct seals, the independently pinned issuer, and the exact canonical
+governance `MultisigPolicy`. Governance must have at least two members and a
+threshold of at least two, and the admitted transaction must carry at least two
+distinct valid member signatures. The receipt also retains the payload-only
+`SignedTransaction::hash()` intent, a digest of the complete
+authorization-bearing `encode_wire_v1()` bytes, ordinary committed-transaction
+inclusion and successful result, the exact result-bearing `SignedBlockWire`, a
+separately checked exact-length/SHA-256 identity for those bytes, and its
+Sumeragi-v2 finality proof. After finality locates the authenticated block index,
+verification compares the actual external transaction's complete signed wire
+byte-for-byte with the approved wire; equal intent hashes cannot hide a different
+multisignature bundle. Verification accepts only one direct
+`ActivateKagemushaRecursiveReleaseV4` instruction; batch, IVM, contract,
+sealed, time-trigger, merge-sidecar, failed-result, stale-context, substituted
+block, roster, catalog, policy, transaction, or authorization-wire forms fail
+closed. A fresh
+context-pinned finality verifier is used for every receipt, and the four-seal
+`execution_policy_hash` must equal the finalized height context. The canonical
+receipt is capped at 64 MiB and its block at 32 MiB; Norito uses explicit
+cumulative decode limits and exact block re-encoding, while JSON ingress has a
+raw-body cap and rejects an oversized base64 block token before decoded
+allocation. Caller-built receipts use a real canonical counting-encoder pass to
+enforce the 64 MiB ceiling before any complete receipt re-encoding or signature
+hash allocation. The 64 MiB value is an encoded-input ceiling, not a peak-memory
+promise.
+
+These are verification and durable wire primitives, not a live publisher. The
+remaining typed integration work is to capture same-read executable/config/
+genesis/catalog evidence inside each validator, access an authorized validator
+signer, collect all four seals, distribute the exact trusted activation height
+context, submit with the governance signer, capture the committed result-bearing
+block and finality material, and publish the issuer-signed receipt through a
+fixed root-custodied no-replace destination. Snapshot-bootstrap validators are
+outside this V1 corridor unless the same trusted signed-genesis body is
+separately provisioned. A canonical effective-config projection is also still
+absent. The staged removal of the checked-in Taira capture/update/publish
+workflows leaves no repository-owned live rollout integration to wire these
+hooks into; none may be inferred from readiness verification.
 
 The signed JSON itself remains the release's
 `physical-device-benchmark.evidence`. The corridor verifies its exact external

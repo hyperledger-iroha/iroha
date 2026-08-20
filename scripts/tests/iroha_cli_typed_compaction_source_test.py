@@ -27,12 +27,12 @@ PINS = (
     SourcePin(
         Path("crates/iroha_cli/src/commands/sorafs.rs"),
         "014e2952c15d131913e4f0e27a7c4859cb40fae2",
-        24_547,
+        22_666,
     ),
     SourcePin(
         Path("crates/iroha_cli/src/soracloud.rs"),
-        "45d8d3fb7fcef23256f65780569caffe4929c8cf",
-        26_499,
+        "6f1e54c391f0a48b6ff158b595e020e7653922cb",
+        24_380,
     ),
     SourcePin(
         Path("crates/iroha_cli/src/main_shared.rs"),
@@ -58,6 +58,39 @@ SORACLOUD_REGION_SHA256 = (
 MAIN_SHARED_REGION_SHA256 = (
     "235a6d57b5bfaf88d1a61b5937d19e319466187a658c0513b5886347b281b564"
 )
+SORAFS_TYPED_REGION_SHA256 = (
+    "1a42d844c9433b8ee8b3dda39bb387f940c410eae33c036d309caab70fa0f198"
+)
+SORAFS_OPERATOR_PANEL_FIXTURE_REGION_SHA256 = (
+    "aa14c86fc54aae920eec0a490ae564df5a6c441e632cd3d79a244b55d8bc4808"
+)
+SORAFS_OPERATOR_RESPONSE_REGION_SHA256 = (
+    "d45f797f52144e4a1dca837201cb1448f5edc0a1c14de5920cbf54ffdcd2e663"
+)
+SORAFS_INCENTIVES_FIXTURE_REGION_SHA256 = (
+    "39605f76bd83ad804e2828e9414b9521e73c9a9eecb32f5210cc5c0114651e66"
+)
+SORAFS_PAYLOAD_REJECTION_REGION_SHA256 = (
+    "9b43b3104cae45c7ef1f6fffd7fe07bdb1d148447a877189401aacbae5d1b964"
+)
+SORAFS_TYPED_ADAPTER_ROWS = {
+    "impl_json_limit_run_with": (
+        10,
+        "a584e7fc3791c99b9eb0fd51503d5b9b15777ec37608a79f2c44ae22ff1a1d7f",
+    ),
+    "impl_appeal_finance_submit_run_with": (
+        5,
+        "3841936c9590dd347d14ca697a69cad99849a76c108aea9a335ef2e5a44d1f42",
+    ),
+    "impl_json_payload_run_with": (
+        4,
+        "a2069d188e5f2b297795a661f15fda46af86992f2020a5876ca8a3d37ada692d",
+    ),
+    "impl_moderation_operator_derived_response": (
+        4,
+        "e734070d9b662e2da4bd2a83ec29b149f4945c2a729aadd0e16f44b55d0e5f19",
+    ),
+}
 
 DIRECT_TEST = re.compile(
     r"(?P<attrs>(?:^[ \t]*#\[[^\n]+\]\n)+)"
@@ -77,6 +110,19 @@ DIRECT_RUN_IMPL = re.compile(
 RUN_ROW = re.compile(
     r"^impl_run_with_client_methods!\((?P<body>.*?)\);\n",
     re.MULTILINE | re.DOTALL,
+)
+PUBLIC_DECLARATION = re.compile(
+    r"^\s*pub(?:\([^\n]*\))?\s+[^\n]+",
+    re.MULTILINE,
+)
+CLAP_ATTRIBUTE = re.compile(
+    r"^\s*#\[(?:arg|command|derive\(clap::)[^\n]*",
+    re.MULTILINE,
+)
+RUST_STRING_OR_BYTE_LITERAL = re.compile(
+    r'(?s)(?:br|rb|r)(?P<hashes>#{0,8})".*?"(?P=hashes)|'
+    r'b?"(?:\\.|[^"\\])*"|'
+    r"b'(?:\\.|[^'\\])'"
 )
 FORBIDDEN_ADDITION = re.compile(
     r"dyn\s+Fn|FnMut|FnOnce|\bfn\s*\(|\$(?:body|setup)|"
@@ -109,6 +155,7 @@ def _test_inventory(source: str, generated: bool) -> tuple[tuple[str, tuple[str,
     if generated:
         for match in GENERATED_SORACLOUD_TEST.finditer(source):
             cases.append((match.start(), match.group("name"), ("#[test]",)))
+    cases.extend(_generated_test_item_cases(source))
     cases.sort()
     inventory = tuple((name, attributes) for _, name, attributes in cases)
     return inventory
@@ -140,6 +187,58 @@ def _new_sorafs_run_rows(source: str) -> tuple[tuple[str, tuple[str, ...]], ...]
     if len(rows) != 53 or len({name for name, _ in rows}) != len(rows):
         raise AssertionError("typed Run row inventory changed")
     return tuple(rows)
+
+
+def _old_sorafs_subcommand_rows(source: str) -> dict[str, tuple[str, ...]]:
+    variant = re.compile(
+        r"(?:Self|[A-Za-z_][A-Za-z0-9_]*)::"
+        r"(?P<variant>[A-Za-z_][A-Za-z0-9_]*)\("
+        r"(?P<binding>[A-Za-z_][A-Za-z0-9_]*)\)\s*=>\s*"
+        r"(?P=binding)\.run\(context\)"
+    )
+    rows = {}
+    for match in DIRECT_RUN_IMPL.finditer(source):
+        variants = tuple(
+            item.group("variant") for item in variant.finditer(match.group("body"))
+        )
+        if variants:
+            rows[match.group("name")] = variants
+    return rows
+
+
+def _new_sorafs_subcommand_rows(source: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    rows = []
+    for body in _macro_invocation_rows(source, "impl_run_for_subcommand"):
+        body = re.sub(r"^#\[[^\]]+\]\s*", "", body)
+        columns = body.split("=>")
+        if len(columns) != 2:
+            raise AssertionError("malformed typed subcommand row")
+        name = columns[0].strip()
+        variants = tuple(
+            variant.strip() for variant in columns[1].split(",") if variant.strip()
+        )
+        if not name or not variants:
+            raise AssertionError("empty typed subcommand row")
+        rows.append((name, variants))
+    if len(rows) != 34 or len({name for name, _ in rows}) != len(rows):
+        raise AssertionError("typed subcommand row inventory changed")
+    return tuple(rows)
+
+
+def _macro_invocation_rows(source: str, name: str) -> tuple[str, ...]:
+    pattern = re.compile(
+        rf"^[ \t]*{re.escape(name)}!\((?P<body>.*?)\);\n",
+        re.MULTILINE | re.DOTALL,
+    )
+    return tuple(" ".join(match.group("body").split()) for match in pattern.finditer(source))
+
+
+def _stripped_matches(pattern: re.Pattern[str], source: str) -> tuple[str, ...]:
+    return tuple(match.group(0).strip() for match in pattern.finditer(source))
+
+
+def _literal_inventory(source: str) -> frozenset[str]:
+    return frozenset(match.group(0) for match in RUST_STRING_OR_BYTE_LITERAL.finditer(source))
 
 
 def _added_lines(indexed: str, current: str) -> tuple[str, ...]:
@@ -201,6 +300,114 @@ def _raw_string_end(source: str, start: int) -> int | None:
     return end + len(terminator)
 
 
+def _rust_structure(source: str) -> str:
+    """Blank Rust comments and literals while retaining offsets and newlines."""
+    characters = list(source)
+
+    def blank(start: int, end: int) -> None:
+        for position in range(start, end):
+            if characters[position] != "\n":
+                characters[position] = " "
+
+    index = 0
+    block_comment_depth = 0
+    block_comment_start = 0
+    while index < len(source):
+        if block_comment_depth:
+            if source.startswith("/*", index):
+                block_comment_depth += 1
+                index += 2
+            elif source.startswith("*/", index):
+                block_comment_depth -= 1
+                index += 2
+                if block_comment_depth == 0:
+                    blank(block_comment_start, index)
+            else:
+                index += 1
+            continue
+        if source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = len(source) if end < 0 else end
+            blank(index, end)
+            index = end
+            continue
+        if source.startswith("/*", index):
+            block_comment_start = index
+            block_comment_depth = 1
+            index += 2
+            continue
+        raw_end = _raw_string_end(source, index)
+        if raw_end is not None:
+            blank(index, raw_end)
+            index = raw_end
+            continue
+        character = source[index]
+        if character == '"':
+            end = _skip_quoted(source, index, '"')
+            blank(index, end)
+            index = end
+            continue
+        if character == "'":
+            lifetime = re.match(r"'[A-Za-z_][A-Za-z0-9_]*", source[index:])
+            if lifetime is not None:
+                after = index + len(lifetime.group(0))
+                if after >= len(source) or source[after] != "'":
+                    index = after
+                    continue
+            end = _skip_quoted(source, index, "'")
+            blank(index, end)
+            index = end
+            continue
+        index += 1
+    if block_comment_depth:
+        raise AssertionError("unterminated Rust block comment")
+    return "".join(characters)
+
+
+def _generated_test_item_cases(
+    source: str,
+) -> list[tuple[int, str, tuple[str, ...]]]:
+    structure = _rust_structure(source)
+    marker = "test_items! {"
+    position = 0
+    cases = []
+    candidate = re.compile(
+        r"(?m)^[ \t]*(?:async\s+)?fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\("
+    )
+    while True:
+        start = structure.find(marker, position)
+        if start < 0:
+            break
+        opening = start + len(marker) - 1
+        depth = 1
+        closing = opening + 1
+        while closing < len(structure) and depth:
+            if structure[closing] == "{":
+                depth += 1
+            elif structure[closing] == "}":
+                depth -= 1
+            closing += 1
+        if depth:
+            raise AssertionError("unclosed test_items! invocation")
+        body_start = opening + 1
+        body = structure[body_start : closing - 1]
+        cursor = 0
+        item_depth = 0
+        for match in candidate.finditer(body):
+            for character in body[cursor : match.start()]:
+                if character == "{":
+                    item_depth += 1
+                elif character == "}":
+                    item_depth -= 1
+            if item_depth == 0:
+                cases.append(
+                    (body_start + match.start(), match.group("name"), ("#[test]",))
+                )
+            cursor = match.start()
+        position = closing
+    return cases
+
+
 def _assert_balanced_rust_delimiters(source: str) -> None:
     pairs = {"(": ")", "[": "]", "{": "}"}
     closing = set(pairs.values())
@@ -259,6 +466,46 @@ def _assert_balanced_rust_delimiters(source: str) -> None:
 def _validate(
     current: dict[Path, str], indexed: dict[Path, str]
 ) -> None:
+    sorafs_path = PINS[0].path
+    sorafs = current[sorafs_path]
+    sorafs_typed_region = _region(
+        sorafs,
+        "macro_rules! impl_run_for_subcommand {\n",
+        "#[allow(dead_code)]\nconst ML_KEM_768_PUBLIC_LEN",
+    )
+    if hashlib.sha256(sorafs_typed_region.encode()).hexdigest() != SORAFS_TYPED_REGION_SHA256:
+        raise AssertionError("SoraFS typed emitter region changed")
+    authenticated_regions = (
+        (
+            "    macro_rules! moderation_operator_panel_fixture {\n",
+            "    fn fixture_moderation_operator_service(\n",
+            SORAFS_OPERATOR_PANEL_FIXTURE_REGION_SHA256,
+            "operator-panel fixture",
+        ),
+        (
+            "    fn operator_panel_body(\n",
+            "    fn review_response(\n",
+            SORAFS_OPERATOR_RESPONSE_REGION_SHA256,
+            "operator response adapter",
+        ),
+        (
+            "    fn initialize_incentives_state(",
+            "    fn write_state_without_budget(",
+            SORAFS_INCENTIVES_FIXTURE_REGION_SHA256,
+            "incentives fixture",
+        ),
+        (
+            "    fn assert_moderation_operator_payload_rejected(\n",
+            "    test_items! {\n",
+            SORAFS_PAYLOAD_REJECTION_REGION_SHA256,
+            "payload-rejection fixture",
+        ),
+    )
+    for start, end, expected_hash, label in authenticated_regions:
+        region = _region(sorafs, start, end)
+        if hashlib.sha256(region.encode()).hexdigest() != expected_hash:
+            raise AssertionError(f"SoraFS typed {label} changed")
+
     reduction = 0
     for pin in PINS:
         source = current[pin.path]
@@ -268,17 +515,18 @@ def _validate(
             raise AssertionError(f"{pin.path}: line ceiling exceeded")
         reduction += len(preimage.splitlines()) - lines
         _assert_balanced_rust_delimiters(source)
-        additions = "\n".join(_added_lines(preimage, source))
+        scanned_source = source
+        if pin.path == sorafs_path:
+            scanned_source = source.replace(sorafs_typed_region, "", 1)
+        additions = "\n".join(_added_lines(preimage, scanned_source))
         if FORBIDDEN_ADDITION.search(additions):
             raise AssertionError(f"{pin.path}: forbidden compaction escape hatch")
         generated = pin.path.name == "soracloud.rs"
-        if _test_inventory(source, generated) != _test_inventory(preimage, False):
+        if _test_inventory(source, generated) != _test_inventory(preimage, generated):
             raise AssertionError(f"{pin.path}: test name or attribute inventory changed")
     if reduction < MINIMUM_RUST_LINE_REDUCTION:
         raise AssertionError(f"Rust line reduction is only {reduction}")
 
-    sorafs_path = PINS[0].path
-    sorafs = current[sorafs_path]
     if sorafs.count("macro_rules! impl_run_with_client_methods") != 1:
         raise AssertionError("typed Run emitter count changed")
     emitter_start = sorafs.index("macro_rules! impl_run_with_client_methods")
@@ -290,6 +538,36 @@ def _validate(
             raise AssertionError(f"typed Run row drifted: {name}")
         if re.search(rf"^impl Run for {re.escape(name)} \{{", sorafs, re.MULTILINE):
             raise AssertionError(f"direct Run impl survived typed row: {name}")
+    old_subcommands = _old_sorafs_subcommand_rows(indexed[sorafs_path])
+    for name, variants in _new_sorafs_subcommand_rows(sorafs):
+        if old_subcommands.get(name) != variants:
+            raise AssertionError(f"typed subcommand row drifted: {name}")
+        if re.search(rf"^impl Run for {re.escape(name)} \{{", sorafs, re.MULTILINE):
+            raise AssertionError(f"direct subcommand impl survived typed row: {name}")
+    for macro_name, (expected_count, expected_hash) in SORAFS_TYPED_ADAPTER_ROWS.items():
+        rows = _macro_invocation_rows(sorafs, macro_name)
+        if len(rows) != expected_count:
+            raise AssertionError(f"{macro_name}: typed row count changed")
+        row_hash = hashlib.sha256("\n".join(rows).encode()).hexdigest()
+        if row_hash != expected_hash:
+            raise AssertionError(f"{macro_name}: typed row inventory changed")
+    if sorafs.count("test_items! {") != 16:
+        raise AssertionError("SoraFS typed test-item group count changed")
+    if sorafs.count("json_response_fixture!") != 45:
+        raise AssertionError("SoraFS JSON response fixture count changed")
+    if sorafs.count("moderation_operator_panel_fixture!") != 7:
+        raise AssertionError("SoraFS operator-panel fixture count changed")
+    preimage = indexed[sorafs_path]
+    if _stripped_matches(PUBLIC_DECLARATION, sorafs) != _stripped_matches(
+        PUBLIC_DECLARATION, preimage
+    ):
+        raise AssertionError("SoraFS public declaration inventory changed")
+    if _stripped_matches(CLAP_ATTRIBUTE, sorafs) != _stripped_matches(
+        CLAP_ATTRIBUTE, preimage
+    ):
+        raise AssertionError("SoraFS Clap attribute inventory changed")
+    if _literal_inventory(sorafs) != _literal_inventory(preimage):
+        raise AssertionError("SoraFS unique string/byte literal inventory changed")
 
     soracloud = current[PINS[1].path]
     soracloud_region = _region(
@@ -365,6 +643,26 @@ class IrohaCliTypedCompactionSourceTest(unittest.TestCase):
         changed[PINS[2].path] = changed[PINS[2].path].replace(
             "HarnessRows::RankedFive(seed) => (F::ranked_five(seed), true),",
             "HarnessRows::RankedFive(seed) => (F::positioned_five(seed), true),",
+            1,
+        )
+        with self.assertRaises(AssertionError):
+            _validate(changed, self.indexed)
+
+    def test_sorafs_typed_adapter_mutation_is_rejected(self) -> None:
+        changed = dict(self.current)
+        changed[PINS[0].path] = changed[PINS[0].path].replace(
+            "bridge_plan_response => moderation_quarantine_bridge_plan_json,",
+            "bridge_plan_response => moderation_quarantine_juror_plan_json,",
+            1,
+        )
+        with self.assertRaises(AssertionError):
+            _validate(changed, self.indexed)
+
+    def test_sorafs_generated_test_name_mutation_is_rejected(self) -> None:
+        changed = dict(self.current)
+        changed[PINS[0].path] = changed[PINS[0].path].replace(
+            "fn pin_list_with_prints_payload()",
+            "fn pin_list_with_renders_payload()",
             1,
         )
         with self.assertRaises(AssertionError):

@@ -1176,6 +1176,135 @@ fn autonomous_carrier_block(
         keys[leader].private_key(),
     )
 }
+/// Exact record-backed autonomous lane certificate shared with worker handoff tests.
+pub(in crate::sumeragi) struct HistoricalAutonomousLaneCertificateFixture {
+    /// Kura containing the immutable historical autonomous recovery record.
+    pub(in crate::sumeragi) kura: Arc<Kura>,
+    /// Full autonomous Prepare/Commit certificate covered by that record.
+    pub(in crate::sumeragi) certificate: LaneBlockCertificateV1,
+    /// Historical global context which owns the recovery record.
+    pub(in crate::sumeragi) context: wire::HeightContext,
+    /// Validator keys used only by deterministic tests.
+    pub(in crate::sumeragi) validators: Vec<KeyPair>,
+}
+/// Persist one record-backed autonomous certificate without an application receipt.
+pub(in crate::sumeragi) fn historical_autonomous_lane_certificate_fixture()
+-> HistoricalAutonomousLaneCertificateFixture {
+    let (adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+    let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    proposal.payload_block_hint = None;
+    let entrypoint = source_block
+        .external_entrypoints_cloned()
+        .next()
+        .expect("historical autonomous fixture entrypoint");
+    let (payload, _) = signed_autonomous_payload_for_entrypoint(
+        &adapter,
+        &keys,
+        &proposal,
+        entrypoint,
+        b"historical-autonomous-queue-plan-admission-binding",
+        b"historical-autonomous-reservation-owner",
+        "deterministic historical autonomous producer",
+        "historical autonomous producer key",
+        "signed historical autonomous payload",
+    );
+    let carrier = autonomous_carrier_block(&adapter, &keys, &payload);
+    adapter
+        .kura
+        .store_block(carrier.clone())
+        .expect("persist historical autonomous carrier");
+    let finality = verified_finality_artifact_for_block(&adapter, &keys, &carrier);
+    let finality_receipt = adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("persist historical autonomous carrier finality");
+    assert_eq!(finality_receipt.height(), adapter.context.height);
+    assert_eq!(finality_receipt.block_hash(), carrier.hash());
+    let committed = ValidBlock::committed_from_replay_signed_block(carrier.clone());
+    commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+    install_finalized_vrf_epoch(&adapter, adapter.context.epoch, adapter.context.height);
+
+    let payload = payload
+        .attach_global_hint_exact(
+            LaneBlockProposalPayloadHintV1 {
+                proposal_height: adapter.context.height,
+                proposal_view: carrier.header().view_change_index(),
+                proposal_block_hash: carrier.hash(),
+            },
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("attach exact historical autonomous carrier hint");
+    let proposal = payload.origin_proposal.clone();
+    let execution_commitment = finality.commit_qc.execution_commitment;
+    let mut install = HistoricalAutonomousReservationInstallV1 {
+        version: HistoricalAutonomousReservationInstallV1::VERSION,
+        recovery_id: Hash::prehashed([0; Hash::LENGTH]),
+        canonical_body: CanonicalExecutedBlockNeedV1 {
+            height: adapter.context.height,
+            block_hash: carrier.hash(),
+            finality_artifact_hash: HashOf::new(&finality),
+            execution_commitment,
+            executed_block_wire_len: execution_commitment.executed_block_wire_len,
+            executed_block_wire_hash: execution_commitment.executed_block_wire_hash,
+        },
+        historical_context: adapter.context.clone(),
+        historical_context_id: adapter.context.id(),
+        historical_context_hash: HashOf::new(&adapter.context),
+        carrier_view: carrier.header().view_change_index(),
+        payload: payload.clone(),
+        reservation_group: LaneQueueReservationReconciliationGroupV1 {
+            identity: LaneQueueReservationGroupIdentityV1::from_key(
+                payload
+                    .reservation_keys
+                    .first()
+                    .expect("historical autonomous reservation group is non-empty"),
+            ),
+            ordered_keys: payload.reservation_keys.clone(),
+        },
+    };
+    install.recovery_id = install.computed_recovery_id();
+    assert_eq!(
+        install_historical_autonomous_lane_recovery(
+            adapter.state.as_ref(),
+            adapter.kura.as_ref(),
+            &install,
+        )
+        .expect("persist exact historical autonomous recovery record"),
+        HistoricalAutonomousLaneRecoveryInstallOutcome::Installed,
+    );
+    assert!(
+        adapter
+            .kura
+            .read_lane_block_application_receipt(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .is_none(),
+        "autonomous record authority must not borrow an ordinary application receipt"
+    );
+    let prepare_votes = keys[..3]
+        .iter()
+        .map(|key| signed_autonomous_prepare_vote(&proposal, &payload, key, &keys))
+        .collect::<Vec<_>>();
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        proposal.vote_body(CertPhase::Prepare),
+        proposal.descriptor.validator_set.clone(),
+        &prepare_votes,
+    )
+    .expect("historical autonomous READY votes form PrepareQC");
+    let certificate = LaneBlockCertificateV1 {
+        proposal: proposal.clone(),
+        prepare_qc,
+        commit_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Commit),
+    };
+    HistoricalAutonomousLaneCertificateFixture {
+        kura: Arc::clone(&adapter.kura),
+        certificate,
+        context: adapter.context.clone(),
+        validators: keys,
+    }
+}
 fn exercise_canonical_autonomous_carrier_after_direct_decision(local_signer_quorum: bool) {
     let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
     let quorum_keys = if local_signer_quorum {

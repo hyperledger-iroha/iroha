@@ -334,4 +334,3 @@ fn ensure_kagemusha_transparent_attachment(attachment: &ProofAttachment) -> Resu
         })?;
     ensure_kagemusha_transparent_backend(backend, backend_tag)
 }
-

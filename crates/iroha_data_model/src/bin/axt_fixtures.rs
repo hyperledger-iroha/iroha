@@ -11,11 +11,12 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     nexus::{
-        AssetHandle, AssetHandleDraft, AxtBinding, AxtDescriptorBuilder, AxtEffectBinding,
-        AxtFastpqBinding, AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
-        AxtProofEnvelope, AxtProofFragment, AxtTouchFragment, DataSpaceId, GroupBinding,
-        HandleBudget, HandleSubject, LaneId, ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
-        UniversalAccountId, compute_descriptor_binding, compute_remote_spend_intent_commitment_v1,
+        AssetHandle, AssetHandleDraft, AxtAssetIncarnationV1, AxtBinding, AxtDescriptorBuilder,
+        AxtEffectBinding, AxtFastpqBinding, AxtHandleFragment, AxtHandleIssuerContextV1,
+        AxtHandleReplayKey, AxtProofEnvelope, AxtProofFragment, AxtTouchFragment, DataSpaceId,
+        GroupBinding, HandleBudget, HandleSubject, LaneId, ProofBlob, RemoteSpendIntent, SpendOp,
+        TouchManifest, UniversalAccountId, compute_descriptor_binding,
+        compute_remote_spend_intent_commitment_v1,
     },
     testing::axt::{
         DescriptorFixture, EnvelopeFixture, HandleFixtures, PoseidonConstantsFixture,
@@ -41,12 +42,30 @@ const POSEIDON_FIXTURE_PATH: &str = concat!(
 fn fixture_issuer() -> KeyPair {
     KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519)
 }
+fn fixture_asset_incarnation(asset_definition_id: &AssetDefinitionId) -> AxtAssetIncarnationV1 {
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"axt-fixture-network"),
+    ));
+    let registration_header_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"axt-fixture-asset-registration-header",
+    ));
+    let execution_identity = Hash::new(b"axt-fixture-asset-registration-execution");
+    AxtAssetIncarnationV1::derive(
+        &network_id,
+        asset_definition_id,
+        &registration_header_hash,
+        &execution_identity,
+        0,
+    )
+}
 fn signed_fixture_handle(draft: AssetHandleDraft, dsid: DataSpaceId) -> AssetHandle {
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"axt-fixture-network"),
+    ));
     let context = AxtHandleIssuerContextV1 {
-        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::new(b"axt-fixture-network"),
-        )),
+        network_id,
         asset_dsid: dsid,
+        asset_definition_incarnation: fixture_asset_incarnation(&draft.asset_definition_id),
         issuer: UniversalAccountId::from_hash(Hash::new(b"axt-fixture-issuer")),
         issuer_manifest_root: draft.manifest_view_root,
         code_root: Hash::new(b"axt-fixture-program").into(),
@@ -305,7 +324,14 @@ fn build_envelope_fixture(
     );
     let transfer_amount = Quantity::from(2_500_u64);
     let transfer_commitment = compute_remote_spend_intent_commitment_v1(
-        AxtHandleReplayKey::from_parts(dsid_one, binding.into_array(), 5, 3, LaneId::new(4)),
+        AxtHandleReplayKey::from_parts(
+            dsid_one,
+            fixture_asset_incarnation(&transfer_asset),
+            binding.into_array(),
+            5,
+            3,
+            LaneId::new(4),
+        ),
         &transfer_asset,
         "transfer",
         &alice,
@@ -314,7 +340,14 @@ fn build_envelope_fixture(
     );
     let lock_amount = Quantity::from(9_001_u64);
     let lock_commitment = compute_remote_spend_intent_commitment_v1(
-        AxtHandleReplayKey::from_parts(dsid_seven, binding.into_array(), 9, 1, LaneId::new(4)),
+        AxtHandleReplayKey::from_parts(
+            dsid_seven,
+            fixture_asset_incarnation(&lock_asset),
+            binding.into_array(),
+            9,
+            1,
+            LaneId::new(4),
+        ),
         &lock_asset,
         "transfer",
         &bob,

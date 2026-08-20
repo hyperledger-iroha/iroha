@@ -405,6 +405,6 @@ fn digest_from_bytes(bytes: &[u8]) -> LifecycleDigest {
     digest.copy_from_slice(bytes);
     LifecycleDigest::new(digest)
 }
-// Decoded envelopes remain inert persisted evidence. TODO: Reauthenticate each
-// retained source against its owning durable store during startup before the
-// registry reconstructs executable replay work.
+// Decoded envelopes remain inert persisted evidence. Origin-specific startup
+// joins reauthenticate each retained source against its owning durable store
+// before the registry reconstructs executable replay work.

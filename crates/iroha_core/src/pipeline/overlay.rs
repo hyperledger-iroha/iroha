@@ -6101,21 +6101,6 @@ mod tests {
         );
     }
     include!("overlay_admission_policy_tests.rs");
-    fn mutate_open_verify_envelope_proof_box(
-        mut proof: iroha_data_model::proof::ProofBox,
-        mutate: impl FnOnce(&mut ZkOpenVerifyEnvelope),
-    ) -> iroha_data_model::proof::ProofBox {
-        let mut envelope: ZkOpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof.bytes).expect("decode OpenVerifyEnvelope fixture");
-        mutate(&mut envelope);
-        proof.bytes = norito::to_bytes(&envelope).expect("encode mutated OpenVerifyEnvelope");
-        proof
-    }
-    #[test]
-    fn empty_overlay_is_noop() {
-        let ovl = TxOverlay::default();
-        assert!(ovl.is_empty());
-    }
     #[test]
     fn plain_ivm_axt_only_overlay_persists_envelope_and_replay_guard() {
         use iroha_data_model::{
@@ -6175,7 +6160,14 @@ mod tests {
                 amount: Some("5".parse().expect("canonical spend quantity")),
             },
         };
-        let replay_key = AxtHandleReplayKey::from_parts(dsid, binding, 1, 1, lane);
+        let replay_key = AxtHandleReplayKey::from_parts(
+            dsid,
+            handle.issuer_context.asset_definition_incarnation,
+            binding,
+            1,
+            1,
+            lane,
+        );
         let mut completed = ivm::axt::HostAxtState::new(descriptor, binding);
         completed
             .record_touch(

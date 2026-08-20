@@ -1592,21 +1592,16 @@ impl AppInitArgs {
         Ok(dist_dir.to_owned())
     }
 }
-/// Arguments for `soracloud app deploy` and `soracloud app upgrade`.
-#[derive(clap::Args, Debug)]
-pub struct AppDeployArgs {
-    /// Path to a `SoracloudAppManifestV1` JSON document.
-    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
-    manifest: PathBuf,
-    /// Torii base URL to execute deploy/upgrade against authoritative control-plane APIs.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for Torii mutation requests.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL to execute deploy/upgrade against authoritative control-plane APIs.",
+    " Optional API token sent as `x-api-token` when mutating live control-plane APIs.",
+    " HTTP timeout for Torii mutation requests.";
+    /// Arguments for `soracloud app deploy` and `soracloud app upgrade`.
+    pub struct AppDeployArgs {
+        /// Path to a `SoracloudAppManifestV1` JSON document.
+        #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
+        manifest: PathBuf,
+    }
 }
 impl AppDeployArgs {
     fn run(
@@ -1984,21 +1979,16 @@ impl AppDeployArgs {
         })
     }
 }
-/// Arguments for `soracloud app status`.
-#[derive(clap::Args, Debug)]
-pub struct AppStatusArgs {
-    /// Path to a `SoracloudAppManifestV1` JSON document.
-    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
-    manifest: PathBuf,
-    /// Torii base URL for authoritative Soracloud status.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane status query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative Soracloud status.",
+    " Optional API token sent as `x-api-token` when querying live control-plane APIs.",
+    " HTTP timeout for live control-plane status query.";
+    /// Arguments for `soracloud app status`.
+    pub struct AppStatusArgs {
+        /// Path to a `SoracloudAppManifestV1` JSON document.
+        #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
+        manifest: PathBuf,
+    }
 }
 impl AppStatusArgs {
     fn run(self) -> Result<AppStatusOutput> {
@@ -4152,162 +4142,160 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
         notes,
     })
 }
-/// Arguments for `soracloud service deploy`.
-#[derive(clap::Args, Debug)]
-pub struct DeployArgs {
-    /// Path to a `SoraContainerManifestV1` JSON document.
-    #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
-    container: PathBuf,
-    /// Path to a `SoraServiceManifestV1` JSON document.
-    #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
-    service: PathBuf,
-    /// Optional JSON file containing a map of inline config values committed atomically with deploy.
-    #[arg(long, value_name = "PATH")]
-    initial_configs: Option<PathBuf>,
-    /// Optional JSON file containing a map of inline secret envelopes committed atomically with deploy.
-    #[arg(long, value_name = "PATH")]
-    initial_secrets: Option<PathBuf>,
-    /// Torii base URL to execute deploy against authoritative control-plane APIs.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for Torii mutation requests.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+macro_rules! define_live_mutation_args {
+    (
+        $url_doc:literal;
+        $(#[$meta:meta])*
+        pub struct $name:ident { $($fields:tt)* }
+    ) => {
+        $(#[$meta])*
+        #[derive(clap::Args, Debug)]
+        pub struct $name {
+            $($fields)*
+            #[doc = $url_doc]
+            #[arg(long, value_name = "URL")]
+            torii_url: Option<String>,
+            /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+            #[arg(long, value_name = "TOKEN")]
+            api_token: Option<String>,
+            /// HTTP timeout for live control-plane mutations.
+            #[arg(long, value_name = "SECS", default_value_t = 10)]
+            timeout_secs: u64,
+        }
+    };
 }
-impl DeployArgs {
-    fn run(
-        self,
-        mode: MutationMode,
-        authority: &AccountId,
-        key_pair: &KeyPair,
-    ) -> Result<ServiceMutationOutput> {
-        let plan = build_service_workspace_plan(&self.container, &self.service)?;
-        let container: SoraContainerManifestV1 = load_json(&self.container)?;
-        let service: SoraServiceManifestV1 = load_json(&self.service)?;
-        let bundle = SoraDeploymentBundleV1 {
-            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-            container,
-            service,
-        };
-        bundle.validate_for_admission()?;
-        let mut initial_service_configs =
-            load_initial_service_configs(self.initial_configs.as_deref())?;
-        let initial_service_secrets =
-            load_initial_service_secrets(self.initial_secrets.as_deref())?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
-        let published_public_discovery = attach_public_service_discovery_config(
-            &bundle,
-            &mut initial_service_configs,
-            &torii_url,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-            authority,
-            key_pair,
-        )?;
-        let response = run_service_bundle_mutation(
-            mode,
-            bundle,
-            initial_service_configs,
-            initial_service_secrets,
-            &torii_url,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-            authority,
-            key_pair,
-        )?;
-        Ok(build_direct_service_mutation_output(
-            &self.container,
-            &self.service,
-            plan,
-            mode,
-            &torii_url,
-            self.api_token.is_some(),
-            published_public_discovery,
-            response,
-        ))
+macro_rules! define_torii_args {
+    (
+        $url_doc:literal, $token_doc:literal, $timeout_doc:literal;
+        $(#[$meta:meta])*
+        pub struct $name:ident { $($fields:tt)* }
+    ) => {
+        $(#[$meta])*
+        #[derive(clap::Args, Debug)]
+        pub struct $name {
+            $($fields)*
+            #[doc = $url_doc]
+            #[arg(long, value_name = "URL")]
+            torii_url: Option<String>,
+            #[doc = $token_doc]
+            #[arg(long, value_name = "TOKEN")]
+            api_token: Option<String>,
+            #[doc = $timeout_doc]
+            #[arg(long, value_name = "SECS", default_value_t = 10)]
+            timeout_secs: u64,
+        }
+    };
+}
+macro_rules! post_live_mutation {
+    ($args:expr, $torii_url:expr, $path:expr, $request:expr) => {
+        post_torii_soracloud_mutation(
+            $torii_url,
+            $path,
+            $request,
+            $args.api_token.as_deref(),
+            $args.timeout_secs,
+        )
+    };
+}
+define_torii_args! {
+    " Torii base URL to execute deploy against authoritative control-plane APIs.",
+    " Optional API token sent as `x-api-token` when mutating live control-plane APIs.",
+    " HTTP timeout for Torii mutation requests.";
+    /// Arguments for `soracloud service deploy`.
+    pub struct DeployArgs {
+        /// Path to a `SoraContainerManifestV1` JSON document.
+        #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
+        container: PathBuf,
+        /// Path to a `SoraServiceManifestV1` JSON document.
+        #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
+        service: PathBuf,
+        /// Optional JSON file containing a map of inline config values committed atomically with deploy.
+        #[arg(long, value_name = "PATH")]
+        initial_configs: Option<PathBuf>,
+        /// Optional JSON file containing a map of inline secret envelopes committed atomically with deploy.
+        #[arg(long, value_name = "PATH")]
+        initial_secrets: Option<PathBuf>,
     }
 }
-/// Arguments for `soracloud service upgrade`.
-#[derive(clap::Args, Debug)]
-pub struct UpgradeArgs {
-    /// Path to a `SoraContainerManifestV1` JSON document.
-    #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
-    container: PathBuf,
-    /// Path to a `SoraServiceManifestV1` JSON document.
-    #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
-    service: PathBuf,
-    /// Optional JSON file containing a map of inline config values committed atomically with upgrade.
-    #[arg(long, value_name = "PATH")]
-    initial_configs: Option<PathBuf>,
-    /// Optional JSON file containing a map of inline secret envelopes committed atomically with upgrade.
-    #[arg(long, value_name = "PATH")]
-    initial_secrets: Option<PathBuf>,
-    /// Torii base URL to execute upgrade against authoritative control-plane APIs.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for Torii mutation requests.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+macro_rules! impl_service_bundle_mutation {
+    ($args:ty) => {
+        impl $args {
+            fn run(
+                self,
+                mode: MutationMode,
+                authority: &AccountId,
+                key_pair: &KeyPair,
+            ) -> Result<ServiceMutationOutput> {
+                let plan = build_service_workspace_plan(&self.container, &self.service)?;
+                let container: SoraContainerManifestV1 = load_json(&self.container)?;
+                let service: SoraServiceManifestV1 = load_json(&self.service)?;
+                let bundle = SoraDeploymentBundleV1 {
+                    schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+                    container,
+                    service,
+                };
+                bundle.validate_for_admission()?;
+                let mut initial_service_configs =
+                    load_initial_service_configs(self.initial_configs.as_deref())?;
+                let initial_service_secrets =
+                    load_initial_service_secrets(self.initial_secrets.as_deref())?;
+                let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+                let published_public_discovery = attach_public_service_discovery_config(
+                    &bundle,
+                    &mut initial_service_configs,
+                    &torii_url,
+                    self.api_token.as_deref(),
+                    self.timeout_secs,
+                    authority,
+                    key_pair,
+                )?;
+                let response = run_service_bundle_mutation(
+                    mode,
+                    bundle,
+                    initial_service_configs,
+                    initial_service_secrets,
+                    &torii_url,
+                    self.api_token.as_deref(),
+                    self.timeout_secs,
+                    authority,
+                    key_pair,
+                )?;
+                Ok(build_direct_service_mutation_output(
+                    &self.container,
+                    &self.service,
+                    plan,
+                    mode,
+                    &torii_url,
+                    self.api_token.is_some(),
+                    published_public_discovery,
+                    response,
+                ))
+            }
+        }
+    };
 }
-impl UpgradeArgs {
-    fn run(
-        self,
-        mode: MutationMode,
-        authority: &AccountId,
-        key_pair: &KeyPair,
-    ) -> Result<ServiceMutationOutput> {
-        let plan = build_service_workspace_plan(&self.container, &self.service)?;
-        let container: SoraContainerManifestV1 = load_json(&self.container)?;
-        let service: SoraServiceManifestV1 = load_json(&self.service)?;
-        let bundle = SoraDeploymentBundleV1 {
-            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-            container,
-            service,
-        };
-        bundle.validate_for_admission()?;
-        let mut initial_service_configs =
-            load_initial_service_configs(self.initial_configs.as_deref())?;
-        let initial_service_secrets =
-            load_initial_service_secrets(self.initial_secrets.as_deref())?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
-        let published_public_discovery = attach_public_service_discovery_config(
-            &bundle,
-            &mut initial_service_configs,
-            &torii_url,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-            authority,
-            key_pair,
-        )?;
-        let response = run_service_bundle_mutation(
-            mode,
-            bundle,
-            initial_service_configs,
-            initial_service_secrets,
-            &torii_url,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-            authority,
-            key_pair,
-        )?;
-        Ok(build_direct_service_mutation_output(
-            &self.container,
-            &self.service,
-            plan,
-            mode,
-            &torii_url,
-            self.api_token.is_some(),
-            published_public_discovery,
-            response,
-        ))
+impl_service_bundle_mutation!(DeployArgs);
+define_torii_args! {
+    " Torii base URL to execute upgrade against authoritative control-plane APIs.",
+    " Optional API token sent as `x-api-token` when mutating live control-plane APIs.",
+    " HTTP timeout for Torii mutation requests.";
+    /// Arguments for `soracloud service upgrade`.
+    pub struct UpgradeArgs {
+        /// Path to a `SoraContainerManifestV1` JSON document.
+        #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
+        container: PathBuf,
+        /// Path to a `SoraServiceManifestV1` JSON document.
+        #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
+        service: PathBuf,
+        /// Optional JSON file containing a map of inline config values committed atomically with upgrade.
+        #[arg(long, value_name = "PATH")]
+        initial_configs: Option<PathBuf>,
+        /// Optional JSON file containing a map of inline secret envelopes committed atomically with upgrade.
+        #[arg(long, value_name = "PATH")]
+        initial_secrets: Option<PathBuf>,
     }
 }
+impl_service_bundle_mutation!(UpgradeArgs);
 /// Arguments for `soracloud service status`.
 #[derive(clap::Args, Debug)]
 pub struct StatusArgs {
@@ -4355,36 +4343,29 @@ impl StatusArgs {
         StatusOutput::from_network(endpoint, payload, service_plan)
     }
 }
-/// Arguments for `iroha soracloud service config-set`.
-#[derive(clap::Args, Debug)]
-pub struct ConfigSetArgs {
-    /// Service name owning the config entry.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Stable service-scoped config name.
-    #[arg(long, value_name = "NAME")]
-    config_name: String,
-    /// Inline JSON value for the config entry.
-    #[arg(long, value_name = "JSON")]
-    value_json: Option<String>,
-    /// Path to a JSON document used as the config value.
-    #[arg(long, value_name = "PATH")]
-    value_file: Option<PathBuf>,
-    /// Torii base URL for authoritative `service/config/set`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `service/config/set`.";
+    /// Arguments for `iroha soracloud service config-set`.
+    pub struct ConfigSetArgs {
+        /// Service name owning the config entry.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Stable service-scoped config name.
+        #[arg(long, value_name = "NAME")]
+        config_name: String,
+        /// Inline JSON value for the config entry.
+        #[arg(long, value_name = "JSON")]
+        value_json: Option<String>,
+        /// Path to a JSON document used as the config value.
+        #[arg(long, value_name = "PATH")]
+        value_file: Option<PathBuf>,
+    }
 }
 impl ConfigSetArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -4406,42 +4387,30 @@ impl ConfigSetArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/service/config/set",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/service/config/set", &request)?;
         let mut payload = payload;
         attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud service config-delete`.
-#[derive(clap::Args, Debug)]
-pub struct ConfigDeleteArgs {
-    /// Service name owning the config entry.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Stable service-scoped config name.
-    #[arg(long, value_name = "NAME")]
-    config_name: String,
-    /// Torii base URL for authoritative `service/config/delete`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `service/config/delete`.";
+    /// Arguments for `iroha soracloud service config-delete`.
+    pub struct ConfigDeleteArgs {
+        /// Service name owning the config entry.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Stable service-scoped config name.
+        #[arg(long, value_name = "NAME")]
+        config_name: String,
+    }
 }
 impl ConfigDeleteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -4460,42 +4429,36 @@ impl ConfigDeleteArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/service/config/delete",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let mut payload = payload;
         attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
-/// Arguments for `soracloud service config-status`.
-#[derive(clap::Args, Debug)]
-pub struct ConfigStatusArgs {
-    /// Service name owning the config entries.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Optional config name filter.
-    #[arg(long, value_name = "NAME")]
-    config_name: Option<String>,
-    /// Torii base URL for authoritative `service/config/status`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane queries.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative `service/config/status`.",
+    " Optional API token sent as `x-api-token` when querying live control-plane APIs.",
+    " HTTP timeout for live control-plane queries.";
+    /// Arguments for `soracloud service config-status`.
+    pub struct ConfigStatusArgs {
+        /// Service name owning the config entries.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Optional config name filter.
+        #[arg(long, value_name = "NAME")]
+        config_name: Option<String>,
+    }
 }
 impl ConfigStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -4520,33 +4483,26 @@ impl ConfigStatusArgs {
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud service secret-set`.
-#[derive(clap::Args, Debug)]
-pub struct SecretSetArgs {
-    /// Service name owning the secret entry.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Stable service-scoped secret name.
-    #[arg(long, value_name = "NAME")]
-    secret_name: String,
-    /// Path to a `SecretEnvelopeV1` JSON document.
-    #[arg(long, value_name = "PATH")]
-    secret_file: PathBuf,
-    /// Torii base URL for authoritative `service/secret/set`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `service/secret/set`.";
+    /// Arguments for `iroha soracloud service secret-set`.
+    pub struct SecretSetArgs {
+        /// Service name owning the secret entry.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Stable service-scoped secret name.
+        #[arg(long, value_name = "NAME")]
+        secret_name: String,
+        /// Path to a `SecretEnvelopeV1` JSON document.
+        #[arg(long, value_name = "PATH")]
+        secret_file: PathBuf,
+    }
 }
 impl SecretSetArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -4568,42 +4524,30 @@ impl SecretSetArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/service/secret/set",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/service/secret/set", &request)?;
         let mut payload = payload;
         attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud service secret-delete`.
-#[derive(clap::Args, Debug)]
-pub struct SecretDeleteArgs {
-    /// Service name owning the secret entry.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Stable service-scoped secret name.
-    #[arg(long, value_name = "NAME")]
-    secret_name: String,
-    /// Torii base URL for authoritative `service/secret/delete`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `service/secret/delete`.";
+    /// Arguments for `iroha soracloud service secret-delete`.
+    pub struct SecretDeleteArgs {
+        /// Service name owning the secret entry.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Stable service-scoped secret name.
+        #[arg(long, value_name = "NAME")]
+        secret_name: String,
+    }
 }
 impl SecretDeleteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -4622,42 +4566,36 @@ impl SecretDeleteArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/service/secret/delete",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let mut payload = payload;
         attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
-/// Arguments for `soracloud service secret-status`.
-#[derive(clap::Args, Debug)]
-pub struct SecretStatusArgs {
-    /// Service name owning the secret entries.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Optional secret name filter.
-    #[arg(long, value_name = "NAME")]
-    secret_name: Option<String>,
-    /// Torii base URL for authoritative `service/secret/status`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane queries.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative `service/secret/status`.",
+    " Optional API token sent as `x-api-token` when querying live control-plane APIs.",
+    " HTTP timeout for live control-plane queries.";
+    /// Arguments for `soracloud service secret-status`.
+    pub struct SecretStatusArgs {
+        /// Service name owning the secret entries.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Optional secret name filter.
+        #[arg(long, value_name = "NAME")]
+        secret_name: Option<String>,
+    }
 }
 impl SecretStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -4682,30 +4620,25 @@ impl SecretStatusArgs {
         Ok(payload)
     }
 }
-/// Arguments for `soracloud service rollback`.
-#[derive(clap::Args, Debug)]
-pub struct RollbackArgs {
-    /// Service name to roll back.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Optional target version. When omitted, rolls back to the previous version.
-    #[arg(long, value_name = "VERSION")]
-    target_version: Option<String>,
-    /// Torii base URL to execute rollback against authoritative control-plane APIs.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for Torii mutation requests.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL to execute rollback against authoritative control-plane APIs.",
+    " Optional API token sent as `x-api-token` when mutating live control-plane APIs.",
+    " HTTP timeout for Torii mutation requests.";
+    /// Arguments for `soracloud service rollback`.
+    pub struct RollbackArgs {
+        /// Service name to roll back.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Optional target version. When omitted, rolls back to the previous version.
+        #[arg(long, value_name = "VERSION")]
+        target_version: Option<String>,
+    }
 }
 impl RollbackArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -4728,13 +4661,7 @@ impl RollbackArgs {
             Some(authority),
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/rollback",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) = post_live_mutation!(self, torii_url, "v1/soracloud/rollback", &request)?;
         let (_, status_payload) = fetch_torii_soracloud_status(
             torii_url,
             Some(&service_name),
@@ -4747,39 +4674,34 @@ impl RollbackArgs {
         Ok(output)
     }
 }
-/// Arguments for `soracloud service rollout`.
-#[derive(clap::Args, Debug)]
-pub struct RolloutArgs {
-    /// Service name with an active rollout.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Rollout handle emitted by `upgrade` output (`rollout_handle`).
-    #[arg(long, value_name = "HANDLE")]
-    rollout_handle: String,
-    /// Health signal for this rollout step.
-    #[arg(long, value_enum, default_value_t = RolloutHealth::Healthy)]
-    health: RolloutHealth,
-    /// Optional target traffic percentage for healthy promotions.
-    #[arg(long, value_name = "PERCENT")]
-    promote_to_percent: Option<u8>,
-    /// Governance transaction hash linked to this rollout action.
-    #[arg(long, value_name = "HASH")]
-    governance_tx_hash: Hash,
-    /// Torii base URL to execute rollout against authoritative control-plane APIs.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for Torii mutation requests.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL to execute rollout against authoritative control-plane APIs.",
+    " Optional API token sent as `x-api-token` when mutating live control-plane APIs.",
+    " HTTP timeout for Torii mutation requests.";
+    /// Arguments for `soracloud service rollout`.
+    pub struct RolloutArgs {
+        /// Service name with an active rollout.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Rollout handle emitted by `upgrade` output (`rollout_handle`).
+        #[arg(long, value_name = "HANDLE")]
+        rollout_handle: String,
+        /// Health signal for this rollout step.
+        #[arg(long, value_enum, default_value_t = RolloutHealth::Healthy)]
+        health: RolloutHealth,
+        /// Optional target traffic percentage for healthy promotions.
+        #[arg(long, value_name = "PERCENT")]
+        promote_to_percent: Option<u8>,
+        /// Governance transaction hash linked to this rollout action.
+        #[arg(long, value_name = "HASH")]
+        governance_tx_hash: Hash,
+    }
 }
 impl RolloutArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -4805,13 +4727,7 @@ impl RolloutArgs {
             Some(authority),
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/rollout",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) = post_live_mutation!(self, torii_url, "v1/soracloud/rollout", &request)?;
         let (_, status_payload) = fetch_torii_soracloud_status(
             torii_url,
             Some(&service_name),
@@ -4824,27 +4740,20 @@ impl RolloutArgs {
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud agent deploy`.
-#[derive(clap::Args, Debug)]
-pub struct AgentDeployArgs {
-    /// Path to an `AgentApartmentManifestV1` JSON document.
-    #[arg(long, value_name = "PATH", default_value = DEFAULT_AGENT_APARTMENT_MANIFEST)]
-    manifest: PathBuf,
-    /// Lease length, measured in deterministic control-plane sequence ticks.
-    #[arg(long, value_name = "TICKS", default_value_t = 120)]
-    lease_ticks: u64,
-    /// Initial autonomy execution budget units.
-    #[arg(long, value_name = "UNITS", default_value_t = AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS)]
-    autonomy_budget_units: u64,
-    /// Torii base URL for authoritative `agent/deploy`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `agent/deploy`.";
+    /// Arguments for `iroha soracloud agent deploy`.
+    pub struct AgentDeployArgs {
+        /// Path to an `AgentApartmentManifestV1` JSON document.
+        #[arg(long, value_name = "PATH", default_value = DEFAULT_AGENT_APARTMENT_MANIFEST)]
+        manifest: PathBuf,
+        /// Lease length, measured in deterministic control-plane sequence ticks.
+        #[arg(long, value_name = "TICKS", default_value_t = 120)]
+        lease_ticks: u64,
+        /// Initial autonomy execution budget units.
+        #[arg(long, value_name = "UNITS", default_value_t = AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS)]
+        autonomy_budget_units: u64,
+    }
 }
 impl AgentDeployArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -4865,13 +4774,8 @@ impl AgentDeployArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/agent/deploy",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/agent/deploy", &request)?;
         let (_, status_payload) = fetch_torii_soracloud_agent_status(
             torii_url,
             Some(&apartment_name),
@@ -4881,24 +4785,17 @@ impl AgentDeployArgs {
         build_agent_mutation_output(payload, &status_payload, &apartment_name, "Deploy")
     }
 }
-/// Arguments for `iroha soracloud agent lease-renew`.
-#[derive(clap::Args, Debug)]
-pub struct AgentLeaseRenewArgs {
-    /// Apartment name to renew.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: String,
-    /// Lease extension ticks.
-    #[arg(long, value_name = "TICKS", default_value_t = 120)]
-    lease_ticks: u64,
-    /// Torii base URL for authoritative `agent/lease/renew`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `agent/lease/renew`.";
+    /// Arguments for `iroha soracloud agent lease-renew`.
+    pub struct AgentLeaseRenewArgs {
+        /// Apartment name to renew.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: String,
+        /// Lease extension ticks.
+        #[arg(long, value_name = "TICKS", default_value_t = 120)]
+        lease_ticks: u64,
+    }
 }
 impl AgentLeaseRenewArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -4912,13 +4809,8 @@ impl AgentLeaseRenewArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/agent/lease/renew",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/agent/lease/renew", &request)?;
         let (_, status_payload) = fetch_torii_soracloud_agent_status(
             torii_url,
             Some(&self.apartment_name),
@@ -4928,37 +4820,25 @@ impl AgentLeaseRenewArgs {
         build_agent_mutation_output(payload, &status_payload, &self.apartment_name, "LeaseRenew")
     }
 }
-/// Arguments for `iroha soracloud agent restart`.
-#[derive(clap::Args, Debug)]
-pub struct AgentRestartArgs {
-    /// Apartment name to restart.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: String,
-    /// Human-readable reason captured in scheduler events.
-    #[arg(long, value_name = "TEXT")]
-    reason: String,
-    /// Torii base URL for authoritative `agent/restart`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `agent/restart`.";
+    /// Arguments for `iroha soracloud agent restart`.
+    pub struct AgentRestartArgs {
+        /// Apartment name to restart.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: String,
+        /// Human-readable reason captured in scheduler events.
+        #[arg(long, value_name = "TEXT")]
+        reason: String,
+    }
 }
 impl AgentRestartArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request =
             signed_agent_restart_request(&self.apartment_name, &self.reason, authority, key_pair)?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/agent/restart",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/agent/restart", &request)?;
         let (_, status_payload) = fetch_torii_soracloud_agent_status(
             torii_url,
             Some(&self.apartment_name),
@@ -4968,21 +4848,16 @@ impl AgentRestartArgs {
         build_agent_mutation_output(payload, &status_payload, &self.apartment_name, "Restart")
     }
 }
-/// Arguments for `iroha soracloud agent status`.
-#[derive(clap::Args, Debug)]
-pub struct AgentStatusArgs {
-    /// Optional apartment name filter.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: Option<String>,
-    /// Torii base URL for authoritative `agent/status`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane status query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative `agent/status`.",
+    " Optional API token sent as `x-api-token` when querying live control-plane APIs.",
+    " HTTP timeout for live control-plane status query.";
+    /// Arguments for `iroha soracloud agent status`.
+    pub struct AgentStatusArgs {
+        /// Optional apartment name filter.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: Option<String>,
+    }
 }
 impl AgentStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -4996,27 +4871,20 @@ impl AgentStatusArgs {
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud agent wallet-spend`.
-#[derive(clap::Args, Debug)]
-pub struct AgentWalletSpendArgs {
-    /// Apartment name issuing the spend request.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: String,
-    /// Asset definition identifier (canonical unprefixed Base58 address).
-    #[arg(long, value_name = "ASSET")]
-    asset_definition: String,
-    /// Exact, positive spend amount.
-    #[arg(long, value_name = "QUANTITY", value_parser = parse_positive_quantity)]
-    amount: Quantity,
-    /// Torii base URL for authoritative `agent/wallet/spend`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `agent/wallet/spend`.";
+    /// Arguments for `iroha soracloud agent wallet-spend`.
+    pub struct AgentWalletSpendArgs {
+        /// Apartment name issuing the spend request.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: String,
+        /// Asset definition identifier (canonical unprefixed Base58 address).
+        #[arg(long, value_name = "ASSET")]
+        asset_definition: String,
+        /// Exact, positive spend amount.
+        #[arg(long, value_name = "QUANTITY", value_parser = parse_positive_quantity)]
+        amount: Quantity,
+    }
 }
 impl AgentWalletSpendArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5028,13 +4896,8 @@ impl AgentWalletSpendArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/agent/wallet/spend",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/agent/wallet/spend", &request)?;
         let (_, status_payload) = fetch_torii_soracloud_agent_status(
             torii_url,
             Some(&self.apartment_name),
@@ -5044,24 +4907,17 @@ impl AgentWalletSpendArgs {
         build_wallet_spend_output(payload, &status_payload, &self.apartment_name)
     }
 }
-/// Arguments for `iroha soracloud agent wallet-approve`.
-#[derive(clap::Args, Debug)]
-pub struct AgentWalletApproveArgs {
-    /// Apartment name owning the request.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: String,
-    /// Wallet request identifier emitted by `agent wallet-spend`.
-    #[arg(long, value_name = "REQUEST")]
-    request_id: String,
-    /// Torii base URL for authoritative `agent/wallet/approve`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `agent/wallet/approve`.";
+    /// Arguments for `iroha soracloud agent wallet-approve`.
+    pub struct AgentWalletApproveArgs {
+        /// Apartment name owning the request.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: String,
+        /// Wallet request identifier emitted by `agent wallet-spend`.
+        #[arg(long, value_name = "REQUEST")]
+        request_id: String,
+    }
 }
 impl AgentWalletApproveArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5072,12 +4928,11 @@ impl AgentWalletApproveArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/agent/wallet/approve",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let (_, status_payload) = fetch_torii_soracloud_agent_status(
             torii_url,
@@ -5093,27 +4948,20 @@ impl AgentWalletApproveArgs {
         )
     }
 }
-/// Arguments for `iroha soracloud agent policy-revoke`.
-#[derive(clap::Args, Debug)]
-pub struct AgentPolicyRevokeArgs {
-    /// Apartment name whose policy should be updated.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: String,
-    /// Capability identifier to revoke (for example `wallet.sign`).
-    #[arg(long, value_name = "CAPABILITY")]
-    capability: String,
-    /// Optional reason included in audit events.
-    #[arg(long, value_name = "TEXT")]
-    reason: Option<String>,
-    /// Torii base URL for authoritative `agent/policy/revoke`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `agent/policy/revoke`.";
+    /// Arguments for `iroha soracloud agent policy-revoke`.
+    pub struct AgentPolicyRevokeArgs {
+        /// Apartment name whose policy should be updated.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: String,
+        /// Capability identifier to revoke (for example `wallet.sign`).
+        #[arg(long, value_name = "CAPABILITY")]
+        capability: String,
+        /// Optional reason included in audit events.
+        #[arg(long, value_name = "TEXT")]
+        reason: Option<String>,
+    }
 }
 impl AgentPolicyRevokeArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5125,12 +4973,11 @@ impl AgentPolicyRevokeArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/agent/policy/revoke",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let (_, status_payload) = fetch_torii_soracloud_agent_status(
             torii_url,
@@ -5146,30 +4993,23 @@ impl AgentPolicyRevokeArgs {
         )
     }
 }
-/// Arguments for `iroha soracloud agent message-send`.
-#[derive(clap::Args, Debug)]
-pub struct AgentMessageSendArgs {
-    /// Sender apartment name.
-    #[arg(long, value_name = "NAME")]
-    from_apartment: String,
-    /// Recipient apartment name.
-    #[arg(long, value_name = "NAME")]
-    to_apartment: String,
-    /// Logical mailbox channel.
-    #[arg(long, value_name = "CHANNEL", default_value = "default")]
-    channel: String,
-    /// Message payload (UTF-8 text).
-    #[arg(long, value_name = "TEXT")]
-    payload: String,
-    /// Torii base URL for authoritative `agent/message/send`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `agent/message/send`.";
+    /// Arguments for `iroha soracloud agent message-send`.
+    pub struct AgentMessageSendArgs {
+        /// Sender apartment name.
+        #[arg(long, value_name = "NAME")]
+        from_apartment: String,
+        /// Recipient apartment name.
+        #[arg(long, value_name = "NAME")]
+        to_apartment: String,
+        /// Logical mailbox channel.
+        #[arg(long, value_name = "CHANNEL", default_value = "default")]
+        channel: String,
+        /// Message payload (UTF-8 text).
+        #[arg(long, value_name = "TEXT")]
+        payload: String,
+    }
 }
 impl AgentMessageSendArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5182,13 +5022,8 @@ impl AgentMessageSendArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/agent/message/send",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/agent/message/send", &request)?;
         let (_, mailbox_status_payload) = fetch_torii_soracloud_agent_mailbox_status(
             torii_url,
             &self.to_apartment,
@@ -5204,24 +5039,17 @@ impl AgentMessageSendArgs {
         )
     }
 }
-/// Arguments for `iroha soracloud agent message-ack`.
-#[derive(clap::Args, Debug)]
-pub struct AgentMessageAckArgs {
-    /// Apartment name consuming the message.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: String,
-    /// Message identifier emitted by `agent message-send`.
-    #[arg(long, value_name = "MESSAGE")]
-    message_id: String,
-    /// Torii base URL for authoritative `agent/message/ack`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `agent/message/ack`.";
+    /// Arguments for `iroha soracloud agent message-ack`.
+    pub struct AgentMessageAckArgs {
+        /// Apartment name consuming the message.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: String,
+        /// Message identifier emitted by `agent message-send`.
+        #[arg(long, value_name = "MESSAGE")]
+        message_id: String,
+    }
 }
 impl AgentMessageAckArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5232,13 +5060,8 @@ impl AgentMessageAckArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/agent/message/ack",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/agent/message/ack", &request)?;
         let (_, mailbox_status_payload) = fetch_torii_soracloud_agent_mailbox_status(
             torii_url,
             &self.apartment_name,
@@ -5248,21 +5071,16 @@ impl AgentMessageAckArgs {
         build_message_ack_output(payload, &mailbox_status_payload, &self.message_id)
     }
 }
-/// Arguments for `iroha soracloud agent mailbox-status`.
-#[derive(clap::Args, Debug)]
-pub struct AgentMailboxStatusArgs {
-    /// Apartment name to inspect.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: String,
-    /// Torii base URL for authoritative `agent/mailbox/status`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane status query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative `agent/mailbox/status`.",
+    " Optional API token sent as `x-api-token` when querying live control-plane APIs.",
+    " HTTP timeout for live control-plane status query.";
+    /// Arguments for `iroha soracloud agent mailbox-status`.
+    pub struct AgentMailboxStatusArgs {
+        /// Apartment name to inspect.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: String,
+    }
 }
 impl AgentMailboxStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -5276,27 +5094,20 @@ impl AgentMailboxStatusArgs {
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud agent artifact-allow`.
-#[derive(clap::Args, Debug)]
-pub struct AgentArtifactAllowArgs {
-    /// Apartment name whose allowlist should be updated.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: String,
-    /// Artifact hash identifier.
-    #[arg(long, value_name = "HASH")]
-    artifact_hash: String,
-    /// Optional provenance hash required for this artifact.
-    #[arg(long, value_name = "HASH")]
-    provenance_hash: Option<String>,
-    /// Torii base URL for authoritative `agent/autonomy/allow`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `agent/autonomy/allow`.";
+    /// Arguments for `iroha soracloud agent artifact-allow`.
+    pub struct AgentArtifactAllowArgs {
+        /// Apartment name whose allowlist should be updated.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: String,
+        /// Artifact hash identifier.
+        #[arg(long, value_name = "HASH")]
+        artifact_hash: String,
+        /// Optional provenance hash required for this artifact.
+        #[arg(long, value_name = "HASH")]
+        provenance_hash: Option<String>,
+    }
 }
 impl AgentArtifactAllowArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5308,12 +5119,11 @@ impl AgentArtifactAllowArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/agent/autonomy/allow",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let (_, status_payload) = fetch_torii_soracloud_agent_status(
             torii_url,
@@ -5329,39 +5139,32 @@ impl AgentArtifactAllowArgs {
         )
     }
 }
-/// Arguments for `iroha soracloud agent autonomy-run`.
-#[derive(clap::Args, Debug)]
-pub struct AgentAutonomyRunArgs {
-    /// Apartment name requesting autonomous execution.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: String,
-    /// Artifact hash identifier.
-    #[arg(long, value_name = "HASH")]
-    artifact_hash: String,
-    /// Optional provenance hash for this run request.
-    #[arg(long, value_name = "HASH")]
-    provenance_hash: Option<String>,
-    /// Budget units requested for this run.
-    #[arg(long, value_name = "UNITS")]
-    budget_units: u64,
-    /// Human-readable run label.
-    #[arg(long, value_name = "LABEL")]
-    run_label: String,
-    /// Optional canonical JSON body to forward to the generated HF `/infer` handler.
-    #[arg(long, value_name = "JSON", conflicts_with = "workflow_input_json_file")]
-    workflow_input_json: Option<String>,
-    /// Optional path to a JSON file forwarded to the generated HF `/infer` handler.
-    #[arg(long, value_name = "PATH", conflicts_with = "workflow_input_json")]
-    workflow_input_json_file: Option<PathBuf>,
-    /// Torii base URL for authoritative `agent/autonomy/run`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `agent/autonomy/run`.";
+    /// Arguments for `iroha soracloud agent autonomy-run`.
+    pub struct AgentAutonomyRunArgs {
+        /// Apartment name requesting autonomous execution.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: String,
+        /// Artifact hash identifier.
+        #[arg(long, value_name = "HASH")]
+        artifact_hash: String,
+        /// Optional provenance hash for this run request.
+        #[arg(long, value_name = "HASH")]
+        provenance_hash: Option<String>,
+        /// Budget units requested for this run.
+        #[arg(long, value_name = "UNITS")]
+        budget_units: u64,
+        /// Human-readable run label.
+        #[arg(long, value_name = "LABEL")]
+        run_label: String,
+        /// Optional canonical JSON body to forward to the generated HF `/infer` handler.
+        #[arg(long, value_name = "JSON", conflicts_with = "workflow_input_json_file")]
+        workflow_input_json: Option<String>,
+        /// Optional path to a JSON file forwarded to the generated HF `/infer` handler.
+        #[arg(long, value_name = "PATH", conflicts_with = "workflow_input_json")]
+        workflow_input_json_file: Option<PathBuf>,
+    }
 }
 impl AgentAutonomyRunArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5451,21 +5254,16 @@ impl AgentAutonomyRunArgs {
         Ok(final_status)
     }
 }
-/// Arguments for `iroha soracloud agent autonomy-status`.
-#[derive(clap::Args, Debug)]
-pub struct AgentAutonomyStatusArgs {
-    /// Apartment name to inspect.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: String,
-    /// Torii base URL for authoritative `agent/autonomy/status`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when querying Torii.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative `agent/autonomy/status`.",
+    " Optional API token sent as `x-api-token` when querying Torii.",
+    " HTTP timeout for live control-plane query.";
+    /// Arguments for `iroha soracloud agent autonomy-status`.
+    pub struct AgentAutonomyStatusArgs {
+        /// Apartment name to inspect.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: String,
+    }
 }
 impl AgentAutonomyStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -5479,54 +5277,49 @@ impl AgentAutonomyStatusArgs {
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud model training-job-start`.
-#[derive(clap::Args, Debug)]
-pub struct TrainingJobStartArgs {
-    /// Service name that owns the training job.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Model name for the training job.
-    #[arg(long, value_name = "NAME")]
-    model_name: String,
-    /// Deterministic training job identifier.
-    #[arg(long, value_name = "ID")]
-    job_id: String,
-    /// Worker-group size for the distributed training run.
-    #[arg(long, value_name = "COUNT", default_value_t = 1)]
-    worker_group_size: u16,
-    /// Target number of steps to complete the training job.
-    #[arg(long, value_name = "STEPS")]
-    target_steps: u32,
-    /// Step cadence for checkpoint creation.
-    #[arg(long, value_name = "STEPS")]
-    checkpoint_interval_steps: u32,
-    /// Maximum allowed retries for the training job.
-    #[arg(long, value_name = "COUNT", default_value_t = 3)]
-    max_retries: u8,
-    /// Compute units charged per step.
-    #[arg(long, value_name = "UNITS")]
-    step_compute_units: u64,
-    /// Total compute budget units for the training job.
-    #[arg(long, value_name = "UNITS")]
-    compute_budget_units: u64,
-    /// Total storage budget bytes for checkpoints.
-    #[arg(long, value_name = "BYTES")]
-    storage_budget_bytes: u64,
-    /// Torii base URL for live control-plane mutation.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for live control-plane mutation.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane mutation.";
+    /// Arguments for `iroha soracloud model training-job-start`.
+    pub struct TrainingJobStartArgs {
+        /// Service name that owns the training job.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Model name for the training job.
+        #[arg(long, value_name = "NAME")]
+        model_name: String,
+        /// Deterministic training job identifier.
+        #[arg(long, value_name = "ID")]
+        job_id: String,
+        /// Worker-group size for the distributed training run.
+        #[arg(long, value_name = "COUNT", default_value_t = 1)]
+        worker_group_size: u16,
+        /// Target number of steps to complete the training job.
+        #[arg(long, value_name = "STEPS")]
+        target_steps: u32,
+        #[doc = concat!(" St", "ep cadence for checkpoint creation.")]
+        #[arg(long, value_name = "STEPS")]
+        checkpoint_interval_steps: u32,
+        /// Maximum allowed retries for the training job.
+        #[arg(long, value_name = "COUNT", default_value_t = 3)]
+        max_retries: u8,
+        /// Compute units charged per step.
+        #[arg(long, value_name = "UNITS")]
+        step_compute_units: u64,
+        /// Total compute budget units for the training job.
+        #[arg(long, value_name = "UNITS")]
+        compute_budget_units: u64,
+        /// Total storage budget bytes for checkpoints.
+        #[arg(long, value_name = "BYTES")]
+        storage_budget_bytes: u64,
+    }
 }
 impl TrainingJobStartArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5573,51 +5366,41 @@ impl TrainingJobStartArgs {
             Some(authority),
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/training/job/start",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/training/job/start", &request)?;
         let mut output = payload;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model training-job-checkpoint`.
-#[derive(clap::Args, Debug)]
-pub struct TrainingJobCheckpointArgs {
-    /// Service name that owns the training job.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Training job identifier.
-    #[arg(long, value_name = "ID")]
-    job_id: String,
-    /// Completed step represented by this checkpoint.
-    #[arg(long, value_name = "STEP")]
-    completed_step: u32,
-    /// Checkpoint payload size in bytes.
-    #[arg(long, value_name = "BYTES")]
-    checkpoint_size_bytes: u64,
-    /// Hash of metrics/telemetry emitted for this checkpoint.
-    #[arg(long, value_name = "HASH")]
-    metrics_hash: Hash,
-    /// Torii base URL for live control-plane mutation.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for live control-plane mutation.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane mutation.";
+    /// Arguments for `iroha soracloud model training-job-checkpoint`.
+    pub struct TrainingJobCheckpointArgs {
+        /// Service name that owns the training job.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Training job identifier.
+        #[arg(long, value_name = "ID")]
+        job_id: String,
+        /// Completed step represented by this checkpoint.
+        #[arg(long, value_name = "STEP")]
+        completed_step: u32,
+        /// Checkpoint payload size in bytes.
+        #[arg(long, value_name = "BYTES")]
+        checkpoint_size_bytes: u64,
+        /// Hash of metrics/telemetry emitted for this checkpoint.
+        #[arg(long, value_name = "HASH")]
+        metrics_hash: Hash,
+    }
 }
 impl TrainingJobCheckpointArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5645,45 +5428,39 @@ impl TrainingJobCheckpointArgs {
             Some(authority),
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/training/job/checkpoint",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let mut output = payload;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model training-job-retry`.
-#[derive(clap::Args, Debug)]
-pub struct TrainingJobRetryArgs {
-    /// Service name that owns the training job.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Training job identifier.
-    #[arg(long, value_name = "ID")]
-    job_id: String,
-    /// Human-readable retry reason recorded in audit logs.
-    #[arg(long, value_name = "TEXT")]
-    reason: String,
-    /// Torii base URL for live control-plane mutation.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for live control-plane mutation.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane mutation.";
+    /// Arguments for `iroha soracloud model training-job-retry`.
+    pub struct TrainingJobRetryArgs {
+        /// Service name that owns the training job.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Training job identifier.
+        #[arg(long, value_name = "ID")]
+        job_id: String,
+        /// Human-readable retry reason recorded in audit logs.
+        #[arg(long, value_name = "TEXT")]
+        reason: String,
+    }
 }
 impl TrainingJobRetryArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5703,42 +5480,32 @@ impl TrainingJobRetryArgs {
             Some(authority),
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/training/job/retry",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/training/job/retry", &request)?;
         let mut output = payload;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model training-job-status`.
-#[derive(clap::Args, Debug)]
-pub struct TrainingJobStatusArgs {
-    /// Service name that owns the training job.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Training job identifier.
-    #[arg(long, value_name = "ID")]
-    job_id: String,
-    /// Torii base URL for live control-plane query.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for live control-plane query.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane query.";
+    /// Arguments for `iroha soracloud model training-job-status`.
+    pub struct TrainingJobStatusArgs {
+        /// Service name that owns the training job.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Training job identifier.
+        #[arg(long, value_name = "ID")]
+        job_id: String,
+    }
 }
 impl TrainingJobStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -5763,48 +5530,43 @@ impl TrainingJobStatusArgs {
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model artifact-register`.
-#[derive(clap::Args, Debug)]
-pub struct ModelArtifactRegisterArgs {
-    /// Service name that owns the model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Model name.
-    #[arg(long, value_name = "NAME")]
-    model_name: String,
-    /// Training job identifier backing this artifact registration.
-    #[arg(long, value_name = "ID")]
-    training_job_id: String,
-    /// Weight artifact hash.
-    #[arg(long, value_name = "HASH")]
-    weight_artifact_hash: Hash,
-    /// Dataset reference identifier.
-    #[arg(long, value_name = "REF")]
-    dataset_ref: String,
-    /// Hash of training config used for the run.
-    #[arg(long, value_name = "HASH")]
-    training_config_hash: Hash,
-    /// Reproducibility metadata hash.
-    #[arg(long, value_name = "HASH")]
-    reproducibility_hash: Hash,
-    /// Provenance attestation hash.
-    #[arg(long, value_name = "HASH")]
-    provenance_attestation_hash: Hash,
-    /// Torii base URL for live control-plane mutation.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for live control-plane mutation.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane mutation.";
+    /// Arguments for `iroha soracloud model artifact-register`.
+    pub struct ModelArtifactRegisterArgs {
+        /// Service name that owns the model.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Model name.
+        #[arg(long, value_name = "NAME")]
+        model_name: String,
+        /// Training job identifier backing this artifact registration.
+        #[arg(long, value_name = "ID")]
+        training_job_id: String,
+        /// Weight artifact hash.
+        #[arg(long, value_name = "HASH")]
+        weight_artifact_hash: Hash,
+        /// Dataset reference identifier.
+        #[arg(long, value_name = "REF")]
+        dataset_ref: String,
+        /// Hash of training config used for the run.
+        #[arg(long, value_name = "HASH")]
+        training_config_hash: Hash,
+        /// Reproducibility metadata hash.
+        #[arg(long, value_name = "HASH")]
+        reproducibility_hash: Hash,
+        /// Provenance attestation hash.
+        #[arg(long, value_name = "HASH")]
+        provenance_attestation_hash: Hash,
+    }
 }
 impl ModelArtifactRegisterArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5829,42 +5591,36 @@ impl ModelArtifactRegisterArgs {
             Some(authority),
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/model/artifact/register",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let mut output = payload;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model artifact-status`.
-#[derive(clap::Args, Debug)]
-pub struct ModelArtifactStatusArgs {
-    /// Service name that owns the model artifact.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Training job identifier associated with the artifact.
-    #[arg(long, value_name = "ID")]
-    training_job_id: String,
-    /// Torii base URL for live control-plane query.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for live control-plane query.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane query.";
+    /// Arguments for `iroha soracloud model artifact-status`.
+    pub struct ModelArtifactStatusArgs {
+        /// Service name that owns the model artifact.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Training job identifier associated with the artifact.
+        #[arg(long, value_name = "ID")]
+        training_job_id: String,
+    }
 }
 impl ModelArtifactStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -5889,54 +5645,49 @@ impl ModelArtifactStatusArgs {
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model weight-register`.
-#[derive(clap::Args, Debug)]
-pub struct ModelWeightRegisterArgs {
-    /// Service name that owns the model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Model name.
-    #[arg(long, value_name = "NAME")]
-    model_name: String,
-    /// New weight version identifier.
-    #[arg(long, value_name = "VERSION")]
-    weight_version: String,
-    /// Training job identifier backing this weight version.
-    #[arg(long, value_name = "ID")]
-    training_job_id: String,
-    /// Optional lineage parent version.
-    #[arg(long, value_name = "VERSION")]
-    parent_version: Option<String>,
-    /// Weight artifact hash.
-    #[arg(long, value_name = "HASH")]
-    weight_artifact_hash: Hash,
-    /// Dataset reference identifier.
-    #[arg(long, value_name = "REF")]
-    dataset_ref: String,
-    /// Hash of training config used for the run.
-    #[arg(long, value_name = "HASH")]
-    training_config_hash: Hash,
-    /// Reproducibility metadata hash.
-    #[arg(long, value_name = "HASH")]
-    reproducibility_hash: Hash,
-    /// Provenance attestation hash.
-    #[arg(long, value_name = "HASH")]
-    provenance_attestation_hash: Hash,
-    /// Torii base URL for live control-plane mutation.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for live control-plane mutation.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane mutation.";
+    /// Arguments for `iroha soracloud model weight-register`.
+    pub struct ModelWeightRegisterArgs {
+        /// Service name that owns the model.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Model name.
+        #[arg(long, value_name = "NAME")]
+        model_name: String,
+        /// New weight version identifier.
+        #[arg(long, value_name = "VERSION")]
+        weight_version: String,
+        /// Training job identifier backing this weight version.
+        #[arg(long, value_name = "ID")]
+        training_job_id: String,
+        /// Optional lineage parent version.
+        #[arg(long, value_name = "VERSION")]
+        parent_version: Option<String>,
+        /// Weight artifact hash.
+        #[arg(long, value_name = "HASH")]
+        weight_artifact_hash: Hash,
+        /// Dataset reference identifier.
+        #[arg(long, value_name = "REF")]
+        dataset_ref: String,
+        /// Hash of training config used for the run.
+        #[arg(long, value_name = "HASH")]
+        training_config_hash: Hash,
+        /// Reproducibility metadata hash.
+        #[arg(long, value_name = "HASH")]
+        reproducibility_hash: Hash,
+        /// Provenance attestation hash.
+        #[arg(long, value_name = "HASH")]
+        provenance_attestation_hash: Hash,
+    }
 }
 impl ModelWeightRegisterArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -5963,51 +5714,45 @@ impl ModelWeightRegisterArgs {
             Some(authority),
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/model/weight/register",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let mut output = payload;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model weight-promote`.
-#[derive(clap::Args, Debug)]
-pub struct ModelWeightPromoteArgs {
-    /// Service name that owns the model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Model name.
-    #[arg(long, value_name = "NAME")]
-    model_name: String,
-    /// Weight version to promote.
-    #[arg(long, value_name = "VERSION")]
-    weight_version: String,
-    /// Gate approval flag.
-    #[arg(long)]
-    gate_approved: bool,
-    /// Hash of gate report/evidence for this promotion decision.
-    #[arg(long, value_name = "HASH")]
-    gate_report_hash: Hash,
-    /// Torii base URL for live control-plane mutation.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for live control-plane mutation.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane mutation.";
+    /// Arguments for `iroha soracloud model weight-promote`.
+    pub struct ModelWeightPromoteArgs {
+        /// Service name that owns the model.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Model name.
+        #[arg(long, value_name = "NAME")]
+        model_name: String,
+        /// Weight version to promote.
+        #[arg(long, value_name = "VERSION")]
+        weight_version: String,
+        /// Gate approval flag.
+        #[arg(long)]
+        gate_approved: bool,
+        /// Hash of gate report/evidence for this promotion decision.
+        #[arg(long, value_name = "HASH")]
+        gate_report_hash: Hash,
+    }
 }
 impl ModelWeightPromoteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -6029,48 +5774,42 @@ impl ModelWeightPromoteArgs {
             Some(authority),
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/model/weight/promote",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let mut output = payload;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model weight-rollback`.
-#[derive(clap::Args, Debug)]
-pub struct ModelWeightRollbackArgs {
-    /// Service name that owns the model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Model name.
-    #[arg(long, value_name = "NAME")]
-    model_name: String,
-    /// Target version to roll back to.
-    #[arg(long, value_name = "VERSION")]
-    target_version: String,
-    /// Human-readable rollback reason.
-    #[arg(long, value_name = "TEXT")]
-    reason: String,
-    /// Torii base URL for live control-plane mutation.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for live control-plane mutation.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane mutation.";
+    /// Arguments for `iroha soracloud model weight-rollback`.
+    pub struct ModelWeightRollbackArgs {
+        /// Service name that owns the model.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Model name.
+        #[arg(long, value_name = "NAME")]
+        model_name: String,
+        /// Target version to roll back to.
+        #[arg(long, value_name = "VERSION")]
+        target_version: String,
+        /// Human-readable rollback reason.
+        #[arg(long, value_name = "TEXT")]
+        reason: String,
+    }
 }
 impl ModelWeightRollbackArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -6091,42 +5830,36 @@ impl ModelWeightRollbackArgs {
             Some(authority),
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/model/weight/rollback",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let mut output = payload;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model weight-status`.
-#[derive(clap::Args, Debug)]
-pub struct ModelWeightStatusArgs {
-    /// Service name that owns the model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Model name.
-    #[arg(long, value_name = "NAME")]
-    model_name: String,
-    /// Torii base URL for live control-plane query.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for live control-plane query.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane query.";
+    /// Arguments for `iroha soracloud model weight-status`.
+    pub struct ModelWeightStatusArgs {
+        /// Service name that owns the model.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Model name.
+        #[arg(long, value_name = "NAME")]
+        model_name: String,
+    }
 }
 impl ModelWeightStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -6151,24 +5884,19 @@ impl ModelWeightStatusArgs {
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model upload-encryption-recipient`.
-#[derive(clap::Args, Debug)]
-pub struct ModelUploadEncryptionRecipientArgs {
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `model/upload/encryption-recipient`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when querying Torii.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative `model/upload/encryption-recipient`.",
+    " Optional API token sent as `x-api-token` when querying Torii.",
+    " HTTP timeout for live control-plane query.";
+    /// Arguments for `iroha soracloud model upload-encryption-recipient`.
+    pub struct ModelUploadEncryptionRecipientArgs {
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+    }
 }
 impl ModelUploadEncryptionRecipientArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -6184,33 +5912,28 @@ impl ModelUploadEncryptionRecipientArgs {
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud model upload-register`.
-#[derive(clap::Args, Debug)]
-pub struct ModelUploadRegisterArgs {
-    /// Path to a `SoraUploadedModelBundleV1` JSON document with an approved SoraFS digest.
-    #[arg(long, value_name = "PATH")]
-    bundle_file: PathBuf,
-    /// Path to an `UploadedModelFinalizePayload` JSON document describing registry metadata.
-    #[arg(long, value_name = "PATH")]
-    request_file: PathBuf,
-    /// Service name that owns the uploaded model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `model/upload/register`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutation.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative `model/upload/register`.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane mutation.";
+    /// Arguments for `iroha soracloud model upload-register`.
+    pub struct ModelUploadRegisterArgs {
+        /// Path to a `SoraUploadedModelBundleV1` JSON document with an approved SoraFS digest.
+        #[arg(long, value_name = "PATH")]
+        bundle_file: PathBuf,
+        /// Path to an `UploadedModelFinalizePayload` JSON document describing registry metadata.
+        #[arg(long, value_name = "PATH")]
+        request_file: PathBuf,
+        /// Service name that owns the uploaded model.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+    }
 }
 impl ModelUploadRegisterArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -6232,12 +5955,11 @@ impl ModelUploadRegisterArgs {
         let request =
             signed_uploaded_model_register_request(bundle, finalize, authority, key_pair)?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/model/upload/register",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         let mut output = payload;
         attach_service_plan_to_output(&mut output, service_plan)?;
@@ -6258,39 +5980,34 @@ fn apply_uploaded_model_register_service_name_override(
     finalize.service_name = service_name.to_owned();
     Ok(())
 }
-/// Arguments for `iroha soracloud model upload-status`.
-#[derive(clap::Args, Debug)]
-pub struct ModelUploadStatusArgs {
-    /// Service name that owns the uploaded model.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Uploaded-model pinned weight version.
-    #[arg(long, value_name = "VERSION")]
-    weight_version: String,
-    /// Optional uploaded-model identifier.
-    #[arg(long, value_name = "ID", conflicts_with = "model_name")]
-    model_id: Option<String>,
-    /// Optional logical model name used to resolve the uploaded-model record.
-    #[arg(long, value_name = "NAME", conflicts_with = "model_id")]
-    model_name: Option<String>,
-    /// Optional bundle-root filter.
-    #[arg(long, value_name = "HASH")]
-    bundle_root: Option<Hash>,
-    /// Torii base URL for authoritative `model/upload/status`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane query.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative `model/upload/status`.",
+    " Optional API token sent as `x-api-token`.",
+    " HTTP timeout for live control-plane query.";
+    /// Arguments for `iroha soracloud model upload-status`.
+    pub struct ModelUploadStatusArgs {
+        /// Service name that owns the uploaded model.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Uploaded-model pinned weight version.
+        #[arg(long, value_name = "VERSION")]
+        weight_version: String,
+        /// Optional uploaded-model identifier.
+        #[arg(long, value_name = "ID", conflicts_with = "model_name")]
+        model_id: Option<String>,
+        /// Optional logical model name used to resolve the uploaded-model record.
+        #[arg(long, value_name = "NAME", conflicts_with = "model_id")]
+        model_name: Option<String>,
+        /// Optional bundle-root filter.
+        #[arg(long, value_name = "HASH")]
+        bundle_root: Option<Hash>,
+    }
 }
 impl ModelUploadStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -6319,51 +6036,44 @@ impl ModelUploadStatusArgs {
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud hf deploy`.
-#[derive(clap::Args, Debug)]
-pub struct HfDeployArgs {
-    /// Hugging Face repository identifier (for example `openai/gpt-oss`).
-    #[arg(long, value_name = "REPO")]
-    repo_id: String,
-    /// Optional Hugging Face revision. Defaults to `main` when omitted.
-    #[arg(long, value_name = "REVISION")]
-    revision: Option<String>,
-    /// Optional local model label. Defaults to the repo slug.
-    #[arg(long, value_name = "NAME")]
-    model_name: Option<String>,
-    /// Soracloud service name bound to this lease membership.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Optional agent apartment name bound to this lease membership.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: Option<String>,
-    /// Shared-lease storage tier.
-    #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
-    storage_class: HfStorageClassArg,
-    /// Shared-lease window length in milliseconds.
-    #[arg(long, value_name = "MS")]
-    lease_term_ms: u64,
-    /// Settlement asset definition identifier.
-    #[arg(long, value_name = "ASSET")]
-    lease_asset_definition: String,
-    /// Exact, positive base lease fee in the settlement asset.
-    #[arg(long, value_name = "QUANTITY", value_parser = parse_positive_quantity)]
-    base_fee: Quantity,
-    /// Torii base URL for authoritative `hf/deploy`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `hf/deploy`.";
+    /// Arguments for `iroha soracloud hf deploy`.
+    pub struct HfDeployArgs {
+        /// Hugging Face repository identifier (for example `openai/gpt-oss`).
+        #[arg(long, value_name = "REPO")]
+        repo_id: String,
+        /// Optional Hugging Face revision. Defaults to `main` when omitted.
+        #[arg(long, value_name = "REVISION")]
+        revision: Option<String>,
+        /// Optional local model label. Defaults to the repo slug.
+        #[arg(long, value_name = "NAME")]
+        model_name: Option<String>,
+        /// Soracloud service name bound to this lease membership.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Optional agent apartment name bound to this lease membership.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: Option<String>,
+        /// Shared-lease storage tier.
+        #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+        storage_class: HfStorageClassArg,
+        /// Shared-lease window length in milliseconds.
+        #[arg(long, value_name = "MS")]
+        lease_term_ms: u64,
+        /// Settlement asset definition identifier.
+        #[arg(long, value_name = "ASSET")]
+        lease_asset_definition: String,
+        /// Exact, positive base lease fee in the settlement asset.
+        #[arg(long, value_name = "QUANTITY", value_parser = parse_positive_quantity)]
+        base_fee: Quantity,
+    }
 }
 impl HfDeployArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -6389,13 +6099,8 @@ impl HfDeployArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/hf/deploy",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/hf/deploy", &request)?;
         let account_id = authority.to_string();
         let (_, status_payload) = fetch_torii_soracloud_hf_status(
             torii_url,
@@ -6412,39 +6117,34 @@ impl HfDeployArgs {
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud hf status`.
-#[derive(clap::Args, Debug)]
-pub struct HfStatusArgs {
-    /// Hugging Face repository identifier (for example `openai/gpt-oss`).
-    #[arg(long, value_name = "REPO")]
-    repo_id: String,
-    /// Optional Hugging Face revision. Defaults to `main` when omitted.
-    #[arg(long, value_name = "REVISION")]
-    revision: Option<String>,
-    /// Shared-lease storage tier.
-    #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
-    storage_class: HfStorageClassArg,
-    /// Shared-lease window length in milliseconds.
-    #[arg(long, value_name = "MS")]
-    lease_term_ms: u64,
-    /// Optional account filter for membership-specific status.
-    #[arg(long, value_name = "ACCOUNT")]
-    account_id: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Torii base URL for authoritative `hf/status`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane queries.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative `hf/status`.",
+    " Optional API token sent as `x-api-token` when querying live control-plane APIs.",
+    " HTTP timeout for live control-plane queries.";
+    /// Arguments for `iroha soracloud hf status`.
+    pub struct HfStatusArgs {
+        /// Hugging Face repository identifier (for example `openai/gpt-oss`).
+        #[arg(long, value_name = "REPO")]
+        repo_id: String,
+        /// Optional Hugging Face revision. Defaults to `main` when omitted.
+        #[arg(long, value_name = "REVISION")]
+        revision: Option<String>,
+        /// Shared-lease storage tier.
+        #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+        storage_class: HfStorageClassArg,
+        /// Shared-lease window length in milliseconds.
+        #[arg(long, value_name = "MS")]
+        lease_term_ms: u64,
+        /// Optional account filter for membership-specific status.
+        #[arg(long, value_name = "ACCOUNT")]
+        account_id: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+    }
 }
 impl HfStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -6465,42 +6165,35 @@ impl HfStatusArgs {
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud hf lease-leave`.
-#[derive(clap::Args, Debug)]
-pub struct HfLeaseLeaveArgs {
-    /// Hugging Face repository identifier.
-    #[arg(long, value_name = "REPO")]
-    repo_id: String,
-    /// Optional Hugging Face revision. Defaults to `main` when omitted.
-    #[arg(long, value_name = "REVISION")]
-    revision: Option<String>,
-    /// Shared-lease storage tier.
-    #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
-    storage_class: HfStorageClassArg,
-    /// Shared-lease window length in milliseconds.
-    #[arg(long, value_name = "MS")]
-    lease_term_ms: u64,
-    /// Optional service binding to include in the signed leave request.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Optional apartment binding to include in the signed leave request.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: Option<String>,
-    /// Torii base URL for authoritative `hf/lease/leave`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `hf/lease/leave`.";
+    /// Arguments for `iroha soracloud hf lease-leave`.
+    pub struct HfLeaseLeaveArgs {
+        /// Hugging Face repository identifier.
+        #[arg(long, value_name = "REPO")]
+        repo_id: String,
+        /// Optional Hugging Face revision. Defaults to `main` when omitted.
+        #[arg(long, value_name = "REVISION")]
+        revision: Option<String>,
+        /// Shared-lease storage tier.
+        #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+        storage_class: HfStorageClassArg,
+        /// Shared-lease window length in milliseconds.
+        #[arg(long, value_name = "MS")]
+        lease_term_ms: u64,
+        /// Optional service binding to include in the signed leave request.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Optional apartment binding to include in the signed leave request.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: Option<String>,
+    }
 }
 impl HfLeaseLeaveArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -6523,13 +6216,8 @@ impl HfLeaseLeaveArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/hf/lease/leave",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/hf/lease/leave", &request)?;
         let account_id = authority.to_string();
         let (_, status_payload) = fetch_torii_soracloud_hf_status(
             torii_url,
@@ -6546,51 +6234,44 @@ impl HfLeaseLeaveArgs {
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud hf lease-renew`.
-#[derive(clap::Args, Debug)]
-pub struct HfLeaseRenewArgs {
-    /// Hugging Face repository identifier.
-    #[arg(long, value_name = "REPO")]
-    repo_id: String,
-    /// Optional Hugging Face revision. Defaults to `main` when omitted.
-    #[arg(long, value_name = "REVISION")]
-    revision: Option<String>,
-    /// Optional local model label. Defaults to the repo slug.
-    #[arg(long, value_name = "NAME")]
-    model_name: Option<String>,
-    /// Soracloud service name bound to the renewed lease membership.
-    #[arg(long, value_name = "NAME")]
-    service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    container: Option<PathBuf>,
-    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
-    #[arg(long, value_name = "PATH")]
-    service: Option<PathBuf>,
-    /// Optional agent apartment name bound to the renewed lease membership.
-    #[arg(long, value_name = "NAME")]
-    apartment_name: Option<String>,
-    /// Shared-lease storage tier.
-    #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
-    storage_class: HfStorageClassArg,
-    /// Shared-lease window length in milliseconds.
-    #[arg(long, value_name = "MS")]
-    lease_term_ms: u64,
-    /// Settlement asset definition identifier.
-    #[arg(long, value_name = "ASSET")]
-    lease_asset_definition: String,
-    /// Exact, positive base lease fee in the settlement asset.
-    #[arg(long, value_name = "QUANTITY", value_parser = parse_positive_quantity)]
-    base_fee: Quantity,
-    /// Torii base URL for authoritative `hf/lease/renew`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `hf/lease/renew`.";
+    /// Arguments for `iroha soracloud hf lease-renew`.
+    pub struct HfLeaseRenewArgs {
+        /// Hugging Face repository identifier.
+        #[arg(long, value_name = "REPO")]
+        repo_id: String,
+        /// Optional Hugging Face revision. Defaults to `main` when omitted.
+        #[arg(long, value_name = "REVISION")]
+        revision: Option<String>,
+        /// Optional local model label. Defaults to the repo slug.
+        #[arg(long, value_name = "NAME")]
+        model_name: Option<String>,
+        /// Soracloud service name bound to the renewed lease membership.
+        #[arg(long, value_name = "NAME")]
+        service_name: Option<String>,
+        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        container: Option<PathBuf>,
+        /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+        #[arg(long, value_name = "PATH")]
+        service: Option<PathBuf>,
+        /// Optional agent apartment name bound to the renewed lease membership.
+        #[arg(long, value_name = "NAME")]
+        apartment_name: Option<String>,
+        /// Shared-lease storage tier.
+        #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+        storage_class: HfStorageClassArg,
+        /// Shared-lease window length in milliseconds.
+        #[arg(long, value_name = "MS")]
+        lease_term_ms: u64,
+        /// Settlement asset definition identifier.
+        #[arg(long, value_name = "ASSET")]
+        lease_asset_definition: String,
+        /// Exact, positive base lease fee in the settlement asset.
+        #[arg(long, value_name = "QUANTITY", value_parser = parse_positive_quantity)]
+        base_fee: Quantity,
+    }
 }
 impl HfLeaseRenewArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -6616,13 +6297,8 @@ impl HfLeaseRenewArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/hf/lease/renew",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
+        let (_, payload) =
+            post_live_mutation!(self, torii_url, "v1/soracloud/hf/lease/renew", &request)?;
         let account_id = authority.to_string();
         let (_, status_payload) = fetch_torii_soracloud_hf_status(
             torii_url,
@@ -6639,48 +6315,41 @@ impl HfLeaseRenewArgs {
         Ok(output)
     }
 }
-/// Arguments for `iroha soracloud model host-advertise`.
-#[derive(clap::Args, Debug)]
-pub struct ModelHostAdvertiseArgs {
-    /// Peer identifier used for Soracloud routing.
-    #[arg(long, value_name = "PEER_ID")]
-    peer_id: String,
-    /// Supported backend families.
-    #[arg(long, value_enum, value_delimiter = ',', num_args = 1..)]
-    backends: Vec<ModelHostBackendArg>,
-    /// Supported model formats.
-    #[arg(long, value_enum, value_delimiter = ',', num_args = 1..)]
-    formats: Vec<ModelHostModelFormatArg>,
-    /// Maximum canonical model bytes accepted by this host.
-    #[arg(long, value_name = "BYTES")]
-    max_model_bytes: u64,
-    /// Maximum disk cache bytes reserved for resident models.
-    #[arg(long, value_name = "BYTES")]
-    max_disk_cache_bytes: u64,
-    /// Maximum system RAM bytes reserved for resident models.
-    #[arg(long, value_name = "BYTES")]
-    max_ram_bytes: u64,
-    /// Maximum accelerator VRAM bytes reserved for resident models.
-    #[arg(long, value_name = "BYTES", default_value_t = 0)]
-    max_vram_bytes: u64,
-    /// Maximum concurrent resident-model slots.
-    #[arg(long, value_name = "COUNT")]
-    max_concurrent_resident_models: u16,
-    /// Governance-defined host class used for compute tariff lookup.
-    #[arg(long, value_name = "CLASS")]
-    host_class: String,
-    /// Heartbeat expiry timestamp (unix ms) for this advert.
-    #[arg(long, value_name = "UNIX_MS")]
-    heartbeat_expires_at_ms: u64,
-    /// Torii base URL for authoritative `model-host/advertise`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `model-host/advertise`.";
+    /// Arguments for `iroha soracloud model host-advertise`.
+    pub struct ModelHostAdvertiseArgs {
+        /// Peer identifier used for Soracloud routing.
+        #[arg(long, value_name = "PEER_ID")]
+        peer_id: String,
+        /// Supported backend families.
+        #[arg(long, value_enum, value_delimiter = ',', num_args = 1..)]
+        backends: Vec<ModelHostBackendArg>,
+        /// Supported model formats.
+        #[arg(long, value_enum, value_delimiter = ',', num_args = 1..)]
+        formats: Vec<ModelHostModelFormatArg>,
+        /// Maximum canonical model bytes accepted by this host.
+        #[arg(long, value_name = "BYTES")]
+        max_model_bytes: u64,
+        /// Maximum disk cache bytes reserved for resident models.
+        #[arg(long, value_name = "BYTES")]
+        max_disk_cache_bytes: u64,
+        /// Maximum system RAM bytes reserved for resident models.
+        #[arg(long, value_name = "BYTES")]
+        max_ram_bytes: u64,
+        /// Maximum accelerator VRAM bytes reserved for resident models.
+        #[arg(long, value_name = "BYTES", default_value_t = 0)]
+        max_vram_bytes: u64,
+        /// Maximum concurrent resident-model slots.
+        #[arg(long, value_name = "COUNT")]
+        max_concurrent_resident_models: u16,
+        /// Governance-defined host class used for compute tariff lookup.
+        #[arg(long, value_name = "CLASS")]
+        host_class: String,
+        /// Heartbeat expiry timestamp (unix ms) for this advert.
+        #[arg(long, value_name = "UNIX_MS")]
+        heartbeat_expires_at_ms: u64,
+    }
 }
 impl ModelHostAdvertiseArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
@@ -6698,79 +6367,58 @@ impl ModelHostAdvertiseArgs {
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud model host-heartbeat`.
-#[derive(clap::Args, Debug)]
-pub struct ModelHostHeartbeatArgs {
-    /// Heartbeat expiry timestamp (unix ms) for this advert.
-    #[arg(long, value_name = "UNIX_MS")]
-    heartbeat_expires_at_ms: u64,
-    /// Torii base URL for authoritative `model-host/heartbeat`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `model-host/heartbeat`.";
+    /// Arguments for `iroha soracloud model host-heartbeat`.
+    pub struct ModelHostHeartbeatArgs {
+        /// Heartbeat expiry timestamp (unix ms) for this advert.
+        #[arg(long, value_name = "UNIX_MS")]
+        heartbeat_expires_at_ms: u64,
+    }
 }
 impl ModelHostHeartbeatArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request =
             signed_model_host_heartbeat_request(self.heartbeat_expires_at_ms, authority, key_pair)?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/model-host/heartbeat",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud model host-withdraw`.
-#[derive(clap::Args, Debug)]
-pub struct ModelHostWithdrawArgs {
-    /// Torii base URL for authoritative `model-host/withdraw`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane mutations.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_live_mutation_args! {
+    " Torii base URL for authoritative `model-host/withdraw`.";
+    /// Arguments for `iroha soracloud model host-withdraw`.
+    pub struct ModelHostWithdrawArgs {
+    }
 }
 impl ModelHostWithdrawArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_model_host_withdraw_request(authority, key_pair)?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, payload) = post_live_mutation!(
+            self,
             torii_url,
             "v1/soracloud/model-host/withdraw",
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            &request
         )?;
         Ok(payload)
     }
 }
-/// Arguments for `iroha soracloud model host-status`.
-#[derive(clap::Args, Debug)]
-pub struct ModelHostStatusArgs {
-    /// Optional validator account identifier filter.
-    #[arg(long, value_name = "ACCOUNT")]
-    validator_account_id: Option<String>,
-    /// Torii base URL for authoritative `model-host/status`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout for live control-plane queries.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
+define_torii_args! {
+    " Torii base URL for authoritative `model-host/status`.",
+    " Optional API token sent as `x-api-token` when querying live control-plane APIs.",
+    " HTTP timeout for live control-plane queries.";
+    /// Arguments for `iroha soracloud model host-status`.
+    pub struct ModelHostStatusArgs {
+        /// Optional validator account identifier filter.
+        #[arg(long, value_name = "ACCOUNT")]
+        validator_account_id: Option<String>,
+    }
 }
 impl ModelHostStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
@@ -7337,76 +6985,50 @@ struct AppServiceMutationOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct ServiceWorkspaceScriptOutput {
-    service_name: String,
-    container_manifest_path: String,
-    service_manifest_path: String,
-    working_dir: String,
-    script_path: String,
-    script_name: String,
-    mode: String,
-    execution_plane: String,
-    runtime: String,
-    workspace_scripts: ServiceWorkspaceScriptsOutput,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    route_host: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    route_path_prefix: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    route_visibility: Option<String>,
-    replica_count: u16,
-    state_binding_count: u32,
-    lease_volume_count: u32,
-    handler_count: u32,
-    #[norito(default)]
-    routes: Vec<ServiceLocalRouteOutput>,
-    command: Vec<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    exit_status: Option<i32>,
-    #[norito(default)]
-    notes: Vec<String>,
+macro_rules! define_service_workspace_output {
+    ($name:ident, [$($network:tt)*]) => {
+        #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+        struct $name {
+            service_name: String,
+            container_manifest_path: String,
+            service_manifest_path: String,
+            working_dir: String,
+            script_path: String,
+            script_name: String,
+            mode: String,
+            execution_plane: String,
+            runtime: String,
+            workspace_scripts: ServiceWorkspaceScriptsOutput,
+            #[norito(default)]
+            #[norito(skip_serializing_if = "Option::is_none")]
+            route_host: Option<String>,
+            #[norito(default)]
+            #[norito(skip_serializing_if = "Option::is_none")]
+            route_path_prefix: Option<String>,
+            #[norito(default)]
+            #[norito(skip_serializing_if = "Option::is_none")]
+            route_visibility: Option<String>,
+            replica_count: u16,
+            state_binding_count: u32,
+            lease_volume_count: u32,
+            handler_count: u32,
+            #[norito(default)]
+            routes: Vec<ServiceLocalRouteOutput>,
+            $($network)*
+            command: Vec<String>,
+            #[norito(default)]
+            #[norito(skip_serializing_if = "Option::is_none")]
+            exit_status: Option<i32>,
+            #[norito(default)]
+            notes: Vec<String>,
+        }
+    };
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct ServiceWorkspaceMutationScriptOutput {
-    service_name: String,
-    container_manifest_path: String,
-    service_manifest_path: String,
-    working_dir: String,
-    script_path: String,
-    script_name: String,
-    mode: String,
-    execution_plane: String,
-    runtime: String,
-    workspace_scripts: ServiceWorkspaceScriptsOutput,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    route_host: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    route_path_prefix: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    route_visibility: Option<String>,
-    replica_count: u16,
-    state_binding_count: u32,
-    lease_volume_count: u32,
-    handler_count: u32,
-    #[norito(default)]
-    routes: Vec<ServiceLocalRouteOutput>,
-    torii_url: String,
-    uses_api_token: bool,
-    command: Vec<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    exit_status: Option<i32>,
-    #[norito(default)]
-    notes: Vec<String>,
-}
+define_service_workspace_output!(ServiceWorkspaceScriptOutput, []);
+define_service_workspace_output!(
+    ServiceWorkspaceMutationScriptOutput,
+    [torii_url: String, uses_api_token: bool,]
+);
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ServiceMutationOutput {
     service_name: String,
@@ -7660,145 +7282,56 @@ struct AppLocalPlanOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct AppLocalWorkspaceScriptsOutput {
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    local_dev: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    build_and_sync: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    doctor: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    release: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    deploy: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    upgrade: Option<String>,
+type AppLocalWorkspaceScriptsOutput = ServiceWorkspaceScriptsOutput;
+macro_rules! define_app_workspace_output {
+    ($(#[$meta:meta])* $name:ident, [$($before_mode:tt)*], [$($after_mode:tt)*]) => {
+        $(#[$meta])*
+        #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+        struct $name {
+            app_name: String,
+            public_url: String,
+            hostname: String,
+            manifest_path: String,
+            workspace_dir: String,
+            workspace_scripts: AppLocalWorkspaceScriptsOutput,
+            working_dir: String,
+            script_path: String,
+            $($before_mode)*
+            mode: String,
+            $($after_mode)*
+            has_mixed_planes: bool,
+            hosted_http_service_count: u32,
+            deterministic_service_count: u32,
+            #[norito(default)]
+            #[norito(skip_serializing_if = "Option::is_none")]
+            frontend: Option<AppLocalFrontendPlanOutput>,
+            #[norito(default)]
+            services: Vec<AppLocalServicePlanOutput>,
+            #[norito(default)]
+            routes: Vec<AppLocalRoutePlanOutput>,
+            command: Vec<String>,
+            #[norito(default)]
+            #[norito(skip_serializing_if = "Option::is_none")]
+            exit_status: Option<i32>,
+            #[norito(default)]
+            notes: Vec<String>,
+        }
+    };
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct AppLocalDevOutput {
-    app_name: String,
-    public_url: String,
-    hostname: String,
-    manifest_path: String,
-    workspace_dir: String,
-    workspace_scripts: AppLocalWorkspaceScriptsOutput,
-    working_dir: String,
-    script_path: String,
-    mode: String,
-    has_mixed_planes: bool,
-    hosted_http_service_count: u32,
-    deterministic_service_count: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    frontend: Option<AppLocalFrontendPlanOutput>,
-    #[norito(default)]
-    services: Vec<AppLocalServicePlanOutput>,
-    #[norito(default)]
-    routes: Vec<AppLocalRoutePlanOutput>,
-    command: Vec<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    exit_status: Option<i32>,
-    #[norito(default)]
-    notes: Vec<String>,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct AppBuildAndSyncOutput {
-    app_name: String,
-    public_url: String,
-    hostname: String,
-    manifest_path: String,
-    workspace_dir: String,
-    workspace_scripts: AppLocalWorkspaceScriptsOutput,
-    working_dir: String,
-    script_path: String,
-    mode: String,
-    has_mixed_planes: bool,
-    hosted_http_service_count: u32,
-    deterministic_service_count: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    frontend: Option<AppLocalFrontendPlanOutput>,
-    #[norito(default)]
-    services: Vec<AppLocalServicePlanOutput>,
-    #[norito(default)]
-    routes: Vec<AppLocalRoutePlanOutput>,
-    command: Vec<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    exit_status: Option<i32>,
-    #[norito(default)]
-    notes: Vec<String>,
-}
-#[cfg(test)]
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct AppDoctorWorkspaceOutput {
-    app_name: String,
-    public_url: String,
-    hostname: String,
-    manifest_path: String,
-    workspace_dir: String,
-    workspace_scripts: AppLocalWorkspaceScriptsOutput,
-    working_dir: String,
-    script_path: String,
-    script_name: String,
-    mode: String,
-    has_mixed_planes: bool,
-    hosted_http_service_count: u32,
-    deterministic_service_count: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    frontend: Option<AppLocalFrontendPlanOutput>,
-    #[norito(default)]
-    services: Vec<AppLocalServicePlanOutput>,
-    #[norito(default)]
-    routes: Vec<AppLocalRoutePlanOutput>,
-    command: Vec<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    exit_status: Option<i32>,
-    #[norito(default)]
-    notes: Vec<String>,
-}
-#[cfg(test)]
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct AppWorkspaceMutationScriptOutput {
-    app_name: String,
-    public_url: String,
-    hostname: String,
-    manifest_path: String,
-    workspace_dir: String,
-    workspace_scripts: AppLocalWorkspaceScriptsOutput,
-    working_dir: String,
-    script_path: String,
-    script_name: String,
-    mode: String,
-    torii_url: String,
-    uses_api_token: bool,
-    has_mixed_planes: bool,
-    hosted_http_service_count: u32,
-    deterministic_service_count: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    frontend: Option<AppLocalFrontendPlanOutput>,
-    #[norito(default)]
-    services: Vec<AppLocalServicePlanOutput>,
-    #[norito(default)]
-    routes: Vec<AppLocalRoutePlanOutput>,
-    command: Vec<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    exit_status: Option<i32>,
-    #[norito(default)]
-    notes: Vec<String>,
-}
+define_app_workspace_output!(AppLocalDevOutput, [], []);
+define_app_workspace_output!(AppBuildAndSyncOutput, [], []);
+define_app_workspace_output!(
+    #[cfg(test)]
+    AppDoctorWorkspaceOutput,
+    [script_name: String,],
+    []
+);
+define_app_workspace_output!(
+    #[cfg(test)]
+    AppWorkspaceMutationScriptOutput,
+    [script_name: String,],
+    [torii_url: String, uses_api_token: bool,]
+);
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppLocalFrontendPlanOutput {
     dist_dir: String,
@@ -8893,6 +8426,12 @@ fn sign_soracloud_payload(key_pair: &KeyPair, payload: &[u8]) -> Result<Signatur
     Signature::try_new(key_pair.private_key(), payload)
         .wrap_err("failed to sign Soracloud CLI payload")
 }
+fn signed_manifest_provenance(key_pair: &KeyPair, payload: &[u8]) -> Result<ManifestProvenance> {
+    Ok(ManifestProvenance {
+        signer: key_pair.public_key().clone(),
+        signature: sign_soracloud_payload(key_pair, payload)?,
+    })
+}
 fn attach_sorafs_release_governance(
     mut manifest: ManifestV1,
     key_pair: &KeyPair,
@@ -8988,6 +8527,100 @@ fn sorafs_pin_retention_epoch() -> Result<u64> {
         .checked_add(SORAFS_DEFAULT_PIN_RETENTION_EPOCHS)
         .ok_or_else(|| eyre!("SoraFS pin retention epoch overflow"))
 }
+struct SorafsManifestBuildLabels<'a> {
+    writer: &'a str,
+    metadata: &'a str,
+    root: &'a str,
+    por: &'a str,
+    manifest: &'a str,
+    governance: &'a str,
+    encoding: &'a str,
+    digest: &'a str,
+}
+struct BuiltSorafsManifest {
+    manifest: ManifestV1,
+    bytes: Vec<u8>,
+    digest_hex: String,
+}
+fn build_sorafs_artifact_manifest(
+    plan: &CarBuildPlan,
+    payload: &[u8],
+    descriptor: &chunker_registry::ChunkerProfileDescriptor,
+    key_pair: &KeyPair,
+    labels: SorafsManifestBuildLabels<'_>,
+) -> Result<BuiltSorafsManifest> {
+    let writer = CarWriter::new(plan, payload).wrap_err_with(|| labels.writer.to_owned())?;
+    let mut sink = io::sink();
+    let car_stats = writer
+        .write_to(&mut sink)
+        .wrap_err_with(|| labels.metadata.to_owned())?;
+    let root_cid = car_stats
+        .root_cids
+        .first()
+        .cloned()
+        .ok_or_else(|| eyre!(labels.root.to_owned()))?;
+    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
+    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
+    let retention_epoch = sorafs_pin_retention_epoch()?;
+    let manifest = ManifestBuilder::new()
+        .root_cid(root_cid)
+        .dag_codec(DagCodecId(car_stats.dag_codec))
+        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root(compute_por_root(payload, plan).wrap_err_with(|| labels.por.to_owned())?)
+        .content_length(plan.content_length)
+        .car_digest(car_archive_digest)
+        .car_size(car_stats.car_size)
+        .pin_policy(PinPolicy {
+            min_replicas: 3,
+            storage_class: ManifestStorageClass::Hot,
+            retention_epoch,
+        })
+        .governance(GovernanceProofs::default())
+        .build()
+        .wrap_err_with(|| labels.manifest.to_owned())?;
+    let manifest = attach_sorafs_release_governance(manifest, key_pair)
+        .wrap_err_with(|| labels.governance.to_owned())?;
+    let (bytes, _) = encode_sorafs_manifest_for_storage(&manifest)
+        .wrap_err_with(|| labels.encoding.to_owned())?;
+    let digest_hex = hex::encode(
+        manifest
+            .digest()
+            .wrap_err_with(|| labels.digest.to_owned())?
+            .as_bytes(),
+    );
+    Ok(BuiltSorafsManifest {
+        manifest,
+        bytes,
+        digest_hex,
+    })
+}
+fn register_built_sorafs_manifest(
+    built: &BuiltSorafsManifest,
+    description: &str,
+    torii_url: &str,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+    timeout_secs: u64,
+) -> Result<()> {
+    let mut config = soracloud_submission_config()?;
+    config.torii_api_url = url::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
+    config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
+    config.account = authority.clone();
+    config.key_pair = key_pair.clone();
+    register_sorafs_pin_manifest_and_wait(
+        &Client::new(config),
+        iroha::client::SorafsPinRegisterArgs {
+            manifest_payload: &built.bytes,
+            alias: None,
+            successor_of: None,
+        },
+        &built.digest_hex,
+        description,
+        timeout_secs,
+    )
+}
 fn publish_public_service_discovery(
     bundle: &SoraDeploymentBundleV1,
     torii_url: &str,
@@ -9050,69 +8683,33 @@ fn publish_public_service_discovery(
                 )
             },
         )?;
-    let writer = CarWriter::new(&plan, &payload)
-        .wrap_err("failed to prepare public discovery CAR writer")?;
-    let mut sink = io::sink();
-    let car_stats = writer
-        .write_to(&mut sink)
-        .wrap_err("failed to compute public discovery CAR metadata")?;
-    let root_cid = car_stats
-        .root_cids
-        .first()
-        .cloned()
-        .ok_or_else(|| eyre!("public discovery CAR planning produced no root CID"))?;
-    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
-    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
-    let retention_epoch = sorafs_pin_retention_epoch()?;
-    let manifest = ManifestBuilder::new()
-        .root_cid(root_cid)
-        .dag_codec(DagCodecId(car_stats.dag_codec))
-        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
-        .chunk_digest_sha3_256(chunk_digest_sha3_256)
-        .por_root(
-            compute_por_root(&payload, &plan)
-                .wrap_err("failed to compute public discovery PoR root")?,
-        )
-        .content_length(plan.content_length)
-        .car_digest(car_archive_digest)
-        .car_size(car_stats.car_size)
-        .pin_policy(PinPolicy {
-            min_replicas: 3,
-            storage_class: ManifestStorageClass::Hot,
-            retention_epoch,
-        })
-        .governance(GovernanceProofs::default())
-        .build()
-        .wrap_err("failed to build public discovery manifest")?;
-    let manifest = attach_sorafs_release_governance(manifest, key_pair)
-        .wrap_err("failed to attach public discovery governance proof")?;
-    let (manifest_bytes, _stored_manifest_digest) =
-        encode_sorafs_manifest_for_storage(&manifest)
-            .wrap_err("failed to encode public discovery manifest")?;
-    let manifest_digest = manifest
-        .digest()
-        .wrap_err("failed to compute public discovery canonical manifest digest")?;
-    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let mut client_config = soracloud_submission_config()?;
-    client_config.torii_api_url = url::Url::parse(torii_url)
-        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
-    client_config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
-    client_config.account = authority.clone();
-    client_config.key_pair = key_pair.clone();
-    let client = Client::new(client_config);
-    register_sorafs_pin_manifest_and_wait(
-        &client,
-        iroha::client::SorafsPinRegisterArgs {
-            manifest_payload: &manifest_bytes,
-            alias: None,
-            successor_of: None,
+    let built = build_sorafs_artifact_manifest(
+        &plan,
+        &payload,
+        descriptor,
+        key_pair,
+        SorafsManifestBuildLabels {
+            writer: "failed to prepare public discovery CAR writer",
+            metadata: "failed to compute public discovery CAR metadata",
+            root: "public discovery CAR planning produced no root CID",
+            por: "failed to compute public discovery PoR root",
+            manifest: "failed to build public discovery manifest",
+            governance: "failed to attach public discovery governance proof",
+            encoding: "failed to encode public discovery manifest",
+            digest: "failed to compute public discovery canonical manifest digest",
         },
-        &manifest_digest_hex,
+    )?;
+    register_built_sorafs_manifest(
+        &built,
         "public discovery",
+        torii_url,
+        authority,
+        key_pair,
         timeout_secs,
     )?;
     let manifest_id_hex = None;
-    let content_cid = encode_content_cid(&manifest.root_cid);
+    let content_cid = encode_content_cid(&built.manifest.root_cid);
+    let manifest_digest_hex = built.digest_hex;
     let mut public_discovery_url = base_url.clone();
     public_discovery_url.set_path(&format!(
         "/sorafs/cid/{content_cid}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}"
@@ -9209,64 +8806,28 @@ fn publish_app_static_site(
                 dist_dir.display()
             )
         })?;
-    let writer = CarWriter::new(&plan, &payload).wrap_err("failed to prepare site CAR writer")?;
-    let mut sink = io::sink();
-    let car_stats = writer
-        .write_to(&mut sink)
-        .wrap_err("failed to compute site CAR metadata")?;
-    let root_cid = car_stats
-        .root_cids
-        .first()
-        .cloned()
-        .ok_or_else(|| eyre!("site CAR planning produced no root CID"))?;
-    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
-    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
-    let retention_epoch = sorafs_pin_retention_epoch()?;
-    let manifest = ManifestBuilder::new()
-        .root_cid(root_cid)
-        .dag_codec(DagCodecId(car_stats.dag_codec))
-        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
-        .chunk_digest_sha3_256(chunk_digest_sha3_256)
-        .por_root(
-            compute_por_root(&payload, &plan)
-                .wrap_err("failed to compute app static site PoR root")?,
-        )
-        .content_length(plan.content_length)
-        .car_digest(car_archive_digest)
-        .car_size(car_stats.car_size)
-        .pin_policy(PinPolicy {
-            min_replicas: 3,
-            storage_class: ManifestStorageClass::Hot,
-            retention_epoch,
-        })
-        .governance(GovernanceProofs::default())
-        .build()
-        .wrap_err("failed to build app static site manifest")?;
-    let manifest = attach_sorafs_release_governance(manifest, key_pair)
-        .wrap_err("failed to attach app static site governance proof")?;
-    let (manifest_bytes, _stored_manifest_digest) =
-        encode_sorafs_manifest_for_storage(&manifest)
-            .wrap_err("failed to encode app static site manifest")?;
-    let manifest_digest = manifest
-        .digest()
-        .wrap_err("failed to compute app static site canonical manifest digest")?;
-    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let mut client_config = soracloud_submission_config()?;
-    client_config.torii_api_url = url::Url::parse(torii_url)
-        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
-    client_config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
-    client_config.account = authority.clone();
-    client_config.key_pair = key_pair.clone();
-    let client = Client::new(client_config);
-    register_sorafs_pin_manifest_and_wait(
-        &client,
-        iroha::client::SorafsPinRegisterArgs {
-            manifest_payload: &manifest_bytes,
-            alias: None,
-            successor_of: None,
+    let built = build_sorafs_artifact_manifest(
+        &plan,
+        &payload,
+        descriptor,
+        key_pair,
+        SorafsManifestBuildLabels {
+            writer: "failed to prepare site CAR writer",
+            metadata: "failed to compute site CAR metadata",
+            root: "site CAR planning produced no root CID",
+            por: "failed to compute app static site PoR root",
+            manifest: "failed to build app static site manifest",
+            governance: "failed to attach app static site governance proof",
+            encoding: "failed to encode app static site manifest",
+            digest: "failed to compute app static site canonical manifest digest",
         },
-        &manifest_digest_hex,
+    )?;
+    register_built_sorafs_manifest(
+        &built,
         "app static site",
+        torii_url,
+        authority,
+        key_pair,
         timeout_secs,
     )?;
     let manifest_id_hex = None;
@@ -9333,50 +8894,24 @@ fn plan_app_static_site_publication(
                 dist_dir.display()
             )
         })?;
-    let writer = CarWriter::new(&plan, &payload).wrap_err("failed to prepare site CAR writer")?;
-    let mut sink = io::sink();
-    let car_stats = writer
-        .write_to(&mut sink)
-        .wrap_err("failed to compute site CAR metadata")?;
-    let root_cid = car_stats
-        .root_cids
-        .first()
-        .cloned()
-        .ok_or_else(|| eyre!("site CAR planning produced no root CID"))?;
-    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
-    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
-    let retention_epoch = sorafs_pin_retention_epoch()?;
-    let manifest = ManifestBuilder::new()
-        .root_cid(root_cid)
-        .dag_codec(DagCodecId(car_stats.dag_codec))
-        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
-        .chunk_digest_sha3_256(chunk_digest_sha3_256)
-        .por_root(
-            compute_por_root(&payload, &plan)
-                .wrap_err("failed to compute app static site PoR root")?,
-        )
-        .content_length(plan.content_length)
-        .car_digest(car_archive_digest)
-        .car_size(car_stats.car_size)
-        .pin_policy(PinPolicy {
-            min_replicas: 3,
-            storage_class: ManifestStorageClass::Hot,
-            retention_epoch,
-        })
-        .governance(GovernanceProofs::default())
-        .build()
-        .wrap_err("failed to build app static site manifest")?;
-    let manifest = attach_sorafs_release_governance(manifest, key_pair)
-        .wrap_err("failed to attach app static site governance proof")?;
-    let (manifest_bytes, _stored_manifest_digest) =
-        encode_sorafs_manifest_for_storage(&manifest)
-            .wrap_err("failed to encode app static site manifest")?;
-    drop(manifest_bytes);
-    let manifest_digest = manifest
-        .digest()
-        .wrap_err("failed to compute app static site canonical manifest digest")?;
-    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let content_cid = encode_content_cid(&manifest.root_cid);
+    let built = build_sorafs_artifact_manifest(
+        &plan,
+        &payload,
+        descriptor,
+        key_pair,
+        SorafsManifestBuildLabels {
+            writer: "failed to prepare site CAR writer",
+            metadata: "failed to compute site CAR metadata",
+            root: "site CAR planning produced no root CID",
+            por: "failed to compute app static site PoR root",
+            manifest: "failed to build app static site manifest",
+            governance: "failed to attach app static site governance proof",
+            encoding: "failed to encode app static site manifest",
+            digest: "failed to compute app static site canonical manifest digest",
+        },
+    )?;
+    let content_cid = encode_content_cid(&built.manifest.root_cid);
+    let manifest_digest_hex = built.digest_hex;
     let mut cid_gateway_url = public_url.clone();
     cid_gateway_url.set_path(&format!("/sorafs/cid/{content_cid}"));
     Ok(AppStaticSitePublishOutput {
@@ -9412,72 +8947,43 @@ fn publish_sorafs_directory_artifact(
                 input_dir.display()
             )
         })?;
-    let writer = CarWriter::new(&plan, &payload)
-        .wrap_err_with(|| format!("failed to prepare {description} CAR writer"))?;
-    let mut sink = io::sink();
-    let car_stats = writer
-        .write_to(&mut sink)
-        .wrap_err_with(|| format!("failed to compute {description} CAR metadata"))?;
-    let root_cid = car_stats
-        .root_cids
-        .first()
-        .cloned()
-        .ok_or_else(|| eyre!("{description} CAR planning produced no root CID"))?;
-    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
-    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
-    let retention_epoch = sorafs_pin_retention_epoch()?;
-    let manifest = ManifestBuilder::new()
-        .root_cid(root_cid)
-        .dag_codec(DagCodecId(car_stats.dag_codec))
-        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
-        .chunk_digest_sha3_256(chunk_digest_sha3_256)
-        .por_root(
-            compute_por_root(&payload, &plan)
-                .wrap_err_with(|| format!("failed to compute {description} PoR root"))?,
-        )
-        .content_length(plan.content_length)
-        .car_digest(car_archive_digest)
-        .car_size(car_stats.car_size)
-        .pin_policy(PinPolicy {
-            min_replicas: 3,
-            storage_class: ManifestStorageClass::Hot,
-            retention_epoch,
-        })
-        .governance(GovernanceProofs::default())
-        .build()
-        .wrap_err_with(|| format!("failed to build {description} manifest"))?;
-    let manifest = attach_sorafs_release_governance(manifest, key_pair)
-        .wrap_err_with(|| format!("failed to attach {description} governance proof"))?;
-    let (manifest_bytes, _stored_manifest_digest) =
-        encode_sorafs_manifest_for_storage(&manifest)
-            .wrap_err_with(|| format!("failed to encode {description} manifest"))?;
-    let manifest_digest = manifest
-        .digest()
-        .wrap_err_with(|| format!("failed to compute {description} canonical manifest digest"))?;
-    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let mut client_config = soracloud_submission_config()?;
-    client_config.torii_api_url = url::Url::parse(torii_url)
-        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
-    client_config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
-    client_config.account = authority.clone();
-    client_config.key_pair = key_pair.clone();
-    let client = Client::new(client_config);
-    register_sorafs_pin_manifest_and_wait(
-        &client,
-        iroha::client::SorafsPinRegisterArgs {
-            manifest_payload: &manifest_bytes,
-            alias: None,
-            successor_of: None,
+    let writer_error = format!("failed to prepare {description} CAR writer");
+    let metadata_error = format!("failed to compute {description} CAR metadata");
+    let root_error = format!("{description} CAR planning produced no root CID");
+    let por_error = format!("failed to compute {description} PoR root");
+    let manifest_error = format!("failed to build {description} manifest");
+    let governance_error = format!("failed to attach {description} governance proof");
+    let encoding_error = format!("failed to encode {description} manifest");
+    let digest_error = format!("failed to compute {description} canonical manifest digest");
+    let built = build_sorafs_artifact_manifest(
+        &plan,
+        &payload,
+        descriptor,
+        key_pair,
+        SorafsManifestBuildLabels {
+            writer: &writer_error,
+            metadata: &metadata_error,
+            root: &root_error,
+            por: &por_error,
+            manifest: &manifest_error,
+            governance: &governance_error,
+            encoding: &encoding_error,
+            digest: &digest_error,
         },
-        &manifest_digest_hex,
+    )?;
+    register_built_sorafs_manifest(
+        &built,
         description,
+        torii_url,
+        authority,
+        key_pair,
         timeout_secs,
     )?;
     let manifest_id_hex = None;
-    let content_cid = encode_content_cid(&manifest.root_cid);
+    let content_cid = encode_content_cid(&built.manifest.root_cid);
     Ok(PublishedSorafsDirectoryArtifact {
         content_cid,
-        manifest_digest_hex,
+        manifest_digest_hex: built.digest_hex,
         manifest_id_hex,
     })
 }
@@ -9508,72 +9014,43 @@ fn publish_sorafs_file_artifact(
                 input_file.display()
             )
         })?;
-    let writer = CarWriter::new(&plan, &payload)
-        .wrap_err_with(|| format!("failed to prepare {description} CAR writer"))?;
-    let mut sink = io::sink();
-    let car_stats = writer
-        .write_to(&mut sink)
-        .wrap_err_with(|| format!("failed to compute {description} CAR metadata"))?;
-    let root_cid = car_stats
-        .root_cids
-        .first()
-        .cloned()
-        .ok_or_else(|| eyre!("{description} CAR planning produced no root CID"))?;
-    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
-    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
-    let retention_epoch = sorafs_pin_retention_epoch()?;
-    let manifest = ManifestBuilder::new()
-        .root_cid(root_cid)
-        .dag_codec(DagCodecId(car_stats.dag_codec))
-        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
-        .chunk_digest_sha3_256(chunk_digest_sha3_256)
-        .por_root(
-            compute_por_root(&payload, &plan)
-                .wrap_err_with(|| format!("failed to compute {description} PoR root"))?,
-        )
-        .content_length(plan.content_length)
-        .car_digest(car_archive_digest)
-        .car_size(car_stats.car_size)
-        .pin_policy(PinPolicy {
-            min_replicas: 3,
-            storage_class: ManifestStorageClass::Hot,
-            retention_epoch,
-        })
-        .governance(GovernanceProofs::default())
-        .build()
-        .wrap_err_with(|| format!("failed to build {description} manifest"))?;
-    let manifest = attach_sorafs_release_governance(manifest, key_pair)
-        .wrap_err_with(|| format!("failed to attach {description} governance proof"))?;
-    let (manifest_bytes, _stored_manifest_digest) =
-        encode_sorafs_manifest_for_storage(&manifest)
-            .wrap_err_with(|| format!("failed to encode {description} manifest"))?;
-    let manifest_digest = manifest
-        .digest()
-        .wrap_err_with(|| format!("failed to compute {description} canonical manifest digest"))?;
-    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let mut client_config = soracloud_submission_config()?;
-    client_config.torii_api_url = url::Url::parse(torii_url)
-        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
-    client_config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
-    client_config.account = authority.clone();
-    client_config.key_pair = key_pair.clone();
-    let client = Client::new(client_config);
-    register_sorafs_pin_manifest_and_wait(
-        &client,
-        iroha::client::SorafsPinRegisterArgs {
-            manifest_payload: &manifest_bytes,
-            alias: None,
-            successor_of: None,
+    let writer_error = format!("failed to prepare {description} CAR writer");
+    let metadata_error = format!("failed to compute {description} CAR metadata");
+    let root_error = format!("{description} CAR planning produced no root CID");
+    let por_error = format!("failed to compute {description} PoR root");
+    let manifest_error = format!("failed to build {description} manifest");
+    let governance_error = format!("failed to attach {description} governance proof");
+    let encoding_error = format!("failed to encode {description} manifest");
+    let digest_error = format!("failed to compute {description} canonical manifest digest");
+    let built = build_sorafs_artifact_manifest(
+        &plan,
+        &payload,
+        descriptor,
+        key_pair,
+        SorafsManifestBuildLabels {
+            writer: &writer_error,
+            metadata: &metadata_error,
+            root: &root_error,
+            por: &por_error,
+            manifest: &manifest_error,
+            governance: &governance_error,
+            encoding: &encoding_error,
+            digest: &digest_error,
         },
-        &manifest_digest_hex,
+    )?;
+    register_built_sorafs_manifest(
+        &built,
         description,
+        torii_url,
+        authority,
+        key_pair,
         timeout_secs,
     )?;
     let manifest_id_hex = None;
-    let content_cid = encode_content_cid(&manifest.root_cid);
+    let content_cid = encode_content_cid(&built.manifest.root_cid);
     Ok(PublishedSorafsFileArtifact {
         content_cid,
-        manifest_digest_hex,
+        manifest_digest_hex: built.digest_hex,
         manifest_id_hex,
         payload_hash,
     })
@@ -9786,15 +9263,11 @@ fn signed_bundle_request(
         &initial_service_secrets,
     )
     .wrap_err("failed to encode deployment bundle payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &payload)?;
     Ok(SignedBundleRequest {
         bundle,
         initial_service_configs,
         initial_service_secrets,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &payload)?,
     })
 }
 fn signed_app_infra_request(
@@ -9805,7 +9278,6 @@ fn signed_app_infra_request(
 ) -> Result<SignedAppInfraRequest> {
     let payload = encode_app_infra_provenance_payload(&manifest)
         .wrap_err("failed to encode app infra manifest payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &payload)?;
     let (deploy_services, upgrade_services) = match mode {
         MutationMode::Deploy => (services, Vec::new()),
         MutationMode::Upgrade => (Vec::new(), services),
@@ -9814,10 +9286,7 @@ fn signed_app_infra_request(
         deploy_services,
         upgrade_services,
         manifest,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &payload)?,
     })
 }
 fn build_app_infra_manifest(
@@ -10031,13 +9500,9 @@ fn signed_service_config_set_request(
         &payload.value_json,
     )
     .wrap_err("failed to encode service config payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedServiceConfigSetRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_service_config_delete_request(
@@ -10059,13 +9524,9 @@ fn signed_service_config_delete_request(
         payload.config_name.as_str(),
     )
     .wrap_err("failed to encode service config delete payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedServiceConfigDeleteRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_service_secret_set_request(
@@ -10090,13 +9551,9 @@ fn signed_service_secret_set_request(
         &payload.secret,
     )
     .wrap_err("failed to encode service secret payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedServiceSecretSetRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_service_secret_delete_request(
@@ -10118,13 +9575,9 @@ fn signed_service_secret_delete_request(
         payload.secret_name.as_str(),
     )
     .wrap_err("failed to encode service secret delete payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedServiceSecretDeleteRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_rollback_request(
@@ -10142,13 +9595,9 @@ fn signed_rollback_request(
     };
     let encoded = encode_rollback_signature_payload(&payload)
         .wrap_err("failed to encode rollback payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedRollbackRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8>> {
@@ -10185,13 +9634,9 @@ fn signed_rollout_request(
     };
     let encoded = encode_rollout_signature_payload(&payload)
         .wrap_err("failed to encode rollout payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedRolloutAdvanceRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_agent_deploy_request(
@@ -10208,13 +9653,9 @@ fn signed_agent_deploy_request(
     };
     let encoded = encode_agent_deploy_signature_payload(&payload)
         .wrap_err("failed to encode agent deploy payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentDeployRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_agent_lease_renew_request(
@@ -10235,13 +9676,9 @@ fn signed_agent_lease_renew_request(
     };
     let encoded = encode_agent_lease_renew_signature_payload(&payload)
         .wrap_err("failed to encode agent lease renew payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentLeaseRenewRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn normalize_hf_token(flag_name: &str, value: &str, max_bytes: usize) -> Result<String> {
@@ -10408,7 +9845,6 @@ fn signed_hf_deploy_request(
     };
     let encoded = encode_hf_deploy_signature_payload(&payload)
         .wrap_err("failed to encode hf deploy payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     let service_name = service_name
         .parse::<Name>()
         .expect("validated HF service name must parse");
@@ -10433,10 +9869,7 @@ fn signed_hf_deploy_request(
         .transpose()?;
     Ok(SignedHfDeployRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
         generated_service_provenance: Some(sign_generated_hf_service_provenance(
             &generated_bundle,
             key_pair,
@@ -10467,13 +9900,9 @@ fn signed_hf_lease_leave_request(
     };
     let encoded = encode_hf_lease_leave_signature_payload(&payload)
         .wrap_err("failed to encode hf lease leave payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedHfLeaseLeaveRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 #[allow(clippy::too_many_arguments)]
@@ -10523,7 +9952,6 @@ fn signed_hf_lease_renew_request(
     };
     let encoded = encode_hf_lease_renew_signature_payload(&payload)
         .wrap_err("failed to encode hf lease renew payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     let service_name = service_name
         .parse::<Name>()
         .expect("validated HF service name must parse");
@@ -10548,10 +9976,7 @@ fn signed_hf_lease_renew_request(
         .transpose()?;
     Ok(SignedHfLeaseRenewRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
         generated_service_provenance: Some(sign_generated_hf_service_provenance(
             &generated_bundle,
             key_pair,
@@ -10619,13 +10044,9 @@ fn signed_model_host_advertise_request(
     let payload = ModelHostAdvertisePayload { capability };
     let encoded = encode_model_host_advertise_signature_payload(&payload)
         .wrap_err("failed to encode model host advertise payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelHostAdvertiseRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_model_host_heartbeat_request(
@@ -10642,13 +10063,9 @@ fn signed_model_host_heartbeat_request(
     };
     let encoded = encode_model_host_heartbeat_signature_payload(&payload)
         .wrap_err("failed to encode model host heartbeat payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelHostHeartbeatRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_model_host_withdraw_request(
@@ -10660,13 +10077,9 @@ fn signed_model_host_withdraw_request(
     };
     let encoded = encode_model_host_withdraw_signature_payload(&payload)
         .wrap_err("failed to encode model host withdraw payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelHostWithdrawRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_agent_restart_request(
@@ -10687,13 +10100,9 @@ fn signed_agent_restart_request(
     };
     let encoded = encode_agent_restart_signature_payload(&payload)
         .wrap_err("failed to encode agent restart payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentRestartRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_agent_policy_revoke_request(
@@ -10716,13 +10125,9 @@ fn signed_agent_policy_revoke_request(
     };
     let encoded = encode_agent_policy_revoke_signature_payload(&payload)
         .wrap_err("failed to encode agent policy revoke payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentPolicyRevokeRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_agent_wallet_spend_request(
@@ -10748,13 +10153,9 @@ fn signed_agent_wallet_spend_request(
     };
     let encoded = encode_agent_wallet_spend_signature_payload(&payload)
         .wrap_err("failed to encode agent wallet spend payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentWalletSpendRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_agent_wallet_approve_request(
@@ -10775,13 +10176,9 @@ fn signed_agent_wallet_approve_request(
     };
     let encoded = encode_agent_wallet_approve_signature_payload(&payload)
         .wrap_err("failed to encode agent wallet approve payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentWalletApproveRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_agent_message_send_request(
@@ -10812,13 +10209,9 @@ fn signed_agent_message_send_request(
     };
     let encoded = encode_agent_message_send_signature_payload(&payload)
         .wrap_err("failed to encode agent message send payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentMessageSendRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_agent_message_ack_request(
@@ -10839,13 +10232,9 @@ fn signed_agent_message_ack_request(
     };
     let encoded = encode_agent_message_ack_signature_payload(&payload)
         .wrap_err("failed to encode agent message ack payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentMessageAckRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn validate_hash_like_value(flag_name: &str, value: &str) -> Result<()> {
@@ -10912,13 +10301,9 @@ fn signed_agent_artifact_allow_request(
     };
     let encoded = encode_agent_artifact_allow_signature_payload(&payload)
         .wrap_err("failed to encode agent autonomy allow payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentArtifactAllowRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_agent_autonomy_run_request(
@@ -10958,13 +10343,9 @@ fn signed_agent_autonomy_run_request(
     };
     let encoded = encode_agent_autonomy_run_signature_payload(&payload)
         .wrap_err("failed to encode agent autonomy run payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentAutonomyRunRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 #[allow(clippy::too_many_arguments)]
@@ -11025,13 +10406,9 @@ fn signed_training_job_start_request(
     };
     let encoded = encode_training_job_start_signature_payload(&payload)
         .wrap_err("failed to encode training job start payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedTrainingJobStartRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_training_job_checkpoint_request(
@@ -11064,13 +10441,9 @@ fn signed_training_job_checkpoint_request(
     };
     let encoded = encode_training_job_checkpoint_signature_payload(&payload)
         .wrap_err("failed to encode training job checkpoint payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedTrainingJobCheckpointRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_training_job_retry_request(
@@ -11096,13 +10469,9 @@ fn signed_training_job_retry_request(
     };
     let encoded = encode_training_job_retry_signature_payload(&payload)
         .wrap_err("failed to encode training job retry payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedTrainingJobRetryRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 #[allow(clippy::too_many_arguments)]
@@ -11142,13 +10511,9 @@ fn signed_model_artifact_register_request(
     };
     let encoded = encode_model_artifact_register_signature_payload(&payload)
         .wrap_err("failed to encode model artifact register payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelArtifactRegisterRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 #[allow(clippy::too_many_arguments)]
@@ -11198,13 +10563,9 @@ fn signed_model_weight_register_request(
     };
     let encoded = encode_model_weight_register_signature_payload(&payload)
         .wrap_err("failed to encode model weight register payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelWeightRegisterRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_model_weight_promote_request(
@@ -11234,13 +10595,9 @@ fn signed_model_weight_promote_request(
     };
     let encoded = encode_model_weight_promote_signature_payload(&payload)
         .wrap_err("failed to encode model weight promote payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelWeightPromoteRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_model_weight_rollback_request(
@@ -11271,13 +10628,9 @@ fn signed_model_weight_rollback_request(
     };
     let encoded = encode_model_weight_rollback_signature_payload(&payload)
         .wrap_err("failed to encode model weight rollback payload for signing")?;
-    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelWeightRollbackRequest {
         payload,
-        provenance: ManifestProvenance {
-            signer: key_pair.public_key().clone(),
-            signature,
-        },
+        provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
 fn signed_uploaded_model_register_request(
@@ -13893,6 +13246,31 @@ fn service_artifact(
         handler_name: handler_name.map(|name| name.parse().expect("literal handler name is valid")),
     }
 }
+macro_rules! state_binding {
+    ($name:expr, $scope:ident, $mutability:ident, $encryption:ident, $prefix:expr, $item:literal, $total:literal) => {
+        SoraStateBindingV1 {
+            schema_version: SORA_STATE_BINDING_VERSION_V1,
+            binding_name: $name.parse().expect("literal binding name is valid"),
+            scope: SoraStateScopeV1::$scope,
+            mutability: SoraStateMutabilityV1::$mutability,
+            encryption: SoraStateEncryptionV1::$encryption,
+            key_prefix: $prefix.to_owned(),
+            max_item_bytes: NonZeroU64::new($item).expect("nonzero literal"),
+            max_total_bytes: NonZeroU64::new($total).expect("nonzero literal"),
+        }
+    };
+}
+fn auth_state_binding(name: &str, prefix: &str) -> SoraStateBindingV1 {
+    state_binding!(
+        name,
+        ServiceState,
+        ReadWrite,
+        ClientCiphertext,
+        prefix,
+        8_192,
+        4_194_304
+    )
+}
 fn default_inrou_manifest() -> SoraInrouManifestV1 {
     SoraInrouManifestV1 {
         schema_version: SORA_INROU_MANIFEST_VERSION_V1,
@@ -14100,54 +13478,26 @@ fn build_split_app_vault_service_bundle(
     });
     service.replicas = NonZeroU16::new(2).expect("nonzero literal");
     service.state_bindings = vec![
-        SoraStateBindingV1 {
-            schema_version: SORA_STATE_BINDING_VERSION_V1,
-            binding_name: "auth_challenges"
-                .parse()
-                .expect("literal binding name is valid"),
-            scope: SoraStateScopeV1::ServiceState,
-            mutability: SoraStateMutabilityV1::ReadWrite,
-            encryption: SoraStateEncryptionV1::ClientCiphertext,
-            key_prefix: "/state/auth/challenges".to_owned(),
-            max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-            max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
-        },
-        SoraStateBindingV1 {
-            schema_version: SORA_STATE_BINDING_VERSION_V1,
-            binding_name: "auth_sessions"
-                .parse()
-                .expect("literal binding name is valid"),
-            scope: SoraStateScopeV1::ServiceState,
-            mutability: SoraStateMutabilityV1::ReadWrite,
-            encryption: SoraStateEncryptionV1::ClientCiphertext,
-            key_prefix: "/state/auth/sessions".to_owned(),
-            max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-            max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
-        },
-        SoraStateBindingV1 {
-            schema_version: SORA_STATE_BINDING_VERSION_V1,
-            binding_name: "user_preferences"
-                .parse()
-                .expect("literal binding name is valid"),
-            scope: SoraStateScopeV1::ConfidentialState,
-            mutability: SoraStateMutabilityV1::ReadWrite,
-            encryption: SoraStateEncryptionV1::FheCiphertext,
-            key_prefix: "/state/users/preferences".to_owned(),
-            max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-            max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
-        },
-        SoraStateBindingV1 {
-            schema_version: SORA_STATE_BINDING_VERSION_V1,
-            binding_name: "user_saved_searches"
-                .parse()
-                .expect("literal binding name is valid"),
-            scope: SoraStateScopeV1::ConfidentialState,
-            mutability: SoraStateMutabilityV1::ReadWrite,
-            encryption: SoraStateEncryptionV1::FheCiphertext,
-            key_prefix: "/state/users/saved_searches".to_owned(),
-            max_item_bytes: NonZeroU64::new(32_768).expect("nonzero literal"),
-            max_total_bytes: NonZeroU64::new(8_388_608).expect("nonzero literal"),
-        },
+        auth_state_binding("auth_challenges", "/state/auth/challenges"),
+        auth_state_binding("auth_sessions", "/state/auth/sessions"),
+        state_binding!(
+            "user_preferences",
+            ConfidentialState,
+            ReadWrite,
+            FheCiphertext,
+            "/state/users/preferences",
+            8_192,
+            4_194_304
+        ),
+        state_binding!(
+            "user_saved_searches",
+            ConfidentialState,
+            ReadWrite,
+            FheCiphertext,
+            "/state/users/saved_searches",
+            32_768,
+            8_388_608
+        ),
     ];
     service.lease_volumes.clear();
     service.handlers = vec![
@@ -14366,30 +13716,8 @@ fn apply_init_template_defaults(
                 tls_mode: SoraTlsModeV1::Required,
             });
             service.state_bindings = vec![
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "auth_challenges"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/auth/challenges".to_owned(),
-                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "auth_sessions"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/auth/sessions".to_owned(),
-                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
-                },
+                auth_state_binding("auth_challenges", "/state/auth/challenges"),
+                auth_state_binding("auth_sessions", "/state/auth/sessions"),
             ];
             service.handlers = vec![
                 service_handler(
@@ -14464,66 +13792,35 @@ fn apply_init_template_defaults(
             });
             service.replicas = NonZeroU16::new(3).expect("nonzero literal");
             service.state_bindings = vec![
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "pii_records"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ConfidentialState,
-                    mutability: SoraStateMutabilityV1::AppendOnly,
-                    encryption: SoraStateEncryptionV1::FheCiphertext,
-                    key_prefix: "/state/pii/records".to_owned(),
-                    max_item_bytes: NonZeroU64::new(65_536).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(33_554_432).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "pii_consent_events"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::AppendOnly,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/pii/consent".to_owned(),
-                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(8_388_608).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "pii_retention_jobs"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/pii/retention".to_owned(),
-                    max_item_bytes: NonZeroU64::new(4_096).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(2_097_152).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "auth_challenges"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/auth/challenges".to_owned(),
-                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "auth_sessions"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/auth/sessions".to_owned(),
-                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
-                },
+                state_binding!(
+                    "pii_records",
+                    ConfidentialState,
+                    AppendOnly,
+                    FheCiphertext,
+                    "/state/pii/records",
+                    65_536,
+                    33_554_432
+                ),
+                state_binding!(
+                    "pii_consent_events",
+                    ServiceState,
+                    AppendOnly,
+                    ClientCiphertext,
+                    "/state/pii/consent",
+                    8_192,
+                    8_388_608
+                ),
+                state_binding!(
+                    "pii_retention_jobs",
+                    ServiceState,
+                    ReadWrite,
+                    ClientCiphertext,
+                    "/state/pii/retention",
+                    4_096,
+                    2_097_152
+                ),
+                auth_state_binding("auth_challenges", "/state/auth/challenges"),
+                auth_state_binding("auth_sessions", "/state/auth/sessions"),
             ];
             service.handlers = vec![
                 service_handler(
@@ -14613,102 +13910,62 @@ fn apply_init_template_defaults(
             });
             service.replicas = NonZeroU16::new(3).expect("nonzero literal");
             service.state_bindings = vec![
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "search_sessions"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/hayahi/search/sessions".to_owned(),
-                    max_item_bytes: NonZeroU64::new(131_072).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(67_108_864).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "search_cache"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/hayahi/search/cache".to_owned(),
-                    max_item_bytes: NonZeroU64::new(524_288).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(134_217_728).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "collector_jobs"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::AppendOnly,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/hayahi/collectors/jobs".to_owned(),
-                    max_item_bytes: NonZeroU64::new(65_536).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(33_554_432).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "collector_results"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::AppendOnly,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/hayahi/collectors/results".to_owned(),
-                    max_item_bytes: NonZeroU64::new(262_144).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(134_217_728).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "auth_challenges"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/auth/challenges".to_owned(),
-                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "auth_sessions"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ServiceState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::ClientCiphertext,
-                    key_prefix: "/state/auth/sessions".to_owned(),
-                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "user_saved_searches"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ConfidentialState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::FheCiphertext,
-                    key_prefix: "/state/hayahi/users/saved_searches".to_owned(),
-                    max_item_bytes: NonZeroU64::new(32_768).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(8_388_608).expect("nonzero literal"),
-                },
-                SoraStateBindingV1 {
-                    schema_version: SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "user_preferences"
-                        .parse()
-                        .expect("literal binding name is valid"),
-                    scope: SoraStateScopeV1::ConfidentialState,
-                    mutability: SoraStateMutabilityV1::ReadWrite,
-                    encryption: SoraStateEncryptionV1::FheCiphertext,
-                    key_prefix: "/state/hayahi/users/preferences".to_owned(),
-                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
-                    max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
-                },
+                state_binding!(
+                    "search_sessions",
+                    ServiceState,
+                    ReadWrite,
+                    ClientCiphertext,
+                    "/state/hayahi/search/sessions",
+                    131_072,
+                    67_108_864
+                ),
+                state_binding!(
+                    "search_cache",
+                    ServiceState,
+                    ReadWrite,
+                    ClientCiphertext,
+                    "/state/hayahi/search/cache",
+                    524_288,
+                    134_217_728
+                ),
+                state_binding!(
+                    "collector_jobs",
+                    ServiceState,
+                    AppendOnly,
+                    ClientCiphertext,
+                    "/state/hayahi/collectors/jobs",
+                    65_536,
+                    33_554_432
+                ),
+                state_binding!(
+                    "collector_results",
+                    ServiceState,
+                    AppendOnly,
+                    ClientCiphertext,
+                    "/state/hayahi/collectors/results",
+                    262_144,
+                    134_217_728
+                ),
+                auth_state_binding("auth_challenges", "/state/auth/challenges"),
+                auth_state_binding("auth_sessions", "/state/auth/sessions"),
+                state_binding!(
+                    "user_saved_searches",
+                    ConfidentialState,
+                    ReadWrite,
+                    FheCiphertext,
+                    "/state/hayahi/users/saved_searches",
+                    32_768,
+                    8_388_608
+                ),
+                state_binding!(
+                    "user_preferences",
+                    ConfidentialState,
+                    ReadWrite,
+                    FheCiphertext,
+                    "/state/hayahi/users/preferences",
+                    8_192,
+                    4_194_304
+                ),
             ];
             service.handlers = vec![
                 service_handler(
@@ -16665,11 +15922,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("static site should exist");
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/sorafs/pin/register".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&norito::json!({ "ok": true }))
-                    .expect("encode pin register response"),
-            },
+            MockHttpResponse::json(
+                json::to_vec(&norito::json!({ "ok": true })).expect("encode pin register response"),
+            ),
         )]));
         let key_pair = soracloud_fixture_key_pair(0x13);
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -16749,6 +16004,14 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     struct MockHttpResponse {
         content_type: &'static str,
         body: Vec<u8>,
+    }
+    impl MockHttpResponse {
+        fn json(body: Vec<u8>) -> Self {
+            Self {
+                content_type: "application/json",
+                body,
+            }
+        }
     }
     #[derive(Clone, Debug)]
     struct CapturedHttpRequest {
@@ -16956,15 +16219,14 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn mock_sorafs_pin_registration_response(
         registration: &MockSorafsPinRegistration,
     ) -> MockHttpResponse {
-        MockHttpResponse {
-            content_type: "application/json",
-            body: json::to_vec(&norito::json!({
+        MockHttpResponse::json(
+            json::to_vec(&norito::json!({
                 "status": "submitted",
                 "tx_hash_hex": (registration.tx_hash_hex.clone()),
                 "manifest_digest_hex": (registration.manifest_digest_hex.clone()),
             }))
             .expect("encode mock SoraFS pin registration response"),
-        }
+        )
     }
     fn mock_sorafs_pin_registry_response(
         path: &str,
@@ -17494,6 +16756,44 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             }
         })
     }
+    fn mock_bundle_mutation_server(
+        mutation_route: &str,
+        draft_response: &norito::json::Value,
+        status_payload: &norito::json::Value,
+        pin_encode_error: &str,
+        draft_encode_error: &str,
+    ) -> MockHttpServer {
+        MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/sorafs/pin/register".to_owned(),
+                MockHttpResponse::json(
+                    json::to_vec(&norito::json!({ "ok": true })).expect(pin_encode_error),
+                ),
+            ),
+            (
+                mutation_route.to_owned(),
+                MockHttpResponse::json(json::to_vec(draft_response).expect(draft_encode_error)),
+            ),
+            (
+                "/v1/soracloud/status".to_owned(),
+                MockHttpResponse::json(
+                    json::to_vec(status_payload).expect("encode status response"),
+                ),
+            ),
+        ]))
+    }
+    fn assert_workspace_script(path: Option<&str>, file_name: &str) {
+        assert!(path.is_some_and(|path| path.ends_with(file_name)));
+    }
+    fn assert_local_workspace_scripts(scripts: &ServiceWorkspaceScriptsOutput) {
+        assert_workspace_script(scripts.local_dev.as_deref(), "dev.sh");
+        assert_workspace_script(scripts.build_and_sync.as_deref(), "build-and-sync.sh");
+        assert_mutation_workspace_scripts(scripts);
+    }
+    fn assert_mutation_workspace_scripts(scripts: &ServiceWorkspaceScriptsOutput) {
+        assert_workspace_script(scripts.deploy.as_deref(), "deploy.sh");
+        assert_workspace_script(scripts.upgrade.as_deref(), "upgrade.sh");
+    }
     #[test]
     fn direct_service_mutation_output_hoists_authoritative_status_fields() {
         let response = norito::json!({
@@ -17801,10 +17101,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             mock_control_plane_status_payload(&["echo_console", "unrelated_service"]);
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/status".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&status_payload).expect("encode status response"),
-            },
+            MockHttpResponse::json(json::to_vec(&status_payload).expect("encode status response")),
         )]));
         install_mock_protected_read_signer();
         let output = StatusArgs {
@@ -17905,10 +17202,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/service/config/status?service_name=echo_console&config_name=demo_config"
                 .to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode config status response"),
-            },
+            MockHttpResponse::json(json::to_vec(&response).expect("encode config status response")),
         )]));
         install_mock_protected_read_signer();
         let output = ConfigStatusArgs {
@@ -17973,10 +17267,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/service/secret/status?service_name=echo_console&secret_name=demo_secret"
                 .to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode secret status response"),
-            },
+            MockHttpResponse::json(json::to_vec(&response).expect("encode secret status response")),
         )]));
         install_mock_protected_read_signer();
         let output = SecretStatusArgs {
@@ -18035,17 +17326,15 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/rollback".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&rollback_response).expect("encode rollback response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&rollback_response).expect("encode rollback response"),
+                ),
             ),
             (
                 "/v1/soracloud/status".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode status response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&status_payload).expect("encode status response"),
+                ),
             ),
         ]));
         let key_pair = soracloud_fixture_key_pair(0x14);
@@ -18138,17 +17427,15 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/rollout".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&rollout_response).expect("encode rollout response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&rollout_response).expect("encode rollout response"),
+                ),
             ),
             (
                 "/v1/soracloud/status".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode status response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&status_payload).expect("encode status response"),
+                ),
             ),
         ]));
         let key_pair = soracloud_fixture_key_pair(0x15);
@@ -18236,17 +17523,15 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/hf/deploy".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&deploy_response).expect("encode hf deploy response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&deploy_response).expect("encode hf deploy response"),
+                ),
             ),
             (
                 status_path.replace("http://127.0.0.1:1", ""),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode hf status response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&status_payload).expect("encode hf status response"),
+                ),
             ),
         ]));
         install_mock_submission_config(&authority, &key_pair);
@@ -18318,10 +17603,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         let server = MockHttpServer::start(BTreeMap::from([(
             status_path.replace("http://127.0.0.1:1", ""),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&status_payload).expect("encode hf status response"),
-            },
+            MockHttpResponse::json(
+                json::to_vec(&status_payload).expect("encode hf status response"),
+            ),
         )]));
         install_mock_protected_read_signer();
         let output = HfStatusArgs {
@@ -18388,17 +17672,15 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/hf/lease/leave".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&leave_response).expect("encode hf leave response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&leave_response).expect("encode hf leave response"),
+                ),
             ),
             (
                 status_path.replace("http://127.0.0.1:1", ""),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode hf status response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&status_payload).expect("encode hf status response"),
+                ),
             ),
         ]));
         install_mock_submission_config(&authority, &key_pair);
@@ -18464,17 +17746,15 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/hf/lease/renew".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&renew_response).expect("encode hf renew response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&renew_response).expect("encode hf renew response"),
+                ),
             ),
             (
                 status_path.replace("http://127.0.0.1:1", ""),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode hf status response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&status_payload).expect("encode hf status response"),
+                ),
             ),
         ]));
         install_mock_submission_config(&authority, &key_pair);
@@ -20347,30 +19627,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let (dir, _) = service_fixture("deploy_service_projection", InitTemplate::HttpService);
         let deploy_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/sorafs/pin/register".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "ok": true }))
-                        .expect("encode public discovery pin register response"),
-                },
-            ),
-            (
-                "/v1/soracloud/deploy".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&deploy_response).expect("encode deploy response"),
-                },
-            ),
-            (
-                "/v1/soracloud/status".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode status response"),
-                },
-            ),
-        ]));
+        let server = mock_bundle_mutation_server(
+            "/v1/soracloud/deploy",
+            &deploy_response,
+            &status_payload,
+            "encode public discovery pin register response",
+            "encode deploy response",
+        );
         let key_pair = soracloud_fixture_key_pair(0x20);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -20433,30 +19696,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let (dir, _) = service_fixture("upgrade_service_projection", InitTemplate::HttpService);
         let upgrade_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/sorafs/pin/register".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "ok": true }))
-                        .expect("encode public discovery pin register response"),
-                },
-            ),
-            (
-                "/v1/soracloud/upgrade".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&upgrade_response).expect("encode upgrade response"),
-                },
-            ),
-            (
-                "/v1/soracloud/status".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode status response"),
-                },
-            ),
-        ]));
+        let server = mock_bundle_mutation_server(
+            "/v1/soracloud/upgrade",
+            &upgrade_response,
+            &status_payload,
+            "encode public discovery pin register response",
+            "encode upgrade response",
+        );
         let key_pair = soracloud_fixture_key_pair(0x3F);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -20777,34 +20023,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.lease_volume_count, 2);
         assert_eq!(output.handler_count, 0);
         assert!(output.workspace_dir.contains("http_service_local_plan"));
-        assert!(
-            output
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .build_and_sync
-                .as_deref()
-                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_local_workspace_scripts(&output.workspace_scripts);
         assert!(
             output
                 .routes
@@ -22162,34 +21381,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
         assert!(output.workspace_dir.contains("split_app_local_plan"));
-        assert!(
-            output
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .build_and_sync
-                .as_deref()
-                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_local_workspace_scripts(&output.workspace_scripts);
         assert_eq!(
             output
                 .frontend
@@ -22343,34 +21535,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_local_dev_dry_run"));
-        assert!(
-            output
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .build_and_sync
-                .as_deref()
-                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_local_workspace_scripts(&output.workspace_scripts);
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
@@ -22481,34 +21646,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .workspace_dir
                 .contains("split_app_build_and_sync_dry_run")
         );
-        assert!(
-            output
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .build_and_sync
-                .as_deref()
-                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_local_workspace_scripts(&output.workspace_scripts);
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
@@ -22696,20 +21834,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .workspace_dir
                 .contains("split_app_deploy_workspace_dry_run")
         );
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_mutation_workspace_scripts(&output.workspace_scripts);
         assert_eq!(output.script_name, "deploy.sh");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
         assert!(output.uses_api_token);
@@ -22765,20 +21890,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .workspace_dir
                 .contains("single_api_upgrade_workspace_run")
         );
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_mutation_workspace_scripts(&output.workspace_scripts);
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.script_name, "upgrade.sh");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
@@ -22992,30 +22104,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/sorafs/pin/register".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "ok": true }))
-                        .expect("encode pin register response"),
-                },
-            ),
-            (
-                "/v1/soracloud/deploy".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&draft_response).expect("encode deploy response"),
-                },
-            ),
-            (
-                "/v1/soracloud/status".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode status response"),
-                },
-            ),
-        ]));
+        let server = mock_bundle_mutation_server(
+            "/v1/soracloud/deploy",
+            &draft_response,
+            &status_payload,
+            "encode pin register response",
+            "encode deploy response",
+        );
         let key_pair = soracloud_fixture_key_pair(0x41);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -23132,30 +22227,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/sorafs/pin/register".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "ok": true }))
-                        .expect("encode pin register response"),
-                },
-            ),
-            (
-                "/v1/soracloud/deploy".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&draft_response).expect("encode deploy response"),
-                },
-            ),
-            (
-                "/v1/soracloud/status".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode status response"),
-                },
-            ),
-        ]));
+        let server = mock_bundle_mutation_server(
+            "/v1/soracloud/deploy",
+            &draft_response,
+            &status_payload,
+            "encode pin register response",
+            "encode deploy response",
+        );
         let key_pair = soracloud_fixture_key_pair(0x42);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -23901,10 +22979,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         });
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/status".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&payload).expect("encode status payload"),
-            },
+            MockHttpResponse::json(json::to_vec(&payload).expect("encode status payload")),
         )]));
         install_mock_protected_read_signer();
         let output = AppStatusArgs {
@@ -23920,34 +22995,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.public_url, "https://travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_status"));
-        assert!(
-            output
-                .workspace_scripts
-                .local_dev
-                .as_deref()
-                .is_some_and(|path| path.ends_with("dev.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .build_and_sync
-                .as_deref()
-                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_local_workspace_scripts(&output.workspace_scripts);
         assert_eq!(
             output
                 .static_site
@@ -24097,10 +23145,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         });
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/status".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&payload).expect("encode status payload"),
-            },
+            MockHttpResponse::json(json::to_vec(&payload).expect("encode status payload")),
         )]));
         install_mock_protected_read_signer();
         let output = AppStatusArgs {
@@ -24118,20 +23163,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .workspace_dir
                 .contains("split_app_status_missing_service")
         );
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_mutation_workspace_scripts(&output.workspace_scripts);
         assert_eq!(output.services.len(), 2);
         let live = output
             .services
@@ -24182,10 +23214,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         });
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/status".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&payload).expect("encode status payload"),
-            },
+            MockHttpResponse::json(json::to_vec(&payload).expect("encode status payload")),
         )]));
         install_mock_protected_read_signer();
         let output = AppStatusArgs {
@@ -24203,20 +23232,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .workspace_dir
                 .contains("single_api_status_root_binding")
         );
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_mutation_workspace_scripts(&output.workspace_scripts);
         assert!(!output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 0);
         assert_eq!(output.deterministic_service_count, 1);
@@ -24263,30 +23279,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("write api bundle");
         let status_payload = mock_control_plane_status_payload(&["travel-ops_api"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/sorafs/pin/register".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "ok": true }))
-                        .expect("encode pin register response"),
-                },
-            ),
-            (
-                "/v1/soracloud/deploy".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&draft_response).expect("encode deploy draft response"),
-                },
-            ),
-            (
-                "/v1/soracloud/status".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode status response"),
-                },
-            ),
-        ]));
+        let server = mock_bundle_mutation_server(
+            "/v1/soracloud/deploy",
+            &draft_response,
+            &status_payload,
+            "encode pin register response",
+            "encode deploy draft response",
+        );
         let key_pair = soracloud_fixture_key_pair(0x43);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -24305,20 +23304,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .workspace_dir
                 .contains("single_api_root_binding_deploy")
         );
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_mutation_workspace_scripts(&output.workspace_scripts);
         assert!(!output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 0);
         assert_eq!(output.deterministic_service_count, 1);
@@ -24469,18 +23455,16 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/sorafs/pin/register".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "ok": true }))
+                MockHttpResponse::json(
+                    json::to_vec(&norito::json!({ "ok": true }))
                         .expect("encode public discovery pin register response"),
-                },
+                ),
             ),
             (
                 "/v1/soracloud/apps/deploy".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&draft_response).expect("encode app deploy draft response"),
-                },
+                MockHttpResponse::json(
+                    json::to_vec(&draft_response).expect("encode app deploy draft response"),
+                ),
             ),
         ]));
         let key_pair = soracloud_fixture_key_pair(0x45);
@@ -24555,30 +23539,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/sorafs/pin/register".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "ok": true }))
-                        .expect("encode pin register response"),
-                },
-            ),
-            (
-                "/v1/soracloud/deploy".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&draft_response).expect("encode deploy draft response"),
-                },
-            ),
-            (
-                "/v1/soracloud/status".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode status response"),
-                },
-            ),
-        ]));
+        let server = mock_bundle_mutation_server(
+            "/v1/soracloud/deploy",
+            &draft_response,
+            &status_payload,
+            "encode pin register response",
+            "encode deploy draft response",
+        );
         let key_pair = soracloud_fixture_key_pair(0x46);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -24593,20 +23560,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_cid_only_deploy"));
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_mutation_workspace_scripts(&output.workspace_scripts);
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
@@ -24754,30 +23708,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/sorafs/pin/register".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "ok": true }))
-                        .expect("encode pin register response"),
-                },
-            ),
-            (
-                "/v1/soracloud/upgrade".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&draft_response).expect("encode upgrade draft response"),
-                },
-            ),
-            (
-                "/v1/soracloud/status".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&status_payload).expect("encode status response"),
-                },
-            ),
-        ]));
+        let server = mock_bundle_mutation_server(
+            "/v1/soracloud/upgrade",
+            &draft_response,
+            &status_payload,
+            "encode pin register response",
+            "encode upgrade draft response",
+        );
         let key_pair = soracloud_fixture_key_pair(0x47);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -24792,20 +23729,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_cid_only_upgrade"));
-        assert!(
-            output
-                .workspace_scripts
-                .deploy
-                .as_deref()
-                .is_some_and(|path| path.ends_with("deploy.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .upgrade
-                .as_deref()
-                .is_some_and(|path| path.ends_with("upgrade.sh"))
-        );
+        assert_mutation_workspace_scripts(&output.workspace_scripts);
         assert_eq!(output.mode, "upgrade");
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);

@@ -429,6 +429,7 @@ impl SignedBlock {
             committed_fragment_count,
             fastpq_transcripts,
             axt_envelopes,
+            axt_transitioned_dataspaces: BTreeSet::new(),
             lane_finality_statements: Vec::new(),
             trigger_completions,
             axt_policy_snapshot,
@@ -466,6 +467,22 @@ impl SignedBlock {
             .as_mut()
             .ok_or(SetLaneFinalityStatementsError::MissingTransactionResults)?;
         result.lane_finality_statements = lane_finality_statements;
+        Ok(())
+    }
+    /// Install the canonical sticky AXT authorization-transition set.
+    ///
+    /// The set must be attached before lane-finality statements are signed so
+    /// Kura replay can reproduce nonce revocation for transient rotations.
+    #[cfg(feature = "transparent_api")]
+    pub fn set_axt_transitioned_dataspaces(
+        &mut self,
+        dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
+    ) -> Result<(), SetLaneFinalityStatementsError> {
+        let result = self
+            .result
+            .as_mut()
+            .ok_or(SetLaneFinalityStatementsError::MissingTransactionResults)?;
+        result.axt_transitioned_dataspaces = dataspaces;
         Ok(())
     }
     /// Replace the embedded AXT policy snapshot for adversarial validation fixtures.
@@ -1994,8 +2011,9 @@ mod tests {
             committed_fragment_count: u64,
             fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
-            lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
             trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
+            axt_transitioned_dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
+            lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
         }
         let omitted_snapshot = BlockResultWithoutAxtPolicySnapshot {
             time_triggers: Vec::new(),
@@ -2005,8 +2023,9 @@ mod tests {
             committed_fragment_count: 0,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
-            lane_finality_statements: Vec::new(),
             trigger_completions: Vec::new(),
+            axt_transitioned_dataspaces: BTreeSet::new(),
+            lane_finality_statements: Vec::new(),
         };
         let bytes = omitted_snapshot.encode();
         let mut cursor = bytes.as_slice();
@@ -2028,6 +2047,7 @@ mod tests {
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
             trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
+            axt_transitioned_dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
         }
         let omitted_lane_finality = BlockResultWithoutLaneFinalityStatements {
             time_triggers: Vec::new(),
@@ -2042,12 +2062,50 @@ mod tests {
                 version: 1,
                 entries: Vec::new(),
             },
+            axt_transitioned_dataspaces: BTreeSet::new(),
         };
         let bytes = omitted_lane_finality.encode();
         let mut cursor = bytes.as_slice();
         assert!(
             BlockResult::decode_all(&mut cursor).is_err(),
             "lane-finality statements are a required V1 BlockResult wire field"
+        );
+    }
+    #[test]
+    fn block_result_rejects_wire_omitting_required_axt_transition_set() {
+        #[derive(norito::codec::Encode)]
+        struct BlockResultWithoutAxtTransitionSet {
+            time_triggers: Vec<crate::trigger::TimeTriggerEntrypoint>,
+            merkle: MerkleTree<TransactionEntrypoint>,
+            result_merkle: MerkleTree<crate::transaction::signed::TransactionResult>,
+            transaction_results: Vec<crate::transaction::signed::TransactionResult>,
+            committed_fragment_count: u64,
+            fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
+            axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+            trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
+            lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
+        }
+        let omitted_transition_set = BlockResultWithoutAxtTransitionSet {
+            time_triggers: Vec::new(),
+            merkle: MerkleTree::default(),
+            result_merkle: MerkleTree::default(),
+            transaction_results: Vec::new(),
+            committed_fragment_count: 0,
+            fastpq_transcripts: BTreeMap::new(),
+            axt_envelopes: Vec::new(),
+            trigger_completions: Vec::new(),
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot {
+                version: 1,
+                entries: Vec::new(),
+            },
+            lane_finality_statements: Vec::new(),
+        };
+        let bytes = omitted_transition_set.encode();
+        let mut cursor = bytes.as_slice();
+        assert!(
+            BlockResult::decode_all(&mut cursor).is_err(),
+            "the sticky AXT transition set is a required V1 BlockResult wire field"
         );
     }
     #[test]
@@ -2160,6 +2218,7 @@ mod tests {
             committed_fragment_count: 1,
             fastpq_transcripts: std::collections::BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            axt_transitioned_dataspaces: BTreeSet::new(),
             lane_finality_statements: Vec::new(),
             trigger_completions: Vec::new(),
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),

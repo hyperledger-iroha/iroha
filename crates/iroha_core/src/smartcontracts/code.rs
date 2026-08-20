@@ -242,7 +242,7 @@ pub(crate) fn new_pending_contract_lifecycle(
     kind: EntryPointKind,
 ) -> Result<PendingContractLifecycle, &'static str> {
     let (execution_identity, ordinal) =
-        state_transaction.next_contract_lifecycle_transition_seed()?;
+        state_transaction.next_lifecycle_transition_seed()?;
     let mut preimage = Vec::from(&b"iroha:contract-lifecycle-transition:v1\0"[..]);
     preimage.extend_from_slice(execution_identity.as_ref());
     preimage.extend_from_slice(&ordinal.to_le_bytes());

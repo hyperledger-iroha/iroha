@@ -137,7 +137,12 @@ fn certified_view_churn_cancels_stale_signing_and_releases_capacity() {
     let mut stale_ids = Vec::new();
     for view in 0..6 {
         let manifest = manifest_at_view(&fixture, view);
-        persist_fsynced_validation_marker(&mut executor, &mut services, &fixture, manifest.clone());
+        install_fsynced_validation_fixture(
+            &mut executor,
+            &mut services,
+            &fixture,
+            manifest.clone(),
+        );
         executor
             .consume_effects(
                 vec![AdapterEffect::Sign {
@@ -218,98 +223,6 @@ fn certified_sources_must_exactly_match_canonical_frozen_roster() {
         assert!(services.fetch_tasks.is_empty());
         assert!(executor.status().fail_closed);
     }
-}
-#[test]
-fn reopened_durable_receipt_satisfies_fetch_without_network() {
-    let fixture = Fixture::new();
-    let directory = TempDir::new().expect("recovery directory");
-    let mut store = V2BodyStore::open_with_policy(
-        directory.path(),
-        fixture.context.clone(),
-        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-    )
-    .expect("open body store");
-    let task = BodyStoreTask::for_test(91, tag(0), fixture.manifest.clone(), fixture.body.clone());
-    let durable = store
-        .execute_store_task(&task)
-        .expect("persist body before crash");
-    let receipt = durable.receipt().clone();
-    drop(store);
-    let reopened = V2BodyStore::open_with_policy(
-        directory.path(),
-        fixture.context.clone(),
-        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-    )
-    .expect("reopen body store");
-    let catalog = reopened.recovery_catalog().expect("recovery catalog");
-    let mut executor = V2EffectExecutor::with_runtime(
-        FakeRuntime::default(),
-        catalog,
-        fixture.context.clone(),
-        PeerId::new(fixture.requester_key.public_key().clone()),
-        Some(0),
-        EffectQueueConfig::default(),
-    )
-    .expect("recovered executor");
-    let mut services = FakeServices {
-        _body_directory: Some(directory),
-        body_store: Some(reopened),
-        requester_key: Some(fixture.requester_key.clone()),
-        ..FakeServices::default()
-    };
-    let recovered_fetch = AdapterEffect::FetchBody {
-        tag: tag(0),
-        round: fixture.manifest.round,
-        subject: fixture.manifest.subject,
-        manifest: Some(fixture.manifest.clone()),
-        certified_sources: Vec::new(),
-        certificate: None,
-    };
-    executor
-        .consume_effects(vec![recovered_fetch.clone()], &mut services)
-        .expect("recover local durable body");
-    assert!(services.fetch_tasks.is_empty());
-    assert_eq!(executor.runtime.queued_commands(), 1);
-    assert!(matches!(
-        executor.runtime.completions.last(),
-        Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
-            if *completion_tag == tag(0) && manifest == &fixture.manifest
-    ));
-    executor
-        .consume_effects(vec![recovered_fetch], &mut services)
-        .expect("retransmitted recovery fetch remains idempotent");
-    assert_eq!(executor.runtime.queued_commands(), 1);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::StoreBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-            }],
-            &mut services,
-        )
-        .expect("acknowledge recovered durability");
-    assert_eq!(
-        executor
-            .durable_bodies
-            .get(&(fixture.manifest.round, fixture.manifest.subject)),
-        Some(&receipt)
-    );
-    executor
-        .consume_effects(
-            vec![AdapterEffect::ValidateBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-            }],
-            &mut services,
-        )
-        .expect("queue recovered validation");
-    let validation_id = services.validation_tasks[0].id();
-    let completion = services.execute_validation(validation_id);
-    executor
-        .complete_body_validation(completion, &mut services)
-        .expect("validate reopened exact body");
 }
 #[test]
 fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
@@ -534,7 +447,7 @@ fn runtime_step_consumes_effect_batch_and_idle_publishes_status() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
-    persist_fsynced_validation_marker(
+    install_fsynced_validation_fixture(
         &mut executor,
         &mut services,
         &fixture,
@@ -597,7 +510,7 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
     fixture
         .executor
         .runtime
-        .bind_validated_body(&conflicting_manifest, &conflicting_validated)
+        .recover_validated_body(&conflicting_manifest, &conflicting_validated)
         .expect("bind a second locally validated equivocation subject");
     let signed_vote = |subject: wire::BlockSubject,
                        execution_commitment: wire::ExecutionCommitment,

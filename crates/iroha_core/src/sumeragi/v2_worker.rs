@@ -34,9 +34,8 @@ use super::{
         RecoveredDecisionApplyTaskV1, RecoveredDecisionApplyWorkerResultV1, V2ApplyService,
     },
     v2_body_store::{
-        BodyStoreCompletion, BodyValidationCompletion, DurableBodyReceipt,
-        DurableCertifiedServeBodyReadbackV1, V2BodyRetirementJob, V2BodyStore,
-        V2BodyStoreInstanceIdentity, ValidatedBodyReceipt,
+        BodyStoreCompletion, DurableBodyReceipt, DurableCertifiedServeBodyReadbackV1,
+        V2BodyRetirementJob, V2BodyStore, V2BodyStoreInstanceIdentity, ValidatedBodyReceipt,
     },
     v2_certified_serve_payload_store::{
         AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadStoreInstanceIdentity,
@@ -44,7 +43,7 @@ use super::{
     },
     v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
-        ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
+        ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask,
         CompletionDisposition, ConsensusBroadcastDisposition, ConsensusSignTask,
         DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectRuntime,
         EffectTransportError, EffectWorkId, PayloadChunkLifecycleDisposition,
@@ -794,7 +793,6 @@ enum V2IoCommand {
     PersistCertifiedFetchBody(CertifiedFetchBodyPersistenceTask),
     PersistRecoveredDecisionFetchBody(RecoveredDecisionFetchBodyPersistenceTaskV1),
     LifecycleValidate(LifecycleValidateTaskV1),
-    Validate(BodyValidationTask),
     Apply(ApplyTask),
     RecoveredDecisionApply(RecoveredDecisionApplyTaskV1),
     RecoveredLifecycleSign(RecoveredLifecycleSignTaskV1),
@@ -829,7 +827,6 @@ impl V2IoCommand {
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::LifecycleValidate(_)
-            | Self::Validate(_)
             | Self::Apply(_)
             | Self::RecoveredDecisionApply(_)
             | Self::RecoveredLifecycleSign(_) => V2IoAdmissionClass::Consensus,
@@ -845,7 +842,6 @@ impl V2IoCommand {
             Self::Sign { task, .. } => Some(task.id()),
             Self::Store(task) => Some(task.id()),
             Self::PersistCertifiedFetchBody(task) => Some(task.work_id()),
-            Self::Validate(task) => Some(task.id()),
             Self::Apply(task) => Some(task.id()),
             Self::RecoveredDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
@@ -864,7 +860,6 @@ impl V2IoCommand {
         match self {
             Self::Sign { task, .. } => Some(task.lifecycle_ordinal()),
             Self::Store(task) => Some(task.lifecycle_ordinal()),
-            Self::Validate(task) => Some(task.lifecycle_ordinal()),
             Self::Apply(task) => Some(task.lifecycle_ordinal()),
             Self::RecoveredDecisionApply(task) => Some(task.dispatch_key().lifecycle_ordinal()),
             Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key().lifecycle_ordinal()),
@@ -889,7 +884,6 @@ impl V2IoCommand {
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::LifecycleValidate(_)
-            | Self::Validate(_)
             | Self::Apply(_)
             | Self::RecoveredDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
@@ -904,7 +898,6 @@ impl V2IoCommand {
         match self {
             Self::Sign { .. } => Some(V2IoCancellableKind::Sign),
             Self::Store(_) => Some(V2IoCancellableKind::Store),
-            Self::Validate(_) => Some(V2IoCancellableKind::Validate),
             Self::Apply(_)
             | Self::RecoveredDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
@@ -948,12 +941,6 @@ impl V2IoCommand {
                     response_hash: task.response_hash(),
                 },
             )),
-            Self::Validate(task) => Some((
-                task.id(),
-                V2IoWorkDescriptor::Validate {
-                    durable_receipt: task.durable_receipt().clone(),
-                },
-            )),
             Self::Apply(task) => Some((
                 task.id(),
                 V2IoWorkDescriptor::Apply {
@@ -985,7 +972,6 @@ impl V2IoCommand {
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::LifecycleValidate(_)
-            | Self::Validate(_)
             | Self::Apply(_)
             | Self::RecoveredLifecycleSign(_)
             | Self::LifecycleCertifiedServe(_)
@@ -1002,7 +988,6 @@ impl V2IoCommand {
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::LifecycleValidate(_)
-            | Self::Validate(_)
             | Self::Apply(_)
             | Self::RecoveredDecisionApply(_)
             | Self::LifecycleCertifiedServe(_)
@@ -1020,7 +1005,6 @@ impl V2IoCommand {
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
             | Self::LifecycleValidate(_)
-            | Self::Validate(_)
             | Self::Apply(_)
             | Self::RecoveredDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
@@ -1039,7 +1023,6 @@ impl V2IoCommand {
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
-            | Self::Validate(_)
             | Self::Apply(_)
             | Self::RecoveredDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
@@ -1069,9 +1052,6 @@ enum V2IoWorkDescriptor {
         id: CertifiedFetchBodyPersistenceId,
         response_hash: HashOf<wire::CertifiedBodyResponse>,
     },
-    Validate {
-        durable_receipt: super::v2_body_store::DurableBodyReceipt,
-    },
     Apply {
         tag: EventTag,
         subject: wire::BlockSubject,
@@ -1083,14 +1063,12 @@ enum V2IoWorkDescriptor {
 enum V2IoCancellableKind {
     Sign,
     Store,
-    Validate,
 }
 impl V2IoWorkDescriptor {
     const fn cancellable_kind(&self) -> Option<V2IoCancellableKind> {
         match self {
             Self::Sign { .. } => Some(V2IoCancellableKind::Sign),
             Self::Store { .. } => Some(V2IoCancellableKind::Store),
-            Self::Validate { .. } => Some(V2IoCancellableKind::Validate),
             Self::PersistCertifiedFetchBody { .. } | Self::Apply { .. } => None,
         }
     }

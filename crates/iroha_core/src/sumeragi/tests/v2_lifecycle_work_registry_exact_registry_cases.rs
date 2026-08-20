@@ -327,9 +327,8 @@ fn mismatched_pending_binding_never_becomes_registry_work() {
     .pop()
     .expect("one first-effect owner");
     let pending = ownership
-        .current_effect_producer(&first)
-        .expect("seal first-effect producer")
-        .mint_pending_binding();
+        .exact_pending_adapter_effect_binding(&first)
+        .expect("mint first-effect pending binding");
     let (error, returned_effect, returned_pending) =
         ConcreteLifecycleWork::from_inert_fixture_for_test(second, pending)
             .expect_err("a foreign effect must return the complete move-only pair");
@@ -339,238 +338,14 @@ fn mismatched_pending_binding_never_becomes_registry_work() {
     assert!(ConcreteLifecycleWorkRegistry::default().is_empty());
 }
 #[test]
-fn direct_signed_replay_pre_admission_is_closed_exact_and_drop_inert() {
-    let tag = EventTag::new(7, 2, Generation::new(1));
-    let first_vote = direct_signed_vote(0xD1, 0xD2);
-    let broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::Vote(first_vote.clone()),
-    ));
-    let broadcast_pending = direct_signed_pending(&broadcast, tag, 1);
-    let registry = ConcreteLifecycleWorkRegistry::default();
-    let before = format!("{registry:?}");
-    let Ok(broadcast) =
-        PreparedDirectSignedReplayPreAdmission::seal_exact(broadcast, broadcast_pending)
-    else {
-        panic!("exact signed Broadcast seals its pre-admission evidence")
-    };
-    assert!(broadcast.validates());
-    assert!(matches!(
-        &broadcast.replay_evidence,
-        DirectSignedReplayEvidenceV1::Broadcast(_)
-    ));
-    drop(broadcast);
-    assert_eq!(format!("{registry:?}"), before);
-    let second_vote = direct_signed_vote(0xD1, 0xD3);
-    let report = AdapterEffect::ReportEquivocation {
-        evidence: crate::sumeragi::v2::AdapterEquivocationEvidence::vote_for_test(
-            first_vote,
-            second_vote,
-        ),
-    };
-    let report_pending = direct_signed_pending(&report, tag, 2);
-    let Ok(report) = PreparedDirectSignedReplayPreAdmission::seal_exact(report, report_pending)
-    else {
-        panic!("exact authenticated conflict seals its pre-admission evidence")
-    };
-    assert!(report.validates());
-    assert!(matches!(
-        &report.replay_evidence,
-        DirectSignedReplayEvidenceV1::ReportEquivocation(_)
-    ));
-    drop(report);
-    assert_eq!(format!("{registry:?}"), before);
-    let unsupported = effect(0xD4);
-    let AdapterEffect::StoreBody {
-        tag: unsupported_tag,
-        ..
-    } = &unsupported
-    else {
-        unreachable!("unsupported fixture is StoreBody")
-    };
-    let unsupported_pending = direct_signed_pending(&unsupported, *unsupported_tag, 3);
-    assert!(
-        PreparedDirectSignedReplayPreAdmission::seal_exact(unsupported, unsupported_pending,)
-            .is_err()
-    );
-    assert_eq!(format!("{registry:?}"), before);
-}
-#[test]
-fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
+fn remote_proposal_replay_pre_admission_is_closed_exact_and_live() {
     let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("work registry has one production prefix");
     let token = production
-        .split("pub(super) struct PreparedLiveWalReplayPreAdmission<'a>")
-        .nth(1)
-        .expect("live WAL pre-admission token has one declaration")
-        .split("pub(super) struct PreparedDurableStoreValidateSuccessor")
-        .next()
-        .expect("Store-to-Validate token follows live WAL token");
-    for required in [
-        "_persisted: SealedLiveWalPersistedEffectV1",
-        "LiveWalReplayPreAdmissionOrigin<'a>",
-        "Apply(PreparedValidatedBodyCompletion<'a>)",
-    ] {
-        assert!(
-            token.contains(required),
-            "live WAL token omitted {required}"
-        );
-    }
-    for required in [
-        "pub(super) fn seal_live_wal_apply(",
-        "retained_validated_receipt_is_exact()",
-        ".complete_exact_apply(",
-        "retained_apply_join_is_exact(&persisted)",
-    ] {
-        assert!(
-            production.contains(required),
-            "live WAL Apply join omitted {required}"
-        );
-    }
-    let replay_authority = include_str!("../v2_lifecycle_replay_authority.rs");
-    let exact_apply = replay_authority
-        .split("pub(super) fn complete_exact_apply(")
-        .nth(1)
-        .expect("the live WAL seal has one exact Apply completion")
-        .split("/// Bind completed `Apply` evidence to its exact retained Validate predecessor.")
-        .next()
-        .expect("the live WAL Apply completion stays bounded");
-    assert!(exact_apply.contains(
-        ".project_validate_apply_successor(predecessor_effect, &self.effect)"
-    ));
-    for forbidden in [
-        "#[derive(Clone",
-        "Option<SealedLiveWalPersistedEffectV1>",
-        "pub(super) fn effect(",
-        "pub(super) fn pending(",
-        "pub(super) fn receipt(",
-        "pub(super) fn source(",
-        "PayloadFree",
-        "seal_payload_free(",
-        "exactly_binds_payload_free_pending",
-        "into_parts",
-        "fn install(",
-        "fn commit(",
-    ] {
-        assert!(
-            !token.contains(forbidden),
-            "live WAL token exposed forbidden surface {forbidden}"
-        );
-    }
-    assert_eq!(
-        production.matches(".complete_exact_apply(").count(),
-        1,
-        "only the fixed retained-Validate join supplies an Apply receipt"
-    );
-    assert_eq!(
-        production.matches(".seal_live_wal_apply(").count(),
-        0,
-        "the inert prerequisite has no production admission caller"
-    );
-    for outside in [
-        reviewed_lifecycle_ledger_source_for_test(),
-        include_str!("../v2_effects.rs"),
-        include_str!("../v2_worker.rs"),
-        include_str!("../v2_runner.rs"),
-    ] {
-        assert!(!outside.contains("PreparedLiveWalReplayPreAdmission"));
-    }
-}
-#[test]
-fn direct_signed_replay_pre_admission_surface_is_move_only_inert_and_unwired() {
-    let source = reviewed_lifecycle_work_registry_source_for_test();
-    let production = source
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("registry has one production prefix");
-    let token = production
-        .split("pub(super) struct PreparedDirectSignedReplayPreAdmission {")
-        .nth(1)
-        .expect("direct signed pre-admission token has one declaration")
-        .split("/// Closed concrete form of one fsynced recovered WAL `Sign` successor.")
-        .next()
-        .expect("recovered WAL carrier follows direct signed token");
-    for required in [
-        "effect: AdapterEffect",
-        "pending: PendingRuntimeEffectBinding",
-        "replay_evidence: DirectSignedReplayEvidenceV1",
-        "Broadcast(SignedBroadcastReplayEvidenceV1)",
-        "ReportEquivocation(SignedEquivocationReplayEvidenceV1)",
-        "pub(super) fn seal_exact(",
-        "SignedBroadcastReplayEvidenceV1::from_exact_effect(&effect, &pending)",
-        "SignedEquivocationReplayEvidenceV1::from_exact_effect(&effect, &pending)",
-        "evidence.exactly_matches_effect(&self.effect, &self.pending)",
-        "_effect: AdapterEffect",
-        "_pending: PendingRuntimeEffectBinding",
-    ] {
-        assert!(
-            token.contains(required),
-            "direct signed pre-admission token omitted {required}"
-        );
-    }
-    let declaration = token
-        .split('}')
-        .next()
-        .expect("direct signed token declaration is bounded");
-    assert!(!declaration.contains("Option<"));
-    assert!(!declaration.contains("derive(Clone"));
-    assert!(!declaration.contains("derive(Debug"));
-    for forbidden in [
-        "fn new(",
-        "fn from_parts(",
-        "fn into_parts(",
-        "fn effect(",
-        "fn pending(",
-        "fn replay_evidence(",
-        "fn install(",
-        "fn commit(",
-        "ConcreteLifecycleWorkRegistry",
-        ".entries",
-        "PendingAdapter {",
-    ] {
-        assert!(
-            !token.contains(forbidden),
-            "direct signed pre-admission token acquired forbidden authority {forbidden}"
-        );
-    }
-    assert_eq!(
-        production.matches("pub(super) fn seal_exact(").count(),
-        1,
-        "the token has one exact seal"
-    );
-    assert_eq!(
-        production
-            .matches("PreparedDirectSignedReplayPreAdmission::seal_exact(")
-            .count(),
-        0,
-        "the inert token must have no production caller"
-    );
-    for caller in [
-        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
-        include_str!("../v2_lifecycle_selector.rs"),
-        include_str!("../v2_lifecycle_concrete_admission.rs"),
-        include_str!("../v2_effects.rs"),
-        include_str!("../v2_worker.rs"),
-        include_str!("../v2_runner.rs"),
-    ] {
-        let caller = caller
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("caller production prefix is bounded");
-        assert!(!caller.contains("PreparedDirectSignedReplayPreAdmission"));
-    }
-}
-#[test]
-fn remote_proposal_replay_pre_admission_is_closed_exact_and_unwired() {
-    let source = reviewed_lifecycle_work_registry_source_for_test();
-    let production = source
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("work registry has one production prefix");
-    let token = production
-        .split("pub(super) struct PreparedRemoteProposalFetchReplayPreAdmission {")
+        .split("pub(in crate::sumeragi) struct PreparedRemoteProposalFetchReplayPreAdmission {")
         .nth(1)
         .expect("remote Proposal replay token has one declaration")
         .split("/// Closed concrete form of one fsynced recovered WAL `Sign` successor.")
@@ -584,13 +359,13 @@ fn remote_proposal_replay_pre_admission_is_closed_exact_and_unwired() {
         "replay_evidence: RemoteProposalStoreReplayEvidenceV1",
         "replay_evidence: RemoteProposalStoredReplayEvidenceV1",
         "replay_evidence: RemoteProposalValidateReplayEvidenceV1",
-        "pub(super) fn seal_exact_fetch(",
+        "fn seal_exact_fetch(",
         "ownership.exact_remote_proposal_fetch_replay(&effect)",
-        "pub(super) fn project_store(",
+        "fn project_store(",
         ".project_exact_store(&effect, &pending)",
-        "pub(super) fn bind_durable_body(",
+        "fn bind_durable_body(",
         ".bind_durable_body(&effect, &durable_receipt)",
-        "pub(super) fn project_validate(",
+        "fn project_validate(",
         ".project_exact_validate(",
         "fn into_durable_validate_carrier(",
         "replay_evidence: DurableValidateReplayEvidenceV1::remote_proposal(",
@@ -643,30 +418,22 @@ fn remote_proposal_replay_pre_admission_is_closed_exact_and_unwired() {
             "remote Proposal replay token exposed forbidden surface {forbidden}"
         );
     }
-    assert_eq!(
-        production
-            .matches("PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(")
-            .count(),
-        0,
-        "the inert remote Proposal token has no production admission caller"
-    );
-    for caller in [
-        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
-        include_str!("../v2_lifecycle_selector.rs"),
-        include_str!("../v2_lifecycle_concrete_admission.rs"),
-        include_str!("../v2_effects.rs"),
-        include_str!("../v2_worker.rs"),
-        include_str!("../v2_runner.rs"),
+    let executor = include_str!("../v2_effects.rs");
+    for required in [
+        "PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(",
+        ".project_store(effect.clone(), ownership.clone())",
+        ".bind_durable_body(receipt)",
+        ".project_validate(effect, ownership)",
+        ".into_pending_durable_validate_admission()",
     ] {
-        let caller = caller
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("caller production prefix is bounded");
-        assert!(!caller.contains("PreparedRemoteProposalFetchReplayPreAdmission"));
+        assert!(
+            executor.contains(required),
+            "live Proposal replay handoff omitted {required}"
+        );
     }
 }
 #[test]
-fn invalid_body_replay_pre_admission_is_closed_exact_and_unwired() {
+fn invalid_body_replay_pre_admission_is_closed_exact_and_lifecycle_owned() {
     let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
@@ -751,7 +518,7 @@ fn invalid_body_replay_pre_admission_is_closed_exact_and_unwired() {
     }
 }
 #[test]
-fn live_validate_sign_join_is_linear_opaque_and_unwired_from_runner() {
+fn live_validate_sign_join_is_linear_opaque_and_scheduler_owned() {
     let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
@@ -830,6 +597,11 @@ fn live_validate_sign_join_is_linear_opaque_and_unwired_from_runner() {
             .count(),
         1,
         "only the fixed Ready registry join binds the adapter Sign predecessor"
+    );
+    assert!(
+        include_str!("../v2_lifecycle_scheduler_inputs.rs")
+            .contains("preview.seal_live_wal_validate_sign()"),
+        "the lifecycle scheduler must consume the sealed live-WAL Sign join"
     );
     for caller in [
         include_str!("../v2_effects.rs"),
@@ -915,10 +687,10 @@ crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     durable_store_execution_surface_is_closed_borrow_bound_and_inert
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
-    durable_validate_execution_surface_is_closed_borrow_bound_and_inert
+    durable_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned
 );
 #[test]
-fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
+fn ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned() {
     let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
@@ -928,24 +700,24 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         .split("pub(crate) struct PreparedReadyDurableValidateExecution<'a>")
         .nth(1)
         .expect("Ready Validate token has one declaration")
-        .split("// DURABLE_VALIDATE_ASYNC_HANDOFF_DECLARATIONS_BEGIN")
+        .split('}')
         .next()
-        .expect("async handoff follows Ready Validate token");
+        .expect("Ready Validate declaration is bounded");
     assert!(declaration.contains("registry: &'a mut ConcreteLifecycleWorkRegistry"));
     assert!(declaration.contains("address: ConcreteWorkAddress"));
     assert!(declaration.contains("outcome_kind: ReadyDurableValidateOutcomeKind"));
     assert!(declaration.contains("lease: TurnLease"));
-    assert!(
-        declaration.contains("_adapter: PreparedReadyDurableValidateAdapterPublication<'adapter>")
-    );
+    assert!(!declaration.contains("PreparedReadyDurableValidateAdapterPublication"));
     assert!(!declaration.contains("derive(Clone"));
     let preview_oracles = production
-        .split("impl PreparedReadyDurableValidateAdapterPreview<'_, '_>")
+        .split("impl<'registry> PreparedReadyDurableValidateAdapterPreview<'registry, '_>")
         .nth(1)
         .expect("Ready Validate preview has one sealed oracle surface")
-        .split("/// Ownership-preserving failure")
+        .split(
+            "impl<'registry, 'adapter> PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>",
+        )
         .next()
-        .expect("preview failure follows its oracle surface");
+        .expect("consuming Ready Validate joins follow the borrowed oracle surface");
     for required in [
         "project_no_successor_for_body_transition",
         "self._registry.matches_exact_lease(lease)",
@@ -967,7 +739,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         "fn durable_receipt(",
         "fn receipt(",
         "matches_exact_successor_effect",
-        "publication_kind",
         "projection::admission_request",
         "CandidateAdmission",
     ] {
@@ -1047,7 +818,7 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         "pub(crate) const fn outcome_kind",
         "fn validated_authority",
         "fn rejected_authority",
-        "pub(super) fn prepare_adapter_preview",
+        "pub(in crate::sumeragi) fn prepare_adapter_preview",
         "adapter.prepare_sealed_ready_durable_validate_succeeded(authority)",
         "adapter.prepare_sealed_ready_durable_validate_failed(authority)",
         "adapter_preview.preflight_publication()",
@@ -1106,12 +877,16 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         );
     }
     let live_publication = production
-        .split("pub(super) fn prepare_registry_publication(")
+        .split(
+            "impl<'registry, 'adapter>\n    PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter>",
+        )
         .nth(1)
+        .and_then(|suffix| suffix.split("pub(super) fn prepare_registry_publication(").nth(1))
         .and_then(|suffix| suffix.split("/// Ownership-preserving failure").next())
         .expect("live Validate-to-Sign registry publication has one bounded surface");
     for required in [
-        "prepare_registry_work(LiveValidateSignWorkProjectionPermit::new())",
+        "prepare_registry_work(",
+        "LiveValidateSignWorkProjectionPermit::new(admission_candidate)",
         "ConcreteWorkAddress::new(lease.owner(), child_ordinal, child_slot)",
         "adapter.registry_work_matches(",
         "registry.into_recovered_wal_validate_registry_cut()",
@@ -1361,7 +1136,9 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         .split("pub(super) fn prepare_recovered_lifecycle_sign_dispatch(")
         .nth(1)
         .expect("typed recovered Sign dispatch has one implementation")
-        .split("/// Attest one exact Ready recovered Decision Fetch and seal its request authority.")
+        .split(
+            "/// Attest one exact Ready recovered Decision Fetch and seal its request authority.",
+        )
         .next()
         .expect("typed recovered Sign dispatch stays bounded");
     assert_eq!(
@@ -1401,6 +1178,11 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         1,
         "receipt hash and repaired-pair shape must share one loaded frame"
     );
+    assert!(
+        include_str!("../v2_lifecycle_scheduler_inputs.rs")
+            .contains(".prepare_ready_durable_validate_execution(&lease, slot, &self.verified)"),
+        "the lifecycle scheduler must enter the sealed Ready Validate execution"
+    );
     for caller_source in [
         crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
         include_str!("../v2_lifecycle_selector.rs"),
@@ -1409,7 +1191,98 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
     ] {
-        assert!(!caller_source.contains("prepare_ready_durable_validate_execution"));
         assert!(!caller_source.contains("installed_child_effect"));
+    }
+}
+
+#[test]
+fn live_wal_sign_carrier_uses_typed_dispatch_and_both_signed_successor_families() {
+    let source = reviewed_lifecycle_work_registry_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("registry has one production prefix");
+    let live_install = production
+        .split("pub(super) fn install_live_wal_before_publication")
+        .nth(1)
+        .expect("live WAL admission has one registry transaction")
+        .split("/// Install one origin-specific durable Validate carrier")
+        .next()
+        .expect("live WAL transaction ends before durable Validate admission");
+    for required in [
+        "PreparedLiveWalCompanionV1::LocalProposal(_)",
+        "DurableLiveWalSignOriginV1::LocalProposal",
+        "ConcreteLifecycleWorkKind::DurableLiveWalSign(work)",
+    ] {
+        assert!(
+            live_install.contains(required),
+            "live ProposalIntent admission omitted typed carrier step {required}"
+        );
+    }
+    let live_validate_install = production
+        .split("fn install_live_sign(self, prepared: PreparedLiveValidateSignRegistryWork)")
+        .nth(1)
+        .expect("live Validate Sign has one registry installation")
+        .split("impl LiveValidateApplyRegistryReservation")
+        .next()
+        .expect("live Validate Sign installation stays bounded");
+    assert!(live_validate_install.contains("DurableLiveWalSignOriginV1::Validate"));
+    assert!(live_validate_install.contains("into_live_sign_work"));
+    assert!(
+        !live_validate_install.contains("PendingAdapter"),
+        "fsynced live Validate Sign must never re-enter generic effect dispatch"
+    );
+
+    let dispatch = production
+        .split("pub(super) fn prepare_recovered_lifecycle_sign_dispatch(")
+        .nth(1)
+        .expect("typed Sign dispatch has one implementation")
+        .split("/// Attest one exact Ready recovered Decision Fetch")
+        .next()
+        .expect("typed Sign dispatch stays bounded");
+    for required in [
+        "ConcreteLifecycleWorkKind::DurableLiveWalSign(sign)",
+        "sign.matches_claimed_record(address, digest, coordinator, lease)",
+        "PreparedRecoveredLifecycleSignCarrier::Live(sign)",
+        "RecoveredLifecycleSignDispatchProjectionErrorV1::AlreadyDispatched",
+    ] {
+        assert!(
+            dispatch.contains(required),
+            "typed live Sign dispatch omitted {required}"
+        );
+    }
+
+    let broadcast_only = production
+        .split("pub(super) fn prepare_recovered_lifecycle_sign_broadcast_successor")
+        .nth(1)
+        .expect("Broadcast-only Sign successor has one preparation")
+        .split("/// Seal the exact Broadcast-and-next-WAL-Sign pair")
+        .next()
+        .expect("Broadcast-only preparation stays bounded");
+    for required in [
+        "ConcreteLifecycleWorkKind::DurableLiveWalSign(sign)",
+        "sign.project_authenticated_signed_broadcast(verified, projection_authority)",
+    ] {
+        assert!(
+            broadcast_only.contains(required),
+            "live Commit Vote completion omitted {required}"
+        );
+    }
+
+    let broadcast_and_sign = production
+        .split("pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor")
+        .nth(1)
+        .expect("Broadcast-and-Sign successor has one preparation")
+        .split("impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor")
+        .next()
+        .expect("combined successor preparation stays bounded");
+    for required in [
+        "ConcreteLifecycleWorkKind::DurableLiveWalSign(sign)",
+        ".project_authenticated_signed_broadcast_and_sign(verified, projection_authority)",
+    ] {
+        assert!(
+            broadcast_and_sign.contains(required),
+            "live Prepare Vote or WAL-ahead Proposal completion omitted {required}"
+        );
     }
 }

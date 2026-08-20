@@ -186,25 +186,20 @@ Note: First release policy
 - Treat any Taira/runtime signing inputs such as `authority`,
   `private_key`, bearer tokens, or forwarded auth headers as runtime-only
   secrets and never persist them in repo files or committed docs.
-- For Taira rollout/debug work, do not trust MCP discovery alone. Use
-  `configs/soranexus/taira/check_mcp_rollout.sh`, and for final public cutover
-  require the signed canary path with `--write-config <runtime-only client.toml>`.
-  Prefer `configs/soranexus/taira/taira-canary-client.example.toml` as the
-  source template; `defaults/client.toml` uses the generic zero chain id.
-  The canary signer must already exist on Taira, but the rollout smoke can now
-  bootstrap the faucet asset automatically if the only failure is
-  `Failed to find asset`.
-- For multi-validator Taira deploy changes, do not hand-edit
-  `configs/soranexus/taira/config.toml` into separate copies. Render per-host
-  configs from `configs/soranexus/taira/validator_roster.example.toml` plus
-  `configs/soranexus/taira/validator_secrets.example.toml` with
-  `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ...`
-  and point the unit at the generated config path.
+- For a disposable four-validator Taira deployment, use
+  `python3 scripts/taira_devnet.py up`; use its `check` and `down` subcommands
+  for inspection and teardown. Keep the default smoke narrow; request
+  `--full-doctor` only when the public product-route surface is under test.
+- For public Taira diagnostics use the same-revision compiled
+  `iroha taira doctor`. For an explicitly authorized signed public canary, use
+  `iroha taira write-canary` with a populated runtime-only copy of
+  `configs/soranexus/taira/taira-canary-client.example.toml` and an owner-only
+  onboarding-token file.
 - If a live public Taira write fails with `route_unavailable`, treat it as an
   ingress or authoritative-peer routing failure first, not a user payload bug.
 - If a live Taira signed canary fails with `Failed to find asset`, check the
-  faucet/bootstrap path before changing deploy topology: the signer may simply
-  be unfunded for the fee asset.
+  CLI-owned faucet/bootstrap result before changing deploy topology: the signer
+  may simply be unfunded for the fee asset.
 - When the user asks about the live SORA Minamoto mainnet or deployed Torii MCP
   workflows, consult `skills/sora-minamoto-mainnet/SKILL.md` in this repo and
   prefer the curated `iroha.*` tool surface. Treat

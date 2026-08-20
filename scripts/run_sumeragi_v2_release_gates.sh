@@ -7,7 +7,6 @@ if [[ $# -gt 1 ]] || [[ "$profile" != "--pr" && "$profile" != "--release" ]]; th
   echo "usage: $0 [--pr|--release]" >&2
   exit 2
 fi
-
 readonly repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 # A production release is launched only by the externally authenticated
@@ -161,7 +160,6 @@ export GIT_CONFIG_KEY_0=core.hooksPath
 export GIT_CONFIG_VALUE_0=/dev/null
 export GIT_CONFIG_KEY_1=core.fsmonitor
 export GIT_CONFIG_VALUE_1=false
-
 readonly release_runner_support_components=(
   scripts/run_sumeragi_v2_release_gates_support.sh
 )
@@ -188,7 +186,6 @@ fi
 # authenticated bytes are lexically loaded; it does not claim same-UID defense.
 source "${repo_root}/scripts/run_sumeragi_v2_release_gates_support.sh"
 unset release_runner_support_path release_runner_support_observed_sha256
-
 if [[ "$profile" != "--release" && "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]; then
   pr_rustup_bin="$(canonical_executable rustup)" || {
     echo "rustup is required to resolve the repository-pinned PR Rust tools" >&2
@@ -462,7 +459,6 @@ if [[ "$profile" == "--pr" && "${IROHA_RELEASE_PRIVATE_PR:-0}" == 1 ]]; then
     --verify --root "$repo_root" --no-writable-paths
   export PATH="$IROHA_RELEASE_PR_BIN" GIT_EXEC_PATH="$IROHA_RELEASE_PR_BIN"
 fi
-
 # Production evidence never executes in the caller's mutable checkout. Require
 # one committed source tree, reproduce it in a fully independent clone without
 # alternates or shared object inodes, copy the separately-bound ignored
@@ -644,7 +640,6 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
   fi
   readonly candidate_identity_path candidate_identity_json candidate_manifest_sha256
   readonly candidate_head candidate_lock_mode
-
   release_cargo_bin="$(canonical_executable cargo)" || {
     echo "the authenticated release Cargo executable could not be resolved" >&2
     exit 1
@@ -675,7 +670,6 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     echo "the authenticated runner aliases do not expose the exact Cargo/rustc release pair" >&2
     exit 1
   fi
-
   case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)
       release_verus_sha256="f11f8a863103a3c8fcaf27e6189edfdba31081516591365b5e29b0a66f570451"
@@ -1439,7 +1433,7 @@ except (UnicodeDecodeError, json.JSONDecodeError) as error:
     raise SystemExit("release child-result is malformed") from error
 names = (
     "corridor_completion", "formal_completion", "seed_completion",
-    "chaos_completion", "taira_completion", "g4p_completion",
+    "chaos_completion", "g4p_completion",
     "g12_seed_completion", "g12_fault_soak_completion",
 )
 if (
@@ -1475,8 +1469,7 @@ PY
   if ((sealed_status == 0)); then
     IFS=$'\t' read -r \
       corridor_completion_path formal_completion_path seed_completion_path \
-      chaos_completion_path taira_completion_path \
-      multilane_four_peer_completion_path nexus_cross_completion_path \
+      chaos_completion_path multilane_four_peer_completion_path nexus_cross_completion_path \
       nexus_cross_soak_completion_path child_result_extra \
       <<<"$child_result_fields"
     if [[ -n "${child_result_extra:-}" ]]; then
@@ -1527,7 +1520,6 @@ PY
       --formal-completion "$formal_completion_path" \
       --seed-completion "$seed_completion_path" \
       --chaos-completion "$chaos_completion_path" \
-      --taira-completion "$taira_completion_path" \
       --g4p-completion "$multilane_four_peer_completion_path" \
       --g12-seed-completion "$nexus_cross_completion_path" \
       --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \
@@ -1605,7 +1597,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 522/522 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 522/522 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, and 100,000 heights; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -1796,6 +1788,7 @@ if [[ "$profile" == "--release" ]]; then
   chmod 0400 "$build_efficiency_provenance_log"
   verify_release_identity "after build-efficiency provenance guard"
 fi
+
 # Reject an oversized or newly unbudgeted production source before the first
 # build command. The log and both identity checkpoints are sealed-manifest-bound.
 if [[ "$profile" == "--release" ]]; then
@@ -1818,6 +1811,7 @@ if [[ "$profile" == "--release" ]]; then
   chmod 0400 "$source_budget_log"
   verify_release_identity "after source-file budget guard"
 fi
+
 # Build every real-localnet executable before any Cargo test process starts.
 # Test processes are then permanently skip-build/reentrant-disabled, avoiding a
 # Cargo-under-Cargo lock cycle while retaining a source/lock/binary attestation.
@@ -2171,10 +2165,10 @@ required_production_liveness_tests=(
   sumeragi::v2_apply::tests::committed_merge_reservation_rejects_bare_norito
   sumeragi::v2_effects::tests::retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it
   sumeragi::v2_effects::tests::authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
-  sumeragi::v2_effects::tests::reproposal_commit_qc_applies_the_exact_unchanged_body
+  sumeragi::v2_effects::tests::recovered_next_vote_body_catalog_join_is_exact_and_store_bound
   sumeragi::v2_effects::tests::reproposal_commit_signing_uses_its_same_round_validation_marker
   sumeragi::v2_effects::tests::split_round_commit_signing_is_rejected_before_service_dispatch
-  sumeragi::v2_effects::tests::deferred_merge_sidecar_accepts_earlier_carrier_and_rejects_future_or_foreign
+  sumeragi::v2_effects::tests::recovered_validation_catalog_hydrates_direct_apply_durability
   sumeragi::v2_effects::tests::higher_different_lock_releases_retained_cache_before_replacement_staging
   sumeragi::v2_effects::tests::synthetic_higher_round_same_subject_retires_origin_bound_stages_before_raw_cache_reuse
   sumeragi::v2_effects::tests::queued_protected_store_keeps_one_work_id_across_repeated_tcs
@@ -2187,25 +2181,25 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::serialized_runtime_rebinds_busy_deferred_body_completion_before_service
   sumeragi::v2_effects::tests::tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc
   sumeragi::v2_effects::tests::same_tag_higher_lock_retires_exact_origin_ownership_before_staging
-  sumeragi::v2_effects::tests::same_tag_higher_lock_retires_fetch_store_and_validation_owners
-  sumeragi::v2_effects::tests::first_lock_retires_unlocked_fetch_store_and_validation_owners
-  sumeragi::v2_effects::tests::higher_lock_retires_queued_store_validation_and_local_proposal_completions
+  sumeragi::v2_effects::tests::retained_locked_body_finishes_an_already_started_exact_origin_fetch
+  sumeragi::v2_effects::tests::retained_locked_body_cannot_rebind_to_a_later_proposal_origin
+  sumeragi::v2_effects::tests::failed_initial_local_store_admission_does_not_publish_pipeline_owner
   sumeragi::v2_effects::tests::lock_reconciliation_rejects_same_round_conflict_and_late_lower_lock
   sumeragi::v2_effects::tests::failed_lock_cleanup_keeps_exact_owner_and_requires_restart
   sumeragi::v2_effects::tests::lock_cleanup_rejects_inconsistent_certified_request_before_mutation
   sumeragi::v2_effects::tests::lock_cleanup_status_failure_preserves_committed_replacement
-  sumeragi::v2_effects::tests::higher_round_same_subject_retires_old_origin_pipeline_with_same_tag
+  sumeragi::v2_effects::tests::active_old_view_store_rebinds_current_consumer_before_late_completion
   sumeragi::v2_effects::tests::decision_installed_by_same_runtime_step_retires_stale_terminal_effects
   sumeragi::v2_effects::tests::decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work
   sumeragi::v2_effects::tests::different_subject_decision_supersedes_protected_lock_and_frees_losing_capacity
   sumeragi::v2_effects::tests::failed_decision_cleanup_keeps_losing_owner_and_requires_restart
   sumeragi::v2_effects::tests::decision_cleanup_fetch_failure_preserves_exact_local_pipeline_consumer
   sumeragi::v2_effects::tests::decision_cleanup_rejects_inconsistent_certified_request_before_mutation
-  sumeragi::v2_effects::tests::decision_rebinds_exact_local_validation_to_reducer_progress
+  sumeragi::v2_effects::tests::decision_rebinds_exact_local_store_under_incumbent_owner
   sumeragi::v2_effects::tests::decision_preserves_current_tag_local_proposal_for_direct_apply
   sumeragi::v2_effects::tests::decision_commitment_mismatch_fails_closed_before_apply
   sumeragi::v2_effects::tests::stale_generation_local_completion_uses_durable_recovery
-  sumeragi::v2_effects::tests::missing_merge_sidecar_retains_exact_validation_until_retry
+  sumeragi::v2_effects::tests::pending_kura_tip_requires_exact_decision_body_and_validation_replay
   sumeragi::v2_effects::tests::decided_apply_retries_after_exact_merge_sidecar_recovery
   sumeragi::v2_effects::tests::apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
   sumeragi::v2_effects::tests::production_certified_body_request_rejects_locally_conflicting_qc_without_fail_close
@@ -2312,18 +2306,18 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::runtime_ingress_carrier_capacity_returns_backpressure_atomically
   sumeragi::v2_runtime::tests::exact_authenticated_progress_retransmission_is_queue_coalesced
   sumeragi::v2_runtime::tests::certified_tc_crosses_full_fence_blocked_prepare_prefix
-  sumeragi::v2_runtime::tests::completion_retries_coalesce_across_ingress_and_busy_deferred_ownership
+  sumeragi::v2_runtime::tests::store_completion_retries_coalesce_across_ingress_and_busy_deferred_ownership
   sumeragi::v2_runtime::tests::body_available_rebind_accepts_same_view_higher_generation
   sumeragi::v2_runtime::tests::body_available_rebind_rejects_uninstalled_destination_without_mutation
   sumeragi::v2_runtime::tests::body_available_rebind_coalesces_exact_busy_deferred_destination_owner
   sumeragi::v2_runtime::tests::body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before_mutation
   sumeragi::v2_runtime::tests::duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation
-  sumeragi::v2_runtime::tests::unbound_direct_prepare_and_commit_votes_are_recoverable_after_validation
+  sumeragi::v2_runtime::tests::unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validation
   sumeragi::v2_runtime::tests::conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
-  sumeragi::v2_runtime::tests::conflicting_local_and_validated_receipts_do_not_coalesce
-  sumeragi::v2_runtime::tests::applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation
-  sumeragi::v2_runtime::tests::applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome
-  sumeragi::v2_runtime::tests::applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation
+  sumeragi::v2_runtime::tests::pending_validate_successor_projection_rejects_forged_coordinates_and_authority
+  sumeragi::v2_runtime::tests::applied_body_storage_phases_suppress_retries_before_ordinal_allocation
+  sumeragi::v2_runtime::tests::pending_validate_projects_exact_prepare_commit_and_report_successors
+  sumeragi::v2_runtime::tests::pending_validate_projects_only_the_exact_commit_authorized_apply_successor
   sumeragi::v2_runtime::tests::drained_internal_ignore_uses_exact_durable_tombstone_before_readmission
   sumeragi::v2_runtime::tests::queued_body_completion_coalesces_only_its_incumbent_owner
   sumeragi::v2_runtime::tests::stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal
@@ -2348,7 +2342,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner
   sumeragi::v2_runtime::tests::post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target
   sumeragi::v2_runtime::tests::pre_dequeue_probe_validates_unfrozen_leader_wire_identity
-  sumeragi::v2_runtime::tests::real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
+  sumeragi::v2_runtime::tests::authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origin
   sumeragi::v2_runtime::tests::adapter_command_identity_is_derived_from_exact_immutable_payload
   sumeragi::v2_runtime::tests::admission_ordinal_exhaustion_fails_runtime_closed
   sumeragi::v2_runtime::tests::runtime_rejects_replayed_foreign_and_mutated_deferred_tokens
@@ -2367,8 +2361,8 @@ required_production_liveness_tests=(
   sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_scheduler_cannot_overtake_its_ready_predecessor
   sumeragi::v2_lifecycle_coordinator::tests::restart_seeds_high_water_and_rollover_preserves_it
   sumeragi::v2_lifecycle_coordinator::tests::producer_handoff_blocks_later_work_without_making_serve_a_global_barrier
-  sumeragi::v2_runtime::tests::preassigned_batch_lifecycles_require_shared_mint_and_exact_root
-  sumeragi::v2_runtime::tests::restart_dormant_completion_batch_atomically_replaces_latent_slots
+  sumeragi::v2_runtime::tests::queued_store_terminal_adopts_authority_upgrade_under_incumbent_owner
+  sumeragi::v2_runtime::tests::local_proposal_ready_is_owned_by_its_validate_predecessor
   sumeragi::v2_runtime::tests::restart_dormant_local_fifo_reservation_survives_full_class_churn
   sumeragi::v2_transport::tests::reproposal_commit_qc_authenticates_its_exact_same_round_body
   sumeragi::v2_recovery::tests::all_hash_only_snapshot_recovers_exact_authenticated_successor
@@ -2399,7 +2393,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::first_same_subject_lock_preserves_pending_local_proposal_events
   sumeragi::v2_runner::tests::higher_same_subject_lock_retires_prior_origin_work
   sumeragi::v2_runner::tests::first_same_subject_lock_from_prior_view_retires_unlocked_work
-  sumeragi::v2_runner::tests::late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock
+  sumeragi::v2_runner::tests::pre_submit_lane_binding_rejection_arms_one_non_empty_retry
   sumeragi::v2_runner::tests::decision_retires_local_work_before_prepared_delivery
   sumeragi::v2_runner::tests::finalized_rollover_closes_ingress_before_successor_replay
   sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff
@@ -2745,7 +2739,7 @@ production_data_model_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# forty-three-module pre-network inventory.
+# forty-module pre-network inventory.
 production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
@@ -3485,6 +3479,7 @@ for required_test in "${required_multilane_integration_lib_focus_tests[@]}"; do
   fi
 done
 
+
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
 # unambiguous one-test Cargo transcript per entry. The canonical 522-row TSV is
@@ -3902,41 +3897,6 @@ run_final_workspace_verification() {
     bash scripts/check_no_legacy_codec.sh
   verify_release_identity "after final source-sealed full workspace verification"
 }
-
-# Pin the production-soak evidence contract and strict all-validator restart
-# gate. Cargo's filter succeeds on zero tests, so require every exact unignored
-# test before executing it with `--exact`.
-required_taira_release_contract_tests=(
-  taira_public_localnet::release_execution_profile_accepts_only_the_exact_positive_profile
-  taira_public_localnet::release_execution_profile_rejects_wrong_or_blank_build_profiles
-  taira_public_localnet::release_execution_profile_rejects_cargo_profile_mismatch
-  taira_public_localnet::release_execution_profile_rejects_non_exact_offline_values
-  taira_public_localnet::simulation_summary_json_records_release_profile_and_status_evidence
-  taira_public_localnet::strict_restart::taira_localnet_restart_catchup_behavior
-)
-taira_release_contract_target="consensus_and_da"
-taira_release_contract_list="$(
-  run_cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" -- --list
-)"
-taira_release_ignored_contract_list="$(
-  run_cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" -- --list --ignored
-)"
-for taira_contract_index in "${!required_taira_release_contract_tests[@]}"; do
-  required_test="${required_taira_release_contract_tests[$taira_contract_index]}"
-  if ! grep -Fqx -- "${required_test}: test" <<<"$taira_release_contract_list"; then
-    echo "missing required Taira release-evidence contract test: ${required_test}" >&2
-    exit 1
-  fi
-  if grep -Fqx -- "${required_test}: test" <<<"$taira_release_ignored_contract_list"; then
-    echo "required Taira release-evidence contract test is ignored: ${required_test}" >&2
-    exit 1
-  fi
-  run_corridor_leg \
-    "taira-contract-${taira_contract_index}" cargo-exact 1 \
-    "cargo test --locked --offline -p integration_tests --test ${taira_release_contract_target} ${required_test} -- --exact --test-threads=1" \
-    run_cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" \
-      "$required_test" -- --exact --test-threads=1
-done
 
 # Keep the canonical Rust wire authority and the maintained lightweight SDK
 # parsers in the same source-bound corridor. These commands use only checked-in
@@ -4467,43 +4427,6 @@ record_corridor_log \
   "${formal_launcher_pipeline_status[0]}" "${formal_launcher_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$formal_launcher_contract_log"
 
-# Run the complete mocked soak launcher/evidence corpus as one exact file-bound
-# preflight. The 43-pass summary rejects missing, added, skipped, or xfailed
-# cases before the release corridor can trust the 24-hour evidence path.
-taira_soak_contract_files=(
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_pins_complete_profile_and_runs_exactly_one_test
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_zero_test_inventory
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_zero_test_execution_output
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_bundle_tampering_before_completion
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_symlinked_marker_temp_without_completion
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_marker_durability_failure_is_not_terminal
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_profile_override_arguments_before_cargo
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_a_concurrent_source_bound_soak
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_does_not_promote_provisional_evidence_when_validation_fails
-  pytests/scripts/taira_v2_soak_evidence_test.py
-)
-taira_soak_contract_log="$(corridor_contract_log_path preflight-taira-soak)"
-release_gate_boundary "preflight-taira-soak:before" || exit $?
-set +e
-PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
-  "${taira_soak_contract_files[@]}" 2>&1 | tee "$taira_soak_contract_log"
-taira_soak_pipeline_status=("${PIPESTATUS[@]}")
-set -e
-release_gate_boundary "preflight-taira-soak:after-natural-completion" || exit $?
-taira_soak_pass_summary="$(
-  grep -Ec '^43 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
-)"
-if ((taira_soak_pipeline_status[0] != 0 || taira_soak_pipeline_status[1] != 0)) \
-  || [[ "$taira_soak_pass_summary" != 1 ]]; then
-  echo "Taira v2 soak launcher/evidence preflight did not run exactly 43 passing tests (pytest=${taira_soak_pipeline_status[0]}, tee=${taira_soak_pipeline_status[1]})" >&2
-  exit 1
-fi
-record_corridor_log \
-  preflight-taira-soak pytest 43 \
-  "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${taira_soak_contract_files[*]}" \
-  "$taira_soak_contract_log" \
-  "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
-((corridor_enabled)) || rm -f -- "$taira_soak_contract_log"
 publish_corridor_completion() {
   if ((!corridor_enabled)); then
     return
@@ -4513,9 +4436,9 @@ publish_corridor_completion() {
     return 1
   fi
   # 43 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
-  # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
-  # SDK + 6 diagnostics + 11 pytest legs = 91.
-  readonly expected_corridor_leg_count=91
+  # command + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped SDK +
+  # 6 diagnostics + 10 pytest legs = 84.
+  readonly expected_corridor_leg_count=84
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -4847,27 +4770,6 @@ if [[ ! -s "$chaos_completion_path_file" ]]; then
   exit 1
 fi
 verify_release_identity "after 100,000-height chaos"
-pre_soak_source_manifest_sha256="$(
-  python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
-)"
-if [[ ! "$pre_soak_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "workspace source manifest helper returned an invalid digest before the Taira production soak" >&2
-  exit 1
-fi
-if [[ "$pre_soak_source_manifest_sha256" != "$release_source_manifest_sha256" ]]; then
-  echo "workspace sources changed before the Taira production soak" >&2
-  exit 1
-fi
-readonly taira_completion_path_file="${IROHA_RELEASE_HOST_ROOT}/taira-completion-path"
-rm -f -- "$taira_completion_path_file"
-IROHA_TAIRA_COMPLETION_PATH_FILE="$taira_completion_path_file" \
-  bash scripts/run_taira_v2_24h_soak.sh
-if [[ ! -s "$taira_completion_path_file" ]]; then
-  echo "Taira production soak did not publish its completion path" >&2
-  exit 1
-fi
-verify_release_identity "after Taira production soak"
-
 final_release_source_manifest_sha256="$(
   python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
 )"
@@ -4926,15 +4828,14 @@ verify_release_identity "after final corridor completion publication"
 seed_completion_path="$(<"$seed_completion_path_file")"
 formal_completion_path="$(<"$formal_completion_path_file")"
 chaos_completion_path="$(<"$chaos_completion_path_file")"
-taira_completion_path="$(<"$taira_completion_path_file")"
 verify_release_identity "before protected child-result publication"
 release_gate_boundary "child-result:before-publication" || exit $?
 "$IROHA_RELEASE_PYTHON_BIN" -I -S - \
   "$IROHA_RELEASE_CHILD_RESULT_PATH" "$IROHA_RELEASE_HOST_ROOT" \
   "$release_source_manifest_sha256" "$corridor_completion_path" \
   "$formal_completion_path" "$seed_completion_path" \
-  "$chaos_completion_path" "$taira_completion_path" \
-  "$multilane_four_peer_completion_path" "$nexus_cross_completion_path" \
+  "$chaos_completion_path" "$multilane_four_peer_completion_path" \
+  "$nexus_cross_completion_path" \
   "$nexus_cross_soak_completion_path" <<'PY'
 from pathlib import Path
 import json
@@ -4946,7 +4847,7 @@ output = Path(sys.argv[1])
 host = Path(sys.argv[2]).resolve(strict=True)
 names = (
     "corridor_completion", "formal_completion", "seed_completion",
-    "chaos_completion", "taira_completion", "g4p_completion",
+    "chaos_completion", "g4p_completion",
     "g12_seed_completion", "g12_fault_soak_completion",
 )
 if output != host / "release-child-result.json" or output.exists() or output.is_symlink():

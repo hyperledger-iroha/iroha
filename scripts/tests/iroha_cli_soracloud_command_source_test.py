@@ -43,7 +43,7 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane": (
-        "6590c55c0a1c00442e2772caa1a314384686e0c2c59cee22d41101b5865b86a6",
+        "7d69e1d478ed37d0e60877f5a54258a8ccada18b7689c78ace1015301a56af8e",
         17,
         0,
         0,
@@ -71,7 +71,7 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback": (
-        "b4bd74a8d1428cf808b82d6f92dd9cb5e4063c27d64dd586f6a2eae4aa101381",
+        "4c3a97a89b6c2ce395fee336d2d5fd849078b0ebd6ee8e94072ac65f936a6feb",
         8,
         0,
         0,
@@ -85,14 +85,14 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane": (
-        "13c74282300ebccaded1ee66c44067685a309c64c83874d7333aca2e832a6a57",
+        "dece98092d6dfa9b1ffa1e0128537529b23ba2f910853d6d7ca53d0d0d1c5e80",
         11,
         1,
         0,
         True,
     ),
     "soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane": (
-        "bfda84172a64a66b78e5642d4087cb7818eabebca2492fbebe971a245ec77115",
+        "90a624fe4509e4c0347e58150c548fed393f5ad8b610fb3eeae5d0fe61b0b5dd",
         14,
         0,
         0,

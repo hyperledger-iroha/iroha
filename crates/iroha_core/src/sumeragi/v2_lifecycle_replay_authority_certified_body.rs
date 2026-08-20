@@ -765,18 +765,6 @@ impl RecoveredStandaloneValidateReplayEvidenceV1 {
             standalone_validate_stage_matches(&self.source, self.body_frame, &effect, receipt)
         })
     }
-    pub(super) fn exactly_matches_recovered_body_frame(
-        &self,
-        reference: &DurableBodyFrameReference,
-        manifest: &wire::PayloadManifest,
-        receipt: &DurableBodyReceipt,
-    ) -> bool {
-        standalone_origin_manifest(&self.source).is_some_and(|retained| retained == manifest)
-            && self.body_frame.durable_reference() == *reference
-            && durable_body_frame_reference(replay_context(receipt.round()), receipt)
-                == Some(*reference)
-            && self.exactly_matches_durable_body(receipt)
-    }
 }
 impl RecoveredStandaloneValidateSourceV1 {
     pub(super) fn exactly_matches_recovered_body_frame(

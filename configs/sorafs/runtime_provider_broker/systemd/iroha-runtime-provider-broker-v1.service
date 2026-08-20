@@ -3,7 +3,6 @@ Description=Iroha V1 runtime-provider broker
 Documentation=https://github.com/hyperledger-iroha/iroha/tree/main/configs/sorafs/runtime_provider_broker
 After=network-online.target
 Wants=network-online.target
-Before=taira-irohad.service
 
 [Service]
 Type=notify

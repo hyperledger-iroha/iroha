@@ -319,6 +319,21 @@ mod block {
         pub fn view(&self) -> View<'_, K, V> {
             View::from_snapshot(self.block.blocks.to_snapshot())
         }
+        /// Read the value that existed before this block's first mutation of `key`.
+        ///
+        /// An applied earlier transaction contributes to the parent block undo
+        /// log. A mutation in this still-open transaction contributes to its
+        /// local undo log. Consulting both preserves the exact block-start
+        /// value without exposing an aborted candidate write.
+        pub fn get_before_block(&self, key: &K) -> Option<&V> {
+            if let Some(previous) = self.block.revert_map().get(key) {
+                return previous.as_ref();
+            }
+            match self.revert.get(key) {
+                Some(previous) => previous.as_ref(),
+                None => self.get(key),
+            }
+        }
         /// Apply aggregated changes of [`Transaction`] to the [`Block`]
         pub fn apply(mut self) {
             for (key, value) in core::mem::take(&mut self.revert) {
@@ -891,6 +906,27 @@ mod tests {
             transaction.insert(1, 13);
             transaction.apply();
         }
+        assert_eq!(block.get_before_block(&1), Some(&10));
+    }
+    #[test]
+    fn transaction_get_before_block_includes_its_local_undo_log() {
+        let storage = Storage::from_iter([(1_u64, 10_u64), (3, 30)]);
+        let mut block = storage.block();
+        block.insert(1, 11);
+
+        {
+            let mut transaction = block.transaction();
+            transaction.insert(1, 12);
+            transaction.insert(2, 20);
+            transaction.remove(3);
+            assert_eq!(transaction.get_before_block(&1), Some(&10));
+            assert_eq!(transaction.get_before_block(&2), None);
+            assert_eq!(transaction.get_before_block(&3), Some(&30));
+        }
+
+        assert_eq!(block.get(&1), Some(&11));
+        assert_eq!(block.get(&2), None);
+        assert_eq!(block.get(&3), Some(&30));
         assert_eq!(block.get_before_block(&1), Some(&10));
     }
     #[test]

@@ -13,7 +13,8 @@ use crate::sumeragi::{
         CertifiedFetchReadyPublicationError, LifecycleDigest, LifecyclePhase, LifecycleState,
         ProductionIngressCapacityRetry, ProductionIngressCapacityStatus,
         ProductionIngressSchedulerInputsError, ProductionIngressTurnPreparation,
-        ProductionRecoveredLifecycleSignDispatchErrorV1, WaitSource,
+        ProductionRecoveredLifecycleSignDispatchErrorV1, ReadyValidatedExecutorCatalogAuthorityV1,
+        WaitSource,
     },
     v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig},
 };
@@ -65,13 +66,6 @@ enum RuntimeCompletion {
         wire::BlockSubject,
         DurableBodyReceipt,
     ),
-    ValidationSucceeded(
-        EventTag,
-        wire::ConsensusRound,
-        wire::BlockSubject,
-        ValidatedBodyReceipt,
-    ),
-    ValidationFailed(EventTag, wire::ConsensusRound, wire::BlockSubject),
     Signature(EventTag, Vec<u8>),
     Application(EventTag, wire::BlockSubject),
     LocalProposal(
@@ -81,12 +75,46 @@ enum RuntimeCompletion {
         ValidatedBodyReceipt,
     ),
 }
+
+fn bound_test_effect_ownership(
+    effect: &AdapterEffect,
+    owner_tag: EventTag,
+    lifecycle_ordinal: u128,
+) -> RuntimeEffectOwnership {
+    bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            owner_tag,
+            lifecycle_ordinal,
+        )],
+    )
+    .expect("bind one exact test effect owner")
+    .pop()
+    .expect("one test effect has one exact owner")
+}
+
+fn bound_test_apply_ownership(
+    effect_tag: EventTag,
+    subject: wire::BlockSubject,
+    certificate: &wire::QuorumCertificate,
+    owner_tag: EventTag,
+    lifecycle_ordinal: u128,
+) -> RuntimeEffectOwnership {
+    bound_test_effect_ownership(
+        &AdapterEffect::Apply {
+            tag: effect_tag,
+            subject,
+            certificate: certificate.clone(),
+        },
+        owner_tag,
+        lifecycle_ordinal,
+    )
+}
+
 #[derive(Default)]
 struct FakeRuntime {
     steps: VecDeque<Result<RuntimeStep<AdapterEffect>, String>>,
     completions: Vec<RuntimeCompletion>,
-    validation_completion_ownerships: Vec<RuntimeEffectOwnership>,
-    bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
     reserved_body_available: Option<BodyAvailableReservation>,
     decided_body: Option<DurableDecision>,
     decision_on_next_step: Option<DurableDecision>,
@@ -100,9 +128,13 @@ struct FakeRuntime {
     reject_scheduler_ownership: bool,
     next_lifecycle_ordinal: u128,
     effect_ownership_calls: usize,
-    effect_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
-    local_proposal_intent_owners:
-        BTreeMap<(EventTag, HashOf<wire::PayloadManifest>), RuntimeEffectOwnership>,
+    effect_owners: BTreeMap<Hash, crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment>,
+    local_proposal_intent_owners: BTreeMap<
+        (EventTag, HashOf<wire::PayloadManifest>),
+        crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment,
+    >,
+    exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
+    live_proposal_intent_wal_sign: Option<(AdapterEffect, LiveProposalIntentWalSignHandoffV1)>,
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
     terminal_body_candidate_commits: usize,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
@@ -122,7 +154,7 @@ struct BodyOwnershipProjection {
     next_work_id: u64,
     pending_fetches: BTreeMap<EffectWorkId, PendingFetch>,
     pending_stores: BTreeMap<EffectWorkId, PendingStore>,
-    pending_validations: BTreeMap<EffectWorkId, PendingValidation>,
+    pending_durable_validate_admissions: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
     deferred_merge_work: BTreeMap<EffectWorkId, HashOf<MergeLedgerEntry>>,
     body_pipeline_owners: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), BodyPipelineOwner>,
     certified_work: BTreeMap<HashOf<wire::CertifiedBodyRequest>, EffectWorkId>,
@@ -142,7 +174,6 @@ struct BodyOwnershipProjection {
     retired_rejected_bodies:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     runtime_completions: Vec<RuntimeCompletion>,
-    runtime_bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
     runtime_body_reservation: Option<BodyAvailableReservation>,
 }
 impl V2EffectExecutor<FakeRuntime> {
@@ -151,7 +182,11 @@ impl V2EffectExecutor<FakeRuntime> {
             next_work_id: self.next_work_id,
             pending_fetches: self.pending_fetches.clone(),
             pending_stores: self.pending_stores.clone(),
-            pending_validations: self.pending_validations.clone(),
+            pending_durable_validate_admissions: self
+                .pending_durable_validate_admissions
+                .keys()
+                .copied()
+                .collect(),
             deferred_merge_work: self.deferred_merge_work.clone(),
             body_pipeline_owners: self.body_pipeline_owners.clone(),
             certified_work: self.certified_work.clone(),
@@ -167,7 +202,6 @@ impl V2EffectExecutor<FakeRuntime> {
             rejected_bodies: self.rejected_bodies.clone(),
             retired_rejected_bodies: self.retired_rejected_bodies.clone(),
             runtime_completions: self.runtime.completions.clone(),
-            runtime_bound_validations: self.runtime.bound_validations.clone(),
             runtime_body_reservation: self.runtime.reserved_body_available.clone(),
         }
     }
@@ -181,7 +215,10 @@ impl FakeRuntime {
         self.completions.push(completion);
         Ok(())
     }
-    fn test_effect_ownership(&mut self, effect: &AdapterEffect) -> RuntimeEffectOwnership {
+    fn test_effect_ownership(
+        &mut self,
+        effect: &AdapterEffect,
+    ) -> crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment {
         let mut identity = Vec::new();
         match effect {
             AdapterEffect::FetchBody { round, subject, .. }
@@ -279,6 +316,14 @@ impl EffectRuntime for FakeRuntime {
         if effects.is_empty() {
             return Ok(Vec::new());
         }
+        if let Some((expected, ownership)) = self.exact_effect_ownership.take() {
+            if effects == core::slice::from_ref(&expected)
+                && ownership.exactly_binds_adapter_effect(&expected)
+            {
+                return Ok(vec![ownership]);
+            }
+            return Err("fake exact effect ownership changed before transfer".to_owned());
+        }
         let mut ownership = Vec::with_capacity(effects.len());
         for effect in effects {
             let local = match effect {
@@ -294,6 +339,18 @@ impl EffectRuntime for FakeRuntime {
             ownership.push(local.unwrap_or_else(|| self.test_effect_ownership(effect)));
         }
         bind_adapter_effect_batch_ownership(effects, ownership)
+    }
+    fn take_live_proposal_intent_wal_sign(
+        &mut self,
+        effects: &[AdapterEffect],
+    ) -> Result<Option<LiveProposalIntentWalSignHandoffV1>, String> {
+        let Some((expected, handoff)) = self.live_proposal_intent_wal_sign.take() else {
+            return Ok(None);
+        };
+        if effects != core::slice::from_ref(&expected) {
+            return Err("fake live ProposalIntent WAL Sign batch changed".to_owned());
+        }
+        Ok(Some(handoff))
     }
     fn take_leader_wire_runtime_terminals(
         &mut self,
@@ -404,31 +461,6 @@ impl EffectRuntime for FakeRuntime {
     }
     fn decided_body(&self) -> Result<Option<DurableDecision>, String> {
         Ok(self.decided_body)
-    }
-    fn bind_validated_body(
-        &mut self,
-        manifest: &wire::PayloadManifest,
-        validated_receipt: &ValidatedBodyReceipt,
-    ) -> Result<(), String> {
-        let durable = validated_receipt.durable();
-        if durable.round() != manifest.round
-            || durable.subject() != manifest.subject
-            || durable.manifest_hash() != HashOf::new(manifest)
-        {
-            return Err("fake validated binding differs from its manifest".to_owned());
-        }
-        if let Some((bound_manifest, bound_receipt)) =
-            self.bound_validations.iter().find(|(bound_manifest, _)| {
-                bound_manifest.round == manifest.round && bound_manifest.subject == manifest.subject
-            })
-        {
-            return (bound_manifest == manifest && bound_receipt == validated_receipt)
-                .then_some(())
-                .ok_or_else(|| "fake validated binding conflicts with authority".to_owned());
-        }
-        self.bound_validations
-            .push((manifest.clone(), validated_receipt.clone()));
-        Ok(())
     }
     fn reserve_body_available(
         &mut self,
@@ -627,20 +659,6 @@ impl EffectRuntime for FakeRuntime {
                     retired.record_body_stored();
                     true
                 }
-                RuntimeCompletion::ValidationSucceeded(
-                    queued_tag,
-                    queued_round,
-                    queued_subject,
-                    _,
-                )
-                | RuntimeCompletion::ValidationFailed(queued_tag, queued_round, queued_subject)
-                    if *queued_tag == tag
-                        && *queued_round == round
-                        && *queued_subject == subject =>
-                {
-                    retired.record_validation();
-                    true
-                }
                 RuntimeCompletion::LocalProposal(queued_tag, manifest, ..)
                     if *queued_tag == tag
                         && manifest.round == round
@@ -651,8 +669,6 @@ impl EffectRuntime for FakeRuntime {
                 }
                 RuntimeCompletion::BodyAvailable(..)
                 | RuntimeCompletion::BodyStored(..)
-                | RuntimeCompletion::ValidationSucceeded(..)
-                | RuntimeCompletion::ValidationFailed(..)
                 | RuntimeCompletion::Signature(..)
                 | RuntimeCompletion::Application(..)
                 | RuntimeCompletion::LocalProposal(..) => false,
@@ -784,65 +800,6 @@ impl EffectRuntime for FakeRuntime {
     ) -> Result<(), EnqueueError> {
         self.push(RuntimeCompletion::BodyStored(tag, round, subject, receipt))
     }
-    fn enqueue_validation_succeeded(
-        &mut self,
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        receipt: ValidatedBodyReceipt,
-    ) -> Result<(), EnqueueError> {
-        self.push(RuntimeCompletion::ValidationSucceeded(
-            tag, round, subject, receipt,
-        ))
-    }
-    fn enqueue_validation_succeeded_with_owner(
-        &mut self,
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        receipt: ValidatedBodyReceipt,
-        ownership: &RuntimeEffectOwnership,
-    ) -> Result<(), EnqueueError> {
-        self.enqueue_validation_succeeded(tag, round, subject, receipt)?;
-        self.validation_completion_ownerships
-            .push(ownership.clone());
-        Ok(())
-    }
-    fn enqueue_validation_failed(
-        &mut self,
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-    ) -> Result<(), EnqueueError> {
-        self.push(RuntimeCompletion::ValidationFailed(tag, round, subject))
-    }
-    fn enqueue_validation_failed_with_owner(
-        &mut self,
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        ownership: &RuntimeEffectOwnership,
-    ) -> Result<(), EnqueueError> {
-        self.enqueue_validation_failed(tag, round, subject)?;
-        self.validation_completion_ownerships
-            .push(ownership.clone());
-        Ok(())
-    }
-    fn enqueue_validation_failures_atomically(
-        &mut self,
-        failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
-    ) -> Result<(), EnqueueError> {
-        if self.fail_enqueue {
-            self.fail_enqueue_hits = self.fail_enqueue_hits.saturating_add(1);
-            return Err(EnqueueError::Full);
-        }
-        self.completions.extend(
-            failures.iter().copied().map(|(tag, round, subject)| {
-                RuntimeCompletion::ValidationFailed(tag, round, subject)
-            }),
-        );
-        Ok(())
-    }
     fn enqueue_signature(&mut self, tag: EventTag, signature: Vec<u8>) -> Result<(), EnqueueError> {
         self.push(RuntimeCompletion::Signature(tag, signature))
     }
@@ -852,51 +809,6 @@ impl EffectRuntime for FakeRuntime {
         subject: wire::BlockSubject,
     ) -> Result<(), EnqueueError> {
         self.push(RuntimeCompletion::Application(tag, subject))
-    }
-    fn enqueue_local_proposal(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-        durable_receipt: DurableBodyReceipt,
-        validated_receipt: ValidatedBodyReceipt,
-    ) -> Result<(), EnqueueError> {
-        self.push(RuntimeCompletion::LocalProposal(
-            tag,
-            manifest,
-            durable_receipt,
-            validated_receipt,
-        ))
-    }
-    fn enqueue_local_proposal_with_owner(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-        durable_receipt: DurableBodyReceipt,
-        validated_receipt: ValidatedBodyReceipt,
-        ownership: &RuntimeEffectOwnership,
-    ) -> Result<LocalProposalReadyCommandIdentity, EnqueueError> {
-        let identity = LocalProposalReadyCommandIdentity::from_exact_handoff(
-            tag,
-            &manifest,
-            &durable_receipt,
-            &validated_receipt,
-            ownership,
-        )
-        .ok_or(EnqueueError::FailClosed)?;
-        let key = (tag, HashOf::new(&manifest));
-        if matches!(
-            self.local_proposal_intent_owners.entry(key),
-            Entry::Occupied(_)
-        ) {
-            return Err(EnqueueError::FailClosed);
-        }
-        self.enqueue_local_proposal(tag, manifest.clone(), durable_receipt, validated_receipt)?;
-        let key = (tag, HashOf::new(&manifest));
-        let Entry::Vacant(slot) = self.local_proposal_intent_owners.entry(key) else {
-            unreachable!("test runtime preflight proved the local owner slot vacant")
-        };
-        slot.insert(ownership.clone());
-        Ok(identity)
     }
     fn verify_certificate(
         &self,
@@ -1040,8 +952,6 @@ struct FakeServices {
     store_tasks: Vec<BodyStoreTask>,
     cancelled_stores: Vec<EffectWorkId>,
     inflight_stores: BTreeSet<EffectWorkId>,
-    validation_tasks: Vec<BodyValidationTask>,
-    cancelled_validations: Vec<EffectWorkId>,
     deferred_merge_sidecars: Vec<(
         EffectWorkId,
         wire::ConsensusRound,
@@ -1052,13 +962,11 @@ struct FakeServices {
     entered_views: Vec<EventTag>,
     equivocations: Vec<wire::SumeragiV2Equivocation>,
     invalid_bodies: Vec<wire::BlockSubject>,
-    rejected_validations: Vec<String>,
     statuses: Vec<EffectExecutorStatus>,
     closed: Vec<String>,
     fail_on: Option<&'static str>,
     fail_on_call: Option<(&'static str, usize)>,
     operation_calls: BTreeMap<&'static str, usize>,
-    validation_error: Option<String>,
     leader_wire_terminals: Vec<LeaderWireRuntimeTerminal>,
     durable_runtime_decision: Option<wire::BlockSubject>,
 }
@@ -1092,24 +1000,6 @@ impl FakeServices {
             .expect("body store service")
             .execute_store_task(&task)
             .expect("execute durable store task")
-    }
-    fn execute_validation(&mut self, work_id: EffectWorkId) -> BodyValidationCompletion {
-        let task = self
-            .validation_tasks
-            .iter()
-            .rev()
-            .find(|task| task.id() == work_id)
-            .expect("validation task");
-        let rejection = self.validation_error.clone();
-        let execution_commitment = fixture_execution_commitment();
-        self.body_store
-            .as_mut()
-            .expect("body store service")
-            .execute_validation_task(task, move |_| match rejection {
-                Some(reason) => Err(reason),
-                None => Ok(execution_commitment),
-            })
-            .expect("execute deterministic validation task")
     }
 }
 impl V2EffectServices for FakeServices {
@@ -1260,16 +1150,6 @@ impl V2EffectServices for FakeServices {
         self.cancelled_stores.push(work_id);
         Ok(!self.inflight_stores.contains(&work_id))
     }
-    fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
-        self.check("validation")?;
-        self.validation_tasks.push(task);
-        Ok(())
-    }
-    fn cancel_body_validation(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
-        self.check("cancel-validation")?;
-        self.cancelled_validations.push(work_id);
-        Ok(())
-    }
     fn work_deferred_for_merge_sidecar(
         &mut self,
         work_id: EffectWorkId,
@@ -1314,14 +1194,6 @@ impl V2EffectServices for FakeServices {
         self.effect_service_order.push("invalid-body");
         self.invalid_bodies.push(subject);
         Ok(())
-    }
-    fn validation_rejected(
-        &mut self,
-        _round: wire::ConsensusRound,
-        _subject: wire::BlockSubject,
-        reason: &str,
-    ) {
-        self.rejected_validations.push(reason.to_owned());
     }
     fn publish_effect_status(&mut self, status: &EffectExecutorStatus) -> Result<(), Self::Error> {
         self.check("status")?;
@@ -1909,6 +1781,104 @@ fn fixture_execution_commitment() -> wire::ExecutionCommitment {
         1,
         Hash::new(b"effects fixture executed block wire"),
     )
+}
+fn validate_durable_body_fixture(
+    services: &mut FakeServices,
+    manifest: &wire::PayloadManifest,
+    durable: DurableBodyReceipt,
+) -> ValidatedBodyReceipt {
+    services
+        .body_store
+        .as_mut()
+        .expect("body store service")
+        .execute_durable_validation(durable, HashOf::new(manifest), |_| {
+            Ok::<_, String>(fixture_execution_commitment())
+        })
+        .expect("execute durable validation fixture")
+        .into_validated_receipt()
+        .expect("fixture validation succeeds")
+}
+/// Install an independently fsynced body and validation marker as test setup.
+///
+/// This deliberately bypasses adapter scheduling: callers exercise downstream
+/// signing or recovery policy, while lifecycle admission/dispatch has its own
+/// focused tests.
+fn install_fsynced_validation_fixture(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    services: &mut FakeServices,
+    fixture: &Fixture,
+    manifest: wire::PayloadManifest,
+) {
+    let durable = services
+        .body_store
+        .as_mut()
+        .expect("body store service")
+        .store(manifest.clone(), fixture.body.clone())
+        .expect("persist exact body fixture");
+    let validated = validate_durable_body_fixture(services, &manifest, durable.clone());
+    let key = (manifest.round, manifest.subject);
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (manifest, durable.clone()))
+            .is_none()
+    );
+    assert!(executor.durable_bodies.insert(key, durable).is_none());
+    assert!(executor.validated_bodies.insert(key, validated).is_none());
+}
+/// Finish an admitted local proposal as fixture setup for downstream policy.
+///
+/// The production Store path and durable validator still run. The lifecycle
+/// terminal is installed directly because these executor-only tests do not own
+/// a `ProductionLifecycleOwnerV1`; end-to-end lifecycle settlement is covered
+/// by the dedicated lifecycle suites.
+fn complete_local_proposal_fixture(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    services: &mut FakeServices,
+) {
+    let task = services
+        .store_tasks
+        .last()
+        .expect("admitted local proposal store task")
+        .clone();
+    let work_id = task.id();
+    let manifest = task.manifest().clone();
+    let tag = task.tag();
+    let completion = services.execute_store(work_id);
+    assert_eq!(
+        executor
+            .complete_body_store(completion, services)
+            .expect("accept exact local body-store completion"),
+        CompletionDisposition::Accepted
+    );
+    let key = (manifest.round, manifest.subject);
+    let durable = executor
+        .durable_bodies
+        .get(&key)
+        .expect("local Store installs durable receipt")
+        .clone();
+    let validated = validate_durable_body_fixture(services, &manifest, durable.clone());
+    assert!(
+        executor
+            .pending_durable_validate_admissions
+            .remove(&key)
+            .is_some(),
+        "local Store hands the exact Validate owner to lifecycle admission"
+    );
+    assert!(
+        executor
+            .validated_bodies
+            .insert(key, validated.clone())
+            .is_none()
+    );
+    executor
+        .runtime
+        .completions
+        .push(RuntimeCompletion::LocalProposal(
+            tag, manifest, durable, validated,
+        ));
+    services.store_tasks.retain(|queued| queued.id() != work_id);
+    services.statuses.clear();
 }
 fn tag(view: u64) -> EventTag {
     EventTag::new(1, view, Generation::new(7 + view))

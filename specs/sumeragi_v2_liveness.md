@@ -696,10 +696,9 @@ Kagami-generated localnets inherit those 17/17/2/17 MiB frame caps, the
 exact `3f + 1` rosters from 4 through 31 validators and set aggregate
 body-ingress bytes from the validator, authenticated non-validator, and
 anonymous source partitions, retaining the reviewed four-validator floor.
-The Taira template carries the same per-source baseline; its bundle renderer
-enforces the same 4, 7, 10, …, 31 geometry and raises the aggregate to at least
-`(validator_count + authenticated_non_validator_sources + 1) *
-body_source_bytes`.
+The checked-in Taira template carries the same four-validator per-source
+baseline. Disposable Taira networks inherit their full geometry directly from
+Kagami instead of passing through a second renderer.
 
 The peer sender extends that ownership boundary through encrypted stream I/O.
 It retains at most one bounded plaintext retry in each safety, ordinary-high,
@@ -816,11 +815,13 @@ remote-only eviction. This witness is bounded Kura-local serving authority,
 not an inclusion proof exported to consensus: every requester independently
 matches the reference and certified entry to its own canonical carrier and
 rejects a substituted or non-holder response.
-Version 3 is the only accepted retained-record layout. Pre-release version-2
-bytes fail closed at direct read and startup, even when the exact body remains
-available; operators must discard and rebuild that pre-release storage rather
-than promote unauthenticated missing fields. The current byte ceiling covers
-the complete base retained-record envelope, the independently bounded merge
+Canonical version-2 retained records remain restart-readable. They expose no
+merge witness because none was stored. If their exact body remains available,
+the same persistence operation that precedes eviction replaces the legacy
+record atomically with version 3 and verifies the replacement before eviction
+may continue. A bodyless legacy record therefore fails historical merge
+service closed instead of manufacturing authority. The version-3 byte ceiling
+is the sum of the complete version-2 envelope, the independently bounded
 reference, and explicit Norito option/struct framing headroom.
 An unknown current-generation Close is acknowledged statelessly and consumes
 none of those tables.
@@ -1330,7 +1331,7 @@ rows brings the historical 856-test, 40-module checkpoint. The exact retired-
 attempt accessor, mixed-carrier successor, two-link cold-restart hydration,
 noncanonical autonomous-output retirement, and the ordinary plus record-backed
 autonomous predecessor-durability regressions bring the current
-source-bound inventory to 864 exact tests across 43 modules and 91 pre-network
+source-bound inventory to 864 exact tests across 43 modules and 84 pre-network
 legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1339,7 +1340,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
+`23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad`.
 Nine of those legs execute the separate 522-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 523 TSV lines and has SHA-256
 `e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
@@ -1586,7 +1587,7 @@ authenticated-non-validator, and two-anonymous owners (`5N+3H+2` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-91 legs, including the governance-unlock audit module, the autonomous
+84 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate exact
 status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
@@ -1771,7 +1772,7 @@ intentionally rejects the current dirty worktree, so checkout-manifest-bound
 evidence still requires a signed clean commit. The fresh full strict
 TLAPS/proof-ledger run against the settled source,
 clean source-sealed production corridor, checkout-manifest-bound 100,000-height
-reducer/WAL chaos run, and fully pinned 24-hour Taira-profile soak also remain
+reducer/WAL chaos run, and aggregate receipt publication also remain
 outstanding. The complete PR corridor is not claimed green here until those
 gates finish.
 
@@ -1968,13 +1969,15 @@ of the duplicate inline network-simulation rows, the historical inventory
 contained 856 tests across 40 modules and 89 legs. The four exact retired-
 attempt, mixed-carrier, cold-restart, and autonomous-output-retirement
 regressions plus the ordinary and record-backed autonomous predecessor-
-durability rows and the three producer-publication-fence race rows bring the
-current inventory to 864 tests across 43 modules. The new rows require the
+durability rows and the three producer-publication-fence race rows produced the
+865-test checkpoint across 43 modules. Retiring the dormant generic persisted-
+continuation regression brings the current inventory to 864 tests across the
+same modules. The retained rows require the
 post-preflight fence to serialize same-wire retransmission and unrelated append
 producers through the durable publication boundary, while a dropped unpublished
 dequeue must release the fence without consuming its target.
 Removing the obsolete MKHE lifecycle G-UNIT leg and retaining the current
-source-sealed command partition leaves the corridor at 91 legs.
+source-sealed command partition leaves the corridor at 84 legs.
 The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -2006,7 +2009,7 @@ unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 91-leg, 864-production-test corridor plus 522 G-UNIT tests; execution
+audited 84-leg, 864-production-test corridor plus 522 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2014,16 +2017,6 @@ assumed writer continuity across connection tenure. Fresh focused worker,
 sidecar, lane, and transport-route tests plus the complete independently mirrored
 source-sealed pre-network corridor remain required before release evidence may
 be promoted.
-
-The same pre-network gate inventories and executes four exact, non-ignored
-Taira release-profile validators, the Rust summary-JSON schema contract, and
-the strict all-validator restart/catch-up contract: six Taira contracts total.
-It then requires exactly 43 passing mocked soak launcher/evidence tests. Those
-tests reject profile drift, zero-test success, concurrent evidence ownership,
-source or artifact mismatch, malformed JSON, weakened acceptance bounds,
-inconsistent counters, invalid provisional evidence, and inconsistent status
-classifications. They validate the release machinery; they are not substitutes
-for the 24-hour validator soak.
 
 Both profiles require one clean committed source identity before their first
 Cargo command, bind the tracked workspace `Cargo.lock` as an explicit build
@@ -2140,14 +2133,8 @@ size, modification time, and change time remain stable while copying.
 
 The production corridor raises the real-network matrix to 32 seeds per
 scenario, requires fresh source-bound TLAPS/TLC/Verus and trace-replay evidence,
-runs the 100,000-height permissioned/NPoS chain-prefix chaos test, and pins the
-Taira-profile seed, load, packet loss, churn cadence, acceptance bounds, and
-86,400-second duration. Load acceptance and commit rates use the full elapsed
-wall time, not a denominator with churn work removed. Churn deadlines stay
-anchored to the original schedule; at least 90% of the expected process and
-membership cycles must execute, a cleanup leave does not count as a scheduled
-cycle, churn work may consume at most 25% of elapsed time, and an in-flight
-bounded churn action may overrun the workload deadline by at most 15 minutes.
+runs the 100,000-height permissioned/NPoS chain-prefix chaos test, and binds
+the resulting source and tool identities.
 The strict formal release gate runs before the 32-seed matrix, so an incomplete
 proof ledger or stale backend evidence fails before 160 real-network attempts.
 The PR profile retains its four-seed matrix followed by the fast formal harness.
@@ -2176,45 +2163,6 @@ chain-prefix test with externally supplied valid certificates and a finite
 deterministic local scheduler, not a real-network quorum-formation or partition
 campaign.
 
-The production soak runner clears inherited daemon/Kagami overrides, pins
-release-profile binaries, `CARGO_NET_OFFLINE=true`, and `RUST_LOG=info`, and
-builds under a SHA-256 checkout-manifest-addressed target. When invoked by the
-release corridor, it rejects a checkout digest that differs from the parent's
-manifest before inventory or compilation, rather than spending 24 hours on a
-candidate the parent must later reject. An atomic lock gives
-that source root exactly one soak-evidence writer; a hard-killed run leaves the
-lock for explicit operator inspection. Before any real matrix, the release
-gate inventories and executes the five exact Rust release-profile/schema tests
-plus the strict all-validator restart/catch-up test,
-and requires all 43 mocked soak launcher/evidence adversaries to pass. The soak
-runner then inventories the exact ignored test and accepts Cargo output only
-when exactly one test ran and passed with networking required. The seed matrix
-also forces one fresh network startup attempt, so a later harness retry cannot
-hide a protocol-induced stall. The fixed retained summary records the Git
-revision, checkout manifest, daemon, Kagami, test-binary and generated-config
-digests, the complete profile, cadence accounting, and authoritative
-initial/final Sumeragi status quorums. The localnet directory is retained, and
-the evidence checker independently recomputes the canonical workspace manifest,
-requires every binary to remain beneath its release-profile source-bound
-directory, and re-hashes those artifacts before the runner reports success.
-The test writes to an invocation-local `.partial` path; only successful
-independent validation and final identity checks atomically promote it to the
-canonical JSON and publish a hash-bound `COMPLETED.tsv`. That completion binds
-the exact HEAD, tree, `Cargo.lock`, sealed source manifest, canonical JSON, and
-the retained full Cargo/libtest transcript. Failed invocations keep that log
-for diagnosis while provisional JSON is removed.
-Duplicate object keys and non-finite numbers, including finite-syntax exponent
-overflow such as `1e10000`, are rejected recursively before schema validation.
-Retained status snapshots preserve their original validator
-index and must contain at least three distinct responsive validators, wire
-protocol 4, no restart-required node, the complete liveness object, and bounded
-queue evidence. Every retained no-progress interval is accepted only when its
-canonical classification set exactly matches the blockers in its authoritative
-status snapshots. A checkout-manifest checkpoint immediately after the
-100,000-height chaos run rejects drift before starting the 24-hour soak. A final
-checkout-manifest and proof-evidence check rejects any later source change
-during the long corridor.
-
 ### Protected release approvals
 
 Production promotion requires four independent operator decisions with the
@@ -2225,14 +2173,14 @@ canonical JSON v1 file whose exact top-level fields are `approval_id`,
 `evidence_root_id`, `expected_duration_seconds`, `format`, `operations`,
 `profile`, `protected_tool_manifest_sha256`, and `schema_version`. Each ordered
 operation has exactly `arguments`, `operation_id`, `ordinal`, and `tool_id`.
-The four immutable inventories contain 23, 38, 8, and 8 operations,
+The four immutable inventories contain 23, 38, 7, and 8 operations,
 respectively; the canonical ordered IDs are recorded in the
 [multilane rehearsal runbook](runbooks/nexus_multilane_rehearsal.md#protected-release-approval-contract)
 and source-bound by `sumeragi_v2_release_approval_contract.py`. The canonical
 ordered operation-record SHA-256 values, in the same class order, are
-`aba5987e1a69dba70c8ef47478ecbf748165f13c3131045594473d47a5a9e95f`,
+`ec23b831d3c9359fc94952bbda3cccb92e84a39645bb14e5c19f130d01ded95b`,
 `eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`,
-`e922b8afbfe4848e8b2b5f858654477a28d710c3afcf7698a77276a8294681cf`,
+`a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`,
 and `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`.
 
 An approval file must be owner-held, mode `0400`, single-link, bounded,
@@ -2340,7 +2288,7 @@ runner and preserves the active logs and evidence directory for diagnosis;
 without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
-receipt binds the 91 pre-network corridor legs and
+receipt binds the 84 pre-network corridor legs and
 their exact 864-test production inventory, the separate 522-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
@@ -2357,10 +2305,9 @@ summary, and
 four run logs; exact deterministic G-12 seed completion, summary, and ten run
 logs; the two-hour G-12 fault-soak completion and log; the closed multilane
 scaling bundle, retained validator, four authenticated digest anchors, retained
-tool inventory, and repository-root binding; the chaos completion/log; and the
-exact-identity Taira completion/canonical JSON/full run log. It independently
-revalidates the matrix, G-4P, G-12, scaling, chaos, and Taira evidence, including
-replaying the retained scaling and Taira validators against the archived
+tool inventory, and repository-root binding; and the chaos completion/log. It
+independently revalidates the matrix, G-4P, G-12, scaling, and chaos evidence,
+including replaying the retained scaling validator against the archived
 artifacts.
 
 Every retained matrix localnet also has a canonical descriptor-relative

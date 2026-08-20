@@ -737,7 +737,7 @@ def _successor_production_recovery_source_fidelity_errors(
                     "fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network()",
                     "fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup()",
                     "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-                    "fn recovered_wal_sign_status_publication_is_exact_last_and_unwired()",
+                    "fn recovered_wal_test_fixture_publishes_status_last_and_owner_factory_stays_closed()",
                     "assert!(context_binding < body_root)",
                     "assert!(body_root < wal_path)",
                     "assert!(wal_path < apply_service)",

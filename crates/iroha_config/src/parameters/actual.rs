@@ -101,7 +101,8 @@ use url::Url;
 pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
 type Result<T, E> = core::result::Result<T, Report<E>>;
 macro_rules! impl_default {
-    ($type:ty => $body:block) => {
+    ($(#[$attr:meta])* $type:ty => $body:block) => {
+        $(#[$attr])*
         impl Default for $type {
             fn default() -> Self $body
         }
@@ -2811,8 +2812,7 @@ pub struct Nexus {
     /// Data-availability sampling configuration.
     pub da: Da,
 }
-#[allow(clippy::derivable_impls)]
-impl_default!(Nexus => {
+impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
         Self {
             storage: NexusStorage::default(),
             staking: NexusStaking::default(),

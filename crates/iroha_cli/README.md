@@ -36,7 +36,7 @@ group/other permissions and must contain the exact 32–256 byte printable-ASCII
 credential without a trailing newline:
 
 ```bash
-iroha taira write-canary \
+iroha --fee-payer authority taira write-canary \
   --public-root https://taira.sora.org \
   --onboarding-token-file "$HOME/.config/iroha/taira-onboarding.token"
 ```

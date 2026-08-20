@@ -945,7 +945,9 @@ fn duration_ms(duration: Duration) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{AxtHandleReplayKey, AxtProofEnvelope, LaneId};
+    use iroha_data_model::nexus::{
+        AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtProofEnvelope, LaneId,
+    };
     use iroha_primitives::Quantity;
     fn proof_request(batch_base64: impl Into<String>) -> ProofRequest {
         ProofRequest {
@@ -991,6 +993,7 @@ mod tests {
         AxtRemoteSpendClaimV1::new(
             AxtHandleReplayKey::from_parts(
                 DataSpaceId::new(12),
+                AxtHandleIssuerContextV1::default().asset_definition_incarnation,
                 [0xA5; 32],
                 7,
                 sub_nonce,

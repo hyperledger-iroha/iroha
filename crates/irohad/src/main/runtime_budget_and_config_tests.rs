@@ -14,6 +14,13 @@ fn runtime_budget_rejects_zero_underflow_and_overflow() {
 }
 
 #[test]
+fn statvfs_capacity_uses_the_fundamental_fragment_size() {
+    assert_eq!(statvfs_fragment_size(4_096, 1_048_576), Some(4_096));
+    assert_eq!(statvfs_fragment_size(0, 4_096), Some(4_096));
+    assert_eq!(statvfs_fragment_size(0, 0), None);
+}
+
+#[test]
 fn budget_root_allows_ancestor_symlink_but_rejects_exact_and_dangling_links() -> eyre::Result<()> {
     use std::os::unix::fs::symlink;
     let temp = tempfile::tempdir()?;

@@ -43,3 +43,18 @@ fn pre_execution_cycle_ceiling_rejects_over_bound() {
         ) if info.max_cycles == 43 && info.upper_bound == 42
     ));
 }
+    fn mutate_open_verify_envelope_proof_box(
+        mut proof: iroha_data_model::proof::ProofBox,
+        mutate: impl FnOnce(&mut ZkOpenVerifyEnvelope),
+    ) -> iroha_data_model::proof::ProofBox {
+        let mut envelope: ZkOpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode OpenVerifyEnvelope fixture");
+        mutate(&mut envelope);
+        proof.bytes = norito::to_bytes(&envelope).expect("encode mutated OpenVerifyEnvelope");
+        proof
+    }
+    #[test]
+    fn empty_overlay_is_noop() {
+        let ovl = TxOverlay::default();
+        assert!(ovl.is_empty());
+    }

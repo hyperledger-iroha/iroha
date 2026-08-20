@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Protect the explicit lane-reset state-test regressions."""
+"""Protect lane-reset regressions across the state test include closure."""
 
 from __future__ import annotations
 
@@ -8,41 +8,42 @@ import re
 import unittest
 from pathlib import Path
 
+from state_source_bundle import read_rust_source_bundle
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/state/tests.rs"
 AUTOSCALE_GUARD_PATH = REPO_ROOT / "scripts/tests/state_autoscale_case_matrix_source_test.py"
-AUTOSCALE_GUARD_SHA256 = "d59bcdd807640f5520dc881d48e5bfd3a4a4b6b7d977c038de6934173b533639"
+AUTOSCALE_GUARD_SHA256 = "7e04f0cd09ddd357b9de5bd8a30fcba47cca8ada13ff84b54fd3975ea8b0ea67"
 MAX_SOURCE_LINES = 36_806
 
 REGIONS = {
     "da_recreated_replay": (
         """state_test! { sync apply_lane_lifecycle_recreated_lane_hides_previous_da_indexes_after_kura_replay
 """,
-        """state_test! { sync non_nexus_lane_artifact_snapshots_track_only_implicit_default_route
+        """state_test! { sync durable_lane_diagnostics_reconstruct_after_kura_restart
 """,
-        "e3fcb841c0b94d8ecc2d657302ab92ed88e7c3f67aac51c3092867ab2552c9ad",
+        "73e05d3874b75b19e82275dc558509e50ebd7b9b7801ceadc88b4552e240b816",
     ),
     "relay_contract": (
         """state_test! { sync apply_lane_lifecycle_recreated_lane_prunes_verified_relay_contract_state
 """,
         """state_test! { sync apply_lane_lifecycle_recreated_lane_persists_da_cursor_reset
 """,
-        "c557981c6dcfe77e1e9c5a30d9f0283e21f4105a2063f2148312f546dee4df0b",
+        "caba17462b111defc48431025f6ee794f63f8c21067ad32102b33c6ff7af82c5",
     ),
     "cursor_journal": (
         """state_test! { sync apply_lane_lifecycle_recreated_lane_persists_da_cursor_reset
 """,
         """#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SameLaneDaResetCase""",
-        "0695484d1c8dcae1354c21c1e3f46e525c3cabe9667063c38b7899c77e20ccdf",
+        "f832f2550b43e3c8f7bb725106ef809a92473c9a0e0525464784d43b02207ac4",
     ),
     "da_policy_replay": (
         """#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SameLaneDaResetCase""",
-        """state_test! { sync apply_lane_lifecycle_rejects_when_nexus_disabled
-""",
-        "4853f49eb61057dec89494fc74a59efa0814346f4858014f27db57d952b2c68a",
+        "fn install_lane_manifest_registry(",
+        "76570a7df1314385e70b57d768ec9ddb871caa3d392ef6a80e5fce1150a72ab7",
     ),
 }
 
@@ -259,8 +260,10 @@ def _test_declaration(test_name: str, declaration_kind: str) -> str:
     raise AssertionError(f"unknown declaration kind: {declaration_kind}")
 
 
-def validate_source(source: str) -> None:
-    if len(source.splitlines()) > MAX_SOURCE_LINES:
+def validate_source(source: str, *, parent_source: str | None = None) -> None:
+    if parent_source is None:
+        parent_source = SOURCE_PATH.read_text(encoding="utf-8")
+    if len(parent_source.splitlines()) > MAX_SOURCE_LINES:
         raise GuardError("state/tests.rs exceeded the frozen lane-reset source budget")
     regions = {label: _region(source, label) for label in REGIONS}
     for test_name, (label, declaration_kind) in EXPECTED_TESTS.items():
@@ -301,7 +304,8 @@ def _replace_in_region(source: str, label: str, old: str, new: str) -> str:
 class StateLaneResetCaseMatrixSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.source = SOURCE_PATH.read_text()
+        cls.parent_source = SOURCE_PATH.read_text(encoding="utf-8")
+        cls.source = read_rust_source_bundle(SOURCE_PATH, root=REPO_ROOT)
 
     def assert_rejected(self, mutated: str) -> None:
         with self.assertRaises(GuardError):
@@ -467,7 +471,12 @@ class StateLaneResetCaseMatrixSourceTests(unittest.TestCase):
         self.assert_rejected(mutated)
 
     def test_source_budget_growth_is_rejected(self) -> None:
-        self.assert_rejected(self.source + "// synthetic growth\n" * 10)
+        growth = MAX_SOURCE_LINES - len(self.parent_source.splitlines()) + 1
+        with self.assertRaises(GuardError):
+            validate_source(
+                self.source,
+                parent_source=self.parent_source + "// synthetic growth\n" * growth,
+            )
 
 
 if __name__ == "__main__":

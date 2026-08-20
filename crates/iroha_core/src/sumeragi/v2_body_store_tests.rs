@@ -1,6 +1,16 @@
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, fs, num::NonZeroU64, path::Path};
+    use super::{
+        BlockSignaturePolicy, BodyValidationError, BodyValidationRejectionIdentity,
+        QuarantinedValidationOutcome, RecoveredTerminalValidateOutcomeCatalogError,
+        RevalidatedRejectedBody, STORE_MAGIC, STORE_VERSION, V2BodyStore, V2BodyStoreError,
+        VALIDATED_MAGIC, VALIDATION_OUTCOME_MARKER_VERSION, ValidatedBodyReceipt,
+        ValidationOutcomeMarker, ValidationOutcomeMarkerKind, write_validation_outcome_marker,
+    };
+    use crate::sumeragi::{
+        v2::RecoveredValidationAuthority, v2_apply::VerifiedRecoveredFinalitySubject,
+        v2_chunks::encode_payload,
+    };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         NetworkId,
@@ -11,19 +21,8 @@ mod tests {
         merge::MergeQuorumCertificate,
         peer::PeerId,
     };
+    use std::{cell::Cell, fs, num::NonZeroU64, path::Path};
     use tempfile::TempDir;
-    use super::{
-        BlockSignaturePolicy, BodyValidationCompletion, BodyValidationError,
-        BodyValidationRejectionIdentity, QuarantinedValidationOutcome,
-        RecoveredTerminalValidateOutcomeCatalogError, RevalidatedRejectedBody, STORE_MAGIC,
-        STORE_VERSION, V2BodyStore, V2BodyStoreError, VALIDATED_MAGIC,
-        VALIDATION_OUTCOME_MARKER_VERSION, ValidatedBodyReceipt, ValidationOutcomeMarker,
-        ValidationOutcomeMarkerKind, write_validation_outcome_marker,
-    };
-    use crate::sumeragi::{
-        v2::RecoveredValidationAuthority, v2_apply::VerifiedRecoveredFinalitySubject,
-        v2_chunks::encode_payload, v2_effects::BodyValidationTask,
-    };
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x94; Hash::LENGTH]),
@@ -83,10 +82,10 @@ mod tests {
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1_048_576,
+                chunk_size_bytes: wire::MAX_DA_CHUNK_SIZE_BYTES,
                 data_shards: 1,
                 parity_shards: 1,
-                max_payload_size_bytes: 1_048_576,
+                max_payload_size_bytes: u64::from(wire::MAX_DA_CHUNK_SIZE_BYTES),
                 max_chunk_count: 2,
             },
             leader_seed: [0x42; 32],
@@ -446,24 +445,17 @@ mod tests {
                 .expect("inspect retained exact body"),
             Some((manifest, receipt.clone()))
         );
-        let task = BodyValidationTask::for_test(43, receipt.clone());
         let deferred = reopened
-            .execute_validation_task(&task, |_| {
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
                 Err::<wire::ExecutionCommitment, _>(FixtureValidationError::MissingMergeSidecar(
                     reference.clone(),
                 ))
             })
             .expect("ordinary validation defers on the exact missing sidecar");
-        assert!(matches!(
-            deferred,
-            BodyValidationCompletion::DeferredMergeSidecar {
-                reference: deferred_reference,
-                ..
-            } if deferred_reference == reference
-        ));
+        assert_eq!(deferred.missing_merge_sidecar(), Some(&reference));
         assert!(reopened.validated_recovery_catalog().is_empty());
         let validated = reopened
-            .execute_validation_task(&task, |_| {
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
                 Ok::<_, FixtureValidationError>(execution_commitment)
             })
             .expect("ordinary bounded retry validates after sidecar recovery");
@@ -774,13 +766,16 @@ mod tests {
             .expect("store the origin-view body");
         let execution_commitment =
             ValidatedBodyReceipt::for_test(origin_receipt.clone()).execution_commitment();
-        let origin_task = BodyValidationTask::for_test(51, origin_receipt.clone());
         let first_callback_ran = Cell::new(false);
         let origin_validation = store
-            .execute_validation_task(&origin_task, |_| {
-                first_callback_ran.set(true);
-                Ok::<_, FixtureValidationError>(execution_commitment)
-            })
+            .execute_durable_validation(
+                origin_receipt.clone(),
+                origin_receipt.manifest_hash(),
+                |_| {
+                    first_callback_ran.set(true);
+                    Ok::<_, FixtureValidationError>(execution_commitment)
+                },
+            )
             .expect("validate the exact body once");
         assert!(first_callback_ran.get());
         assert_eq!(
@@ -811,10 +806,14 @@ mod tests {
             .expect("the original leader signature authenticates an unchanged reproposal body");
         let callback_ran = Cell::new(false);
         let later_validation = store
-            .execute_validation_task(&BodyValidationTask::for_test(52, later_receipt), |_| {
-                callback_ran.set(true);
-                Ok::<_, FixtureValidationError>(execution_commitment)
-            })
+            .execute_durable_validation(
+                later_receipt.clone(),
+                later_receipt.manifest_hash(),
+                |_| {
+                    callback_ran.set(true);
+                    Ok::<_, FixtureValidationError>(execution_commitment)
+                },
+            )
             .expect("revalidate the unchanged body under its new proposal round");
         assert!(
             callback_ran.get(),
@@ -937,12 +936,15 @@ mod tests {
             ValidatedBodyReceipt::for_test(later_receipt.clone()).execution_commitment();
         assert_ne!(origin_commitment, conflicting_commitment);
         let callback_ran = Cell::new(false);
-        let later_task = BodyValidationTask::for_test(52, later_receipt.clone());
         let error = store
-            .execute_validation_task(&later_task, |_| {
-                callback_ran.set(true);
-                Ok::<_, FixtureValidationError>(conflicting_commitment)
-            })
+            .execute_durable_validation(
+                later_receipt.clone(),
+                later_receipt.manifest_hash(),
+                |_| {
+                    callback_ran.set(true);
+                    Ok::<_, FixtureValidationError>(conflicting_commitment)
+                },
+            )
             .expect_err("a prior-view marker must not bypass exact-round validation");
         assert!(
             callback_ran.get(),
@@ -1015,24 +1017,17 @@ mod tests {
         let (body, manifest) = body_and_manifest(&context, &keys, None);
         let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
         let receipt = store.store(manifest, body).expect("store exact body");
-        let task = BodyValidationTask::for_test(41, receipt.clone());
         let reference = missing_merge_reference(&receipt);
         let execution_commitment =
             ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
         let deferred = store
-            .execute_validation_task(&task, |_| {
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
                 Err::<wire::ExecutionCommitment, _>(FixtureValidationError::MissingMergeSidecar(
                     reference.clone(),
                 ))
             })
             .expect("classify exact missing sidecar as deferred");
-        assert!(matches!(
-            deferred,
-            BodyValidationCompletion::DeferredMergeSidecar {
-                reference: deferred_reference,
-                ..
-            } if deferred_reference == reference
-        ));
+        assert_eq!(deferred.missing_merge_sidecar(), Some(&reference));
         assert!(store.validated_recovery_catalog().is_empty());
         assert!(
             !store
@@ -1040,7 +1035,7 @@ mod tests {
                 .exists()
         );
         let rejected = store
-            .execute_validation_task(&task, |_| {
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
                 Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
                     "invalid candidate",
                 ))
@@ -1058,7 +1053,7 @@ mod tests {
                 .expect("rejection marker is durable before returning the outcome");
         let callback_ran = Cell::new(false);
         let repeated = store
-            .execute_validation_task(&task, |_| {
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
                 callback_ran.set(true);
                 Ok::<_, FixtureValidationError>(execution_commitment)
             })
@@ -1525,8 +1520,12 @@ mod tests {
         assert_eq!(store.validated, validated_before);
         assert_eq!(store.rejected, rejected_before);
     }
-    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(terminal_validate_outcome_catalog_cut_is_opaque_and_move_only);
-    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(durable_validation_surface_has_no_scheduler_identity_or_ordinal);
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+        terminal_validate_outcome_catalog_cut_is_opaque_and_move_only
+    );
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+        durable_validation_surface_has_no_scheduler_identity_or_ordinal
+    );
     #[test]
     fn rejection_marker_version_code_and_frame_binding_fail_closed() {
         let directory = TempDir::new().expect("temporary directory");

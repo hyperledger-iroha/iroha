@@ -36,7 +36,7 @@ pub mod isi {
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
         name::Name,
-        nexus::{DataSpaceCatalog, DataSpaceId, LaneVisibility},
+        nexus::{AxtAssetIncarnationV1, DataSpaceCatalog, DataSpaceId, LaneVisibility},
         validation_fee::ValidationFeePlainElectorateRulesV1,
     };
     use iroha_logger::prelude::*;
@@ -69,42 +69,6 @@ pub mod isi {
         }
     }
     include!("domain/asset_alias_scope.rs");
-    fn ensure_global_asset_definition_registered_on_authoritative_route(
-        state_transaction: &StateTransaction<'_, '_>,
-        definition: &AssetDefinition,
-    ) -> Result<(), InstructionExecutionError> {
-        if state_transaction.replay_compatibility {
-            return Ok(());
-        }
-        ensure_global_asset_definition_home_is_public_or_universal(state_transaction, definition)?;
-        let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "asset definition {} owning domain has no active dataspace",
-                        definition.id()
-                    )
-                    .into(),
-                )
-            })?;
-        let route_dataspace = state_transaction
-            .current_dataspace_id
-            .or(state_transaction.world.current_dataspace_id);
-        if let Some(route_dataspace) = route_dataspace
-            && route_dataspace != home_dataspace
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "global asset definition {} must be registered on its authoritative dataspace {}; current route is {}",
-                    definition.id(),
-                    home_dataspace.as_u64(),
-                    route_dataspace.as_u64()
-                )
-                .into(),
-            ));
-        }
-        Ok(())
-    }
     /// Restore or retarget the continuity record for an already validated alias binding.
     ///
     /// # Errors
@@ -2302,9 +2266,31 @@ pub mod isi {
             }
             let mut stored_definition = asset_definition.clone();
             stored_definition.alias = None;
+            let registration_header_hash = state_transaction._curr_block.hash();
+            let (execution_identity, lifecycle_ordinal) = state_transaction
+                .next_lifecycle_transition_seed()
+                .map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "asset-definition registration lacks deterministic execution identity: {error}"
+                        )
+                        .into(),
+                    )
+                })?;
+            let incarnation = AxtAssetIncarnationV1::derive(
+                state_transaction.network_id(),
+                &asset_definition_id,
+                &registration_header_hash,
+                &execution_identity,
+                lifecycle_ordinal,
+            );
             state_transaction
                 .world
                 .insert_asset_definition_entry(asset_definition_id.clone(), stored_definition);
+            state_transaction
+                .world
+                .axt_asset_incarnations
+                .insert(asset_definition_id.clone(), incarnation);
             if let Some(alias) = asset_definition.alias().as_ref().cloned() {
                 let bound_at_ms = state_transaction.block_unix_timestamp_ms();
                 state_transaction.world.bind_asset_definition_alias(

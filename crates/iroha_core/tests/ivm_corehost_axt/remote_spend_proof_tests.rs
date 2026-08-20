@@ -366,6 +366,206 @@ fn core_host_rejects_correctly_signed_handle_for_another_asset_at_use() {
     );
 }
 
+fn signed_abi_handle_with_incarnation(
+    handle: AssetHandle,
+    dataspace: DataSpaceId,
+    asset_definition_incarnation: iroha_data_model::nexus::AxtAssetIncarnationV1,
+) -> AssetHandle {
+    let binding = handle
+        .binding_array()
+        .expect("fixture AXT binding must be 32 bytes");
+    let manifest_root: [u8; 32] = handle
+        .manifest_view_root
+        .as_slice()
+        .try_into()
+        .expect("fixture manifest root must be 32 bytes");
+    let draft = iroha_data_model::nexus::AssetHandleDraft {
+        asset_definition_id: handle.asset_definition_id,
+        scope: handle.scope,
+        subject: iroha_data_model::nexus::HandleSubject {
+            account: handle.subject.account,
+            origin_dsid: handle.subject.origin_dsid,
+        },
+        budget: iroha_data_model::nexus::HandleBudget {
+            remaining: handle.budget.remaining,
+            per_use: handle.budget.per_use,
+        },
+        handle_era: handle.handle_era,
+        sub_nonce: handle.sub_nonce,
+        group_binding: iroha_data_model::nexus::GroupBinding {
+            composability_group_id: handle.group_binding.composability_group_id,
+            epoch_id: handle.group_binding.epoch_id,
+        },
+        target_lane: handle.target_lane,
+        axt_binding: AxtBinding::new(binding),
+        manifest_view_root: manifest_root,
+        expiry_slot: handle.expiry_slot,
+        max_clock_skew_ms: handle.max_clock_skew_ms,
+    };
+    let mut context = axt_test_issuer_context(dataspace, draft.manifest_view_root);
+    context.asset_definition_incarnation = asset_definition_incarnation;
+    let model = draft
+        .sign_by_issuer_v1(context, axt_test_issuer().private_key())
+        .expect("sign AXT issuer fixture with explicit asset incarnation");
+    abi_asset_handle_from_signed_model(model)
+}
+
+#[test]
+fn core_host_rejects_correctly_signed_stale_asset_incarnation_at_use() {
+    let authority = fixture_authority();
+    let dsid = DataSpaceId::new(112);
+    let manifest_root = [0x6C; 32];
+    let lane = LaneId::new(0);
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: Vec::new(),
+    };
+    let binding = axt::compute_binding(&descriptor).expect("descriptor binding");
+    let (handle, intent, amount) = single_remote_spend(
+        &authority,
+        binding,
+        dsid,
+        manifest_root,
+        lane,
+        1,
+        Some(dsid),
+        FIXTURE_MERCHANT_ACCOUNT_LITERAL,
+    );
+    let control_proof = proof_blob_for_remote_spend(
+        dsid,
+        manifest_root,
+        b"host-current-asset-incarnation".to_vec(),
+        25,
+        &handle,
+        &intent,
+        &amount,
+    );
+    let mut control = host_with_policy(authority.clone(), dsid, manifest_root, lane, 5);
+    use_single_handle_envelope(&mut control, &descriptor, &control_proof, &handle, &intent)
+        .expect("a handle signed for the exact live asset incarnation must pass USE");
+
+    let stale_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
+        &axt_test_network_id(),
+        &axt_test_asset_definition_id(),
+        &HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"iroha-corehost-axt-stale-registration-header",
+        )),
+        &Hash::new(b"iroha-corehost-axt-stale-registration-execution"),
+        9,
+    );
+    assert_ne!(stale_incarnation, axt_test_asset_incarnation());
+    let stale_handle = signed_abi_handle_with_incarnation(handle, dsid, stale_incarnation);
+    let stale_proof = proof_blob_for_remote_spend(
+        dsid,
+        manifest_root,
+        b"host-stale-asset-incarnation".to_vec(),
+        25,
+        &stale_handle,
+        &intent,
+        &amount,
+    );
+    let mut attack = host_with_policy(authority, dsid, manifest_root, lane, 5);
+    assert_eq!(
+        use_single_handle_envelope(
+            &mut attack,
+            &descriptor,
+            &stale_proof,
+            &stale_handle,
+            &intent,
+        ),
+        Err(VMError::PermissionDenied),
+        "USE must reject a correctly signed handle from an earlier asset incarnation"
+    );
+    let reject = attack.take_axt_reject_for_tests().expect("reject context");
+    assert_eq!(reject.reason, AxtRejectReason::PolicyDenied);
+    assert!(
+        reject.detail.contains("stale asset-definition incarnation"),
+        "unexpected stale-incarnation rejection: {}",
+        reject.detail
+    );
+}
+
+#[test]
+fn core_host_rejects_historical_incarnation_proof_for_current_handle() {
+    let authority = fixture_authority();
+    let dsid = DataSpaceId::new(113);
+    let manifest_root = [0x6D; 32];
+    let lane = LaneId::new(0);
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: Vec::new(),
+    };
+    let binding = axt::compute_binding(&descriptor).expect("descriptor binding");
+    let (current_handle, intent, amount) = single_remote_spend(
+        &authority,
+        binding,
+        dsid,
+        manifest_root,
+        lane,
+        1,
+        Some(dsid),
+        FIXTURE_MERCHANT_ACCOUNT_LITERAL,
+    );
+    let current_proof = proof_blob_for_remote_spend(
+        dsid,
+        manifest_root,
+        b"host-current-incarnation-proof".to_vec(),
+        25,
+        &current_handle,
+        &intent,
+        &amount,
+    );
+    let mut control = host_with_policy(authority.clone(), dsid, manifest_root, lane, 5);
+    use_single_handle_envelope(
+        &mut control,
+        &descriptor,
+        &current_proof,
+        &current_handle,
+        &intent,
+    )
+    .expect("proof and handle from the exact current asset incarnation must pass USE");
+
+    let historical_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
+        &axt_test_network_id(),
+        &axt_test_asset_definition_id(),
+        &HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"iroha-corehost-axt-historical-proof-registration",
+        )),
+        &Hash::new(b"iroha-corehost-axt-historical-proof-execution"),
+        11,
+    );
+    assert_ne!(historical_incarnation, axt_test_asset_incarnation());
+    let historical_handle =
+        signed_abi_handle_with_incarnation(current_handle.clone(), dsid, historical_incarnation);
+    let historical_proof = proof_blob_for_remote_spend(
+        dsid,
+        manifest_root,
+        b"host-historical-incarnation-proof".to_vec(),
+        25,
+        &historical_handle,
+        &intent,
+        &amount,
+    );
+    let mut attack = host_with_policy(authority, dsid, manifest_root, lane, 5);
+    assert_eq!(
+        use_single_handle_envelope(
+            &mut attack,
+            &descriptor,
+            &historical_proof,
+            &current_handle,
+            &intent,
+        ),
+        Err(VMError::PermissionDenied),
+        "a historical proof must not authorize a freshly signed current-incarnation handle"
+    );
+    let reject = attack.take_axt_reject_for_tests().expect("reject context");
+    assert_eq!(reject.reason, AxtRejectReason::Proof);
+    assert_eq!(
+        reject.detail,
+        "FASTPQ proof does not commit to the exact remote spend intent"
+    );
+}
+
 #[test]
 fn core_host_rejects_signed_origin_outside_bound_descriptor() {
     let authority = fixture_authority();

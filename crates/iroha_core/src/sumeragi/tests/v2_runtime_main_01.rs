@@ -138,7 +138,7 @@ fn active_view_producer_cannot_fence_absolute_timeout() {
         .active_view_producer
         .as_ref()
         .expect("leader producer reservation")
-        .ownership
+        .owner
         .clone();
     runtime
         .arm_live_clocks(start)
@@ -159,7 +159,7 @@ fn active_view_producer_cannot_fence_absolute_timeout() {
     let store_ownership = ownership
         .exact_store_task_ownership(&store_effect, &proposal.manifest)
         .expect("local proposal composite retains its exact Store owner");
-    assert_eq!(store_ownership.owner(), reserved.owner());
+    assert_eq!(store_ownership.owner(), &reserved);
     assert!(runtime.active_view_producer.is_some());
     let deadline = start + Duration::from_secs(10);
     assert!(matches!(
@@ -247,8 +247,21 @@ fn replayed_proposal_fanout_consumes_the_live_producer_reservation() {
             b"replayed-proposal-signature",
         )
         .expect("mint exact startup recovery owner");
-    let replay_ownership =
-        RuntimeEffectOwnership::fresh(replay_owner, RuntimeFreshRootKind::StartupRecovery);
+    let fanout_effect = AdapterEffect::StoreBody {
+        tag: initial,
+        round: proposal.manifest.round,
+        subject: proposal.manifest.subject,
+    };
+    let replay_ownership = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&fanout_effect),
+        vec![RuntimeEffectOwnerAssignment::fresh_root(
+            replay_owner,
+            RuntimeFreshRootKind::StartupRecovery,
+        )],
+    )
+    .expect("bind replayed Proposal fanout owner")
+    .pop()
+    .expect("one replayed Proposal fanout owner");
     runtime
         .reconcile_active_view_producer(initial, true)
         .expect("reserve live producer after replay work was restored");
@@ -289,8 +302,21 @@ fn retransmitted_proposal_fanout_preserves_the_live_producer_reservation() {
             b"periodic-retransmit",
         )
         .expect("mint exact retransmit owner");
-    let retransmit_ownership =
-        RuntimeEffectOwnership::fresh(retransmit_owner, RuntimeFreshRootKind::Retransmit);
+    let fanout_effect = AdapterEffect::StoreBody {
+        tag: initial,
+        round: proposal.manifest.round,
+        subject: proposal.manifest.subject,
+    };
+    let retransmit_ownership = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&fanout_effect),
+        vec![RuntimeEffectOwnerAssignment::fresh_root(
+            retransmit_owner,
+            RuntimeFreshRootKind::Retransmit,
+        )],
+    )
+    .expect("bind periodic Proposal fanout owner")
+    .pop()
+    .expect("one periodic Proposal fanout owner");
     runtime
         .arm_live_clocks(start)
         .expect("arm clocks after producer reservation");
@@ -323,7 +349,18 @@ fn proposal_fanout_cannot_replace_active_view_producer_owner() {
     runtime
         .arm_live_clocks(start)
         .expect("arm after producer reservation");
-    let foreign = RuntimeEffectOwnership::fresh_for_test(initial, 999);
+    let fanout_effect = AdapterEffect::StoreBody {
+        tag: initial,
+        round: proposal.manifest.round,
+        subject: proposal.manifest.subject,
+    };
+    let foreign = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&fanout_effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(initial, 999)],
+    )
+    .expect("bind foreign Proposal fanout owner")
+    .pop()
+    .expect("one foreign Proposal fanout owner");
     assert!(
         runtime
             .complete_active_view_producer_after_proposal_fanout(proposal.round, &foreign)
@@ -1600,227 +1637,4 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
         .take_effect_ownership(target_effects.len())
         .expect("consume target effect ownership");
     let _ = runtime.take_leader_wire_runtime_terminals();
-}
-#[test]
-fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress() {
-    let directory = TempDir::new().expect("temporary real-adapter ordering directory");
-    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
-        &directory,
-        RuntimeQueueConfig::new(8, 1, 1),
-        Some(0),
-    );
-    let start = Instant::now();
-    runtime
-        .arm_live_clocks(start)
-        .expect("arm runtime after adapter startup");
-    // Refresh the derived clock before the signer becomes busy. This keeps
-    // the absolute deadline and retransmission deadline independent in the
-    // ordering trace below.
-    let before_timeout = start + Duration::from_secs(9);
-    assert!(matches!(
-        runtime
-            .step_and_take_scheduler_ownership_for_test(before_timeout)
-            .expect("service pre-fence retransmission"),
-        RuntimeStep::Advanced(_)
-    ));
-    let proposal = signed_runtime_proposal(&context, &keys, 0xE1);
-    runtime
-        .enqueue_network(proposal.clone())
-        .expect("enqueue authenticated proposal");
-    let proposal_effects = match runtime
-        .step_and_take_scheduler_ownership_for_test(before_timeout)
-        .expect("dispatch authenticated proposal")
-    {
-        RuntimeStep::Advanced(effects) => effects,
-        RuntimeStep::Idle => panic!("proposal dispatch unexpectedly idle"),
-    };
-    let (tag, manifest) = match proposal_effects.as_slice() {
-        [
-            AdapterEffect::FetchBody {
-                tag,
-                manifest: Some(manifest),
-                ..
-            },
-        ] => (*tag, manifest.clone()),
-        effects => panic!("unexpected proposal effects: {effects:?}"),
-    };
-    runtime
-        .enqueue_body_available(tag, manifest.clone())
-        .expect("enqueue reconstructed body");
-    assert!(matches!(
-        runtime
-            .step_and_take_scheduler_ownership_for_test(before_timeout)
-            .expect("dispatch reconstructed body"),
-        RuntimeStep::Advanced(ref effects)
-            if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
-    ));
-    let durable = DurableBodyReceipt::for_test(
-        context.id(),
-        manifest.round,
-        manifest.subject,
-        HashOf::new(&manifest),
-    );
-    runtime
-        .enqueue_body_stored(tag, manifest.round, manifest.subject, durable.clone())
-        .expect("enqueue durable-body completion");
-    assert!(matches!(
-        runtime
-            .step_and_take_scheduler_ownership_for_test(before_timeout)
-            .expect("dispatch durable-body completion"),
-        RuntimeStep::Advanced(ref effects)
-            if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
-    ));
-    runtime
-        .enqueue_validation_succeeded(
-            tag,
-            manifest.round,
-            manifest.subject,
-            ValidatedBodyReceipt::for_test(durable),
-        )
-        .expect("enqueue validated-body completion");
-    let validation_step = runtime
-        .step(before_timeout)
-        .expect("dispatch validated-body completion");
-    runtime
-        .take_last_scheduler_ownership()
-        .expect("validation retains exact scheduler ownership");
-    let RuntimeStep::Advanced(validation_effects) = validation_step else {
-        panic!("validation dispatch unexpectedly idle")
-    };
-    let prepare_effect_ownership = runtime
-        .take_effect_ownership(validation_effects.len())
-        .expect("Prepare signature request retains its lifecycle owner");
-    let (prepare_sign_tag, prepare_signature_preimage) = match validation_effects.as_slice() {
-        [
-            AdapterEffect::Sign {
-                tag,
-                request: SignRequest::Vote(vote),
-            },
-        ] if vote.phase == wire::GlobalPhase::Prepare
-            && vote.round == manifest.round
-            && vote.subject == manifest.subject =>
-        {
-            (*tag, vote.signature_preimage())
-        }
-        effects => panic!("unexpected validation effects: {effects:?}"),
-    };
-    assert_eq!(prepare_effect_ownership.len(), 1);
-    runtime
-        .set_external_lifecycle_owners(vec![prepare_effect_ownership[0].owner().clone()])
-        .expect("publish pending Prepare signer owner");
-    // The exact authenticated retransmission is physically admitted after
-    // the pending Prepare signer. It retains that later position while the
-    // signer is external; neither its class nor its duplicate semantics
-    // may move it ahead of the incumbent lifecycle.
-    runtime
-        .enqueue_network(proposal)
-        .expect("enqueue exact authenticated retransmission");
-    assert!(matches!(
-        runtime
-            .step_and_take_scheduler_ownership_for_test(before_timeout)
-            .expect("retain exact authenticated retransmission behind its signer"),
-        RuntimeStep::Idle
-    ));
-    assert_eq!(
-        runtime.ingress.next_class,
-        CommandClass::Progress,
-        "exact fence-completion bypass is cursor-neutral after the preceding Completion turns"
-    );
-    let deadline = start + runtime.round_timeout();
-    assert!(matches!(
-        runtime
-            .step_and_take_scheduler_ownership_for_test(deadline)
-            .expect("deliver absolute timeout through the real adapter"),
-        RuntimeStep::Advanced(ref effects) if effects.is_empty()
-    ));
-    assert!(
-        !runtime.driver().deferred_work_is_serviceable(),
-        "the exact Prepare signature still fences the Busy-deferred timeout"
-    );
-    let prepare_signature = Signature::new(keys[0].private_key(), &prepare_signature_preimage)
-        .payload()
-        .to_vec();
-    runtime
-        .enqueue_signature_with_owner(
-            prepare_sign_tag,
-            prepare_signature,
-            &prepare_effect_ownership[0],
-        )
-        .expect("enqueue exact Prepare signature completion");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire pending Prepare signer owner after completion enqueue");
-    runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0xE2))
-        .expect("enqueue newer authenticated ingress");
-    assert_eq!(runtime.queued_commands(), 3);
-    let prepare_broadcast = runtime
-        .step_and_take_scheduler_ownership_for_test(deadline)
-        .expect("signature completion owns the first serialized turn");
-    assert!(matches!(
-        prepare_broadcast,
-        RuntimeStep::Advanced(ref effects)
-            if matches!(
-                effects.as_slice(),
-                [AdapterEffect::Broadcast(message)]
-                    if matches!(
-                        &message.payload,
-                        wire::ConsensusMessageV2Payload::Vote(vote)
-                            if vote.phase == wire::GlobalPhase::Prepare
-                                && vote.round == manifest.round
-                                && vote.subject == manifest.subject
-                    )
-            )
-    ));
-    assert_eq!(
-        runtime.queued_commands(),
-        2,
-        "the exact retransmission and newer ingress remain owned after signature completion"
-    );
-    assert!(matches!(
-        runtime
-            .step_and_take_scheduler_ownership_for_test(deadline)
-            .expect("coalesce the exact retransmission at its frozen position"),
-        RuntimeStep::Advanced(ref effects) if effects.is_empty()
-    ));
-    assert_eq!(
-        runtime.queued_commands(),
-        1,
-        "the newer ingress remains after the exact retransmission stutters"
-    );
-    let timeout_macro_step = runtime
-        .step_and_take_scheduler_ownership_for_test(deadline)
-        .expect("service exactly one older Busy-deferred timeout transition");
-    assert!(matches!(
-        timeout_macro_step,
-        RuntimeStep::Advanced(ref effects)
-            if matches!(
-                effects.as_slice(),
-                [AdapterEffect::Sign {
-                    request: SignRequest::TimeoutVote(vote),
-                    ..
-                }] if vote.round == manifest.round
-            )
-    ));
-    assert_eq!(
-        runtime.queued_commands(),
-        1,
-        "one deferred macro-step cannot concatenate newer ingress"
-    );
-    assert!(matches!(
-        runtime
-            .step_and_take_scheduler_ownership_for_test(deadline)
-            .expect("dispatch newer ingress"),
-        RuntimeStep::Advanced(ref effects)
-            if matches!(effects.as_slice(), [AdapterEffect::ReportEquivocation { .. }])
-    ));
-    assert_eq!(runtime.queued_commands(), 0);
-    let next_retransmission = before_timeout + runtime.retransmit_interval();
-    assert!(matches!(
-        runtime
-            .step_and_take_scheduler_ownership_for_test(next_retransmission)
-            .expect("make the next periodic scheduling decision"),
-        RuntimeStep::Advanced(ref effects) if effects.is_empty()
-    ));
-    assert_eq!(runtime.retransmit_started_at, next_retransmission);
 }

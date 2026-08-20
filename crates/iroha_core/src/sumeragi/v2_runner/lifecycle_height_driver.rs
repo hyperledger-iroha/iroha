@@ -328,6 +328,21 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
 
     let mut outer_turns = outer_ingress_turns(limit, context_id, height);
     while let Some(current_turn) = outer_turns.next_current() {
+        let recovered_output_settled = activated.with_runner_runtime(
+            runner,
+            |owner, executor, services, _local_proposal| {
+                super::super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+                    owner, executor, services,
+                )
+                .map_err(V2RunnerError::from)
+            },
+        )?;
+        if recovered_output_settled {
+            // A preceding completion may have exposed this exact ordinal as
+            // the new Ready minimum. Settle it before the turn driver can
+            // acquire a registry-backed lease for the cold-only carrier.
+            return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+        }
         match current_turn.target() {
             LifecycleRunnerRankTarget::Completion => {
                 use super::super::v2_lifecycle_coordinator::{
@@ -388,22 +403,23 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 }
             }
             LifecycleRunnerRankTarget::Runtime => {
-                let installed_terminal = activated.with_runner_runtime(
+                let (installed_terminal, lifecycle_yield) = activated.with_runner_runtime(
                     runner,
-                    |_owner, executor, services, _local_proposal| {
+                    |owner, executor, services, _local_proposal| {
                         let was_terminal = executor
                             .local_proposal_directive()?
                             .decided_subject()
                             .is_some();
-                        advance_executor(receiver, executor, services, 1)?;
+                        let lifecycle_yield =
+                            advance_executor(receiver, owner, executor, services, 1)?;
                         let is_terminal = executor
                             .local_proposal_directive()?
                             .decided_subject()
                             .is_some();
-                        Ok::<_, V2RunnerError>(!was_terminal && is_terminal)
+                        Ok::<_, V2RunnerError>((!was_terminal && is_terminal, lifecycle_yield))
                     },
                 )?;
-                if installed_terminal {
+                if installed_terminal || lifecycle_yield {
                     return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
                 }
                 if producer_claim.blocks_ingress() {

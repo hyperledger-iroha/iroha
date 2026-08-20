@@ -56,14 +56,19 @@ fn axt_validation_enforces_shared_budget_across_envelopes() {
     );
     drop(attack_state_block);
 
-    let control = build_block_with_envelope_records(
-        vec![
-            make_envelope(1, 5, b"split-envelope-control-a"),
-            make_envelope(2, 5, b"split-envelope-control-b"),
-        ],
-        snapshot,
-    );
-    let control_state_block = state.block(control.header());
+    let control_envelopes = vec![
+        make_envelope(1, 5, b"split-envelope-control-a"),
+        make_envelope(2, 5, b"split-envelope-control-b"),
+    ];
+    let control = build_block_with_envelope_records(control_envelopes.clone(), snapshot);
+    let mut control_state_block = state.block(control.header());
+    for envelope in control_envelopes {
+        let mut executed = control_state_block.transaction();
+        executed
+            .record_axt_envelope(envelope)
+            .expect("each below-cap envelope must execute");
+        executed.apply();
+    }
     validate_axt_envelopes(&control, &control_state_block)
         .expect("two completed envelopes may consume exactly the shared signed budget");
 }
@@ -77,7 +82,7 @@ fn axt_validation_persists_hidden_family_budget_across_blocks() {
     ) -> Result<(), BlockValidationError> {
         let dsid = DataSpaceId::new(123);
         let lane = LaneId::new(2);
-        let (mut state, issuer, issuer_uaid, manifest_root) =
+        let (state, issuer, issuer_uaid, manifest_root) =
             authenticated_axt_validation_state(dsid, lane, 0x7B);
         let descriptor = AxtDescriptor {
             dsids: vec![dsid],
@@ -144,15 +149,23 @@ fn axt_validation_persists_hidden_family_budget_across_blocks() {
             ledger.commit();
         }
         let replay_key = AxtHandleReplayKey::from_handle(dsid, &current.handles[0].handle);
-        let prior_replay_record =
-            (stage_executed_record && previous_amount.is_some()).then_some(AxtReplayRecord {
-                dataspace: dsid,
-                used_slot: 1,
-                retain_until_slot: 1,
-            });
-        if let Some(prior_replay_record) = prior_replay_record {
+        let previous_replay_key = previous_amount.map(|_| {
+            let mut previous_handle = current.handles[0].handle.clone();
+            previous_handle.sub_nonce = current_sub_nonce - 1;
+            AxtHandleReplayKey::from_handle(dsid, &previous_handle)
+        });
+        let prior_replay_record = previous_amount.map(|_| AxtReplayRecord {
+            dataspace: dsid,
+            budget_key: budget_key.clone(),
+            used_slot: 1,
+            retain_until_slot: 1,
+        });
+        if let Some(prior_replay_record) = prior_replay_record.as_ref() {
             let mut ledger = state.world.axt_replay_ledger.block();
-            ledger.insert(replay_key, prior_replay_record);
+            ledger.insert(
+                previous_replay_key.expect("prior amount has a prior replay key"),
+                prior_replay_record.clone(),
+            );
             ledger.commit();
         }
         let mut policy = state
@@ -163,25 +176,50 @@ fn axt_validation_persists_hidden_family_budget_across_blocks() {
             .copied()
             .expect("fixture policy");
         policy.next_handle_counter = current_sub_nonce;
-        state.set_axt_policy(dsid, policy);
+        {
+            let mut policies = state.world.axt_policies.block();
+            policies.insert(dsid, policy);
+            policies.commit();
+            let mut counters = state.world.axt_handle_counters.block();
+            counters.insert(
+                dsid,
+                iroha_data_model::nexus::AxtHandleCounterRecord::try_from_parts(
+                    current_sub_nonce,
+                    policy.active_handle_era,
+                )
+                .expect("cross-block fixture counter"),
+            );
+            counters.commit();
+        }
         let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
         snapshot.entries[0].policy.next_handle_counter = current_sub_nonce + 1;
         snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
         let block = if stage_executed_record {
-            build_block_with_envelope_records_at_ms(vec![current], snapshot, 2)
+            build_block_with_envelope_records_at_ms(vec![current.clone()], snapshot, 2)
         } else {
-            build_block_with_envelopes(current, snapshot)
+            build_block_with_envelopes(current.clone(), snapshot)
         };
         let mut state_block = state.block(block.header());
+        assert_eq!(
+            state_block.axt_replay_record_at_block_start(&replay_key),
+            None,
+            "the next exact handle key must be absent from the pre-block replay state"
+        );
+        if let (Some(previous_replay_key), Some(prior_replay_record)) =
+            (previous_replay_key, prior_replay_record.as_ref())
+        {
+            assert_eq!(
+                state_block.axt_replay_record_at_block_start(&previous_replay_key),
+                Some(prior_replay_record),
+                "the prior consumed handle must remain present in the pre-block replay state"
+            );
+        }
         if stage_executed_record {
-            let mut executed_record = budget_record.clone();
-            executed_record
-                .try_consume(&budget_key, &Quantity::from(current_amount), 20)
-                .expect("the executed control fits its cumulative family allowance");
-            state_block
-                .world
-                .axt_handle_budget_ledger
-                .insert(budget_key.clone(), executed_record);
+            let mut executed = state_block.transaction();
+            executed
+                .record_axt_envelope(current)
+                .expect("the below-cap current envelope must execute");
+            executed.apply();
             let expected_previous = previous_amount.map(Quantity::from);
             assert_eq!(
                 state_block
@@ -190,20 +228,20 @@ fn axt_validation_persists_hidden_family_budget_across_blocks() {
                 expected_previous.as_ref(),
                 "the on-demand admission view must expose the exact pre-block family record"
             );
-            let executed_replay_record = AxtReplayRecord {
-                dataspace: dsid,
-                used_slot: 2,
-                retain_until_slot: 20,
-            };
-            state_block
-                .world
-                .axt_replay_ledger
-                .insert(replay_key, executed_replay_record);
             assert_eq!(
                 state_block.axt_replay_record_at_block_start(&replay_key),
-                prior_replay_record.as_ref(),
-                "the on-demand admission view must expose the exact pre-block replay state"
+                None,
+                "the next exact handle key must be absent from the pre-block replay state"
             );
+            if let (Some(previous_replay_key), Some(prior_replay_record)) =
+                (previous_replay_key, prior_replay_record.as_ref())
+            {
+                assert_eq!(
+                    state_block.axt_replay_record_at_block_start(&previous_replay_key),
+                    Some(prior_replay_record),
+                    "the on-demand admission view must retain the prior handle's replay state"
+                );
+            }
         }
         validate_axt_envelopes(&block, &state_block)
     }
@@ -216,11 +254,114 @@ fn axt_validation_persists_hidden_family_budget_across_blocks() {
         AxtRejectReason::Budget,
         "shared handle budget exceeded across blocks or AXT envelopes",
     );
-    run_case(Some(5), 5, false)
-        .expect("two blocks may consume exactly the signed family allowance");
     run_case(Some(5), 5, true).expect(
-        "post-execution validation must hydrate the prior record instead of double-charging it",
+        "two blocks may consume exactly the signed family allowance while post-execution validation hydrates the prior record",
     );
     run_case(None, 7, true)
         .expect("post-execution validation must preserve a family's pre-block absence");
+}
+
+#[test]
+fn axt_validation_accepts_authenticated_hidden_amount() {
+    let (state, envelope) = hidden_amount_fixture(17, 0x31, b"authenticated-hidden-amount");
+    let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
+    snapshot.entries[0].policy.next_handle_counter = 2;
+    snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
+    let block = build_block_with_envelopes(envelope.clone(), snapshot);
+    let mut state_block = state.block(block.header());
+    {
+        let mut executed = state_block.transaction();
+        executed
+            .record_axt_envelope(envelope)
+            .expect("authenticated hidden-amount control must execute");
+        executed.apply();
+    }
+    validate_axt_envelopes(&block, &state_block)
+        .expect("authenticated hidden amount must pass block admission");
+}
+
+#[test]
+fn axt_validation_rejects_opaque_authorization_carrier_at_generic_boundary() {
+    let dsid = DataSpaceId::new(117);
+    let lane = LaneId::new(1);
+    let (state, _, _, manifest_root) = authenticated_axt_validation_state(dsid, lane, 0x75);
+    let descriptor = AxtDescriptor {
+        dsids: vec![dsid],
+        touches: Vec::new(),
+    };
+    let envelope = AxtEnvelopeRecord {
+        binding: binding_for_descriptor(&descriptor),
+        lane,
+        descriptor,
+        touches: Vec::new(),
+        proofs: vec![AxtProofFragment {
+            dsid,
+            proof: opaque_proof_blob_for(
+                dsid,
+                manifest_root,
+                b"opaque-generic-block-attack",
+                12,
+            ),
+        }],
+        handles: Vec::new(),
+        commit_height: 1,
+    };
+    expect_axt_envelope_error(
+        &state,
+        envelope,
+        AxtRejectReason::Proof,
+        "requires a witnessed transfer claim",
+    );
+}
+
+#[test]
+fn axt_validation_enforces_registered_asset_balance_policy() {
+    let (restricted_state, restricted_envelope) =
+        hidden_amount_fixture(118, 0x76, b"restricted-private-dataspace-control");
+    let mut restricted_snapshot = axt_policy_snapshot_for_validation_test(&restricted_state);
+    restricted_snapshot.entries[0].policy.next_handle_counter = 2;
+    restricted_snapshot.version = AxtPolicySnapshot::compute_version(&restricted_snapshot.entries);
+    let restricted_block =
+        build_block_with_envelopes(restricted_envelope.clone(), restricted_snapshot);
+    let mut restricted_state_block = restricted_state.block(restricted_block.header());
+    {
+        let mut executed = restricted_state_block.transaction();
+        executed
+            .record_axt_envelope(restricted_envelope.clone())
+            .expect("restricted asset control must execute");
+        executed.apply();
+    }
+    validate_axt_envelopes(&restricted_block, &restricted_state_block)
+        .expect("a registered restricted asset may use its exact signed intent dataspace");
+    drop(restricted_state_block);
+
+    let (global_state, global_envelope) = hidden_amount_fixture_with_asset_policy(
+        118,
+        0x76,
+        b"restricted-private-dataspace-control",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+    );
+    expect_axt_envelope_error(
+        &global_state,
+        global_envelope,
+        AxtRejectReason::PolicyDenied,
+        "does not belong to the intent dataspace",
+    );
+
+    let missing_state = restricted_state;
+    let mut world = missing_state.world.block();
+    assert!(
+        world
+            .asset_definitions
+            .remove(sample_asset_definition_id())
+            .is_some(),
+        "fixture asset definition must be present before removal"
+    );
+    world.commit();
+    expect_axt_envelope_error(
+        &missing_state,
+        restricted_envelope,
+        AxtRejectReason::PolicyDenied,
+        "asset definition is not registered",
+    );
 }

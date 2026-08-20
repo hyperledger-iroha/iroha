@@ -140,16 +140,15 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
             .effects(),
         [AdapterEffect::ValidateBody { .. }]
     ));
-    let locked = adapter
-        .validation_succeeded(
-            adapter.current_tag(),
-            wire_round,
-            locked_subject,
-            &validated,
-        )
-        .expect("persist the exact current LockAndCommit record");
+    let validation_tag = adapter.current_tag();
+    let locked = settle_ready_validate_succeeded_for_test(
+        &mut adapter,
+        validation_tag,
+        wire_round,
+        locked_subject,
+        &validated,
+    );
     let commit_sign_tag = locked
-        .effects()
         .iter()
         .find_map(|effect| match effect {
             AdapterEffect::Sign {

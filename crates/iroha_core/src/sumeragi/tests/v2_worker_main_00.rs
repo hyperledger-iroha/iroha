@@ -8,7 +8,9 @@ use crate::sumeragi::{
     v2_chunks::encode_payload,
     v2_core::MAX_EFFECTS_PER_STEP,
     v2_effects::EffectQueueConfig,
-    v2_lane_work::tests::durable_lane_history_fixture,
+    v2_lane_work::tests::{
+        durable_lane_history_fixture, historical_autonomous_lane_certificate_fixture,
+    },
     v2_runtime::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
         LocalProposalEffectOwnership, RetiredBodyPipelineCompletions, RuntimeEffectOwnership,
@@ -231,7 +233,7 @@ struct SaturatedCompletionRuntime {
     queued: usize,
     capacity: usize,
     next_lifecycle_ordinal: u128,
-    effect_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
+    effect_owners: BTreeMap<Hash, crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment>,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: Option<usize>,
 }
@@ -252,7 +254,7 @@ impl SaturatedCompletionRuntime {
     fn effect_ownership(
         &mut self,
         effect: &AdapterEffect,
-    ) -> Result<RuntimeEffectOwnership, String> {
+    ) -> Result<crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment, String> {
         let mut identity = Vec::new();
         let tag = match effect {
             AdapterEffect::FetchBody {
@@ -314,7 +316,7 @@ impl SaturatedCompletionRuntime {
         &mut self,
         tag: EventTag,
         identity: Hash,
-    ) -> Result<RuntimeEffectOwnership, String> {
+    ) -> Result<crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment, String> {
         if let Some(existing) = self.effect_owners.get(&identity) {
             return Ok(existing.clone());
         }
@@ -532,29 +534,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<(), EnqueueError> {
         Self::reject_completion()
     }
-    fn enqueue_validation_succeeded(
-        &mut self,
-        _tag: EventTag,
-        _round: wire::ConsensusRound,
-        _subject: wire::BlockSubject,
-        _receipt: ValidatedBodyReceipt,
-    ) -> Result<(), EnqueueError> {
-        Self::reject_completion()
-    }
-    fn enqueue_validation_failed(
-        &mut self,
-        _tag: EventTag,
-        _round: wire::ConsensusRound,
-        _subject: wire::BlockSubject,
-    ) -> Result<(), EnqueueError> {
-        Self::reject_completion()
-    }
-    fn enqueue_validation_failures_atomically(
-        &mut self,
-        _failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
-    ) -> Result<(), EnqueueError> {
-        Self::reject_completion()
-    }
     fn enqueue_signature(
         &mut self,
         _tag: EventTag,
@@ -566,15 +545,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
         &mut self,
         _tag: EventTag,
         _subject: wire::BlockSubject,
-    ) -> Result<(), EnqueueError> {
-        Self::reject_completion()
-    }
-    fn enqueue_local_proposal(
-        &mut self,
-        _tag: EventTag,
-        _manifest: wire::PayloadManifest,
-        _durable_receipt: DurableBodyReceipt,
-        _validated_receipt: ValidatedBodyReceipt,
     ) -> Result<(), EnqueueError> {
         Self::reject_completion()
     }
@@ -789,7 +759,6 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         next_locked_candidate_acquisition_id: 0,
         proposal_work_retired: false,
         prepared_candidates: VecDeque::new(),
-        validation_rejections: VecDeque::new(),
         merge_sidecar_deferrals: VecDeque::new(),
         outbound_chunks: BTreeMap::new(),
         fast_path_proposals: BTreeSet::new(),

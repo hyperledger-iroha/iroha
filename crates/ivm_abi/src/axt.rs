@@ -9,6 +9,8 @@ use crate::{
     error::VMError,
 };
 use iroha_crypto::{Hash, Signature};
+#[cfg(test)]
+use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use iroha_data_model::nexus::{
     AssetHandle as ModelAssetHandle, AxtBinding, AxtDescriptor as ModelAxtDescriptor,
     AxtHandleBudgetKey as ModelAxtHandleBudgetKey,
@@ -722,6 +724,7 @@ pub fn validate_asset_handle(handle: &AssetHandle) -> Result<(), VMError> {
             .issuer_manifest_root
             .iter()
             .all(|byte| *byte == 0)
+        || handle.issuer_context.validate().is_err()
         || handle.issuer_context.abi_version != 1
         || handle.issuer_context.abi_hash.iter().all(|byte| *byte == 0)
     {
@@ -1010,6 +1013,7 @@ pub fn expected_remote_spend_intent_commitment_v1(
     let binding = handle.binding_array().ok_or(VMError::NoritoInvalid)?;
     let replay_key = AxtHandleReplayKey::from_parts(
         intent.asset_dsid,
+        handle.issuer_context.asset_definition_incarnation,
         binding,
         handle.handle_era,
         handle.sub_nonce,
@@ -2048,6 +2052,28 @@ mod tests {
             ),
             Ok(())
         );
+        let mut reincarnated_model_handle = model_handle.clone();
+        reincarnated_model_handle
+            .issuer_context
+            .asset_definition_incarnation = AxtAssetIncarnationV1::derive(
+            &reincarnated_model_handle.issuer_context.network_id,
+            &reincarnated_model_handle.asset_definition_id,
+            &iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new(b"ivm-abi-reincarnated-remote-spend-registration"),
+            ),
+            &Hash::new(b"ivm-abi-reincarnated-remote-spend-execution"),
+            1,
+        );
+        assert_eq!(
+            validate_model_remote_spend_intent_commitment_from_proof_facts(
+                &reincarnated_model_handle,
+                &model_clear,
+                &clear_amount,
+                &facts,
+            ),
+            Err(VMError::PermissionDenied),
+            "a claim for a retired asset incarnation must not authorize the current handle"
+        );
         let mut substituted_model = model_clear.clone();
         substituted_model.op.to = ACCOUNT_FROM_LITERAL.to_owned();
         assert_eq!(
@@ -2119,6 +2145,28 @@ mod tests {
                 &proof,
             ),
             Err(VMError::PermissionDenied)
+        );
+        let mut reincarnated_handle = clear_handle.clone();
+        reincarnated_handle
+            .issuer_context
+            .asset_definition_incarnation = AxtAssetIncarnationV1::derive(
+            &reincarnated_handle.issuer_context.network_id,
+            &reincarnated_handle.asset_definition_id,
+            &iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new(b"ivm-abi-reincarnated-remote-spend-registration"),
+            ),
+            &Hash::new(b"ivm-abi-reincarnated-remote-spend-execution"),
+            1,
+        );
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &reincarnated_handle,
+                &clear,
+                &clear_amount,
+                &proof,
+            ),
+            Err(VMError::PermissionDenied),
+            "a proof for the retired incarnation must not authorize a current-incarnation handle"
         );
         let mut second_handle = clear_handle.clone();
         second_handle.sub_nonce += 1;
@@ -2813,13 +2861,26 @@ mod tests {
         abi_handle.manifest_view_root = vec![0xA5; 32];
         abi_handle.expiry_slot = 456;
         abi_handle.max_clock_skew_ms = Some(987);
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"ivm-abi-budget-key-network"),
+        ));
+        let registration_header_hash =
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new(b"ivm-abi-budget-key-asset-registration"),
+            );
+        let execution_identity = Hash::new(b"ivm-abi-budget-key-asset-execution");
         abi_handle.issuer_context = AxtHandleIssuerContextV1 {
-            network_id: iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-                iroha_data_model::block::BlockHeader,
-            >::from_untyped_unchecked(
-                Hash::new(b"ivm-abi-budget-key-network"),
-            )),
+            network_id,
             asset_dsid: dsid,
+            asset_definition_incarnation: AxtAssetIncarnationV1::derive(
+                &network_id,
+                &abi_handle.asset_definition_id,
+                &registration_header_hash,
+                &execution_identity,
+                0,
+            ),
             issuer: iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
                 b"ivm-abi-budget-key-issuer",
             )),
@@ -2898,6 +2959,17 @@ mod tests {
         let mut mutated = model_handle.clone();
         mutated.issuer_context.asset_dsid = DataSpaceId::new(7);
         assert_model_mutation_changes_key(mutated, "issuer dataspace");
+        let mut mutated = model_handle.clone();
+        mutated.issuer_context.asset_definition_incarnation = AxtAssetIncarnationV1::derive(
+            &mutated.issuer_context.network_id,
+            &mutated.asset_definition_id,
+            &iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new(b"ivm-abi-other-asset-registration"),
+            ),
+            &Hash::new(b"ivm-abi-other-asset-execution"),
+            0,
+        );
+        assert_model_mutation_changes_key(mutated, "asset-definition incarnation");
         let mut mutated = model_handle.clone();
         mutated.issuer_context.issuer = iroha_data_model::nexus::UniversalAccountId::from_hash(
             Hash::new(b"ivm-abi-other-budget-key-issuer"),
