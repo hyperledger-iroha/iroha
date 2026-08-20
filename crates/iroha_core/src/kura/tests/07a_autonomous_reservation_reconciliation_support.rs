@@ -63,11 +63,9 @@ fn two_reservation_autonomous_lane_payload_for_kura(
         .zip(&routing_plans)
         .enumerate()
         .map(|(index, (entrypoint, routing_plan))| {
-            let accepted =
-                AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+
             LaneQueueReservationKeyV2 {
                 version: LaneQueueReservationKeyV2::VERSION,
-                signed_transaction_hash: accepted.hash(),
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                     b"two-reservation-strict-admission",

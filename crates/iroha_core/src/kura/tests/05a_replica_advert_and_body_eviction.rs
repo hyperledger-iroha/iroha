@@ -1035,8 +1035,7 @@ fn eviction_flushes_pending_fsync_before_rewrite() {
         merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: Duration::from_secs(3600),
-        block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        lane_history_retention: LANE_HISTORY_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -1140,8 +1139,7 @@ fn evicted_block_caches_after_remote_rehydrate() {
             merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
             fsync_interval: FSYNC_INTERVAL,
-            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),

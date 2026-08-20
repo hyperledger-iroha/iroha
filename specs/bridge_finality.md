@@ -61,10 +61,9 @@ carrier. The same retained record must exist before Kura may evict the
 historical block body. Kura then stores the validated
 artifact in a separate immutable finality record with the same header. Both
 writes are idempotent no-clobber operations; a conflicting record at the same
-height is rejected. Canonical version-2 retained records remain readable. When
-the exact body still exists, pre-eviction retention performs a checked, atomic
-version-3 replacement; a remote-only version-2 record remains valid
-finality/SCCP evidence but cannot claim a merge witness it never contained.
+height is rejected. Version 3 is the only accepted retained-record layout.
+Pre-release version-2 bytes fail closed during direct reads and startup rather
+than being promoted or used as partial finality/SCCP evidence.
 
 Application requires its durable manifest, body frame, deterministic validation
 receipt, and execution commitment to match the CommitQC's authenticated

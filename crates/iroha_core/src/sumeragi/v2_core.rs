@@ -170,11 +170,6 @@ pub use refinement::{
     check_production_two_stage_relay_retry_transition,
     production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
 };
-#[cfg(test)]
-pub(crate) use refinement::{
-    IDENTITY_KIND_CERTIFIED_BODY_REQUEST, ProductionHistoricalBodyPipelineTraceProjection,
-    check_production_historical_body_pipeline_transition,
-};
 /// Schema of the production-reachable first-release transition witness.
 pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION: u16 = 1;
 /// SHA-256 identity of the reviewed TLA+ action source for witness schema V1.

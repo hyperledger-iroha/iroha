@@ -69,14 +69,8 @@ pub mod beacon;
 /// Block types and helpers.
 pub mod block;
 /// Block synchronization protocol and messages.
-pub mod block_sync;
 /// Bridge finality proof helpers.
 pub mod bridge;
-/// Durable archival commit-roster journal used by internal recovery audits.
-///
-/// Finality authority is the Kura-owned, cryptographically verified v2
-/// artifact; journal records are intentionally not part of the public API.
-pub(crate) mod commit_roster_journal;
 /// Lane compliance policy evaluation.
 pub mod compliance;
 /// Data availability orchestration and ingest helpers.
@@ -217,10 +211,9 @@ pub mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
 use crate::{
-    block_sync::message::Message as BlockSyncMessage,
     merge_sidecar::CertifiedMergeSidecarMessage,
     peers_gossiper::{PeerTrustGossip, PeersGossip},
-    sumeragi::message::{BlockMessage, BlockMessageWire, ControlFlow},
+    sumeragi::message::{BlockMessage, BlockMessageWire},
 };
 use iroha_data_model::{merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope};
 use iroha_torii_shared::connect as connect_proto;
@@ -420,7 +413,9 @@ fn inbound_sumeragi_topic(
         16 | 19 | 21 | 22 | 25..=28 => Ok(Topic::Consensus),
         20 | 29 => Ok(Topic::ConsensusPayload),
         30 => inbound_consensus_v2_topic(field, flags),
-        0..=29 => Ok(Topic::Other),
+        0..=15 | 17..=18 | 23..=24 => Err(norito::core::Error::Message(
+            "retired global Sumeragi v1 block discriminant".to_owned(),
+        )),
         _ => Err(norito::core::Error::Message(
             "unknown Sumeragi block discriminant".to_owned(),
         )),
@@ -488,15 +483,9 @@ pub type EventsSender = broadcast::Sender<EventBox>;
 /// Network message envelope exchanged between peers.
 #[derive(Clone, Debug, Decode, Encode)]
 pub enum NetworkMessage {
-    /// Live Sumeragi v2 or lane-local consensus data message.
-    ///
-    /// The nested enum retains global v1 variants for archive decoding, but
-    /// [`BlockMessageWire`] rejects those variants during serialization.
+    /// Live Sumeragi v2, lane-local, or authenticated auxiliary consensus data.
     #[codec(index = 0)]
     SumeragiBlock(Arc<BlockMessageWire>),
-    /// Archived v1 consensus control-flow frame; live serialization and ingress reject it.
-    #[codec(index = 1)]
-    SumeragiControlFlow(Box<ControlFlow>),
     /// Lane settlement relay envelope (NX-4).
     #[codec(index = 2)]
     LaneRelay(Box<LaneRelayEnvelope>),
@@ -512,9 +501,6 @@ pub enum NetworkMessage {
     /// Native AMX participant attestation control-plane message.
     #[codec(index = 6)]
     NativeAmx(Arc<native_amx::NativeAmxMessage>),
-    /// Archived v1 block-sync frame; live serialization rejects it and v2 uses certified bodies.
-    #[codec(index = 7)]
-    BlockSync(Box<BlockSyncMessage>),
     /// Transaction gossiper message.
     #[codec(index = 8)]
     TransactionGossiper(Arc<TransactionGossip>),
@@ -638,11 +624,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::LaneBlockCertificate(_)
                 | BlockMessage::LaneHistoricalRecoveryRequest(_) => T::Consensus,
                 BlockMessage::KuraReplicaAdvert(_) => T::Consensus,
-                // Every remaining `BlockMessage` variant belongs to the retired
-                // global v1 protocol.  Keep those variants decodable for archive
-                // tooling, but never schedule them on correctness-critical live
-                // consensus queues.
-                _ => T::Other,
             },
             NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
                 CertifiedMergeSidecarMessage::Request(_)
@@ -662,10 +643,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             | NetworkMessage::ToriiProxyResponse(_)
             | NetworkMessage::QueuePlanAdmissionPublication(_)
             | NetworkMessage::StreamingControl(_) => T::Control,
-            // The global v1 control-flow and block-sync envelopes are likewise
-            // decode-only. Send admission, serialization, and daemon ingress
-            // all reject them.
-            NetworkMessage::SumeragiControlFlow(_) | NetworkMessage::BlockSync(_) => T::Other,
             NetworkMessage::TransactionGossiper(gossip) => match gossip.plane {
                 gossiper::GossipPlane::Public => T::TxGossip,
                 gossiper::GossipPlane::Restricted => T::TxGossipRestricted,
@@ -730,7 +707,11 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         };
         let topic = match tag {
             0 => inbound_sumeragi_topic(field)?,
-            1 | 7 => Topic::Other,
+            1 => {
+                return Err(norito::core::Error::Message(
+                    "retired global Sumeragi v1 control-flow discriminant".to_owned(),
+                ));
+            }
             2..=4 | 6 | 21 => Topic::Consensus,
             5 => inbound_certified_merge_sidecar_topic(field, flags)?,
             8 => inbound_transaction_gossip_topic(field, flags)?,
@@ -878,7 +859,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             Self::SumeragiBlock(message) => {
                 message.as_ref().as_message().ensure_live_outbound().is_ok()
             }
-            Self::SumeragiControlFlow(_) | Self::BlockSync(_) => false,
             _ => true,
         }
     }
@@ -984,6 +964,66 @@ pub mod prelude {
     #[doc(inline)]
     pub use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, PublicKey};
 }
+// These synthetic-state regressions need deliberately nonshipping validation
+// or state-apply fixtures. Compile them inside the library test harness so
+// ordinary `cargo test` keeps exercising them without exporting fixture
+// authority from production builds.
+#[cfg(test)]
+extern crate self as iroha_core;
+#[cfg(test)]
+#[path = "../tests/admission_batching.rs"]
+mod admission_batching_tests;
+#[cfg(test)]
+#[path = "../tests/adversarial_block_rejections.rs"]
+mod adversarial_block_rejections_tests;
+#[cfg(test)]
+#[path = "../tests/bls_batch_pop.rs"]
+mod bls_batch_pop_tests;
+#[cfg(test)]
+#[path = "../tests/event_ordering.rs"]
+mod event_ordering_tests;
+#[cfg(test)]
+#[path = "../tests/execute_trigger_events.rs"]
+mod execute_trigger_events_tests;
+#[cfg(test)]
+#[path = "../tests/isi_gas_fees.rs"]
+mod isi_gas_fees_tests;
+#[cfg(test)]
+#[path = "../tests/ivm_corehost_axt.rs"]
+mod ivm_corehost_axt_tests;
+#[cfg(test)]
+#[path = "../tests/overlay_chunking.rs"]
+mod overlay_chunking_tests;
+#[cfg(test)]
+#[path = "../tests/overlay_workers_parity.rs"]
+mod overlay_workers_parity_tests;
+#[cfg(test)]
+#[path = "../tests/parallel_apply_knob.rs"]
+mod parallel_apply_knob_tests;
+#[cfg(test)]
+#[path = "../tests/parallel_apply.rs"]
+mod parallel_apply_tests;
+#[cfg(test)]
+#[path = "../tests/pipeline_warning_event.rs"]
+mod pipeline_warning_event_tests;
+#[cfg(test)]
+#[path = "../tests/scheduler_gpu_key_bucket_parity.rs"]
+mod scheduler_gpu_key_bucket_parity_tests;
+#[cfg(test)]
+#[path = "../tests/scheduler_ready_queue_heap_parity.rs"]
+mod scheduler_ready_queue_heap_parity_tests;
+#[cfg(test)]
+#[path = "../tests/scheduler_telemetry.rs"]
+mod scheduler_telemetry_tests;
+#[cfg(test)]
+#[path = "../tests/signature_batch_determinism.rs"]
+mod signature_batch_determinism_tests;
+#[cfg(test)]
+#[path = "../tests/snapshots.rs"]
+mod synthetic_state_snapshots;
+#[cfg(test)]
+#[path = "../tests/validation_fee_admission.rs"]
+mod validation_fee_admission_tests;
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -998,15 +1038,8 @@ mod tests {
             SoracloudLocalReadProxyRequestV1, SoracloudLocalReadProxyResponseV1,
             SoracloudLocalReadRequest,
         },
-        sumeragi::{
-            consensus::{
-                ConsensusBlockHeader, Phase, Proposal, QcHeaderRef, RbcChunk, RbcDeliver, RbcInit,
-                RbcReady,
-            },
-            message::{
-                BlockCreated, BlockMessage, BlockMessageWire, BlockSyncUpdate, FetchPendingBlock,
-                KURA_REPLICA_ADVERT_VERSION_V1, KuraReplicaAdvertV1,
-            },
+        sumeragi::message::{
+            BlockMessage, BlockMessageWire, KURA_REPLICA_ADVERT_VERSION_V1, KuraReplicaAdvertV1,
         },
         torii_proxy::{
             QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionPublicationV1,
@@ -1019,8 +1052,8 @@ mod tests {
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
     };
-    use iroha_crypto::{Hash, HashOf, KeyPair, Signature, SignatureOf};
-    use iroha_data_model::block::{BlockHeader, BlockSignature, builder::BlockBuilder};
+    use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::block::BlockHeader;
     use iroha_data_model::nexus::{DataSpaceId, LaneId};
     use iroha_data_model::peer::PeerId;
     use iroha_data_model::role::RoleId;
@@ -1032,13 +1065,7 @@ mod tests {
     };
     use iroha_test_samples::gen_account_in;
     use norito::{codec::Encode, core as ncore};
-    use std::{
-        cmp::Ordering,
-        collections::{BTreeMap, BTreeSet},
-        num::NonZeroU64,
-        sync::Arc,
-        time::Duration,
-    };
+    use std::{cmp::Ordering, collections::BTreeMap, num::NonZeroU64, sync::Arc, time::Duration};
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             label,
@@ -1062,14 +1089,17 @@ mod tests {
             .0
     }
     fn raw_sumeragi_topic_for_synthetic_tag(tag: u32) -> Result<NetworkTopic, ncore::Error> {
-        let (mut payload, flags) = norito::codec::encode_with_header_flags(
-            &BlockMessage::VrfCommit(crate::sumeragi::consensus::VrfCommit {
-                epoch: 1,
-                commitment: [0xA5; 32],
-                signer: 0,
-                bls_sig: vec![0x5A],
-            }),
-        );
+        use iroha_data_model::block::consensus_v2 as wire;
+        let (mut payload, flags) = norito::codec::encode_with_header_flags(&BlockMessage::V2(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::VrfCommit(
+                wire::VrfCommit {
+                    epoch: 1,
+                    commitment: [0xA5; 32],
+                    signer: 0,
+                    bls_sig: vec![0x5A],
+                },
+            )),
+        ));
         payload
             .get_mut(..core::mem::size_of::<u32>())
             .ok_or(ncore::Error::LengthMismatch)?
@@ -1225,12 +1255,10 @@ mod tests {
             NetworkTopic::TxGossipRestricted
         );
         for (tag, expected) in [
-            (1_u32, NetworkTopic::Other),
-            (2, NetworkTopic::Consensus),
+            (2_u32, NetworkTopic::Consensus),
             (3, NetworkTopic::Consensus),
             (4, NetworkTopic::Consensus),
             (6, NetworkTopic::Consensus),
-            (7, NetworkTopic::Other),
             (9, NetworkTopic::PeerGossip),
             (10, NetworkTopic::TrustGossip),
             (12, NetworkTopic::Health),
@@ -1254,6 +1282,20 @@ mod tests {
             );
         }
         let flags = ncore::default_encode_flags();
+        for (tag, label) in [(1_u32, "control-flow"), (7, "block-sync")] {
+            let (mut retired, retired_flags) =
+                norito::codec::encode_with_header_flags(&SingleFieldNetworkMessage::Field(0));
+            retired[..core::mem::size_of::<u32>()].copy_from_slice(&tag.to_le_bytes());
+            assert!(
+                <NetworkMessage as ClassifyTopic>::inbound_topic(&retired, retired_flags).is_err(),
+                "the retired global-v1 {label} tag must fail before ingress admission"
+            );
+            let mut retired_cursor = retired.as_slice();
+            assert!(
+                <NetworkMessage as norito::codec::Decode>::decode(&mut retired_cursor).is_err(),
+                "the retired global-v1 {label} tag must fail typed decode"
+            );
+        }
         assert!(
             <NetworkMessage as ClassifyTopic>::inbound_topic(&99_u32.to_le_bytes(), flags).is_err(),
             "unknown network-message tags must fail before typed decode"
@@ -1266,7 +1308,7 @@ mod tests {
         );
     }
     #[test]
-    fn raw_lane_and_decode_only_block_tags_use_exact_transport_classes() {
+    fn raw_lane_tags_keep_capacity_classes_and_retired_tags_fail_closed() {
         for tag in [19, 21, 22, 25, 26, 27, 28] {
             assert_eq!(
                 raw_sumeragi_topic_for_synthetic_tag(tag).expect("classify lane control tag"),
@@ -1281,11 +1323,12 @@ mod tests {
                 "lane payload discriminant {tag} must use the bounded payload corridor"
             );
         }
-        for tag in [5, 6] {
-            assert_eq!(
-                raw_sumeragi_topic_for_synthetic_tag(tag).expect("classify decode-only VRF tag"),
-                NetworkTopic::Other,
-                "first-release decode-only VRF discriminant {tag} must not borrow a safety lane"
+        for tag in [
+            0_u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 23, 24,
+        ] {
+            assert!(
+                raw_sumeragi_topic_for_synthetic_tag(tag).is_err(),
+                "retired global-v1 discriminant {tag} must fail before ingress capacity admission"
             );
         }
         assert!(
@@ -2210,19 +2253,6 @@ mod tests {
             v2_vrf.is_outbound_allowed(),
             "versioned VRF frames must use the authenticated v2 safety corridor"
         );
-        let legacy_vrf = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::VrfCommit(crate::sumeragi::consensus::VrfCommit {
-                epoch: 3,
-                commitment: [0xA5; 32],
-                signer: 0,
-                bls_sig: vec![0x5A],
-            }),
-        )));
-        assert_eq!(legacy_vrf.topic(), NetworkTopic::Other);
-        assert!(
-            !legacy_vrf.is_outbound_allowed(),
-            "legacy unversioned VRF frames remain decode-only"
-        );
     }
     fn signed_kura_replica_advert_message() -> NetworkMessage {
         let key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
@@ -2308,162 +2338,6 @@ mod tests {
         assert!(
             ncore::to_bytes(&wrong_version_chunk).is_err(),
             "a non-canonical protocol version must fail the wire boundary"
-        );
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero block height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let block_hash = header.hash();
-        let block = BlockBuilder::new(header.clone()).build(BTreeSet::new());
-        let created = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::BlockCreated(BlockCreated {
-                block: block.clone(),
-                frontier: None,
-            }),
-        )));
-        assert_eq!(created.topic(), NetworkTopic::Other);
-        let fetch = FetchPendingBlock {
-            requester: PeerId::from(checked_topic_keypair().public_key().clone()),
-            block_hash,
-            height: 1,
-            view: 0,
-            priority: None,
-            requester_roster_proof_known: None,
-            commit_qc_only: None,
-        };
-        let fetch_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::FetchPendingBlock(fetch),
-        )));
-        assert_eq!(fetch_msg.topic(), NetworkTopic::Other);
-        let roster_hash = Hash::prehashed([1; 32]);
-        let chunk_root = Hash::prehashed([2; 32]);
-        let payload_hash = Hash::prehashed([3; 32]);
-        let leader_keypair = checked_topic_keypair();
-        let leader_signature = BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(leader_keypair.private_key(), block_hash)
-                .expect("test block signing should succeed"),
-        );
-        let init = RbcInit {
-            block_hash,
-            height: 1,
-            view: 0,
-            epoch: 0,
-            roster: Vec::new(),
-            roster_hash,
-            total_chunks: 0,
-            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-            chunk_size_bytes: 0,
-            payload_size_bytes: 0,
-            data_shards: 0,
-            parity_shards: 0,
-            chunk_digests: Vec::new(),
-            payload_hash,
-            chunk_root,
-            block_header: header.clone(),
-            leader_signature,
-        };
-        let init_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::RbcInit(init),
-        )));
-        assert_eq!(init_msg.topic(), NetworkTopic::Other);
-        let chunk = RbcChunk {
-            block_hash,
-            height: 1,
-            view: 0,
-            epoch: 0,
-            idx: 0,
-            bytes: vec![1, 2, 3],
-        };
-        let payload = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::RbcChunk(chunk),
-        )));
-        assert_eq!(payload.topic(), NetworkTopic::Other);
-        let proposal = Proposal {
-            header: ConsensusBlockHeader {
-                parent_hash: block_hash,
-                tx_root: Hash::new(b"tx"),
-                state_root: Hash::new(b"state"),
-                proposer: 0,
-                height: 1,
-                view: 0,
-                epoch: 0,
-                highest_qc: QcHeaderRef {
-                    height: 0,
-                    view: 0,
-                    epoch: 0,
-                    subject_block_hash: block_hash,
-                    phase: Phase::Prepare,
-                },
-            },
-            payload_hash,
-        };
-        let proposal_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::Proposal(proposal),
-        )));
-        assert_eq!(proposal_msg.topic(), NetworkTopic::Other);
-        let sync = BlockSyncUpdate::from(&block);
-        let sync_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::BlockSyncUpdate(sync),
-        )));
-        assert_eq!(sync_msg.topic(), NetworkTopic::Other);
-        let ready = RbcReady {
-            block_hash,
-            height: 1,
-            view: 0,
-            epoch: 0,
-            roster_hash,
-            chunk_root,
-            sender: 0,
-            signature: vec![7],
-        };
-        let ready_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::RbcReady(ready),
-        )));
-        assert_eq!(ready_msg.topic(), NetworkTopic::Other);
-        let deliver = RbcDeliver {
-            block_hash,
-            height: 1,
-            view: 0,
-            epoch: 0,
-            roster_hash,
-            chunk_root,
-            sender: 0,
-            signature: vec![9],
-            ready_signatures: Vec::new(),
-        };
-        let deliver_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::RbcDeliver(deliver),
-        )));
-        assert_eq!(deliver_msg.topic(), NetworkTopic::Other);
-    }
-    #[test]
-    fn network_message_refuses_decoded_archival_block_message() {
-        let msg = BlockMessage::VrfCommit(iroha_data_model::block::consensus::VrfCommit {
-            epoch: 9,
-            commitment: [0x91; 32],
-            signer: 1,
-            bls_sig: vec![0x92],
-        });
-        let encoded = ncore::to_bytes(&msg).expect("encode archival block-message fixture");
-        assert!(encoded.starts_with(&norito::core::MAGIC));
-        let wire = <BlockMessageWire as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
-            .expect("decode archival block-message fixture")
-            .0;
-        let network = NetworkMessage::SumeragiBlock(Arc::new(wire));
-        match &network {
-            NetworkMessage::SumeragiBlock(wire) => {
-                assert!(matches!(wire.as_ref().as_ref(), BlockMessage::VrfCommit(_)));
-            }
-            other => panic!("expected sumeragi block message, got {other:?}"),
-        }
-        assert!(
-            ncore::to_bytes(&network).is_err(),
-            "retired global v1 message must fail at the network serialization boundary"
         );
     }
     #[test]

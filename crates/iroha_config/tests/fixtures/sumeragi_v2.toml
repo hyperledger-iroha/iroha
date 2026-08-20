@@ -6,7 +6,7 @@ extends = ["minimal_with_trusted_peers.toml"]
 max_total_connections = 32
 
 [kura]
-block_sync_roster_retention = 8192
+lane_history_retention = 8192
 
 [sumeragi]
 role = "observer"

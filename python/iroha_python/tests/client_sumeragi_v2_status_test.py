@@ -442,6 +442,38 @@ def test_qc_reference_preserves_execution_commitment() -> None:
     )
 
 
+def test_qc_response_uses_only_authoritative_v2_prepare_references() -> None:
+    payload = {
+        "highest_prepare_qc": _prepare_qc(view=3),
+        "locked_prepare_qc": _prepare_qc(view=2),
+    }
+
+    response = client_module.SumeragiV2QcResponse.from_payload(payload)
+
+    assert response.highest_prepare_qc is not None
+    assert response.highest_prepare_qc.round.view == 3
+    assert response.locked_prepare_qc is not None
+    assert response.locked_prepare_qc.phase is SumeragiV2GlobalPhase.PREPARE
+    assert iroha_python.SumeragiV2QcResponse is client_module.SumeragiV2QcResponse
+
+
+def test_qc_response_rejects_pre_release_snapshot_shape() -> None:
+    with pytest.raises(TypeError, match="unsupported fields: highest_qc, locked_qc"):
+        client_module.SumeragiV2QcResponse.from_payload(
+            {
+                "highest_qc": {"height": 15, "view": 3},
+                "locked_qc": {"height": 15, "view": 2},
+            }
+        )
+
+
+def test_qc_response_requires_both_nullable_slots() -> None:
+    with pytest.raises(TypeError, match=r"locked_prepare_qc is required"):
+        client_module.SumeragiV2QcResponse.from_payload(
+            {"highest_prepare_qc": None}
+        )
+
+
 def test_execution_commitment_accepts_nonempty_native_manifest() -> None:
     payload = _execution_commitment()
     payload["native_amx_application_manifest_root"] = _canonical_hash(0x55)
@@ -662,7 +694,7 @@ def test_status_allows_subject_without_parent_hash() -> None:
     assert status.last_committed_subject.parent_block_hash is None
 
 
-def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> None:
+def test_retired_global_sumeragi_rbc_and_telemetry_surfaces_are_absent() -> None:
     retired_methods = (
         "get_sumeragi_rbc",
         "get_sumeragi_rbc_typed",
@@ -676,6 +708,8 @@ def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> Non
         "request_sumeragi_rbc_sample_typed",
         "get_sumeragi_collectors",
         "get_sumeragi_collectors_typed",
+        "get_sumeragi_telemetry",
+        "get_sumeragi_telemetry_typed",
     )
     for name in retired_methods:
         assert not hasattr(ToriiClient, name), name
@@ -690,6 +724,13 @@ def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> Non
         "RbcSample",
         "RbcChunkProof",
         "RbcMerkleProof",
+        "SumeragiAvailabilityCollector",
+        "SumeragiAvailabilitySnapshot",
+        "SumeragiQcLatencyEntry",
+        "SumeragiRbcBacklog",
+        "SumeragiTelemetrySnapshot",
+        "SumeragiVrfLateReveal",
+        "SumeragiVrfSummary",
     )
     for name in retired_models:
         assert not hasattr(client_module, name), name
@@ -697,12 +738,7 @@ def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> Non
         assert not hasattr(iroha_python, name), name
         assert name not in iroha_python.__all__, name
 
-    retained_telemetry_models = (
-        "SumeragiAvailabilityCollector",
-        "SumeragiRbcBacklog",
-        "SumeragiRbcEviction",
-        "SumeragiRbcStoreStatus",
-    )
+    retained_telemetry_models = ("SumeragiRbcEviction", "SumeragiRbcStoreStatus")
     for name in retained_telemetry_models:
         assert hasattr(client_module, name), name
         assert hasattr(iroha_python, name), name

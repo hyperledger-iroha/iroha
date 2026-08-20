@@ -61,13 +61,8 @@ impl MochiApp {
                     "Mochi writes `.env.local` and `.mochi/generated/*` here, and keeps peer state under `.mochi/sandbox/<profile>`.",
                 );
                 ui.add_space(12.0);
-                ui.checkbox(
-                    &mut self.first_run_wizard.enable_nexus,
-                    "Enable Nexus / multi-lane defaults",
-                );
-                if self.first_run_wizard.enable_nexus {
-                    ui.small("Nexus uses the always-on first-release DA/RBC pipeline.");
-                }
+                ui.label("Nexus routing is mandatory in the first release.");
+                ui.small("Custom multi-lane topology uses the always-on DA/RBC pipeline.");
                 ui.add_space(16.0);
                 if ui
                     .add(
@@ -89,7 +84,6 @@ impl MochiApp {
         }
         self.settings_data_root_input = workspace.to_owned();
         self.settings_profile_input = self.first_run_wizard.preset.slug().to_owned();
-        self.settings_nexus_enabled = self.first_run_wizard.enable_nexus;
         self.active_view = ActiveView::Dashboard;
         self.first_run_wizard.completed = true;
         self.first_run_wizard.open = false;

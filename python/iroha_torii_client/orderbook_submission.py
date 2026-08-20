@@ -16,11 +16,10 @@ ORDERBOOK_TRANSACTION_MAX_BYTES_V1 = 2 * 1024 * 1024
 ORDERBOOK_RECEIPT_MAX_BYTES_V1 = 1024 * 1024
 ORDERBOOK_SUBMISSION_TIMEOUT_SECONDS_V1 = 30.0
 _HASH_HEX = re.compile(r"[0-9a-f]{64}")
-_IDENTITY_KEYS = frozenset({"tx_hash", "entrypoint_hash", "signed_transaction_hash"})
+_IDENTITY_KEYS = frozenset({"entrypoint_hash", "signed_transaction_hash"})
 _RECEIPT_KEYS = frozenset({"payload", "signature"})
 _PAYLOAD_KEYS = frozenset(
     {
-        "tx_hash",
         "entrypoint_hash",
         "signed_transaction_hash",
         "submitted_at_ms",
@@ -43,14 +42,15 @@ _HTTP_ADAPTER_CLOSE = _HTTP_ADAPTER.close
 class SorafsOrderbookSubmissionIdentity(TypedDict):
     """Exact identities derived from the authenticated signed transaction."""
 
-    tx_hash: str
     entrypoint_hash: str
     signed_transaction_hash: str
 
 
-class SorafsOrderbookSubmissionReceiptPayload(SorafsOrderbookSubmissionIdentity):
+class SorafsOrderbookSubmissionReceiptPayload(TypedDict):
     """Authenticated canonical receipt payload."""
 
+    entrypoint_hash: str
+    signed_transaction_hash: str
     submitted_at_ms: int
     submitted_at_height: int
     signer: str
@@ -80,7 +80,10 @@ class SorafsOrderbookSubmissionMixin:
 
     def _configure_sorafs_orderbook_native_verifier(self, verifier: Any) -> None:
         if verifier is not None:
-            _require_native_function(verifier, "inspect_sorafs_orderbook_submission_v1")
+            _require_native_function(
+                verifier,
+                "inspect_sorafs_orderbook_submission_for_discriminant_v1",
+            )
             _require_native_function(
                 verifier, "verify_sorafs_orderbook_submission_receipt_v1"
             )
@@ -414,7 +417,10 @@ def prepare_orderbook_submission(
     expected_receipt_signer: Any,
     context: str,
 ) -> tuple[bytes, SorafsOrderbookSubmissionIdentity, Any]:
-    inspect = _require_native_function(native, "inspect_sorafs_orderbook_submission_v1")
+    inspect = _require_native_function(
+        native,
+        "inspect_sorafs_orderbook_submission_for_discriminant_v1",
+    )
     verify_native_receipt = _require_native_function(
         native, "verify_sorafs_orderbook_submission_receipt_v1"
     )
@@ -467,7 +473,6 @@ def validate_response_headers(response: Any, identity: Mapping[str, str], contex
     if content_encoding not in (None, "identity"):
         raise RuntimeError(f"{context} response Content-Encoding must be absent or identity")
     for header, key in (
-        ("x-iroha-transaction-hash", "tx_hash"),
         ("x-iroha-entrypoint-hash", "entrypoint_hash"),
         ("x-iroha-signed-transaction-hash", "signed_transaction_hash"),
     ):
@@ -490,7 +495,6 @@ def verify_receipt(
         raise RuntimeError(f"{context} response returned an empty receipt")
     raw = verify_native_receipt(
         receipt_norito,
-        identity["tx_hash"],
         identity["entrypoint_hash"],
         identity["signed_transaction_hash"],
         expected_receipt_signer,
@@ -530,7 +534,7 @@ def verify_receipt(
     payload = _require_exact_mapping(
         receipt["payload"], _PAYLOAD_KEYS, "verified orderbook receipt.payload"
     )
-    for key in ("tx_hash", "entrypoint_hash", "signed_transaction_hash"):
+    for key in ("entrypoint_hash", "signed_transaction_hash"):
         literal = _canonical_hash_literal(
             payload[key], f"verified orderbook receipt.payload.{key}"
         )

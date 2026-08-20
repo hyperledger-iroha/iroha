@@ -1829,10 +1829,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
             ));
             assert!(matches!(
-                leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
-                    ordinary_message,
-                    Some(local_peer.clone()),
-                )),
+                leader_wire_ingress.try_push(
+                    crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                        ordinary_message,
+                        local_peer.clone(),
+                    )
+                ),
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
             ));
             let ordinary_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
@@ -1849,10 +1851,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 wire::ConsensusMessageV2Payload::CertifiedBodyResponse(invalid_response),
             );
             assert!(matches!(
-                leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
-                    crate::sumeragi::message::BlockMessage::V2(invalid_response_message),
-                    Some(local_peer.clone()),
-                )),
+                leader_wire_ingress.try_push(
+                    crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                        crate::sumeragi::message::BlockMessage::V2(invalid_response_message),
+                        local_peer.clone(),
+                    )
+                ),
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
             ));
             let invalid_response_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
@@ -1964,10 +1968,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
             ));
             assert!(matches!(
-                leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
-                    batch_message,
-                    Some(local_peer.clone()),
-                )),
+                leader_wire_ingress.try_push(
+                    crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                        batch_message,
+                        local_peer.clone(),
+                    )
+                ),
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
             ));
             let mut batch_runner =

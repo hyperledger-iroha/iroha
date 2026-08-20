@@ -32,8 +32,8 @@ use iroha_data_model::{
             SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX,
             SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX, SumeragiAutonomousLaneExecution,
             SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
-            SumeragiLaneBlockSessionStatus, SumeragiLanePayloadOwnership,
-            SumeragiNativeAmxParticipantApplication, SumeragiNativeAmxParticipantApplicationState,
+            SumeragiLaneBlockSessionStatus, SumeragiNativeAmxParticipantApplication,
+            SumeragiNativeAmxParticipantApplicationState,
         },
         proofs::{BlockProofs, BlockReceiptProof, ExecutionReceiptProof},
     },
@@ -49,8 +49,8 @@ use iroha_data_model::{
     },
     confidential::ConfidentialFeatureDigest,
     consensus::{
-        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
-        VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
+        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
+        VALIDATOR_SET_HASH_VERSION_V1,
     },
     content::{ContentBundleId, ContentBundleRecord, ContentChunk},
     da::{
@@ -133,7 +133,7 @@ use iroha_data_model::{
     peer::PeerId,
     permission::{Permission, Permissions},
     prelude::*,
-    query::error::{FindError, QueryExecutionFail},
+    query::error::{CanonicalHistoryError, FindError, QueryExecutionFail},
     ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
     repo::{RepoAgreement, RepoAgreementId},
     role::RoleId,
@@ -321,11 +321,8 @@ fn append_merge_executor_delta(
         .expect("runtime executor must have a canonical Norito representation");
     append_merge_write_set_component(out, &encoded);
 }
-#[cfg(test)]
-use crate::commit_roster_journal::CommitRosterSnapshot;
 use crate::{
     block::BlockValidationError,
-    commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError},
     da::{
         ConfidentialComputeError, DaCommitmentValidationError, DaShardCursorError,
         DaShardCursorIndex, DaShardCursorJournal, LaneEpoch,
@@ -334,11 +331,17 @@ use crate::{
         pin_store::DaPinStore,
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
-    sumeragi::stake_snapshot::CommitStakeSnapshot,
 };
 mod bounded_authority;
+mod canonical_history;
 mod committed_hash_journal;
+mod da_hydration;
+mod lane_authority;
 mod tiered;
+use canonical_history::committed_block_from_kura;
+pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
+pub(crate) use da_hydration::DaIndexHydrationError;
+pub use lane_authority::{LaneAuthorityCommittee, LaneAuthorityError, LaneAuthorityRoute};
 
 struct ResolvedLaneAuthorityInputs {
     bounded: bounded_authority::LaneAuthorityInputs,
@@ -391,7 +394,7 @@ use crate::{
     compliance::LaneComplianceEngine,
     executor::Executor,
     governance::manifest::{
-        GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
+        LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
     kura::{Kura, PendingCertifiedMergeEvidenceScan},
@@ -737,7 +740,6 @@ macro_rules! with_world_overlay_fields {
             proof_tags,
             proofs_by_tag,
             validation_fee_proposal_index,
-            commit_qcs,
             consensus_evidence,
             contract_manifests,
             contract_code,
@@ -1602,9 +1604,9 @@ struct QueuePlanPendingObligationRouteV1 {
     lane_incarnation: Hash,
 }
 /// Replicated pending application obligation for one immutable QueuePlan
-/// admission. The optional signed identity covers the legacy all-external
-/// transaction index while the typed entrypoint identity covers heterogeneous
-/// and authority-free carriers. Every compact identity and deduplicated route
+/// admission. The optional signed identity binds the exact signed payload when
+/// the entrypoint carries one, while the typed entrypoint identity covers every
+/// carrier kind. Every compact identity and deduplicated route
 /// is checked against the embedded, registry-hash-authenticated admission
 /// binding whenever the marker is decoded.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -1892,48 +1894,29 @@ fn decode_canonical_merge_routing_plan(
         ))
     })
 }
-/// Return the transaction-membership hashes committed by an execution batch.
-pub fn merge_execution_committed_transaction_hashes(
+/// Return the canonical entrypoint identities committed by an execution batch.
+pub fn merge_execution_committed_entrypoint_hashes(
     batch: &MergeExecutionBatch,
-) -> Vec<HashOf<SignedTransaction>> {
+) -> Vec<HashOf<TransactionEntrypoint>> {
     batch
         .lanes
         .iter()
-        .flat_map(|execution| committed_transaction_hashes_for_entrypoints(&execution.entrypoints))
+        .flat_map(|execution| committed_entrypoint_hashes(&execution.entrypoints))
         .collect()
 }
-/// Return committed transaction-membership hashes for an ordered entrypoint slice.
-///
-/// The all-external fast path preserves the canonical signed-transaction hash;
-/// heterogeneous system entrypoints use their typed entrypoint identities.
-pub(crate) fn committed_transaction_hashes_for_entrypoints(
+/// Return canonical committed identities for an ordered entrypoint slice.
+pub(crate) fn committed_entrypoint_hashes(
     entrypoints: &[TransactionEntrypoint],
-) -> Vec<HashOf<SignedTransaction>> {
-    if entrypoints
-        .iter()
-        .all(|entrypoint| matches!(entrypoint, TransactionEntrypoint::External(_)))
-    {
-        return entrypoints
-            .iter()
-            .filter_map(|entrypoint| match entrypoint {
-                TransactionEntrypoint::External(tx) => {
-                    Some(crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash)
-                }
-                _ => None,
-            })
-            .collect();
-    }
+) -> Vec<HashOf<TransactionEntrypoint>> {
     entrypoints
         .iter()
-        .map(|entrypoint| {
-            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()))
-        })
+        .map(TransactionEntrypoint::hash)
         .collect()
 }
 /// Decode the exact queue-reservation groups finalized by a certified merge entry.
 ///
 /// The outer vector retains canonical lane order and every inner vector retains
-/// exact entrypoint/FIFO order. Canonical decoding, transaction binding, and
+/// exact entrypoint/FIFO order. Canonical decoding, entrypoint binding, and
 /// cross-lane uniqueness are rechecked before any caller can begin Queue
 /// cleanup, so a malformed later group cannot partially consume an earlier
 /// group.
@@ -1942,7 +1925,7 @@ pub(crate) fn certified_merge_queue_reservation_groups(
 ) -> Result<
     Vec<
         Vec<(
-            HashOf<SignedTransaction>,
+            HashOf<TransactionEntrypoint>,
             crate::queue::LaneQueueReservationKeyV2,
         )>,
     >,
@@ -1951,33 +1934,32 @@ pub(crate) fn certified_merge_queue_reservation_groups(
     let Some(batch) = entry.execution_batch.as_ref() else {
         return Ok(Vec::new());
     };
-    let mut seen_transactions = BTreeSet::new();
+    let mut seen_entrypoints = BTreeSet::new();
     let mut seen_reservations = BTreeSet::new();
     let mut groups = Vec::with_capacity(batch.lanes.len());
     for execution in &batch.lanes {
-        let transaction_hashes =
-            committed_transaction_hashes_for_entrypoints(&execution.entrypoints);
-        if transaction_hashes.len() != execution.reservation_keys.len() {
+        let entrypoint_hashes = committed_entrypoint_hashes(&execution.entrypoints);
+        if entrypoint_hashes.len() != execution.reservation_keys.len() {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "merge queue reservation vector is not aligned with entrypoints".to_owned(),
             ));
         }
         let mut reservations = Vec::with_capacity(execution.reservation_keys.len());
-        for (transaction_hash, encoded) in transaction_hashes
+        for (entrypoint_hash, encoded) in entrypoint_hashes
             .into_iter()
             .zip(&execution.reservation_keys)
         {
             let reservation = decode_canonical_merge_reservation_key(encoded)?;
-            if reservation.signed_transaction_hash != transaction_hash
-                || !seen_transactions.insert(transaction_hash)
+            if reservation.entrypoint_hash != entrypoint_hash
+                || !seen_entrypoints.insert(entrypoint_hash)
                 || !seen_reservations.insert(reservation.digest())
             {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "merge queue reservation is duplicated or bound to another transaction"
+                    "merge queue reservation is duplicated or bound to another entrypoint"
                         .to_owned(),
                 ));
             }
-            reservations.push((transaction_hash, reservation));
+            reservations.push((entrypoint_hash, reservation));
         }
         crate::queue::lane_queue_reservation_group_binding_from_ordered_keys(
             reservations.iter().map(|(_, key)| key),
@@ -1996,7 +1978,7 @@ pub(crate) fn certified_merge_queue_reservations(
     entry: &MergeLedgerEntry,
 ) -> Result<
     Vec<(
-        HashOf<SignedTransaction>,
+        HashOf<TransactionEntrypoint>,
         crate::queue::LaneQueueReservationKeyV2,
     )>,
     MergeLedgerCommitError,
@@ -2009,9 +1991,6 @@ pub(crate) fn certified_merge_queue_reservations(
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
-    /// Merge entries can only be committed while Nexus is enabled.
-    #[error("merge ledger commits require nexus.enabled=true")]
-    NexusDisabled,
     /// The merge entry must contain settlement snapshots, an execution batch, or one drain certificate.
     #[error(
         "merge ledger entry must include a lane snapshot, execution batch, or drain certificate"
@@ -2411,9 +2390,6 @@ fn validate_merge_snapshot_against_nexus(
     dataspace_id: DataSpaceId,
     proposal_height: u64,
 ) -> Result<(), MergeLedgerCommitError> {
-    if !nexus.enabled {
-        return Err(MergeLedgerCommitError::NexusDisabled);
-    }
     let Some(expected_dataspace) = nexus_catalog_geometry_lane_dataspace(lane_id, nexus) else {
         return Err(MergeLedgerCommitError::UnknownLane { lane_id });
     };
@@ -2835,9 +2811,6 @@ impl MergeAdmissionState {
 /// Errors surfaced when applying lane lifecycle updates.
 #[derive(Debug, ThisError)]
 pub enum LaneLifecycleError {
-    /// Lane lifecycle updates require Nexus to be enabled.
-    #[error("lane lifecycle updates require nexus.enabled=true")]
-    NexusDisabled,
     /// Lifecycle plans must add or retire at least one lane.
     #[error("lane lifecycle plan must add or retire at least one lane")]
     EmptyPlan,
@@ -2889,12 +2862,6 @@ pub enum LaneLifecycleError {
         /// Pending-progress invariant that blocks retirement.
         reason: &'static str,
     },
-    /// A dependent Nexus feature was enabled while Nexus itself is disabled.
-    #[error("{0} requires nexus.enabled=true")]
-    NexusDisabledFeature(&'static str),
-    /// Disabled Nexus configuration must not carry multi-lane overrides.
-    #[error("nexus.enabled=false requires the default single-lane catalog and routing policy")]
-    NexusDisabledWithLaneOverrides,
     /// Relay worker requires asynchronous lane-relay-burn fee settlement.
     #[error("nexus.relay_worker.enabled requires lane-relay-burn fee settlement")]
     RelayWorkerFeeConfig,
@@ -2909,9 +2876,6 @@ pub enum LaneLifecycleError {
     /// Lane-relay emergency multisig threshold cannot exceed member count.
     #[error("nexus.lane_relay_emergency.multisig_threshold must be <= multisig_members")]
     LaneRelayEmergencyThreshold,
-    /// Dataspace default sponsor programs require Nexus to be enabled.
-    #[error("nexus dataspace fee sponsor programs require nexus.enabled=true")]
-    DataspaceFeeSponsorProgramsRequireNexusEnabled,
     /// Dataspace default sponsor program references a dataspace absent from the catalog.
     #[error("nexus dataspace fee sponsor program references unknown dataspace {0}")]
     DataspaceFeeSponsorProgramUnknownDataspace(DataSpaceId),
@@ -3150,16 +3114,6 @@ struct LaneGeometryCatalogPublicationFailure {
     error: LaneLifecycleError,
     rollback_safe: bool,
 }
-/// Errors surfaced while rebuilding DA indexes from the committed block log.
-#[derive(Copy, Clone, Debug, ThisError, PartialEq, Eq)]
-pub(crate) enum DaIndexHydrationError {
-    /// DA shard cursor replay failed.
-    #[error("DA shard cursor hydration failed: {0}")]
-    ShardCursor(#[from] DaShardCursorError),
-    /// DA receipt cursor replay failed.
-    #[error("DA receipt cursor hydration failed: {0}")]
-    ReceiptCursor(#[from] DaReceiptCursorError),
-}
 /// Errors surfaced when computing block inclusion/execution proofs.
 #[derive(Copy, Clone, Debug, ThisError)]
 pub enum BlockProofError {
@@ -3172,6 +3126,18 @@ pub enum BlockProofError {
     /// Referenced block not found in storage.
     #[error("block {0} not found in Kura")]
     BlockNotFound(NonZeroU64),
+    /// The Kura body differs from the header hash committed in the WSV.
+    #[error(
+        "Kura block {block_height} does not match committed WSV hash: expected {expected:?}, found {actual:?}"
+    )]
+    BlockHashMismatch {
+        /// Height whose body was requested.
+        block_height: NonZeroU64,
+        /// Header hash committed in the WSV.
+        expected: HashOf<BlockHeader>,
+        /// Header hash decoded from Kura.
+        actual: HashOf<BlockHeader>,
+    },
     /// The durable Kura slot contains a block with a different header height.
     #[error("Kura slot {requested} contains block header height {actual}")]
     BlockHeightMismatch {
@@ -3868,13 +3834,6 @@ pub struct World {
     pub(crate) proof_tags: Storage<iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
     /// Inverted index from ZK1 TLV tag to proof ids (sorted, unique) for efficient queries.
     pub(crate) proofs_by_tag: Storage<[u8; 4], Vec<iroha_data_model::proof::ProofId>>,
-    /// Commit QCs keyed by subject block hash.
-    ///
-    /// Unlike process-local consensus caches, this archive is part of restart snapshots so
-    /// historical bridge proofs remain constructible after bounded Kura roster sidecars and the
-    /// commit-roster journal expire. Canonical WSV checkpoint hashing explicitly redacts this
-    /// asynchronously enriched recovery evidence in `snapshot.rs`.
-    pub(crate) commit_qcs: Storage<HashOf<BlockHeader>, Qc>,
     /// Latest lane merge-hint roots observed via the merge ledger.
     pub(crate) merge_hint_roots: Cell<Vec<Hash>>,
     /// Latest reduced global state root advertised by the merge ledger.
@@ -4540,8 +4499,6 @@ pub struct WorldBlock<'world> {
     pub(crate) proof_tags: StorageBlock<'world, iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
     /// Inverted index from TLV tag to proof ids.
     pub(crate) proofs_by_tag: StorageBlock<'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
-    /// Commit QCs keyed by subject block hash.
-    pub(crate) commit_qcs: StorageBlock<'world, HashOf<BlockHeader>, Qc>,
     /// Persisted consensus evidence records keyed by deterministic digest.
     #[norito(skip)]
     pub(crate) consensus_evidence: StorageBlock<'world, Vec<u8>, EvidenceRecord>,
@@ -5023,7 +4980,6 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.proofs, Proof);
         collect_reverts!(self.proof_tags, ProofTag);
         collect_reverts!(self.proofs_by_tag, ProofByTag);
-        collect_reverts!(self.commit_qcs, CommitQc);
         collect_reverts!(self.contract_manifests, ContractManifest);
         collect_reverts!(self.contract_code, ContractCode);
         collect_reverts!(self.contract_code_uploads, ContractCodeUpload);
@@ -5100,7 +5056,6 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.proofs, Proof);
         collect_payload!(self.proof_tags, ProofTag);
         collect_payload!(self.proofs_by_tag, ProofByTag);
-        collect_payload!(self.commit_qcs, CommitQc);
         collect_payload!(self.contract_manifests, ContractManifest);
         collect_payload!(self.contract_code, ContractCode);
         collect_payload!(self.contract_code_uploads, ContractCodeUpload);
@@ -5268,7 +5223,6 @@ impl<'world> WorldBlock<'world> {
             proofs_by_status,
             proof_tags,
             proofs_by_tag,
-            commit_qcs,
             consensus_evidence,
             contract_manifests,
             contract_code,
@@ -5754,8 +5708,6 @@ pub struct WorldTransaction<'block, 'world> {
     /// Inverted index from TLV tag to proof ids.
     pub(crate) proofs_by_tag:
         StorageTransaction<'block, 'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
-    /// Commit QCs keyed by subject block hash.
-    pub(crate) commit_qcs: StorageTransaction<'block, 'world, HashOf<BlockHeader>, Qc>,
     /// Persisted consensus evidence records keyed by deterministic digest.
     pub(crate) consensus_evidence: StorageTransaction<'block, 'world, Vec<u8>, EvidenceRecord>,
     /// Contract manifests
@@ -7814,8 +7766,6 @@ pub struct WorldView<'world> {
     pub(crate) proof_tags: StorageView<'world, iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
     /// Inverted index from TLV tag to proof ids.
     pub(crate) proofs_by_tag: StorageView<'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
-    /// Commit QCs keyed by subject block hash.
-    pub(crate) commit_qcs: StorageView<'world, HashOf<BlockHeader>, Qc>,
     /// Latest lane merge-hint roots observed via the merge ledger.
     pub(crate) merge_hint_roots: CellView<'world, Vec<Hash>>,
     /// Latest reduced global state root advertised by the merge ledger.
@@ -10782,10 +10732,6 @@ pub struct State {
     pub da_shard_cursors: parking_lot::RwLock<DaShardCursorIndex>,
     /// Background persistor for DA shard cursor journal snapshots.
     da_shard_cursor_persistor: DaShardCursorJournalPersistor,
-    /// Structurally validated legacy commit-roster archive; never live v2 finality authority.
-    pub(crate) commit_roster_journal: Arc<parking_lot::RwLock<CommitRosterJournal>>,
-    /// Serializes the complete commit-roster journal persistence and accounting scope.
-    commit_roster_journal_persistence_lock: parking_lot::Mutex<()>,
     /// Durable latest query-index snapshot marker reconstructed at startup.
     query_index_journal: parking_lot::RwLock<QueryIndexJournal>,
     /// Serializes the complete query-index journal persistence and accounting scope.
@@ -10806,7 +10752,9 @@ pub struct State {
     pub lane_privacy_registry: parking_lot::RwLock<LanePrivacyRegistryHandle>,
     /// Optional lane compliance engine (consensus-critical when configured).
     lane_compliance: parking_lot::RwLock<Option<Arc<LaneComplianceEngine>>>,
-    /// Guard to ensure DA indexes are hydrated from the block log at most once.
+    /// Serializes initial DA hydration and every explicit rewind rebuild.
+    da_index_hydration_fence: parking_lot::Mutex<()>,
+    /// Cached outcome of the most recent serialized DA index rebuild.
     da_indexes_hydrated: parking_lot::RwLock<Option<Result<(), DaIndexHydrationError>>>,
     /// Runtime handle for the IVM to execute triggers.
     pub ivm: IVM,
@@ -11353,19 +11301,17 @@ impl SccpVerifierWorkV1 {
         self == Self::default()
     }
 }
-/// Finality authority governing whether State should publish the legacy commit-roster projection.
-#[derive(Clone, Copy)]
-enum CommitRosterAuthority<'a> {
-    /// Legacy finality may carry a structurally matched commit-certificate hint.
-    Legacy(Option<&'a Qc>),
-    /// Exact Sumeragi-v2 finality remains authoritative in Kura and must not be projected.
+/// Topology authority governing post-execution State publication.
+#[derive(Clone)]
+enum ApplyTopologyAuthority {
+    /// Nonshipping fixtures may exercise caller-supplied topology reconciliation.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    Fixture,
+    /// Exact Sumeragi-v2 finality remains authoritative.
     V2Finality,
 }
-/// Immutable AXT authorization context captured before any effects of a block run.
-///
-/// Policy identity, issuer identity, the issuer's verification key, and the replay
-/// ledger are frozen together. The per-dataspace handle counter is deliberately
-/// tracked outside this snapshot because accepted handles advance it within the block.
+/// Immutable AXT authorization snapshot captured before block effects.
+/// Freezes policy, issuer/key, and replay ledger; accepted handles separately advance counters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AxtBlockStartSnapshot {
     policy_snapshot: AxtPolicySnapshot,
@@ -11686,7 +11632,7 @@ pub struct StateBlock<'state> {
     /// Whether this block appended a canonical autoscale sample record.
     autoscale_sample_history_dirty: bool,
     /// Transaction hashes committed by direct standalone lane-block application.
-    direct_committed_transactions: HashSet<HashOf<SignedTransaction>>,
+    direct_committed_entrypoints: HashSet<HashOf<TransactionEntrypoint>>,
     /// Resolved certified merge entry staged before ordinary carrier-block effects.
     staged_merge_entry: Option<MergeLedgerEntry>,
     /// Exact proposal-native QueuePlan certificates staged before ordinary
@@ -11774,7 +11720,7 @@ impl<'state> StateBlock<'state> {
         )
         .expect("block height is non-zero");
         self.transactions.json_serialize_after_commit(
-            &self.direct_committed_transactions,
+            &self.direct_committed_entrypoints,
             height,
             out,
         );
@@ -12065,7 +12011,7 @@ impl<'state> StateBlock<'state> {
         // the replay ledger and must never advance the counter a second time.
         for handle in &envelope.handles {
             let retain_until_slot = retain_until_slot_for_handle(handle, &self.nexus, current_slot);
-            let key = AxtHandleReplayKey::from_handle(&handle.handle);
+            let key = AxtHandleReplayKey::from_handle(handle.intent.asset_dsid, &handle.handle);
             self.world.axt_replay_ledger.insert(
                 key,
                 AxtReplayRecord {
@@ -12974,122 +12920,6 @@ pub(crate) fn consensus_key_pop_for_public_key(
         }
     })
 }
-/// Return whether a commit certificate is bound to the exact requested committed block.
-pub(crate) fn commit_qc_matches_block(
-    commit_qc: &Qc,
-    height: u64,
-    block_hash: HashOf<BlockHeader>,
-) -> bool {
-    matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit)
-        && commit_qc.height == height
-        && commit_qc.subject_block_hash == block_hash
-}
-/// Load a structurally matched legacy commit certificate for archival tests.
-#[cfg(test)]
-pub(crate) fn trusted_world_commit_qc_for_block(
-    snapshot: &impl WorldReadOnly,
-    height: u64,
-    block_hash: HashOf<BlockHeader>,
-) -> Option<Qc> {
-    snapshot
-        .commit_qcs()
-        .get(&block_hash)
-        .filter(|commit_qc| commit_qc_matches_block(commit_qc, height, block_hash))
-        .cloned()
-}
-#[cfg(test)]
-mod historical_commit_qc_tests {
-    use super::{State, World, trusted_world_commit_qc_for_block};
-    use crate::{
-        query::store::LiveQueryStore,
-        sumeragi::consensus::{PERMISSIONED_TAG, Phase, default_chain_order_hash},
-    };
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::{
-        block::{BlockHeader, builder::BlockBuilder},
-        consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
-    };
-    use std::num::NonZeroU64;
-    fn commit_qc(block_hash: HashOf<BlockHeader>, height: u64) -> Qc {
-        Qc {
-            phase: Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root: Hash::prehashed([0; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0; Hash::LENGTH]),
-            height,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&Vec::<iroha_data_model::peer::PeerId>::new()),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: Vec::new(),
-            aggregate: QcAggregate {
-                signers_bitmap: Vec::new(),
-                bls_aggregate_signature: Vec::new(),
-            },
-        }
-    }
-    #[test]
-    fn trusted_world_commit_qc_lookup_rejects_wrong_phase_height_and_hash() {
-        let requested = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x41; 32]));
-        let other = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
-        for malformed in [
-            {
-                let mut qc = commit_qc(requested, 7);
-                qc.phase = Phase::Prepare;
-                qc
-            },
-            commit_qc(requested, 8),
-            commit_qc(other, 7),
-        ] {
-            let mut state = State::new_for_testing(
-                World::new(),
-                crate::kura::Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            state.insert_commit_qc_for_testing(requested, malformed);
-            let view = state.view();
-            assert!(
-                trusted_world_commit_qc_for_block(&view.world, 7, requested).is_none(),
-                "a malformed archive row must fail closed"
-            );
-        }
-    }
-    #[test]
-    fn core_state_and_transaction_fall_back_to_exact_world_commit_qc() {
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x51; 32]));
-        let expected = commit_qc(block_hash, 7);
-        let mut state = State::new_for_testing(
-            World::new(),
-            crate::kura::Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        state.insert_commit_qc_for_testing(block_hash, expected.clone());
-        assert_eq!(
-            state.commit_qc_for_block(7, block_hash),
-            Some(expected.clone())
-        );
-        let current_header = BlockHeader::new(
-            NonZeroU64::new(1).expect("nonzero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let current = BlockBuilder::new(current_header)
-            .build_with_signature(0, crate::state::checked_keypair().private_key());
-        let mut state_block = state.block(current.header());
-        let transaction = state_block.transaction();
-        assert_eq!(
-            transaction.commit_qc_for_block(7, block_hash),
-            Some(expected)
-        );
-    }
-}
 /// Resolve every lane id currently associated with the provided validator peers.
 pub(crate) fn validator_lane_ids_for_peers<I, P>(
     snapshot: &impl WorldReadOnly,
@@ -13141,6 +12971,7 @@ pub(crate) fn public_lane_reward_record_matches_key(
     key.0 == record.lane_id && key.1 == record.epoch
 }
 /// Resolve every lane id currently associated with a single validator peer.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn validator_lane_ids_for_peer(
     snapshot: &impl WorldReadOnly,
     peer: &PeerId,
@@ -13196,9 +13027,6 @@ pub(crate) fn nexus_active_lane_dataspace(
     lane_id: LaneId,
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Option<DataSpaceId> {
-    if !nexus.enabled {
-        return None;
-    }
     let dataspace_id = nexus_catalog_geometry_lane_dataspace(lane_id, nexus)?;
     nexus
         .dataspace_catalog
@@ -13215,18 +13043,13 @@ pub(crate) fn nexus_active_lane_dataspace_at_height(
         .then_some(dataspace_id)
 }
 /// Resolve the canonical mutable-staking owner for a physical dataspace.
-/// Static lanes share the lowest active stake-elected owner; disabled Nexus
-/// admits only `SINGLE`/`UNIVERSAL`, while autoscale lanes retain exact ownership.
+/// Static lanes share the lowest active stake-elected owner, while autoscale
+/// lanes retain exact ownership.
 pub(crate) fn nexus_staking_authority_lane_at_height(
     lane_id: LaneId,
     nexus: &iroha_config::parameters::actual::Nexus,
     block_height: u64,
 ) -> Option<LaneId> {
-    if !nexus.enabled {
-        return (consensus_lane_dataspace_at_height(lane_id, nexus, block_height)
-            == Some(DataSpaceId::UNIVERSAL))
-        .then_some(LaneId::SINGLE);
-    }
     let dataspace_id = nexus_active_lane_dataspace_at_height(lane_id, nexus, block_height)?;
     let lane = nexus
         .lane_catalog
@@ -13257,21 +13080,13 @@ pub(crate) fn nexus_staking_authority_lane_at_height(
         .map(|candidate| candidate.id)
         .min()
 }
-/// Resolve the height-sensitive consensus route. Disabled Nexus admits only
-/// the canonical `SINGLE`/`UNIVERSAL` catalog geometry.
+/// Resolve the height-sensitive consensus route.
 pub(crate) fn consensus_lane_dataspace_at_height(
     lane_id: LaneId,
     nexus: &iroha_config::parameters::actual::Nexus,
     block_height: u64,
 ) -> Option<DataSpaceId> {
-    if nexus.enabled {
-        nexus_active_lane_dataspace_at_height(lane_id, nexus, block_height)
-    } else if lane_id == LaneId::SINGLE {
-        nexus_catalog_geometry_lane_dataspace(lane_id, nexus)
-            .filter(|dataspace_id| *dataspace_id == DataSpaceId::UNIVERSAL)
-    } else {
-        None
-    }
+    nexus_active_lane_dataspace_at_height(lane_id, nexus, block_height)
 }
 /// Resolve the manifest-authority source lanes for one active routed target.
 ///
@@ -13350,15 +13165,7 @@ fn axt_cached_policy_retain_lane_ids_at_height(
     nexus: &iroha_config::parameters::actual::Nexus,
     block_height: u64,
 ) -> BTreeSet<LaneId> {
-    if nexus.enabled {
-        return axt_active_lane_ids_at_height(nexus, block_height);
-    }
-    nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .filter_map(|lane| nexus_catalog_geometry_lane_dataspace(lane.id, nexus).map(|_| lane.id))
-        .collect()
+    axt_active_lane_ids_at_height(nexus, block_height)
 }
 pub(crate) fn nexus_active_lane_ids(
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -13480,6 +13287,7 @@ pub(crate) fn live_consensus_key_pop_for_peer(
     }
     None
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn active_stake_elected_validator_peers_for_checkpoint_lanes<I, P>(
     world: &impl WorldReadOnly,
     candidate_peers: I,
@@ -13743,22 +13551,7 @@ where
         let ids: Vec<PeerId> = c
             .members
             .into_iter()
-            .filter_map(|acct| {
-                if let Some(peer_id) = validator_peer_ids_by_account.get(&acct) {
-                    return Some(peer_id.clone());
-                }
-                let peer_id = PeerId::from(acct.try_signatory()?.clone());
-                if !present_peers.contains(&peer_id) {
-                    return None;
-                }
-                if enforce_topology_membership && !topology_peers.contains(&peer_id) {
-                    return None;
-                }
-                if !peer_has_live_consensus_key(world, &peer_id, block_height) {
-                    return None;
-                }
-                Some(peer_id)
-            })
+            .filter_map(|account| validator_peer_ids_by_account.get(&account).cloned())
             .collect();
         if let Some(committee) = select_prf_committee(world, epoch, ids) {
             return Some(committee);
@@ -13804,16 +13597,6 @@ where
     candidates.retain(|peer| peer_has_live_consensus_key(world, peer, block_height));
     candidates.sort();
     candidates.dedup();
-    if candidates.is_empty() {
-        let peers: Vec<PeerId> = world
-            .peers()
-            .iter()
-            .filter(|peer| peer_has_live_consensus_key(world, peer, block_height))
-            .filter(|peer| !enforce_topology_membership || topology_peers.contains(peer))
-            .cloned()
-            .collect();
-        return select_prf_committee(world, epoch, peers);
-    }
     select_prf_committee(world, epoch, candidates)
 }
 impl StakeSnapshot for StateView<'_> {
@@ -14021,13 +13804,16 @@ mod stake_snapshot_tests {
     #[test]
     fn nexus_active_lanes_require_catalog_geometry_and_dataspace_agreement() {
         let stale_lane = LaneId::new(1);
-        let mut disabled_nexus = iroha_config::parameters::actual::Nexus::default();
-        disabled_nexus.enabled = false;
-        assert_eq!(nexus_active_lane_ids(&disabled_nexus), BTreeSet::new());
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+
         assert_eq!(
-            nexus_active_lane_dataspace(LaneId::SINGLE, &disabled_nexus),
-            None,
-            "disabled Nexus must not expose the default lane as active"
+            nexus_active_lane_ids(&nexus),
+            BTreeSet::from([LaneId::SINGLE])
+        );
+        assert_eq!(
+            nexus_active_lane_dataspace(LaneId::SINGLE, &nexus),
+            Some(DataSpaceId::UNIVERSAL),
+            "the canonical default lane must be active"
         );
         let stale_geometry_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
@@ -14042,7 +13828,6 @@ mod stake_snapshot_tests {
         )
         .expect("stale geometry catalog");
         let mut missing_catalog_lane = iroha_config::parameters::actual::Nexus {
-            enabled: true,
             lane_catalog: LaneCatalog::new(
                 NonZeroU32::new(1).expect("nonzero lane count"),
                 vec![LaneConfig::default()],
@@ -14087,7 +13872,6 @@ mod stake_snapshot_tests {
         )
         .expect("drifted geometry catalog");
         let mut mismatched_geometry = iroha_config::parameters::actual::Nexus {
-            enabled: true,
             lane_catalog: authoritative_catalog,
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata::default(),
@@ -14148,7 +13932,6 @@ mod stake_snapshot_tests {
         )
         .expect("mixed autoscale lane catalog");
         let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
             lane_catalog,
             ..Default::default()
         };
@@ -14192,7 +13975,6 @@ mod stake_snapshot_tests {
         )
         .expect("autoscale lane catalog");
         let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
             lane_catalog,
             ..Default::default()
         };
@@ -14253,7 +14035,6 @@ mod stake_snapshot_tests {
         ])
         .expect("private dataspace catalog");
         let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
             lane_catalog,
             dataspace_catalog,
             ..Default::default()
@@ -14459,7 +14240,6 @@ mod stake_snapshot_tests {
         )
         .expect("shared-dataspace lane catalog");
         let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
             lane_catalog,
             ..iroha_config::parameters::actual::Nexus::default()
         };
@@ -14681,7 +14461,6 @@ mod stake_snapshot_tests {
         .expect("stale geometry catalog");
         {
             let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
             nexus.staking.min_validator_stake = 1_u64.into();
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
             nexus.lane_catalog = LaneCatalog::new(
@@ -14881,27 +14660,19 @@ mod stake_snapshot_tests {
     }
     #[test]
     fn council_members_map_to_peer_ids_in_epoch_roster() {
-        // Build a minimal state with blank Kura/query
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        // Generate one exact 3f+1 committee and set it as the world peers.
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 1_u64.into();
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+        }
         let kp: Vec<KeyPair> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let mut wb = state.world.block();
-        let peers_vec: UniqueVec<PeerId> = {
-            let mut uv = UniqueVec::new();
-            for k in &kp {
-                let _ = uv.push(PeerId::from(k.public_key().clone()));
-            }
-            uv
-        };
-        *wb.peers.get_mut() = peers_vec;
-        let peers: Vec<_> = wb.peers.clone().into_iter().collect();
-        for peer in peers {
-            seed_consensus_key(&mut wb, &peer, ConsensusKeyStatus::Active, 0);
+        for keypair in &kp {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 10);
         }
-        // Build a council state whose account signatories map to the same peers
-        // in a deliberately different order.
         let members = vec![
             DMAccountId::of(kp[1].public_key().clone()),
             DMAccountId::of(kp[0].public_key().clone()),
@@ -14916,7 +14687,6 @@ mod stake_snapshot_tests {
         };
         wb.council.insert(0, council);
         wb.commit();
-        // Query the epoch roster via StakeSnapshot
         let sv = state.view();
         let out = <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).unwrap();
         let fast = state
@@ -14931,12 +14701,50 @@ mod stake_snapshot_tests {
         assert_eq!(fast, out);
     }
     #[test]
+    fn council_members_without_eligible_validator_bindings_cannot_fill_epoch_roster() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 1_u64.into();
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+        }
+        let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
+        let mut world = state.world.block();
+        let mut members = Vec::with_capacity(keypairs.len());
+        for keypair in &keypairs {
+            let peer = PeerId::from(keypair.public_key().clone());
+            let _ = world.peers.get_mut().push(peer.clone());
+            seed_consensus_key(&mut world, &peer, ConsensusKeyStatus::Active, 0);
+            members.push(DMAccountId::of(keypair.public_key().clone()));
+        }
+        world.council.insert(
+            0,
+            CouncilState {
+                epoch: 0,
+                members,
+                candidate_count: 4,
+                ..CouncilState::default()
+            },
+        );
+        world.commit();
+        assert!(
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&state.view(), 0).is_none(),
+            "council membership must not synthesize validator authority without an eligible lane binding"
+        );
+    }
+    #[test]
     fn council_multisig_member_without_peer_binding_is_ignored_without_unwinding() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 1_u64.into();
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+        }
         let keypair = crate::state::checked_keypair();
-        let peer = PeerId::from(keypair.public_key().clone());
         let single_key_account = DMAccountId::of(keypair.public_key().clone());
         let member =
             iroha_data_model::account::MultisigMember::new(keypair.public_key().clone(), 1)
@@ -14945,8 +14753,7 @@ mod stake_snapshot_tests {
             .expect("valid multisig policy");
         let multisig_account = DMAccountId::new_multisig(policy);
         let mut world = state.world.block();
-        let _ = world.peers.get_mut().push(peer.clone());
-        seed_consensus_key(&mut world, &peer, ConsensusKeyStatus::Active, 0);
+        seed_active_public_lane_validator(&mut world, &keypair, LaneId::SINGLE, 10);
         world.council.insert(
             0,
             CouncilState {
@@ -14969,7 +14776,6 @@ mod stake_snapshot_tests {
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
             nexus.staking.min_validator_stake = 1_u64.into();
         }
         let account_keys: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
@@ -15355,7 +15161,6 @@ mod stake_snapshot_tests {
         .expect("lane catalog");
         {
             let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
@@ -15592,68 +15397,38 @@ mod stake_snapshot_tests {
         assert!(!roster.contains(&admin_peer));
     }
     #[test]
-    fn admin_managed_roster_falls_back_to_peers() {
+    fn admin_managed_validators_cannot_fill_npos_epoch_roster() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
         {
             let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 1_u64.into();
             nexus.staking.public_validator_mode = LaneValidatorMode::AdminManaged;
             nexus.staking.restricted_validator_mode = LaneValidatorMode::AdminManaged;
         }
-        let lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(1).expect("nonzero lane count"),
-            vec![LaneConfig::default()],
-        )
-        .expect("lane catalog");
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.lane_catalog = lane_catalog.clone();
-            nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
-        }
-        let kp_a = crate::state::checked_keypair();
-        let kp_b = crate::state::checked_keypair();
-        let extra_keypairs: Vec<_> = (0..2).map(|_| crate::state::checked_keypair()).collect();
-        let peer_a = PeerId::from(kp_a.public_key().clone());
-        let peer_b = PeerId::from(kp_b.public_key().clone());
-        let extra_peers: Vec<_> = extra_keypairs
-            .iter()
-            .map(|keypair| PeerId::from(keypair.public_key().clone()))
-            .collect();
+        let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let mut wb = state.world.block();
-        {
-            let peers = wb.peers.get_mut();
-            let _ = peers.push(peer_a.clone());
-            let _ = peers.push(peer_b.clone());
-            for peer in &extra_peers {
-                let _ = peers.push(peer.clone());
-            }
+        for keypair in &keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 500);
         }
-        seed_consensus_key(&mut wb, &peer_a, ConsensusKeyStatus::Active, 0);
-        seed_consensus_key(&mut wb, &peer_b, ConsensusKeyStatus::Active, 0);
-        for peer in &extra_peers {
-            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
-        }
-        // Stray validator entry should not affect admin-managed rosters.
-        let validator_id = DMAccountId::of(kp_a.public_key().clone());
-        wb.public_lane_validators.insert(
-            (LaneId::SINGLE, validator_id.clone()),
-            active_lane_validator_record(LaneId::SINGLE, &validator_id, peer_a.clone(), 500_u32),
-        );
         wb.commit();
         let sv = state.view();
-        let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        let mut expected = vec![peer_a, peer_b];
-        expected.extend(extra_peers);
-        expected.sort();
-        assert_eq!(roster, expected);
+        assert!(
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).is_none(),
+            "admin-managed lane validators must not substitute for an empty NPoS candidate set"
+        );
     }
     #[test]
-    fn stake_snapshot_uses_genesis_peers_when_no_public_lane_stake_exists() {
+    fn stake_snapshot_fails_closed_when_no_public_lane_stake_exists() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 1_u64.into();
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+        }
         let mut wb = state.world.block();
         let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let mut peers_vec = UniqueVec::new();
@@ -15667,13 +15442,31 @@ mod stake_snapshot_tests {
         }
         wb.commit();
         let sv = state.view();
-        let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        let mut expected = peers;
-        expected.sort();
-        assert_eq!(
-            roster, expected,
-            "genesis peers should populate the roster when no public-lane stake exists"
+        assert!(
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).is_none(),
+            "world peers without eligible public-lane stake must not become NPoS validators"
+        );
+    }
+    #[test]
+    fn below_minimum_stake_validators_cannot_fill_npos_epoch_roster() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 1_000_u64.into();
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+        }
+        let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
+        let mut wb = state.world.block();
+        for keypair in &keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 999);
+        }
+        wb.commit();
+        let sv = state.view();
+        assert!(
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).is_none(),
+            "below-minimum-stake validators must not substitute for an empty NPoS candidate set"
         );
     }
 }
@@ -18926,8 +18719,6 @@ macro_rules! world_ro_accessors {
             storage runtime_upgrades:
                 iroha_data_model::runtime::RuntimeUpgradeId =>
                 iroha_data_model::runtime::RuntimeUpgradeRecord;
-            /// Commit QCs keyed by subject block hash (read-only).
-            storage commit_qcs: HashOf<BlockHeader> => Qc;
             /// Latest lane merge-hint roots observed via the merge ledger.
             ref merge_hint_roots: Vec<Hash>;
             /// Latest reduced global state root advertised by the merge ledger.
@@ -20281,13 +20072,6 @@ impl<'world> WorldBlock<'world> {
     ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
         &mut self.vrf_epochs
     }
-    #[cfg(any(test, feature = "telemetry"))]
-    /// Mutable commit-QC storage accessor used by telemetry/router tests.
-    pub fn commit_qcs_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageBlock<'world, HashOf<BlockHeader>, Qc> {
-        &mut self.commit_qcs
-    }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Mutable pin-manifest registry accessor used by tests that need committed SoraFS state.
     pub fn pin_manifests_mut_for_testing(
@@ -20493,7 +20277,6 @@ impl<'world> WorldBlock<'world> {
             proofs_by_status,
             proof_tags,
             proofs_by_tag,
-            commit_qcs,
             consensus_evidence,
             contract_manifests,
             contract_code,
@@ -20643,7 +20426,6 @@ impl<'world> WorldBlock<'world> {
         proofs_by_status.commit();
         proof_tags.commit();
         proofs_by_tag.commit();
-        commit_qcs.commit();
         consensus_evidence.commit();
         contract_manifests.commit();
         contract_code.commit();
@@ -22004,7 +21786,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             proofs_by_status,
             proof_tags,
             proofs_by_tag,
-            commit_qcs,
             contract_manifests,
             contract_code,
             contract_code_uploads,
@@ -22163,7 +21944,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         proofs_by_status.apply();
         proof_tags.apply();
         proofs_by_tag.apply();
-        commit_qcs.apply();
         consensus_evidence.apply();
         merge_global_state_root.apply();
         merge_hint_roots.apply();
@@ -23510,10 +23290,8 @@ impl State {
             })
             .collect()
     }
-    /// Return whether this state decoded a versioned Nexus runtime snapshot.
-    ///
-    /// Legacy snapshots do not carry the effective lane catalog and therefore
-    /// must continue to use the configured startup catalog.
+    /// Report whether a canonical Nexus runtime snapshot was decoded.
+    /// Fresh state uses its configured catalog until the first canonical snapshot.
     #[must_use]
     pub fn nexus_runtime_restored_from_snapshot(&self) -> bool {
         self.nexus_runtime_restored_from_snapshot
@@ -23668,16 +23446,16 @@ impl State {
     }
     fn restore_da_cursors_from_journal(
         &self,
+        cursors: &mut DaShardCursorIndex,
+        lane_config: &iroha_config::parameters::actual::LaneConfig,
         journal: &DaShardCursorJournal,
         latest_height: u64,
     ) -> Result<usize, DaShardCursorError> {
         let mut restored = 0_usize;
-        let mut cursors = self.da_shard_cursors.write();
         cursors.merge_canonical_reset_heights(&Self::journal_reset_heights_at_or_below(
             journal,
             latest_height,
         ));
-        let lane_config = self.nexus_snapshot().lane_config.clone();
         for entry in journal.entries() {
             if entry.last_block_height > latest_height {
                 warn!(
@@ -23689,7 +23467,7 @@ impl State {
                 );
                 continue;
             }
-            if cursors.restore_from_journal_entry(&lane_config, entry)? {
+            if cursors.restore_from_journal_entry(lane_config, entry)? {
                 restored = restored.saturating_add(1);
                 #[cfg(feature = "telemetry")]
                 self.telemetry.record_da_shard_cursor_event(
@@ -23701,13 +23479,6 @@ impl State {
             }
         }
         Ok(restored)
-    }
-    fn commit_roster_journal_path(&self) -> PathBuf {
-        let root = self.kura.store_root();
-        if root.as_os_str().is_empty() {
-            return PathBuf::new();
-        }
-        CommitRosterJournal::journal_path(&root)
     }
     fn query_index_journal_path(&self) -> PathBuf {
         let root = self.kura.store_root();
@@ -23925,600 +23696,6 @@ impl State {
         self.persist_query_projection_checkpoint(Some(checkpoint.clone()));
         Ok(checkpoint)
     }
-    fn persist_commit_roster_journal(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> Result<bool, CommitRosterJournalError> {
-        let path = self.commit_roster_journal_path();
-        let mut journal_guard = self.commit_roster_journal.write();
-        if journal_guard.storage_is_unknown() {
-            return Err(CommitRosterJournalError::StorageUnknown { path });
-        }
-        let mut candidate = journal_guard.clone();
-        if !candidate.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot) {
-            warn!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                block = %commit_qc.subject_block_hash,
-                "refusing to replace a concurrently prepared commit-roster tuple"
-            );
-            return Ok(false);
-        }
-        // Persist exact clean retries too: durable storage can disappear independently of the
-        // in-memory tuple, so every authorized durability boundary must rewrite and fsync it.
-        let accounting_mutation = self.kura.begin_total_disk_usage_mutation();
-        if let Err(err) = candidate.persist() {
-            warn!(
-                ?err,
-                path = %path.display(),
-                "failed to persist commit roster journal"
-            );
-            // `persist` publishes with rename before syncing the parent directory. If that final
-            // sync fails, restore the previous journal so an operation rejected by this method
-            // cannot become authoritative after restart. If the compensating replacement also
-            // fails, neither a namespace read nor an exact payload match proves which rename will
-            // survive a crash. Fence all journal-dependent publication until process restart.
-            let outcome = if let Err(rollback_err) = journal_guard.persist() {
-                warn!(
-                    ?rollback_err,
-                    path = %path.display(),
-                    "failed to roll back commit roster journal after persistence error"
-                );
-                journal_guard.mark_storage_unknown();
-                error!(
-                    height = commit_qc.height,
-                    view = commit_qc.view,
-                    block = %commit_qc.subject_block_hash,
-                    path = %path.display(),
-                    "commit roster journal durability is unknown; restart required"
-                );
-                Err(CommitRosterJournalError::StorageUnknown { path: path.clone() })
-            } else {
-                Ok(false)
-            };
-            drop(accounting_mutation);
-            if let Err(refresh_err) = self.kura.refresh_disk_usage_bytes() {
-                warn!(
-                    ?refresh_err,
-                    "failed to reconcile Kura disk usage after commit roster rollback"
-                );
-                journal_guard.mark_storage_unknown();
-                return Err(CommitRosterJournalError::StorageUnknown { path });
-            }
-            return outcome;
-        }
-        // The journal is a directory of immutable generations plus a current pointer. A full
-        // stable Kura scan is the single accounting authority after publication and GC; statting
-        // the root directory would omit every payload byte.
-        drop(accounting_mutation);
-        if let Err(err) = self.kura.refresh_disk_usage_bytes() {
-            warn!(
-                ?err,
-                "failed to reconcile Kura disk usage after commit roster journal persistence"
-            );
-            candidate.mark_storage_unknown();
-            *journal_guard = candidate;
-            return Err(CommitRosterJournalError::StorageUnknown { path });
-        }
-        *journal_guard = candidate;
-        Ok(true)
-    }
-    fn upsert_commit_roster_journal_memory(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
-        self.commit_roster_journal.write().upsert(
-            commit_qc.clone(),
-            checkpoint.clone(),
-            stake_snapshot,
-        )
-    }
-    /// Fetch a structurally validated legacy commit-roster fixture for tests.
-    ///
-    /// Production block sync and startup replay use Kura's cryptographically verified v2 finality
-    /// artifact and never promote this archival projection to authority.
-    #[cfg(test)]
-    #[must_use]
-    pub fn commit_roster_snapshot_for_block(
-        &self,
-        height: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> Option<CommitRosterSnapshot> {
-        let _persistence_guard = self.commit_roster_journal_persistence_lock.lock();
-        if self.commit_roster_journal.read().storage_is_unknown() {
-            error!(
-                height,
-                block = %block_hash,
-                path = %self.commit_roster_journal_path().display(),
-                "commit roster snapshot is fenced by unknown journal durability; restart required"
-            );
-            return None;
-        }
-        if self
-            .committed_hash_conflict_for_height(height, block_hash)
-            .is_some()
-        {
-            debug!(
-                height,
-                block = %block_hash,
-                "skipping commit-roster snapshot for non-canonical committed block"
-            );
-            return None;
-        }
-        let snapshot = self
-            .commit_roster_journal
-            .read()
-            .get(height, block_hash)
-            .or_else(|| {
-                let sidecar = self.kura.read_roster_metadata(height)?;
-                if sidecar.height != height || sidecar.block_hash != block_hash {
-                    return None;
-                }
-                let commit_qc = sidecar.commit_qc?;
-                let validator_checkpoint = sidecar.validator_checkpoint?;
-                if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit)
-                    || commit_qc.height != height
-                    || commit_qc.subject_block_hash != block_hash
-                    || validator_checkpoint.height != height
-                    || validator_checkpoint.block_hash != block_hash
-                    || validator_checkpoint.view != commit_qc.view
-                    || validator_checkpoint.validator_set != commit_qc.validator_set
-                    || validator_checkpoint.signers_bitmap != commit_qc.aggregate.signers_bitmap
-                    || validator_checkpoint.bls_aggregate_signature
-                        != commit_qc.aggregate.bls_aggregate_signature
-                {
-                    return None;
-                }
-                let snapshot = CommitRosterSnapshot {
-                    commit_qc,
-                    validator_checkpoint,
-                    stake_snapshot: sidecar.stake_snapshot,
-                };
-                if !CommitRosterJournal::snapshot_is_canonical(&snapshot) {
-                    warn!(
-                        height,
-                        block = %block_hash,
-                        "ignoring non-canonical commit-roster sidecar snapshot"
-                    );
-                    return None;
-                }
-                Some(snapshot)
-            })?;
-        if !self.upsert_commit_roster_journal_memory(
-            &snapshot.commit_qc,
-            &snapshot.validator_checkpoint,
-            snapshot.stake_snapshot.clone(),
-        ) {
-            warn!(
-                height,
-                block = %block_hash,
-                "refusing sidecar snapshot that conflicts with a prepared commit-roster tuple"
-            );
-            return None;
-        }
-        Some(snapshot)
-    }
-    fn committed_hash_for_height(&self, height: u64) -> Option<HashOf<BlockHeader>> {
-        let index = usize::try_from(height.checked_sub(1)?).ok()?;
-        self.block_hashes.view().get(index).copied().or_else(|| {
-            let height = NonZeroUsize::new(index.saturating_add(1))?;
-            self.kura
-                .get_block_hash(height)
-                .or_else(|| self.kura.get_durable_block_hash(height))
-        })
-    }
-    fn committed_hash_conflict_for_height(
-        &self,
-        height: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> Option<HashOf<BlockHeader>> {
-        self.committed_hash_for_height(height)
-            .filter(|canonical_hash| *canonical_hash != block_hash)
-    }
-    fn upsert_commit_qc_in_world(&self, commit_qc: &Qc) {
-        let should_update = {
-            let commit_qcs = self.world.commit_qcs.view();
-            commit_qcs
-                .get(&commit_qc.subject_block_hash)
-                .is_none_or(|existing| {
-                    if existing.height != commit_qc.height {
-                        warn!(
-                            height = commit_qc.height,
-                            block = %commit_qc.subject_block_hash,
-                            existing_height = existing.height,
-                            "overwriting commit QC with mismatched height in world storage"
-                        );
-                    }
-                    existing.view < commit_qc.view
-                })
-        };
-        if !should_update {
-            return;
-        }
-        let mut commit_qcs = self.world.commit_qcs.block();
-        if commit_qcs
-            .get(&commit_qc.subject_block_hash)
-            .is_some_and(|existing| existing.view >= commit_qc.view)
-        {
-            return;
-        }
-        commit_qcs.insert(commit_qc.subject_block_hash, commit_qc.clone());
-        commit_qcs.commit();
-    }
-    fn record_commit_roster_internal(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-        update_world: bool,
-        _update_status: bool,
-        write_sidecar: bool,
-        persist_journal: bool,
-    ) -> Result<bool, CommitRosterJournalError> {
-        let _persistence_guard = self.commit_roster_journal_persistence_lock.lock();
-        if self.commit_roster_journal.read().storage_is_unknown() {
-            return Err(CommitRosterJournalError::StorageUnknown {
-                path: self.commit_roster_journal_path(),
-            });
-        }
-        if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-            warn!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                phase = ?commit_qc.phase,
-                "skipping commit roster record for non-commit certificate"
-            );
-            return Ok(false);
-        }
-        let subject_block_hash = commit_qc.subject_block_hash;
-        if checkpoint.height != commit_qc.height || checkpoint.block_hash != subject_block_hash {
-            warn!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                block = %subject_block_hash,
-                checkpoint_height = checkpoint.height,
-                checkpoint_block = %checkpoint.block_hash,
-                "skipping commit roster record: checkpoint metadata mismatch"
-            );
-            return Ok(false);
-        }
-        if checkpoint.view != commit_qc.view {
-            warn!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                block = %commit_qc.subject_block_hash,
-                checkpoint_view = checkpoint.view,
-                "skipping commit roster record: checkpoint view mismatch"
-            );
-            return Ok(false);
-        }
-        if checkpoint.validator_set_hash_version != commit_qc.validator_set_hash_version
-            || checkpoint.validator_set_hash != commit_qc.validator_set_hash
-            || checkpoint.validator_set != commit_qc.validator_set
-            || checkpoint.parent_state_root != commit_qc.parent_state_root
-            || checkpoint.post_state_root != commit_qc.post_state_root
-            || checkpoint.chain_order_hash != commit_qc.chain_order_hash
-            || checkpoint.rechain_seq != commit_qc.rechain_seq
-            || checkpoint.signers_bitmap != commit_qc.aggregate.signers_bitmap
-            || checkpoint.bls_aggregate_signature != commit_qc.aggregate.bls_aggregate_signature
-            || checkpoint.expires_at_height.is_some()
-        {
-            warn!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                block = %commit_qc.subject_block_hash,
-                "skipping commit roster record: checkpoint does not match commit certificate"
-            );
-            return Ok(false);
-        }
-        if let Some(canonical_hash) =
-            self.committed_hash_conflict_for_height(commit_qc.height, subject_block_hash)
-        {
-            warn!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                block = %subject_block_hash,
-                canonical = %canonical_hash,
-                "skipping commit roster record for non-canonical committed block"
-            );
-            return Ok(false);
-        }
-        let write_sidecar = write_sidecar
-            && self
-                .committed_hash_for_height(commit_qc.height)
-                .is_some_and(|canonical_hash| canonical_hash == subject_block_hash);
-        let stake_snapshot = stake_snapshot;
-        if stake_snapshot
-            .as_ref()
-            .is_some_and(|snapshot| !snapshot.matches_roster(&commit_qc.validator_set))
-        {
-            warn!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                block = %commit_qc.subject_block_hash,
-                "rejecting commit roster stake snapshot: roster mismatch"
-            );
-            return Ok(false);
-        }
-        match commit_qc.mode_tag.as_str() {
-            crate::sumeragi::consensus::PERMISSIONED_TAG if stake_snapshot.is_some() => {
-                warn!(
-                    height = commit_qc.height,
-                    view = commit_qc.view,
-                    block = %commit_qc.subject_block_hash,
-                    "rejecting permissioned commit roster with a stake snapshot"
-                );
-                return Ok(false);
-            }
-            crate::sumeragi::consensus::NPOS_TAG
-                if commit_qc.height > 1 && stake_snapshot.is_none() =>
-            {
-                warn!(
-                    height = commit_qc.height,
-                    view = commit_qc.view,
-                    block = %commit_qc.subject_block_hash,
-                    "rejecting NPoS commit roster without an authoritative stake snapshot"
-                );
-                return Ok(false);
-            }
-            crate::sumeragi::consensus::PERMISSIONED_TAG | crate::sumeragi::consensus::NPOS_TAG => {
-            }
-            _ => {
-                warn!(
-                    height = commit_qc.height,
-                    view = commit_qc.view,
-                    block = %commit_qc.subject_block_hash,
-                    mode_tag = %commit_qc.mode_tag,
-                    "rejecting commit roster with an unknown consensus mode"
-                );
-                return Ok(false);
-            }
-        }
-        let existing_snapshot = self
-            .commit_roster_journal
-            .read()
-            .get(commit_qc.height, commit_qc.subject_block_hash);
-        if let Some(snapshot) = existing_snapshot.as_ref()
-            && (snapshot.commit_qc != *commit_qc
-                || snapshot.validator_checkpoint != *checkpoint
-                || snapshot.stake_snapshot != stake_snapshot)
-        {
-            warn!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                block = %commit_qc.subject_block_hash,
-                existing_view = snapshot.commit_qc.view,
-                "rejecting divergent commit-roster tuple for an already prepared block subject"
-            );
-            return Ok(false);
-        }
-        if existing_snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.commit_qc == *commit_qc
-                && snapshot.validator_checkpoint == *checkpoint
-                && snapshot.stake_snapshot == stake_snapshot
-        }) {
-            let journal_accepted = if persist_journal {
-                self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot.clone())?
-            } else {
-                self.upsert_commit_roster_journal_memory(
-                    commit_qc,
-                    checkpoint,
-                    stake_snapshot.clone(),
-                )
-            };
-            if !journal_accepted {
-                return Ok(false);
-            }
-            // A pre-commit hint intentionally omits WSV and sidecar mutation. A later exact
-            // canonical retry must still upgrade those stores after durability is confirmed.
-            if update_world {
-                self.upsert_commit_qc_in_world(commit_qc);
-            }
-            if write_sidecar
-                && !self.commit_roster_sidecar_matches(
-                    commit_qc,
-                    checkpoint,
-                    stake_snapshot.as_ref(),
-                )
-            {
-                self.write_commit_roster_sidecar(commit_qc, checkpoint, stake_snapshot.clone());
-            }
-            debug!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                block = %commit_qc.subject_block_hash,
-                "accepted exact commit roster retry"
-            );
-            return Ok(true);
-        }
-        let sidecar_snapshot = stake_snapshot.clone();
-        if persist_journal {
-            if !self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot)? {
-                return Ok(false);
-            }
-        } else if !self.upsert_commit_roster_journal_memory(commit_qc, checkpoint, stake_snapshot) {
-            return Ok(false);
-        }
-        if update_world {
-            self.upsert_commit_qc_in_world(commit_qc);
-        }
-        if write_sidecar {
-            self.write_commit_roster_sidecar(commit_qc, checkpoint, sidecar_snapshot);
-        }
-        Ok(true)
-    }
-    fn commit_roster_sidecar_matches(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<&CommitStakeSnapshot>,
-    ) -> bool {
-        self.kura
-            .read_roster_metadata(commit_qc.height)
-            .is_some_and(|sidecar| {
-                sidecar.height == commit_qc.height
-                    && sidecar.block_hash == commit_qc.subject_block_hash
-                    && sidecar.commit_qc.as_ref() == Some(commit_qc)
-                    && sidecar.validator_checkpoint.as_ref() == Some(checkpoint)
-                    && sidecar.stake_snapshot.as_ref() == stake_snapshot
-            })
-    }
-    fn write_commit_roster_sidecar(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-    ) {
-        let sidecar = crate::kura::RosterSidecar::new(
-            commit_qc.height,
-            commit_qc.subject_block_hash,
-            Some(commit_qc.clone()),
-            Some(checkpoint.clone()),
-            stake_snapshot,
-        );
-        self.kura.write_roster_metadata(&sidecar);
-    }
-    /// Record commit-roster artifacts in status caches, world storage, and the journal.
-    ///
-    /// Returns `Ok(true)` when the roster entry is accepted or `Ok(false)` when skipped.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CommitRosterJournalError::StorageUnknown`] when a prior failed journal
-    /// replacement could not establish a durable namespace and restart is required.
-    #[cfg(test)]
-    pub(crate) fn record_commit_roster(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> Result<bool, CommitRosterJournalError> {
-        self.record_commit_roster_internal(
-            commit_qc,
-            checkpoint,
-            stake_snapshot,
-            true,
-            true,
-            true,
-            true,
-        )
-    }
-    /// Record commit-roster metadata as a consensus recovery hint.
-    ///
-    /// This durably persists the recovery fence for block-sync validation without taking the WSV
-    /// commit-QC write path or writing committed-height sidecars before the block is committed.
-    /// Persistence failure is reported to consensus so it can fail closed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CommitRosterJournalError::StorageUnknown`] when journal durability cannot be
-    /// established and the process must restart before retrying.
-    #[cfg(test)]
-    pub(crate) fn record_commit_roster_hint(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> Result<bool, CommitRosterJournalError> {
-        self.record_commit_roster_internal(
-            commit_qc,
-            checkpoint,
-            stake_snapshot,
-            false,
-            true,
-            false,
-            true,
-        )
-    }
-    /// Record commit-roster artifacts for a durably committed block, including sidecar.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CommitRosterJournalError::StorageUnknown`] when a prior journal replacement left
-    /// durable state ambiguous. No WSV or sidecar mutation occurs in that state.
-    #[cfg(test)]
-    pub(crate) fn record_commit_roster_with_sidecar(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> Result<bool, CommitRosterJournalError> {
-        self.record_commit_roster_internal(
-            commit_qc,
-            checkpoint,
-            stake_snapshot,
-            true,
-            true,
-            true,
-            false,
-        )
-    }
-    #[cfg(test)]
-    fn restore_commit_roster_history(&self) {
-        let snapshots = self.commit_roster_journal.read().snapshots();
-        if snapshots.is_empty() {
-            return;
-        }
-        let restored = snapshots.len();
-        for snapshot in snapshots {
-            crate::sumeragi::status::record_commit_qc(snapshot.commit_qc);
-            crate::sumeragi::status::record_validator_checkpoint(snapshot.validator_checkpoint);
-        }
-        debug!(restored, "restored commit rosters from journal");
-    }
-    /// Reset all in-memory DA indexes to empty state while retaining the current lane mapping.
-    fn reset_da_indexes(&self, lane_config: &iroha_config::parameters::actual::LaneConfig) {
-        *self.da_commitments.write() = DaCommitmentStore::default();
-        *self.da_confidential_compute.write() = ConfidentialComputeStore::default();
-        *self.da_receipt_cursors.write() = DaReceiptCursorIndex::default();
-        let mut shard_cursors = DaShardCursorIndex::new(lane_config);
-        let incarnation_resets = self
-            .lane_incarnation_activation_heights_snapshot()
-            .into_iter()
-            .filter(|(_, activation_height)| *activation_height > 0)
-            .collect::<BTreeMap<_, _>>();
-        shard_cursors.merge_canonical_reset_heights(&incarnation_resets);
-        *self.da_shard_cursors.write() = shard_cursors;
-        *self.da_pin_intents.write() = DaPinStore::default();
-    }
-    pub(crate) fn ensure_da_indexes_hydrated(&self) -> Result<(), DaIndexHydrationError> {
-        {
-            let guard = self.da_indexes_hydrated.read();
-            if let Some(result) = guard.as_ref() {
-                return *result;
-            }
-        }
-        let result = self.hydrate_da_indexes_from_kura(None);
-        if let Err(err) = &result {
-            warn!(?err, "failed to hydrate DA indexes from Kura");
-        }
-        *self.da_indexes_hydrated.write() = Some(result);
-        result
-    }
-    #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
-    pub(crate) fn set_da_indexes_hydration_result_for_test(
-        &self,
-        result: Option<Result<(), DaIndexHydrationError>>,
-    ) {
-        *self.da_indexes_hydrated.write() = result;
-    }
-    /// Force a rebuild of DA indexes from the Kura block log, truncating at `target_height` when provided.
-    pub(crate) fn rewind_da_indexes_to_height(
-        &self,
-        target_height: u64,
-    ) -> Result<(), DaIndexHydrationError> {
-        *self.da_indexes_hydrated.write() = None;
-        let result = self.hydrate_da_indexes_from_kura(Some(target_height));
-        if let Err(err) = &result {
-            warn!(?err, target_height, "failed to rewind DA indexes from Kura");
-        }
-        *self.da_indexes_hydrated.write() = Some(result);
-        result
-    }
     #[cfg(test)]
     fn ingest_pin_intents(
         &self,
@@ -24562,25 +23739,33 @@ impl State {
         );
         self.insert_sanitized_pin_intents(block_height, intents, rejected, context, &positions)
     }
-    fn ingest_committed_pin_intents_from_kura(
+    fn ingest_committed_pin_intents_from_kura_into(
         &self,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        store: &mut DaPinStore,
+        shard_cursors: &DaShardCursorIndex,
         block_height: u64,
         intents: Vec<iroha_data_model::da::pin_intent::DaPinIntent>,
     ) -> Vec<DaPinIntentWithLocation> {
         let positions = Self::pin_intent_bundle_positions(&intents);
-        let nexus = self.nexus_snapshot();
         let (intents, rejected) = crate::da::sanitize_pin_intents_against_nexus_at_height(
             intents,
-            &nexus,
+            nexus,
             block_height,
             |_| true,
         );
-        self.insert_sanitized_pin_intents(
+        Self::insert_sanitized_pin_intents_into(
+            store,
             block_height,
             intents,
             rejected,
             "kura-replay",
             &positions,
+            |lane_id| {
+                shard_cursors
+                    .canonical_reset_height_for_lane(lane_id)
+                    .is_none_or(|reset_height| block_height > reset_height)
+            },
         )
     }
     fn pin_intent_bundle_positions(
@@ -24601,6 +23786,31 @@ impl State {
         context: &str,
         positions: &BTreeMap<iroha_data_model::da::pin_intent::DaPinIntent, usize>,
     ) -> Vec<DaPinIntentWithLocation> {
+        let canonical_reset_heights = self.canonical_lane_reset_heights_snapshot();
+        let mut store = self.da_pin_intents.write();
+        Self::insert_sanitized_pin_intents_into(
+            &mut store,
+            block_height,
+            intents,
+            rejected,
+            context,
+            positions,
+            |lane_id| {
+                canonical_reset_heights
+                    .get(&lane_id)
+                    .is_none_or(|reset_height| block_height > *reset_height)
+            },
+        )
+    }
+    fn insert_sanitized_pin_intents_into(
+        store: &mut DaPinStore,
+        block_height: u64,
+        intents: Vec<iroha_data_model::da::pin_intent::DaPinIntent>,
+        rejected: Vec<crate::da::DaPinIntentValidationError>,
+        context: &str,
+        positions: &BTreeMap<iroha_data_model::da::pin_intent::DaPinIntent, usize>,
+        mut lane_visible: impl FnMut(LaneId) -> bool,
+    ) -> Vec<DaPinIntentWithLocation> {
         if !rejected.is_empty() {
             for reason in rejected {
                 warn!(
@@ -24614,10 +23824,9 @@ impl State {
         if intents.is_empty() {
             return Vec::new();
         }
-        let mut store = self.da_pin_intents.write();
         let mut inserted = Vec::new();
         for (idx, intent) in intents.into_iter().enumerate() {
-            if !self.da_lane_visible_after_reset(block_height, intent.lane_id) {
+            if !lane_visible(intent.lane_id) {
                 warn!(
                     height = block_height,
                     lane = %intent.lane_id.as_u32(),
@@ -24687,7 +23896,16 @@ impl State {
     ) -> Result<(), DaShardCursorError> {
         let lane_config = self.nexus_snapshot().lane_config.clone();
         let mut cursors = self.da_shard_cursors.write();
-        let result = cursors.record_records(&lane_config, records, block_height);
+        self.advance_da_shard_cursors_into(&mut cursors, &lane_config, block_height, records)
+    }
+    fn advance_da_shard_cursors_into(
+        &self,
+        cursors: &mut DaShardCursorIndex,
+        lane_config: &iroha_config::parameters::actual::LaneConfig,
+        block_height: u64,
+        records: &[iroha_data_model::da::commitment::DaCommitmentRecord],
+    ) -> Result<(), DaShardCursorError> {
+        let result = cursors.record_records(lane_config, records, block_height);
         #[cfg(feature = "telemetry")]
         {
             match &result {
@@ -24772,6 +23990,14 @@ impl State {
         records: &[iroha_data_model::da::commitment::DaCommitmentRecord],
     ) -> Result<(), DaReceiptCursorError> {
         let mut cursors = self.da_receipt_cursors.write();
+        self.advance_da_receipt_cursors_into(&mut cursors, block_height, records)
+    }
+    fn advance_da_receipt_cursors_into(
+        &self,
+        cursors: &mut DaReceiptCursorIndex,
+        block_height: u64,
+        records: &[iroha_data_model::da::commitment::DaCommitmentRecord],
+    ) -> Result<(), DaReceiptCursorError> {
         let result = cursors.record_bundle(block_height, records);
         #[cfg(feature = "telemetry")]
         {
@@ -24791,10 +24017,25 @@ impl State {
         &self,
         block_height: u64,
         records: &[iroha_data_model::da::commitment::DaCommitmentRecord],
-        mut include: impl FnMut(&iroha_data_model::da::commitment::DaCommitmentRecord) -> bool,
+        include: impl FnMut(&iroha_data_model::da::commitment::DaCommitmentRecord) -> bool,
     ) -> Result<(), ConfidentialComputeError> {
         let lane_config = self.nexus_snapshot().lane_config.clone();
         let mut store = self.da_confidential_compute.write();
+        Self::record_confidential_compute_into(
+            &mut store,
+            &lane_config,
+            block_height,
+            records,
+            include,
+        )
+    }
+    fn record_confidential_compute_into(
+        store: &mut ConfidentialComputeStore,
+        lane_config: &iroha_config::parameters::actual::LaneConfig,
+        block_height: u64,
+        records: &[iroha_data_model::da::commitment::DaCommitmentRecord],
+        mut include: impl FnMut(&iroha_data_model::da::commitment::DaCommitmentRecord) -> bool,
+    ) -> Result<(), ConfidentialComputeError> {
         for (idx, record) in records.iter().enumerate() {
             if !include(record) {
                 continue;
@@ -24808,7 +24049,7 @@ impl State {
                 continue;
             };
             if let Some(policy) =
-                crate::da::validate_confidential_compute_record(&lane_config, record)?
+                crate::da::validate_confidential_compute_record(lane_config, record)?
             {
                 let location = DaCommitmentLocation {
                     block_height,
@@ -24817,226 +24058,6 @@ impl State {
                 store.insert(record, location, &policy);
             }
         }
-        Ok(())
-    }
-    #[allow(clippy::too_many_lines)]
-    fn hydrate_da_indexes_from_kura(
-        &self,
-        target_height: Option<u64>,
-    ) -> Result<(), DaIndexHydrationError> {
-        let lane_config = self.nexus_snapshot().lane_config.clone();
-        self.reset_da_indexes(&lane_config);
-        let journal_path = self.da_shard_cursor_journal_path();
-        let persisted_journal = if journal_path.as_os_str().is_empty() {
-            None
-        } else {
-            match DaShardCursorJournal::load(&lane_config, &journal_path) {
-                Ok(journal) => Some(journal),
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %journal_path.display(),
-                        "failed to load persisted DA shard cursor journal; continuing with ledger replay"
-                    );
-                    None
-                }
-            }
-        };
-        // Clone the hash list up front so we do not hold the block-hash lock while
-        // loading blocks from Kura (avoids lock-order inversions with Kura writers).
-        let hashes: Vec<HashOf<BlockHeader>> = self.block_hashes.view().iter().copied().collect();
-        let replay_len = target_height
-            .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
-            .map_or(hashes.len(), |limit| hashes.len().min(limit));
-        let replay_height = replay_len as u64;
-        if let Some(journal) = persisted_journal.as_ref() {
-            self.da_shard_cursors.write().merge_canonical_reset_heights(
-                &Self::journal_reset_heights_at_or_below(journal, replay_height),
-            );
-        }
-        if replay_len == 0 {
-            if let Some(journal) = persisted_journal.as_ref() {
-                let restored = self.restore_da_cursors_from_journal(journal, 0)?;
-                if restored > 0 {
-                    self.persist_da_shard_cursor_journal();
-                }
-            }
-            return Ok(());
-        }
-        let mut saw_da_commitments = false;
-        let hash_only_prefix = self.kura.hash_only_unavailable_prefix_len(replay_len);
-        if hash_only_prefix > 0 {
-            debug!(
-                hash_only_prefix,
-                replay_len,
-                "skipping hash-only hard-fork snapshot blocks while hydrating DA indexes"
-            );
-        }
-        for (idx, expected_hash) in hashes
-            .iter()
-            .take(replay_len)
-            .enumerate()
-            .skip(hash_only_prefix)
-        {
-            let height = idx + 1;
-            let Some(block) = self
-                .kura
-                .get_block(NonZeroUsize::new(height).expect("non-zero block height"))
-            else {
-                if self.kura.is_hash_only_block_height(
-                    NonZeroUsize::new(height).expect("non-zero block height"),
-                ) {
-                    debug!(
-                        height,
-                        "skipping hash-only hard-fork snapshot block while hydrating DA indexes"
-                    );
-                    continue;
-                }
-                warn!(height, "missing block while hydrating DA indexes from Kura");
-                continue;
-            };
-            let block_hash = block.hash();
-            if block_hash != *expected_hash {
-                warn!(
-                    height,
-                    expected = ?expected_hash,
-                    actual = ?block_hash,
-                    "hash mismatch while hydrating DA indexes from Kura"
-                );
-            }
-            if let Some(bundle) = block.as_ref().da_commitments() {
-                saw_da_commitments = true;
-                let nexus = self.nexus_snapshot();
-                let active_commitments = self
-                    .active_da_commitments_for_current_nexus(height as u64, &bundle.commitments);
-                let query_visible_keys: BTreeSet<_> = active_commitments
-                    .iter()
-                    .map(DaCommitmentKey::from_record)
-                    .collect();
-                let identity_visible_keys: BTreeSet<_> = bundle
-                    .commitments
-                    .iter()
-                    .filter(|record| {
-                        let key = DaCommitmentKey::from_record(record);
-                        self.da_lane_visible_after_reset(
-                            block.as_ref().header().height().get(),
-                            record.lane_id,
-                        ) && (query_visible_keys.contains(&key)
-                            || nexus
-                                .lane_catalog
-                                .lanes()
-                                .iter()
-                                .all(|lane| lane.id != record.lane_id))
-                    })
-                    .map(DaCommitmentKey::from_record)
-                    .collect();
-                self.da_commitments
-                    .write()
-                    .insert_bundle_with_visibility_filter(
-                        block.as_ref().header().height().get(),
-                        bundle.clone(),
-                        |record| {
-                            identity_visible_keys.contains(&DaCommitmentKey::from_record(record))
-                        },
-                        |record| query_visible_keys.contains(&DaCommitmentKey::from_record(record)),
-                    );
-                if let Err(err) = self.advance_da_shard_cursors_from_bundle(
-                    block.as_ref().header().height().get(),
-                    &active_commitments,
-                ) {
-                    warn!(
-                        ?err,
-                        height, "failed to advance shard cursor index while hydrating from Kura"
-                    );
-                    return Err(DaIndexHydrationError::ShardCursor(err));
-                }
-                if let Err(err) = self.advance_da_receipt_cursors_from_bundle(
-                    block.as_ref().header().height().get(),
-                    &active_commitments,
-                ) {
-                    warn!(
-                        ?err,
-                        height, "failed to advance receipt cursor index while hydrating from Kura"
-                    );
-                    return Err(DaIndexHydrationError::ReceiptCursor(err));
-                }
-                if let Err(err) = self.record_confidential_compute_from_bundle_with_filter(
-                    block.as_ref().header().height().get(),
-                    &bundle.commitments,
-                    |record| query_visible_keys.contains(&DaCommitmentKey::from_record(record)),
-                ) {
-                    warn!(
-                        ?err,
-                        height, "failed to hydrate confidential-compute receipts from Kura"
-                    );
-                }
-            }
-            if let Some(bundle) = block.as_ref().da_pin_intents() {
-                let _ = self.ingest_committed_pin_intents_from_kura(
-                    block.as_ref().header().height().get(),
-                    bundle.intents.clone(),
-                );
-            }
-        }
-        if let Some(journal) = persisted_journal {
-            if !saw_da_commitments || self.da_shard_cursors.read().is_empty() {
-                let restored = self.restore_da_cursors_from_journal(&journal, replay_height)?;
-                if restored > 0 {
-                    self.persist_da_shard_cursor_journal();
-                }
-            }
-            let cursors = self.da_shard_cursors.read().clone();
-            for entry in journal.entries() {
-                if replay_height != 0 && entry.last_block_height > replay_height {
-                    warn!(
-                        lane = %entry.lane_id.as_u32(),
-                        shard = %entry.shard_id.as_u32(),
-                        cursor_height = entry.last_block_height,
-                        replay_height,
-                        "persisted DA shard cursor ahead of ledger height; skipping comparison"
-                    );
-                    continue;
-                }
-                let shard_id = entry.shard_id.as_u32();
-                match cursors.get(shard_id) {
-                    Some(cursor)
-                        if (cursor.epoch, cursor.sequence) >= (entry.epoch, entry.sequence) => {}
-                    Some(cursor) => {
-                        warn!(
-                            lane = %entry.lane_id.as_u32(),
-                            shard = %shard_id,
-                            observed = ?(cursor.epoch, cursor.sequence),
-                            persisted = ?(entry.epoch, entry.sequence),
-                            "persisted DA shard cursor was ahead of ledger replay; overwriting with ledger state"
-                        );
-                        #[cfg(feature = "telemetry")]
-                        self.telemetry.record_da_shard_cursor_event(
-                            "journal_regression",
-                            entry.lane_id.as_u32(),
-                            shard_id,
-                            cursor.last_block_height,
-                        );
-                    }
-                    None => {
-                        warn!(
-                            lane = %entry.lane_id.as_u32(),
-                            shard = %shard_id,
-                            persisted_epoch = entry.epoch,
-                            persisted_sequence = entry.sequence,
-                            "persisted DA shard cursor missing from ledger replay; clearing entry"
-                        );
-                        #[cfg(feature = "telemetry")]
-                        self.telemetry.record_da_shard_cursor_event(
-                            "journal_missing",
-                            entry.lane_id.as_u32(),
-                            shard_id,
-                            0,
-                        );
-                    }
-                }
-            }
-        }
-        self.persist_da_shard_cursor_journal();
         Ok(())
     }
     /// Access the in-memory DA commitment index.
@@ -25330,11 +24351,6 @@ impl State {
         // Defer AXT policy refresh until the runtime lane catalog is applied.
         Ok(())
     }
-    /// Insert a commit QC for testing/telemetry scaffolding.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn insert_commit_qc_for_testing(&mut self, block_hash: HashOf<BlockHeader>, qc: Qc) {
-        self.world.commit_qcs.insert(block_hash, qc);
-    }
     fn rebuild_uaid_dataspace_bindings(&mut self) -> core::result::Result<usize, String> {
         let mut manifest_uaids: Vec<_> = {
             let view = self.world.space_directory_manifests.view();
@@ -25526,8 +24542,7 @@ impl State {
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();
         let settlement_cfg = iroha_config::parameters::actual::Settlement::default();
         let settlement_engine = SettlementEngine::from_router_config(&settlement_cfg.router);
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = iroha_config::parameters::defaults::nexus::ENABLED;
+        let nexus = iroha_config::parameters::actual::Nexus::default();
         let lane_incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
         let lane_incarnation_lineage = lane_incarnations
             .iter()
@@ -25549,10 +24564,6 @@ impl State {
             .collect();
         let streaming_storage_paths = StreamingStoragePaths::default();
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
-        // Reuse the exact journal snapshot Kura validated during startup. Re-reading here would
-        // introduce a second, previously fail-open decode boundary and a race with recovery-temp
-        // promotion.
-        let commit_roster_journal = kura.commit_roster_journal_handle();
         let LoadedStateJournals {
             query_index: query_index_journal,
             query_projection_checkpoint: query_projection_checkpoint_journal,
@@ -25654,8 +24665,6 @@ impl State {
             da_shard_cursors,
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             da_receipt_cursors: parking_lot::RwLock::new(DaReceiptCursorIndex::default()),
-            commit_roster_journal,
-            commit_roster_journal_persistence_lock: parking_lot::Mutex::new(()),
             query_index_journal: parking_lot::RwLock::new(query_index_journal),
             query_index_journal_persistence_lock: parking_lot::Mutex::new(()),
             query_projection_checkpoint_journal: parking_lot::RwLock::new(
@@ -25668,6 +24677,7 @@ impl State {
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
             lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
             lane_compliance: parking_lot::RwLock::new(None),
+            da_index_hydration_fence: parking_lot::Mutex::new(()),
             da_indexes_hydrated: parking_lot::RwLock::new(None),
             chain_id,
             network_id,
@@ -26027,8 +25037,6 @@ impl State {
             max_decoded_ops: s.pipeline.ivm_cache_max_decoded_ops,
         });
         ivm::zk::set_prover_threads(s.pipeline.ivm_prover_threads);
-        #[cfg(test)]
-        s.restore_commit_roster_history();
         Ok(s)
     }
     pub(crate) fn reseed_static_lane_incarnations(&mut self) {
@@ -26750,7 +25758,7 @@ impl State {
             pending_autoscale_lifecycle: None,
             autoscale_sample_history: self.autoscale_sample_history_snapshot(),
             autoscale_sample_history_dirty: false,
-            direct_committed_transactions: HashSet::new(),
+            direct_committed_entrypoints: HashSet::new(),
             staged_merge_entry: None,
             staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
@@ -27657,7 +26665,7 @@ impl State {
             pending_autoscale_lifecycle: None,
             autoscale_sample_history: self.autoscale_sample_history_snapshot(),
             autoscale_sample_history_dirty: false,
-            direct_committed_transactions: HashSet::new(),
+            direct_committed_entrypoints: HashSet::new(),
             staged_merge_entry: None,
             staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
@@ -27774,7 +26782,7 @@ impl State {
             pending_autoscale_lifecycle: None,
             autoscale_sample_history,
             autoscale_sample_history_dirty: false,
-            direct_committed_transactions: HashSet::new(),
+            direct_committed_entrypoints: HashSet::new(),
             staged_merge_entry: None,
             staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
@@ -28055,27 +27063,8 @@ impl State {
     /// This avoids acquiring a full [`StateView`] when only block retrieval is needed.
     #[track_caller]
     pub fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        self.kura.get_block(height)
-    }
-    /// Load a structurally matched legacy commit certificate for archival tests.
-    ///
-    /// The legacy sidecar/archive values are structural projections only and are unavailable to
-    /// production admission, network response, and recovery paths.
-    #[track_caller]
-    #[cfg(test)]
-    pub fn commit_qc_for_block(
-        &self,
-        height: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> Option<iroha_data_model::consensus::Qc> {
-        self.kura
-            .read_roster_metadata(height)
-            .and_then(|sidecar| sidecar.commit_qc)
-            .filter(|commit_qc| commit_qc_matches_block(commit_qc, height, block_hash))
-            .or_else(|| {
-                let world = self.world.view();
-                trusted_world_commit_qc_for_block(&world, height, block_hash)
-            })
+        let expected = self.block_hashes.view().get(height.get() - 1).copied()?;
+        committed_block_from_kura(&self.kura, height, expected)
     }
     /// Load a committed block hash by height from Kura's durable index.
     ///
@@ -28112,7 +27101,8 @@ impl State {
     /// This avoids acquiring a full [`StateView`] when only hash lookup is needed.
     #[track_caller]
     pub fn block_height_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<NonZeroUsize> {
-        self.kura.get_block_height_by_hash(hash)
+        let height = self.kura.get_block_height_by_hash(hash)?;
+        (self.block_hashes.view().get(height.get() - 1) == Some(&hash)).then_some(height)
     }
     /// Load a committed block by hash from Kura.
     ///
@@ -28159,7 +27149,18 @@ impl State {
         block_height: NonZeroU64,
         entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<BlockProofs, BlockProofError> {
-        block_proofs_for_entry_from_kura(&self.kura, block_height, entry_hash)
+        let height_index: usize = block_height
+            .get()
+            .try_into()
+            .map_err(|_| BlockProofError::HeightOutOfRange(block_height))?;
+        let expected_hash = self
+            .block_hashes
+            .view()
+            .iter()
+            .nth(height_index - 1)
+            .copied()
+            .ok_or(BlockProofError::BlockNotFound(block_height))?;
+        block_proofs_for_entry_from_kura(&self.kura, block_height, expected_hash, entry_hash)
     }
     /// Return whether an enabled, non-depleted time trigger remains reachable after
     /// `parent_creation_time` and therefore needs ledger-clock progress.
@@ -28249,21 +27250,21 @@ impl State {
     pub fn prev_block_hash_fast(&self) -> Option<HashOf<BlockHeader>> {
         self.block_hashes.view().iter().nth_back(1).copied()
     }
-    /// Whether a transaction hash is already committed.
+    /// Whether a canonical entrypoint identity is already committed.
     ///
-    /// This avoids acquiring a full [`StateView`] when only committed-transaction
+    /// This avoids acquiring a full [`StateView`] when only committed-entrypoint
     /// membership is required.
     #[track_caller]
-    pub fn has_committed_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
+    pub fn has_committed_entrypoint(&self, hash: HashOf<TransactionEntrypoint>) -> bool {
         self.transactions.view().get(&hash).is_some()
     }
-    pub(crate) fn record_direct_committed_transactions(
+    pub(crate) fn record_direct_committed_entrypoints(
         &self,
-        transactions: impl IntoIterator<Item = HashOf<SignedTransaction>>,
+        entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
         height: NonZeroUsize,
     ) {
         self.transactions
-            .record_direct_committed_membership(transactions, height);
+            .record_direct_committed_entrypoint_membership(entrypoints, height);
     }
     /// Return the transaction admission limits used by ingress validation.
     ///
@@ -28346,14 +27347,14 @@ impl State {
     pub fn has_account(&self, account_id: &AccountId) -> bool {
         self.world.accounts.view().get(account_id).is_some()
     }
-    /// Committed block height for a transaction hash, if present in the index.
+    /// Committed block height for an entrypoint identity, if present in the index.
     ///
-    /// This avoids acquiring a full [`StateView`] when only the transaction index
+    /// This avoids acquiring a full [`StateView`] when only the entrypoint index
     /// lookup is required.
     #[track_caller]
-    pub fn committed_transaction_height(
+    pub fn committed_entrypoint_height(
         &self,
-        hash: &HashOf<SignedTransaction>,
+        hash: &HashOf<TransactionEntrypoint>,
     ) -> Option<NonZeroUsize> {
         self.transactions.view().get(hash)
     }
@@ -28559,6 +27560,7 @@ impl State {
             let lane_incarnation_activation_heights =
                 self.lane_incarnation_activation_heights_snapshot();
             let autoscale_sample_history = self.autoscale_sample_history_snapshot();
+            let lane_manifests = self.lane_manifests.read().clone();
             let nexus_wait = nexus_start.elapsed();
             let world_start = Instant::now();
             let mut world = self.world.view();
@@ -28649,7 +27651,7 @@ impl State {
                 lane_incarnation_lineage,
                 lane_incarnation_activation_heights,
                 autoscale_sample_history,
-                lane_manifests: self.lane_manifests.read().clone(),
+                lane_manifests,
                 fraud_monitoring: self.fraud_monitoring.clone(),
                 zk: self.zk.clone(),
                 sccp_registry,
@@ -28923,7 +27925,7 @@ impl State {
                     carrier.block_height
                 )));
             }
-            self.repair_merge_execution_transaction_membership(entry, &carrier)?;
+            self.repair_merge_execution_entrypoint_membership(entry, &carrier)?;
         }
         for entry in entries {
             let entry_hash = entry.canonical_hash();
@@ -28973,7 +27975,7 @@ impl State {
                 // idempotently from the authenticated transcript in case a
                 // process stopped after the atomic WSV publication but before
                 // the auxiliary membership index update became observable.
-                self.repair_merge_execution_transaction_membership(&entry, &carrier)?;
+                self.repair_merge_execution_entrypoint_membership(&entry, &carrier)?;
                 let reference = iroha_data_model::block::CertifiedMergeLedgerReference::new(&entry);
                 let repair_authorizations =
                     crate::sumeragi::v2_apply::post_carrier_evidence_repair_authorizations(
@@ -29093,14 +28095,14 @@ impl State {
         };
         Ok(&state.intent == intent && state.commitment == Some(expected))
     }
-    fn repair_merge_execution_transaction_membership(
+    fn repair_merge_execution_entrypoint_membership(
         &self,
         entry: &MergeLedgerEntry,
         carrier: &crate::kura::MergeLedgerCarrierRecord,
     ) -> Result<(), MergeLedgerCommitError> {
         let batch = entry.execution_batch.as_ref().ok_or_else(|| {
             MergeLedgerCommitError::ExecutionBatchInvalid(
-                "transaction membership repair requires an execution batch".to_owned(),
+                "entrypoint membership repair requires an execution batch".to_owned(),
             )
         })?;
         if self
@@ -29110,7 +28112,7 @@ impl State {
             != Some(entry)
         {
             return Err(MergeLedgerCommitError::ExecutionStatePublication(
-                "transaction membership repair carrier does not match the full merge entry"
+                "entrypoint membership repair carrier does not match the full merge entry"
                     .to_owned(),
             ));
         }
@@ -29118,7 +28120,7 @@ impl State {
             .lanes
             .iter()
             .flat_map(|execution| {
-                StateBlock::merge_execution_transaction_hashes(&execution.entrypoints)
+                StateBlock::merge_execution_entrypoint_hashes(&execution.entrypoints)
             })
             .collect::<Vec<_>>();
         if hashes.is_empty() {
@@ -29126,11 +28128,11 @@ impl State {
         }
         let height = NonZeroUsize::new(usize::try_from(carrier.block_height).map_err(|_| {
             MergeLedgerCommitError::ExecutionStatePublication(
-                "merge carrier height does not fit the transaction membership index".to_owned(),
+                "merge carrier height does not fit the entrypoint membership index".to_owned(),
             )
         })?)
         .expect("merge execution application height is non-zero");
-        self.record_direct_committed_transactions(hashes, height);
+        self.record_direct_committed_entrypoints(hashes, height);
         Ok(())
     }
     fn prune_merge_admission_lane_progress(&self, lanes_to_prune: &BTreeSet<LaneId>) {
@@ -29701,80 +28703,6 @@ impl State {
     pub fn lane_compliance_engine(&self) -> Option<Arc<LaneComplianceEngine>> {
         self.lane_compliance.read().clone()
     }
-    fn lane_authority_inputs_from_nexus(
-        lane_id: LaneId,
-        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
-        nexus: &iroha_config::parameters::actual::Nexus,
-        block_height: u64,
-    ) -> Option<ResolvedLaneAuthorityInputs> {
-        let dataspace_id = Self::nexus_authoritative_lane_dataspace(lane_id, nexus)?;
-        nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height).then_some(())?;
-        let lane = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .find(|lane| lane.id == lane_id)?;
-        // Snapshot only the protocol-bounded authority material. Cloning the
-        // full lane would duplicate arbitrary dashboard metadata on every
-        // routed query even though authority resolution never reads it.
-        let autoscale_validator_set = lane_claims_autoscale_managed(lane).then(|| {
-            decode_autoscale_lane_committee(lane)
-                .ok()
-                .flatten()
-                .map_or_else(Vec::new, |committee| committee.validator_set)
-        });
-        let manifest_authority_lanes = nexus_manifest_authority_eligible_lanes_at_height(
-            lane_id,
-            dataspace_id,
-            nexus,
-            block_height,
-        );
-        let staking_authority_lanes = if lane_uses_reserved_autoscale_metadata(lane) {
-            matches!(
-                validator_mode,
-                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-            )
-            .then_some(BTreeSet::from([lane_id]))
-            .unwrap_or_default()
-        } else {
-            nexus
-                .lane_catalog
-                .lanes()
-                .iter()
-                .filter(|candidate| !lane_uses_reserved_autoscale_metadata(candidate))
-                .filter(|candidate| {
-                    nexus_active_lane_dataspace_at_height(candidate.id, nexus, block_height)
-                        == Some(dataspace_id)
-                })
-                .filter(|candidate| {
-                    matches!(
-                        nexus
-                            .staking
-                            .validator_mode(candidate.id, &nexus.lane_catalog),
-                        iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-                    )
-                })
-                .map(|candidate| candidate.id)
-                .collect()
-        };
-        let staking_owner_lane = if lane_uses_reserved_autoscale_metadata(lane) {
-            Some(lane_id)
-        } else {
-            nexus_staking_authority_lane_at_height(lane_id, nexus, block_height)
-        };
-        Some(ResolvedLaneAuthorityInputs {
-            bounded: bounded_authority::LaneAuthorityInputs {
-                dataspace_id,
-                autoscale_validator_set,
-                validator_mode,
-                minimum_stake: nexus.staking.min_validator_stake.clone(),
-                max_validators: nexus.staking.max_validators.get(),
-            },
-            manifest_authority_lanes,
-            staking_authority_lanes,
-            staking_owner_lane,
-        })
-    }
     fn lane_authority_inputs(
         &self,
         lane_id: LaneId,
@@ -29782,16 +28710,17 @@ impl State {
     ) -> Option<ResolvedLaneAuthorityInputs> {
         let nexus = self.nexus.read();
         let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
-        Self::lane_authority_inputs_from_nexus(lane_id, validator_mode, &nexus, block_height)
+        lane_authority::inputs_from_nexus(lane_id, validator_mode, &nexus, block_height)
     }
     /// Resolve the authoritative validator accounts for a lane from manifests or staking state.
+    #[cfg(test)]
     pub fn authoritative_lane_validator_accounts(&self, lane_id: LaneId) -> Vec<AccountId> {
         let block_height = self.lane_authority_height();
         let Some(inputs) = self.lane_authority_inputs(lane_id, block_height) else {
             return Vec::new();
         };
         let manifest_registry = self.lane_manifests.read().clone();
-        Self::authoritative_lane_validator_accounts_with_inputs(
+        lane_authority::validator_accounts_with_inputs(
             &self.world.view(),
             lane_id,
             manifest_registry.as_ref(),
@@ -29799,12 +28728,36 @@ impl State {
             block_height,
         )
     }
-    /// Resolve validator peers from the commit topology in single-lane mode or
-    /// from manifest/staking authority when Nexus is enabled.
+    /// Resolve the exact current-height `3f+1` authority for a lane/dataspace route.
+    ///
+    /// The returned height and committee come from one immutable state view so
+    /// status and proxy callers cannot decorate a committee with data read
+    /// across a concurrent commit boundary.
+    pub fn resolve_lane_committee(
+        &self,
+        route: LaneAuthorityRoute,
+    ) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
+        let view = self.view();
+        let authority_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+        StateReadOnly::resolve_lane_committee_at_height(&view, route, authority_height)
+    }
+    /// Resolve the exact `3f+1` authority for a lane/dataspace route at an
+    /// explicit consensus height.
+    pub fn resolve_lane_committee_at_height(
+        &self,
+        route: LaneAuthorityRoute,
+        authority_height: u64,
+    ) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
+        let view = self.view();
+        StateReadOnly::resolve_lane_committee_at_height(&view, route, authority_height)
+    }
+    /// Test-only lane-keyed compatibility helper.
+    #[cfg(test)]
     pub fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
         self.authoritative_lane_peer_ids_at_height(lane_id, self.lane_authority_height())
     }
-    /// Resolve the authoritative validator peer ids for a lane at an explicit block height.
+    /// Test-only lane-keyed compatibility helper.
+    #[cfg(test)]
     pub fn authoritative_lane_peer_ids_at_height(
         &self,
         lane_id: LaneId,
@@ -29818,7 +28771,6 @@ impl State {
             nexus.staking.validator_mode(lane_id, &nexus.lane_catalog),
             manifest_registry.as_ref(),
             &nexus,
-            &self.commit_topology_snapshot(),
             block_height,
         )
     }
@@ -29867,7 +28819,7 @@ impl State {
         };
         let lane_manifests = self.lane_manifests.read().clone();
         let Ok(Some(rules)) =
-            Self::manifest_authority_rules_for_lane(lane_id, lane_manifests.as_ref(), &inputs)
+            lane_authority::manifest_rules_for_lane(lane_id, lane_manifests.as_ref(), &inputs)
         else {
             return Vec::new();
         };
@@ -29945,11 +28897,11 @@ impl State {
     ) -> Vec<AccountId> {
         let block_height = self.lane_authority_height();
         let Some(inputs) =
-            Self::lane_authority_inputs_from_nexus(lane_id, validator_mode, nexus, block_height)
+            lane_authority::inputs_from_nexus(lane_id, validator_mode, nexus, block_height)
         else {
             return Vec::new();
         };
-        Self::authoritative_lane_validator_accounts_with_inputs(
+        lane_authority::validator_accounts_with_inputs(
             &self.world.view(),
             lane_id,
             manifest_registry,
@@ -29957,269 +28909,33 @@ impl State {
             block_height,
         )
     }
-    fn manifest_authority_rules_for_lane<'a>(
-        lane_id: LaneId,
-        manifest_registry: &'a LaneManifestRegistry,
-        inputs: &ResolvedLaneAuthorityInputs,
-    ) -> Result<Option<&'a GovernanceRules>, ()> {
-        manifest_registry
-            .dataspace_authority_rules_for_lanes(
-                lane_id,
-                inputs.bounded.dataspace_id,
-                &inputs.manifest_authority_lanes,
-            )
-            .map_err(|_| ())
-    }
-
-    /// Resolve one physical dataspace's live stake projection.
-    ///
-    /// Lane-keyed stake rows are canonical storage projections of dataspace-wide
-    /// authority. Empty sibling projections are ignored, while more than one
-    /// non-empty projection fails closed instead of retaining duplicate state
-    /// that a later lane-local mutation can split. Autoscale rows stay exact-lane;
-    /// their immutable peer committee is resolved before this helper.
-    fn live_dataspace_stake_authority_candidates_from_sources(
-        world: &impl WorldReadOnly,
-        inputs: &ResolvedLaneAuthorityInputs,
-        block_height: u64,
-    ) -> Option<Vec<(AccountId, PeerId, Quantity)>> {
-        Self::live_stake_authority_candidates_for_lanes(
-            world,
-            &inputs.staking_authority_lanes,
-            inputs.staking_owner_lane,
-            &inputs.bounded.minimum_stake,
-            inputs.bounded.max_validators,
-            block_height,
-        )
-    }
-
-    fn live_stake_authority_candidates_for_lanes(
-        world: &impl WorldReadOnly,
-        source_lanes: &BTreeSet<LaneId>,
-        canonical_owner: Option<LaneId>,
-        minimum_stake: &Quantity,
-        configured_limit: u32,
-        block_height: u64,
-    ) -> Option<Vec<(AccountId, PeerId, Quantity)>> {
-        let limit = bounded_authority::staking_validator_limit_from(configured_limit)?;
-        let mut selected = Vec::with_capacity(limit);
-        let mut selected_projection = None;
-        for (key, record) in world.public_lane_validators().iter() {
-            if !source_lanes.contains(&key.0)
-                || !public_lane_validator_record_matches_key(key, record)
-                || !matches!(record.status, PublicLaneValidatorStatus::Active)
-                || !crate::smartcontracts::isi::staking::meets_min_stake(
-                    &record.self_stake,
-                    minimum_stake,
-                )
-                .unwrap_or(false)
-                || !world.peers().iter().any(|peer| peer == &record.peer_id)
-                || !peer_has_live_consensus_key(world, &record.peer_id, block_height)
-            {
-                continue;
-            }
-            if selected_projection.is_some_and(|lane| lane != key.0) {
-                return None;
-            }
-            selected_projection = Some(key.0);
-            bounded_authority::insert_unique_by(
-                &mut selected,
-                record,
-                limit,
-                |lhs, rhs| lhs.validator == rhs.validator,
-                |lhs, rhs| {
-                    rhs.total_stake
-                        .cmp(&lhs.total_stake)
-                        .then_with(|| lhs.validator.cmp(&rhs.validator))
-                        .then_with(|| lhs.peer_id.cmp(&rhs.peer_id))
-                },
-            );
-        }
-        if selected_projection.is_some() && selected_projection != canonical_owner {
-            return None;
-        }
-        Some(
-            selected
-                .into_iter()
-                .map(|record| {
-                    (
-                        record.validator.clone(),
-                        record.peer_id.clone(),
-                        record.total_stake.clone(),
-                    )
-                })
-                .collect(),
-        )
-    }
-
-    fn ranked_stake_authority_peer_pool(
-        candidates: Vec<(AccountId, PeerId, Quantity)>,
-    ) -> Vec<PeerId> {
-        let mut peers = Vec::with_capacity(candidates.len());
-        for (_, peer_id, _) in candidates {
-            if !peers.contains(&peer_id) {
-                peers.push(peer_id);
-            }
-        }
-        peers
-    }
-
-    fn authoritative_lane_validator_accounts_with_inputs(
-        world: &impl WorldReadOnly,
-        lane_id: LaneId,
-        manifest_registry: &LaneManifestRegistry,
-        inputs: &ResolvedLaneAuthorityInputs,
-        block_height: u64,
-    ) -> Vec<AccountId> {
-        let rules =
-            match Self::manifest_authority_rules_for_lane(lane_id, manifest_registry, inputs) {
-                Ok(rules) => rules,
-                Err(()) => return Vec::new(),
-            };
-        if let Some(rules) = rules {
-            if !rules.validator_bindings.is_empty() {
-                let bindings = bounded_authority::live_manifest_validator_bindings(
-                    world,
-                    &rules.validator_bindings,
-                    &rules.validators,
-                    block_height,
-                );
-                return bindings
-                    .into_iter()
-                    .map(|binding| binding.validator)
-                    .collect();
-            }
-            return bounded_authority::live_manifest_validator_account_peers(
-                world,
-                &rules.validators,
-                block_height,
-            )
-            .into_iter()
-            .map(|(validator, _)| validator)
-            .collect();
-        }
-        if inputs.staking_authority_lanes.len() == 1
-            && inputs.staking_authority_lanes.contains(&lane_id)
-            && inputs.staking_owner_lane == Some(lane_id)
-            && matches!(
-                inputs.bounded.validator_mode,
-                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-            )
-        {
-            return bounded_authority::stake_elected_validator_accounts(
-                world,
-                lane_id,
-                &inputs.bounded.minimum_stake,
-                inputs.bounded.max_validators,
-                block_height,
-            );
-        }
-        Self::live_dataspace_stake_authority_candidates_from_sources(world, inputs, block_height)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(account, _, _)| account)
-            .collect()
-    }
+    #[cfg(test)]
     fn authoritative_lane_peer_ids_from_sources(
         world: &impl WorldReadOnly,
         lane_id: LaneId,
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
-        commit_topology: &[PeerId],
         block_height: u64,
     ) -> Vec<PeerId> {
-        if !nexus.enabled {
-            return (consensus_lane_dataspace_at_height(lane_id, nexus, block_height)
-                == Some(DataSpaceId::UNIVERSAL))
-            .then(|| commit_topology.to_vec())
-            .unwrap_or_default();
-        }
         let Some(inputs) =
-            Self::lane_authority_inputs_from_nexus(lane_id, validator_mode, nexus, block_height)
+            lane_authority::inputs_from_nexus(lane_id, validator_mode, nexus, block_height)
         else {
             return Vec::new();
         };
-        Self::authoritative_lane_peer_ids_with_inputs(
+        lane_authority::peer_pool_with_inputs(
             world,
             lane_id,
             manifest_registry,
             &inputs,
             block_height,
         )
-    }
-    fn authoritative_lane_peer_ids_with_inputs(
-        world: &impl WorldReadOnly,
-        lane_id: LaneId,
-        manifest_registry: &LaneManifestRegistry,
-        inputs: &ResolvedLaneAuthorityInputs,
-        block_height: u64,
-    ) -> Vec<PeerId> {
-        if let Some(validator_set) = &inputs.bounded.autoscale_validator_set {
-            // An autoscale lane has one immutable committee for its full
-            // incarnation. Never apply current-world peer/key/manifest or
-            // topology filters here: delayed QCs from this pinned authority
-            // must remain verifiable after roster churn.
-            return validator_set.clone();
-        }
-        let rules =
-            match Self::manifest_authority_rules_for_lane(lane_id, manifest_registry, inputs) {
-                Ok(rules) => rules,
-                Err(()) => return Vec::new(),
-            };
-        if let Some(rules) = rules {
-            if !rules.validator_bindings.is_empty() {
-                let bindings = bounded_authority::live_manifest_validator_bindings(
-                    world,
-                    &rules.validator_bindings,
-                    &rules.validators,
-                    block_height,
-                );
-                let pool: Vec<_> = bindings
-                    .into_iter()
-                    .map(|binding| binding.peer_id)
-                    .collect();
-                return pool;
-            }
-            let pool: Vec<_> = bounded_authority::live_manifest_validator_account_peers(
-                world,
-                &rules.validators,
-                block_height,
-            )
-            .into_iter()
-            .map(|(_, peer)| peer)
-            .collect();
-            return pool;
-        }
-        if inputs.staking_authority_lanes.len() == 1
-            && inputs.staking_authority_lanes.contains(&lane_id)
-            && inputs.staking_owner_lane == Some(lane_id)
-            && matches!(
-                inputs.bounded.validator_mode,
-                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-            )
-        {
-            return bounded_authority::stake_elected_peer_ids(
-                world,
-                lane_id,
-                &inputs.bounded.minimum_stake,
-                inputs.bounded.max_validators,
-                block_height,
-            );
-        }
-        let Some(candidates) = Self::live_dataspace_stake_authority_candidates_from_sources(
-            world,
-            inputs,
-            block_height,
-        ) else {
-            return Vec::new();
-        };
-        Self::ranked_stake_authority_peer_pool(candidates)
+        .unwrap_or_default()
     }
     /// Derive the initial committee for a brand-new autoscale lane incarnation.
     ///
-    /// This is the only path allowed to consult mutable manifests, peer/key
-    /// liveness, or commit topology. The returned authority is persisted in the
+    /// This is the only path allowed to consult mutable manifests, stake, and
+    /// peer/key liveness. The returned authority is persisted in the
     /// lane metadata before the incarnation and catalog commitments are
     /// derived; all later authority resolution reads that pin instead.
     fn derive_new_autoscale_lane_committee_from_sources(
@@ -30228,7 +28944,6 @@ impl State {
         lane_id: LaneId,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
-        commit_topology: &[PeerId],
         proposal_height: u64,
     ) -> Vec<PeerId> {
         let Some(lane) = nexus
@@ -30239,8 +28954,7 @@ impl State {
         else {
             return Vec::new();
         };
-        if !nexus.enabled
-            || !nexus.autoscale.enabled
+        if !nexus.autoscale.enabled
             || !lane_claims_autoscale_managed(lane)
             || lane.visibility != iroha_data_model::nexus::LaneVisibility::Public
             || lane.alias != format!("elastic-lane-{}", lane.id.as_u32())
@@ -30352,7 +29066,7 @@ impl State {
             .map(|candidate| candidate.id)
             .collect();
         let canonical_owner = stake_source_lanes.iter().next().copied();
-        let Some(stake_candidates) = Self::live_stake_authority_candidates_for_lanes(
+        let Some(stake_candidates) = lane_authority::live_stake_candidates_for_lanes(
             world,
             &stake_source_lanes,
             canonical_owner,
@@ -30363,7 +29077,7 @@ impl State {
             return Vec::new();
         };
         if !stake_candidates.is_empty() {
-            let pool = Self::ranked_stake_authority_peer_pool(stake_candidates);
+            let pool = lane_authority::ranked_stake_peer_pool(stake_candidates);
             return Self::autoscale_lane_committee_from_pool(
                 world,
                 network_id,
@@ -30374,22 +29088,13 @@ impl State {
                 proposal_height,
             );
         }
-        Self::autoscale_lane_committee_from_topology(
-            world,
-            network_id,
-            lane_id,
-            dataspace_id,
-            nexus,
-            commit_topology,
-            proposal_height,
-        )
+        Vec::new()
     }
     fn pin_new_autoscale_lane_committee_from_sources(
         world: &impl WorldReadOnly,
         network_id: &iroha_data_model::NetworkId,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
-        commit_topology: &[PeerId],
         lane: &mut iroha_data_model::nexus::LaneConfig,
         proposal_height: u64,
     ) -> Result<(), LaneLifecycleError> {
@@ -30416,7 +29121,6 @@ impl State {
             lane.id,
             manifest_registry,
             &prospective_nexus,
-            commit_topology,
             proposal_height,
         );
         if validator_set.len() != required {
@@ -30444,26 +29148,6 @@ impl State {
             encode_autoscale_lane_committee(&committee)?,
         );
         Ok(())
-    }
-    fn autoscale_lane_committee_from_topology(
-        world: &impl WorldReadOnly,
-        network_id: &iroha_data_model::NetworkId,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        nexus: &iroha_config::parameters::actual::Nexus,
-        commit_topology: &[PeerId],
-        block_height: u64,
-    ) -> Vec<PeerId> {
-        let pool = Self::live_commit_topology_peers(world, commit_topology, block_height);
-        Self::autoscale_lane_committee_from_pool(
-            world,
-            network_id,
-            lane_id,
-            dataspace_id,
-            nexus,
-            &pool,
-            block_height,
-        )
     }
     fn autoscale_lane_committee_from_pool(
         world: &impl WorldReadOnly,
@@ -30504,24 +29188,6 @@ impl State {
         nexus: &iroha_config::parameters::actual::Nexus,
     ) -> Option<DataSpaceId> {
         nexus_active_lane_dataspace(lane_id, nexus)
-    }
-    fn live_commit_topology_peers(
-        world: &impl WorldReadOnly,
-        commit_topology: &[PeerId],
-        block_height: u64,
-    ) -> Vec<PeerId> {
-        let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
-        let mut peers: Vec<_> = commit_topology
-            .iter()
-            .filter(|peer_id| {
-                present_peers.contains(*peer_id)
-                    && peer_has_live_consensus_key(world, peer_id, block_height)
-            })
-            .cloned()
-            .collect();
-        peers.sort();
-        peers.dedup();
-        peers
     }
     /// Resolve compact lane-finality authority through immutable Kura state.
     ///
@@ -30822,9 +29488,6 @@ impl State {
         if proposal_height > next_global_height {
             return Err(LaneRelayError::BlockHeightMismatch);
         }
-        if !nexus.enabled {
-            return Err(LaneRelayError::NexusDisabled);
-        }
         let relay_proposal_height = envelope.block_header.height().get();
         let expected_dataspace =
             consensus_lane_dataspace_at_height(envelope.lane_id, &nexus, relay_proposal_height)
@@ -31046,40 +29709,14 @@ impl State {
                 "execution transcript differs from its producer-authenticated payload".to_owned(),
             ));
         }
-        let descriptor = &execution.proposal.descriptor;
-        let (proposal_block_hash, proposal_view) =
-            crate::kura::Kura::autonomous_lane_execution_anchor(
-                &executable_payload.origin_proposal,
-                execution.autonomous_payload_hash,
-            );
-        let ownership = SumeragiLanePayloadOwnership {
-            proposal_height: descriptor.proposal_height,
-            proposal_view,
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            lane_block_height: descriptor.lane_block_height,
-            lane_block_view: descriptor.lane_block_view,
-            subject_hash: descriptor.subject_hash,
-            qc_mode_tag: descriptor.qc_mode_tag.clone(),
-            accepted_candidate_indices: descriptor.accepted_candidate_indices.clone(),
-            accepted_transaction_hashes: descriptor.accepted_transaction_hashes.clone(),
-            previous_lane_block_height: descriptor.previous_lane_block_height,
-            previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
-            lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
-            lane_block_descriptor_validator_set: descriptor.validator_set.clone(),
-            lane_block_descriptor_validator_count: descriptor.validator_count,
-            lane_block_descriptor_min_quorum: descriptor.min_quorum,
-            payload_ownership_hash: descriptor.payload_ownership_hash,
-            rbc_instance_hash: descriptor.rbc_instance_hash,
-        };
         let input = crate::kura::LaneBlockExecutionInputArtifact::new(
             crate::kura::RecoveredLaneBlockPayload {
                 proposal: execution.proposal.clone(),
-                artifact: crate::kura::LaneBlockArtifact::new(proposal_block_hash, ownership),
-                autonomous_network_id: Some(execution.autonomous_network_id),
-                autonomous_epoch: Some(execution.autonomous_epoch),
-                autonomous_payload_hash: Some(execution.autonomous_payload_hash),
+                source: crate::kura::LaneBlockExecutionSourceV1::autonomous_lane(
+                    execution.autonomous_network_id,
+                    execution.autonomous_epoch,
+                    execution.autonomous_payload_hash,
+                ),
                 entrypoints: execution.entrypoints.clone(),
                 reservation_keys: execution
                     .reservation_keys
@@ -31128,16 +29765,13 @@ impl State {
                 .map_err(|message| {
                     MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned())
                 })?;
-            let source_network_id = source.input.autonomous_network_id.ok_or_else(|| {
-                MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "autonomous merge source lacks a chain binding".to_owned(),
-                )
-            })?;
-            let source_epoch = source.input.autonomous_epoch.ok_or_else(|| {
-                MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "autonomous merge source lacks an epoch binding".to_owned(),
-                )
-            })?;
+            let Some((source_network_id, source_epoch, source_payload_hash)) =
+                source.input.source.autonomous_binding()
+            else {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous merge source carries a global-block execution source".to_owned(),
+                ));
+            };
             let authenticated_bundle = crate::kura::Kura::decode_autonomous_lane_merge_bundle(
                 &source.source_bundle,
                 source_network_id,
@@ -31153,7 +29787,7 @@ impl State {
             }
             let authenticated_payload = authenticated_bundle.executable_payload();
             if source.origin_proposal != authenticated_payload.origin_proposal
-                || source.input.autonomous_payload_hash != Some(authenticated_payload.payload_hash)
+                || source_payload_hash != authenticated_payload.payload_hash
                 || source.input.entrypoint_hashes != authenticated_payload.entrypoint_hashes
                 || source.input.entrypoints != authenticated_payload.entrypoints
                 || source.input.reservation_keys != authenticated_payload.reservation_keys
@@ -31198,15 +29832,10 @@ impl State {
             {
                 let descriptor = &source.input.proposal.descriptor;
                 let entrypoint_hash = Hash::from(entrypoint.hash());
-                let transaction_hash = StateBlock::merge_execution_transaction_hashes(
-                    std::slice::from_ref(entrypoint),
-                )
-                .into_iter()
-                .next()
-                .expect("one entrypoint produces one membership hash");
+                let canonical_entrypoint_hash = entrypoint.hash();
                 if bound_plan.digest() != reservation.routing_plan_digest
                     || bound_plan.coordinator_leg() != reservation.coordinator_leg
-                    || reservation.signed_transaction_hash != transaction_hash
+                    || reservation.entrypoint_hash != canonical_entrypoint_hash
                     || Hash::from(reservation.entrypoint_hash) != entrypoint_hash
                     || !matches!(
                         queue_plan_admission_registry_match(
@@ -31235,12 +29864,9 @@ impl State {
                 if !crate::native_amx::receipt_shape_matches_coordinator_payload(
                     native_amx_receipt.as_ref(),
                     bound_plan,
-                    reservation.signed_transaction_hash.as_ref(),
+                    reservation.entrypoint_hash.as_ref(),
                     entrypoint_hash,
-                    source
-                        .input
-                        .autonomous_network_id
-                        .expect("validated autonomous input has a chain binding"),
+                    source_network_id,
                     &source.origin_proposal,
                 ) {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -31250,7 +29876,7 @@ impl State {
                 }
                 if let Some(receipt) = native_amx_receipt {
                     let mut source_id = [0u8; Hash::LENGTH];
-                    source_id.copy_from_slice(reservation.signed_transaction_hash.as_ref());
+                    source_id.copy_from_slice(reservation.entrypoint_hash.as_ref());
                     let expected_v2_context =
                         crate::block::expected_native_amx_v2_context_from_receipt(
                             receipt,
@@ -31310,8 +29936,8 @@ impl State {
                 .iter()
                 .map(|result| Hash::from(result.hash()))
                 .collect::<Vec<_>>();
-            state_block.stage_direct_committed_transactions(
-                StateBlock::merge_execution_transaction_hashes(&source.input.entrypoints),
+            state_block.stage_direct_committed_entrypoints(
+                StateBlock::merge_execution_entrypoint_hashes(&source.input.entrypoints),
             );
             let placeholder = LaneBlockCommitment {
                 block_height: descriptor.lane_block_height,
@@ -31344,18 +29970,9 @@ impl State {
                         proof_of_possession,
                     })
                     .collect(),
-                autonomous_network_id: source
-                    .input
-                    .autonomous_network_id
-                    .expect("validated autonomous input has a chain binding"),
-                autonomous_epoch: source
-                    .input
-                    .autonomous_epoch
-                    .expect("validated autonomous input has an epoch binding"),
-                autonomous_payload_hash: source
-                    .input
-                    .autonomous_payload_hash
-                    .expect("validated autonomous input has a payload binding"),
+                autonomous_network_id: source_network_id,
+                autonomous_epoch: source_epoch,
+                autonomous_payload_hash: source_payload_hash,
                 entrypoint_hashes: source.input.entrypoint_hashes,
                 entrypoints: source.input.entrypoints,
                 reservation_keys: source
@@ -31407,17 +30024,11 @@ impl State {
     ) -> Option<Vec<MergeExecutionSource>> {
         let lifecycle = &consensus.lifecycle;
         let nexus = &lifecycle.nexus;
-        if !nexus.enabled || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES {
+        if nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES {
             return None;
         }
         let network_id = self.network_id;
         let world = self.world.view();
-        let multi_lane = crate::queue::routable_lane_ids_for_nexus_at_height(
-            &nexus,
-            consensus.committed_height.saturating_add(1),
-        )
-        .len()
-            > 1;
         let mut sources = Vec::new();
         for lane in nexus.lane_catalog.lanes() {
             let incarnation = *lifecycle.incarnations.get(&lane.id)?;
@@ -31468,20 +30079,27 @@ impl State {
                 );
                 return None;
             }
-            let mut authoritative = if multi_lane || lane_claims_autoscale_managed(lane) {
-                self.authoritative_lane_peer_ids_at_height(lane.id, descriptor.proposal_height)
-            } else {
-                self.commit_topology_snapshot()
+            let authoritative = match lane_authority::authenticated_committee_for_descriptor(
+                self, descriptor,
+            ) {
+                Ok(authoritative) => authoritative,
+                Err(reason) => {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        reason,
+                        "deferring certified source selection because historical lane authority is unavailable"
+                    );
+                    return None;
+                }
             };
-            authoritative.sort();
-            authoritative.dedup();
-            if authoritative.is_empty() || descriptor.validator_set != authoritative {
+            if descriptor.validator_set != authoritative {
                 warn!(
                     lane = %lane.id.as_u32(),
                     lane_block_height = expected_height,
-                    "certified lane block no longer matches authoritative activation-context committee"
+                    "certified lane block differs from its finalized proposal-height committee"
                 );
-                continue;
+                return None;
             }
             let expected_epoch =
                 crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height);
@@ -31527,9 +30145,6 @@ impl State {
         let consensus = self.merge_consensus_snapshot();
         let lifecycle = &consensus.lifecycle;
         let nexus = &lifecycle.nexus;
-        if !nexus.enabled {
-            return false;
-        }
         let network_id = self.network_id;
         let world = self.world.view();
         for lane in nexus.lane_catalog.lanes() {
@@ -31680,7 +30295,6 @@ impl State {
         let admission = &consensus.admission;
         let nexus = &lifecycle.nexus;
         if epoch_id != admission.expected_epoch()
-            || !nexus.enabled
             || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES
         {
             return None;
@@ -31691,7 +30305,7 @@ impl State {
             .merge_execution_write_set_bytes()
             .is_empty()
             && start_effect_probe.world.external_event_buf.is_empty()
-            && start_effect_probe.direct_committed_transactions.is_empty()
+            && start_effect_probe.direct_committed_entrypoints.is_empty()
             && start_effect_probe
                 .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
                 .is_ok();
@@ -31705,12 +30319,6 @@ impl State {
         }
         let network_id = self.network_id;
         let world = self.world.view();
-        let multi_lane = crate::queue::routable_lane_ids_for_nexus_at_height(
-            &nexus,
-            consensus.committed_height.saturating_add(1),
-        )
-        .len()
-            > 1;
         let mut sources = Vec::new();
         for lane in nexus.lane_catalog.lanes() {
             let incarnation = *lifecycle.incarnations.get(&lane.id)?;
@@ -31761,20 +30369,27 @@ impl State {
                 );
                 return None;
             }
-            let mut authoritative = if multi_lane || lane_claims_autoscale_managed(lane) {
-                self.authoritative_lane_peer_ids_at_height(lane.id, descriptor.proposal_height)
-            } else {
-                self.commit_topology_snapshot()
+            let authoritative = match lane_authority::authenticated_committee_for_descriptor(
+                self, descriptor,
+            ) {
+                Ok(authoritative) => authoritative,
+                Err(reason) => {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        reason,
+                        "deferring merge batch construction because historical lane authority is unavailable"
+                    );
+                    return None;
+                }
             };
-            authoritative.sort();
-            authoritative.dedup();
-            if authoritative.is_empty() || descriptor.validator_set != authoritative {
+            if descriptor.validator_set != authoritative {
                 warn!(
                     lane = %lane.id.as_u32(),
                     lane_block_height = expected_height,
-                    "certified lane block no longer matches authoritative activation-context committee"
+                    "certified lane block differs from its finalized proposal-height committee"
                 );
-                continue;
+                return None;
             }
             let expected_epoch =
                 crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height);
@@ -31944,7 +30559,7 @@ impl State {
         &self,
     ) -> Option<(LaneDrainCertificateBodyV1, Vec<PeerId>)> {
         let nexus = self.nexus_snapshot();
-        if !nexus.enabled || !nexus.autoscale.enabled {
+        if !nexus.autoscale.enabled {
             return None;
         }
         let expected_lane = autoscale_managed_lane_for_retire(
@@ -32384,17 +30999,18 @@ impl State {
                             .to_owned(),
                     ));
                 }
-                if validate_live_authority
-                    && crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+                if validate_live_authority {
+                    let authority = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
                         &self.view(),
                         route.leg.route,
                         context.proposal_height,
-                    ) != route.validator_set
-                {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "queue-plan admission validator set is not authoritative at its proposal height"
-                            .to_owned(),
-                    ));
+                    );
+                    if authority.as_ref().ok() != Some(&route.validator_set) {
+                        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                            "queue-plan admission validator set is not authoritative at its proposal height"
+                                .to_owned(),
+                        ));
+                    }
                 }
             }
             validated.push(admission);
@@ -32894,9 +31510,6 @@ impl State {
         let consensus = self.merge_consensus_snapshot();
         let lifecycle = &consensus.lifecycle;
         let nexus = lifecycle.nexus.clone();
-        if !nexus.enabled {
-            return Vec::new();
-        }
         let admission = &consensus.admission;
         let next_epoch = admission.expected_epoch();
         let previous_view = admission.previous_view();
@@ -33060,18 +31673,12 @@ impl State {
     fn lane_block_artifact_routes(
         nexus: &iroha_config::parameters::actual::Nexus,
     ) -> Vec<(LaneId, DataSpaceId)> {
-        if nexus.enabled {
-            return nexus
-                .lane_catalog
-                .lanes()
-                .iter()
-                .map(|lane| (lane.id, lane.dataspace_id))
-                .collect();
-        }
-        // Non-Nexus consensus still schedules lane-local payloads on the
-        // compatibility route. Do not consult a disabled Nexus catalog here:
-        // only the implicit single-lane route is authoritative in this mode.
-        vec![(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| (lane.id, lane.dataspace_id))
+            .collect()
     }
     /// Snapshot latest applied lane-local artifacts for active proposal lanes.
     ///
@@ -33741,14 +32348,22 @@ impl State {
                 if pending_native_source_hashes.contains(&source.bundle_hash) {
                     continue;
                 }
+                let authenticated_committee =
+                    lane_authority::authenticated_committee_for_descriptor(self, descriptor)
+                        .map_err(|reason| {
+                            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                                "certified autonomous Native AMX diagnostics lack authenticated historical coordinator authority: {reason}",
+                            ))
+                        })?;
                 for row in
                     Self::authenticated_native_amx_participant_application_rows_from_autonomous_source(
                         &source.source_bundle,
                         network_id,
                         expected_epoch,
-                        crate::block::HistoricalNativeAmxSourceAuthority::CertifiedCoordinator(
-                            &certified_coordinator_authority,
-                        ),
+                        crate::block::HistoricalNativeAmxSourceAuthority::CertifiedCoordinator {
+                            committee: &authenticated_committee,
+                            key_authority: &certified_coordinator_authority,
+                        },
                     )?
                 {
                     Self::merge_native_amx_participant_application_diagnostic_row(
@@ -34803,6 +33418,7 @@ impl State {
     /// never walks lane-local certificate history. The lifecycle snapshot is
     /// held logically consistent across every route so reset, dataspace, and
     /// incarnation filters cannot be mixed between generations.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn latest_certified_lane_block_frontier_sessions_snapshot_cached(
         &self,
@@ -35567,6 +34183,84 @@ impl State {
         }
         Ok(registry_match)
     }
+    /// Read the exact pending QueuePlan binding authorizing an immutable execution plan.
+    ///
+    /// Validates the full obligation, route markers, journal binding, and lane incarnations.
+    ///
+    /// # Errors
+    /// Rejects malformed, conflicting, foreign, or inactive evidence; absence returns `Ok(None)`.
+    pub(crate) fn pending_queue_plan_binding_for_execution(
+        state: &impl StateReadOnly,
+        entrypoint: &TransactionEntrypoint,
+        routing_plan: &crate::queue::RoutingPlan,
+        execution_height: u64,
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(state.network_id());
+        let entrypoint_hash = entrypoint.hash();
+        let obligation_key =
+            Self::queue_plan_pending_obligation_marker_key(network_id_digest, entrypoint_hash)
+                .map_err(|error| error.to_string())?;
+        let Some(payload) = state.world().smart_contract_state().get(&obligation_key) else {
+            return Ok(None);
+        };
+        let obligation =
+            Self::decode_exact_queue_plan_pending_obligation_marker(&obligation_key, payload)
+                .map_err(|error| error.to_string())?;
+        let binding = &obligation.binding;
+        binding.validate_for_request(state.network_id(), entrypoint, routing_plan)?;
+        if execution_height < binding.admission_context.proposal_height {
+            return Err(
+                "QueuePlan pending binding is newer than the proposed execution height".to_owned(),
+            );
+        }
+        let registry_key = Self::queue_plan_admission_registry_marker_key(&binding.registry_key())
+            .map_err(|error| error.to_string())?;
+        let registry_payload = state
+            .world()
+            .smart_contract_state()
+            .get(&registry_key)
+            .ok_or_else(|| {
+                "QueuePlan pending obligation has no immutable registry owner".to_owned()
+            })?;
+        let registry_value = Self::decode_exact_queue_plan_admission_registry_marker(
+            &registry_key,
+            registry_payload,
+        )
+        .map_err(|error| error.to_string())?;
+        if registry_value != binding.registry_value()
+            || obligation.binding_hash != binding.canonical_hash()
+        {
+            return Err(
+                "QueuePlan pending obligation conflicts with its immutable registry owner"
+                    .to_owned(),
+            );
+        }
+        for route in &obligation.routes {
+            Self::require_queue_plan_pending_route_member_marker(
+                state.world().smart_contract_state(),
+                &obligation,
+                *route,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        for bound in &binding.admission_context.route_incarnations {
+            let route = bound.leg.route;
+            let route_is_current =
+                state.nexus().lane_catalog.lanes().iter().any(|lane| {
+                    lane.id == route.lane_id && lane.dataspace_id == route.dataspace_id
+                }) && state.lane_incarnation_at_height(route.lane_id, execution_height)
+                    == Some(bound.lane_incarnation);
+            if !route_is_current {
+                return Err(format!(
+                    "QueuePlan pending route lane {} dataspace {} does not retain its admitted incarnation at execution height {execution_height}",
+                    route.lane_id.as_u32(),
+                    route.dataspace_id.as_u64(),
+                ));
+            }
+        }
+        Ok(Some(binding.clone()))
+    }
     fn queue_plan_admission_registry_match_in_view(
         state_view: &impl StateReadOnlyWithTransactions,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -36202,11 +34896,6 @@ impl State {
             )
         })
     }
-    fn queue_plan_entrypoint_membership_hash(
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
-    ) -> HashOf<SignedTransaction> {
-        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash))
-    }
     fn validate_queue_plan_pending_obligation_route_member(
         world: &impl WorldReadOnly,
         obligation: &QueuePlanPendingObligationV1,
@@ -36253,8 +34942,7 @@ impl State {
             network_id_digest,
             entrypoint_hash.clone(),
         )?;
-        let membership_hash = Self::queue_plan_entrypoint_membership_hash(entrypoint_hash.clone());
-        let committed = state.has_transaction(membership_hash);
+        let committed = state.has_entrypoint(entrypoint_hash);
         match state.world().smart_contract_state().get(&key) {
             Some(payload) => {
                 let obligation =
@@ -36304,9 +34992,7 @@ impl State {
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
         expected: QueuePlanPendingObligationV1,
     ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
-        let committed = state.has_transaction(Self::queue_plan_entrypoint_membership_hash(
-            binding.entrypoint_hash.clone(),
-        ));
+        let committed = state.has_entrypoint(binding.entrypoint_hash);
         let active = Self::queue_plan_pending_obligation_matches_active_lifecycle(state, &expected);
         Self::queue_plan_binding_application_state_in_storage(
             state.world().smart_contract_state(),
@@ -38046,11 +36732,10 @@ impl State {
         let expected_network_id = self.network_id;
         let authority = self.view();
         let world = &authority.world;
-        let multi_lane = validate_live_authority && active_lanes.len() > 1;
         let mut previous_order = None;
         let mut seen_lanes = BTreeSet::new();
         let mut seen_entrypoints = BTreeSet::new();
-        let mut seen_transactions = BTreeSet::new();
+        let mut seen_committed_entrypoints = BTreeSet::new();
         let mut seen_reservations = BTreeSet::new();
         for execution in &batch.lanes {
             let descriptor = &execution.proposal.descriptor;
@@ -38180,10 +36865,12 @@ impl State {
                     ));
                 }
             }
-            for tx_hash in StateBlock::merge_execution_transaction_hashes(&execution.entrypoints) {
-                if !seen_transactions.insert(tx_hash) {
+            for entrypoint_hash in
+                StateBlock::merge_execution_entrypoint_hashes(&execution.entrypoints)
+            {
+                if !seen_committed_entrypoints.insert(entrypoint_hash) {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "duplicate signed transaction across lanes".to_owned(),
+                        "duplicate committed entrypoint across lanes".to_owned(),
                     ));
                 }
             }
@@ -38206,12 +36893,7 @@ impl State {
                     .zip(&routing_plans)
                     .zip(&execution.native_amx_receipts)
             {
-                let transaction_hash = StateBlock::merge_execution_transaction_hashes(
-                    std::slice::from_ref(entrypoint),
-                )
-                .into_iter()
-                .next()
-                .expect("one entrypoint produces one membership hash");
+                let canonical_entrypoint_hash = entrypoint.hash();
                 let registry_match = if validate_live_authority {
                     queue_plan_admission_registry_match(
                         &authority,
@@ -38225,7 +36907,7 @@ impl State {
                         reservation.queue_plan_admission_binding_hash,
                     )
                 };
-                if reservation.signed_transaction_hash != transaction_hash
+                if reservation.entrypoint_hash != canonical_entrypoint_hash
                     || Hash::from(reservation.entrypoint_hash) != *expected_hash
                     || !matches!(registry_match, Ok(QueuePlanAdmissionRegistryMatch::Exact))
                     || reservation.routing_plan_digest != routing_plan.digest()
@@ -38246,7 +36928,7 @@ impl State {
                 if !crate::native_amx::receipt_shape_matches_coordinator_payload(
                     native_amx_receipt.as_ref(),
                     routing_plan,
-                    reservation.signed_transaction_hash.as_ref(),
+                    reservation.entrypoint_hash.as_ref(),
                     *expected_hash,
                     execution.autonomous_network_id,
                     &execution.origin_proposal,
@@ -38309,17 +36991,17 @@ impl State {
                 ));
             }
             if validate_live_authority {
-                let mut authoritative = if multi_lane {
-                    authority.authoritative_lane_peer_ids_at_height(
-                        descriptor.lane_id,
+                let authoritative = authority
+                    .resolve_lane_committee_at_height(
+                        LaneAuthorityRoute::new(descriptor.lane_id, descriptor.dataspace_id),
                         descriptor.proposal_height,
                     )
-                } else {
-                    authority.commit_topology().to_vec()
-                };
-                authoritative.sort();
-                authoritative.dedup();
-                if authoritative.is_empty() || descriptor.validator_set != authoritative {
+                    .map_err(|error| {
+                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                            "lane authority is unavailable at its exact activation route: {error}"
+                        ))
+                    })?;
+                if descriptor.validator_set.as_slice() != authoritative.validators() {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                         "lane committee differs from authoritative activation context".to_owned(),
                     ));
@@ -38366,7 +37048,7 @@ impl State {
                     continue;
                 };
                 let mut source_id = [0u8; Hash::LENGTH];
-                source_id.copy_from_slice(reservation.signed_transaction_hash.as_ref());
+                source_id.copy_from_slice(reservation.entrypoint_hash.as_ref());
                 let expected_v2_context =
                     crate::block::expected_native_amx_v2_context_from_receipt(
                         receipt,
@@ -39633,21 +38315,6 @@ impl State {
             .iter()
             .map(|lane| lane.id)
             .collect();
-        if !nexus.enabled && nexus.lane_relay_emergency.enabled {
-            return Err(LaneLifecycleError::NexusDisabledFeature(
-                "nexus.lane_relay_emergency.enabled",
-            ));
-        }
-        if !nexus.enabled && nexus.autoscale.enabled {
-            return Err(LaneLifecycleError::NexusDisabledFeature(
-                "nexus.autoscale.enabled",
-            ));
-        }
-        if !nexus.enabled && nexus.relay_worker.enabled {
-            return Err(LaneLifecycleError::NexusDisabledFeature(
-                "nexus.relay_worker.enabled",
-            ));
-        }
         if !nexus_fee_asset_selector_is_xor(&nexus.fees.fee_asset_id) {
             return Err(LaneLifecycleError::NexusFeeAssetIdInvalid);
         }
@@ -39665,9 +38332,6 @@ impl State {
         {
             return Err(LaneLifecycleError::LaneRelayEmergencyThreshold);
         }
-        if !nexus.dataspace_fee_sponsor_program_ids.is_empty() && !nexus.enabled {
-            return Err(LaneLifecycleError::DataspaceFeeSponsorProgramsRequireNexusEnabled);
-        }
         for dataspace_id in nexus.dataspace_fee_sponsor_program_ids.keys() {
             if !dataspace_ids.contains(dataspace_id) {
                 return Err(
@@ -39675,16 +38339,9 @@ impl State {
                 );
             }
         }
-        if !nexus.enabled
-            && (nexus.lane_catalog != LaneCatalog::default()
-                || nexus.dataspace_catalog != DataSpaceCatalog::default()
-                || nexus.routing_policy != LaneRoutingPolicy::default())
-        {
-            return Err(LaneLifecycleError::NexusDisabledWithLaneOverrides);
-        }
         ensure_autoscale_runtime_lane_bounds(&nexus.autoscale)?;
         ensure_autoscale_default_lane_is_base(&nexus)?;
-        if nexus.enabled && nexus.autoscale.enabled {
+        if nexus.autoscale.enabled {
             ensure_autoscale_base_profile_supported(&nexus, None, None)?;
         }
         let current_block_height = self.block_hashes.view().len() as u64;
@@ -39741,13 +38398,11 @@ impl State {
                 ensure_manual_lane_outside_autoscale_elastic_range(lane.id, &nexus)?;
             }
         }
-        if nexus.enabled {
-            validate_nexus_routing_policy(
-                &nexus.routing_policy,
-                &nexus.lane_catalog,
-                &nexus.dataspace_catalog,
-            )?;
-        }
+        validate_nexus_routing_policy(
+            &nexus.routing_policy,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+        )?;
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
@@ -39763,8 +38418,7 @@ impl State {
             &previous_lane_incarnation_lineage,
         )?;
         let static_incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
-        let updated_catalog_hash =
-            iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&nexus.lane_catalog);
+        let updated_catalog_hash = merge_lane_consensus_catalog_hash(&nexus.lane_catalog);
         let mut updated_lane_incarnations = BTreeMap::new();
         let mut updated_lane_incarnation_activation_heights = BTreeMap::new();
         let mut updated_lane_incarnation_lineage = previous_lane_incarnation_lineage.clone();
@@ -40082,7 +38736,7 @@ impl State {
             .axt_replay_ledger
             .view()
             .iter()
-            .filter_map(|(key, entry)| (!dataspace_ids.contains(&entry.dataspace)).then_some(*key))
+            .filter_map(|(key, _)| (!dataspace_ids.contains(&key.asset_dsid)).then_some(*key))
             .collect();
         if !stale_replay_keys.is_empty() {
             let mut tx = self.world.axt_replay_ledger.block();
@@ -40276,10 +38930,10 @@ impl State {
                 )?;
                 let nexus = self.nexus.read().clone();
                 let manifests = self.lane_manifests.read().clone();
-                let topology = self.commit_topology_snapshot();
                 let world = self.world.view();
                 for addition in &mut effective_plan.additions {
-                    if topology.is_empty()
+                    #[cfg(test)]
+                    if self.commit_topology_snapshot().is_empty()
                         && matches!(decode_autoscale_lane_committee(addition), Ok(Some(_)))
                     {
                         // Most state unit tests install geometry without a live
@@ -40294,17 +38948,16 @@ impl State {
                                 reason,
                             }
                         })?;
-                    } else {
-                        State::pin_new_autoscale_lane_committee_from_sources(
-                            &world,
-                            &self.network_id,
-                            manifests.as_ref(),
-                            &nexus,
-                            &topology,
-                            addition,
-                            proposal_height,
-                        )?;
+                        continue;
                     }
+                    State::pin_new_autoscale_lane_committee_from_sources(
+                        &world,
+                        &self.network_id,
+                        manifests.as_ref(),
+                        &nexus,
+                        addition,
+                        proposal_height,
+                    )?;
                 }
             }
             let plan = &effective_plan;
@@ -41810,9 +40463,6 @@ impl State {
     #[allow(clippy::too_many_lines)]
     fn enforce_nexus_storage_budget(&self, block_height: u64) {
         let nexus = self.nexus.read();
-        if !nexus.enabled {
-            return;
-        }
         let Some(max_disk) = nexus
             .storage
             .effective_local_budget_bytes
@@ -42269,17 +40919,12 @@ fn synthetic_lane_lifecycle_header_hash(
 /// availability carriers authenticate `NetworkId` separately, while later lifecycle derivation
 /// remains network-bound, so this non-circular genesis seed does not weaken replay protection.
 pub(crate) fn derive_static_lane_incarnations(catalog: &LaneCatalog) -> BTreeMap<LaneId, Hash> {
-    let catalog_hash = merge_lane_catalog_hash(catalog);
+    let catalog_hash = merge_lane_consensus_catalog_hash(catalog);
     catalog
         .lanes()
         .iter()
         .map(|lane| {
-            let encoded = (
-                catalog_hash,
-                lane.id,
-                lane_without_autoscale_drain_metadata(lane),
-            )
-                .encode();
+            let encoded = (catalog_hash, lane.id, merge_lane_config_hash(lane)).encode();
             (
                 lane.id,
                 Hash::new_from_chunks(&[STATIC_LANE_INCARNATION_DOMAIN, encoded.as_slice()]),
@@ -42402,15 +41047,14 @@ fn derive_config_lane_incarnation(
     next_generation: u64,
     updated_catalog_hash: Hash,
 ) -> Hash {
-    let previous_catalog_hash =
-        iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(previous_catalog);
+    let previous_catalog_hash = merge_lane_consensus_catalog_hash(previous_catalog);
     let encoded = (
         network_id.clone(),
         previous_catalog_hash,
         updated_catalog_hash,
         current_block_height,
         lane.id,
-        lane.clone(),
+        merge_lane_config_hash(lane),
         prior.generation,
         prior.incarnation,
         prior.activation_height,
@@ -42489,8 +41133,7 @@ fn derive_lifecycle_lane_incarnations(
         previous_lineage,
     )?;
     let changed_lanes: BTreeSet<_> = plan.additions.iter().map(|lane| lane.id).collect();
-    let previous_catalog_hash =
-        iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(previous_catalog);
+    let previous_catalog_hash = merge_lane_consensus_catalog_hash(previous_catalog);
     let mut updated = BTreeMap::new();
     for lane in updated_catalog.lanes() {
         let incarnation = if changed_lanes.contains(&lane.id) {
@@ -42515,7 +41158,7 @@ fn derive_lifecycle_lane_incarnations(
                 network_id.clone(),
                 previous_catalog_hash,
                 lane.id,
-                lane.clone(),
+                merge_lane_config_hash(lane),
                 prior.generation,
                 prior.incarnation,
                 prior.activation_height,
@@ -42752,9 +41395,6 @@ fn static_staking_owner_for_dataspace_at_height(
     dataspace_id: DataSpaceId,
     block_height: u64,
 ) -> Option<LaneId> {
-    if !nexus.enabled {
-        return (dataspace_id == DataSpaceId::UNIVERSAL).then_some(LaneId::SINGLE);
-    }
     nexus
         .lane_catalog
         .lanes()
@@ -42904,9 +41544,6 @@ fn prepare_lane_lifecycle_update(
     current_block_height: u64,
     allow_autoscale_managed_changes: bool,
 ) -> core::result::Result<LaneLifecycleCatalogUpdate, LaneLifecycleError> {
-    if !nexus.enabled {
-        return Err(LaneLifecycleError::NexusDisabled);
-    }
     if plan.additions.is_empty() && plan.retire.is_empty() {
         return Err(LaneLifecycleError::EmptyPlan);
     }
@@ -43396,6 +42033,16 @@ fn lane_without_autoscale_drain_metadata(
 fn merge_lane_config_hash(lane: &iroha_data_model::nexus::LaneConfig) -> Hash {
     crate::merge::merge_lane_config_hash(&lane_without_autoscale_drain_metadata(lane))
 }
+fn merge_lane_consensus_catalog_hash(catalog: &LaneCatalog) -> Hash {
+    let lanes = catalog
+        .lanes()
+        .iter()
+        .map(lane_without_autoscale_drain_metadata)
+        .collect();
+    let sanitized = LaneCatalog::new(catalog.lane_count(), lanes)
+        .expect("removing reserved drain metadata cannot invalidate a lane catalog");
+    crate::merge::merge_lane_consensus_catalog_hash(&sanitized)
+}
 fn merge_lane_catalog_hash(catalog: &LaneCatalog) -> Hash {
     let lanes = catalog
         .lanes()
@@ -43712,7 +42359,7 @@ fn ensure_autoscale_managed_created_heights_not_future(
     nexus: &iroha_config::parameters::actual::Nexus,
     block_height: u64,
 ) -> Result<(), LaneLifecycleError> {
-    if !nexus.enabled || !nexus.autoscale.enabled {
+    if !nexus.autoscale.enabled {
         return Ok(());
     }
     for lane in nexus.lane_catalog.lanes() {
@@ -43759,7 +42406,7 @@ fn ensure_manual_lane_outside_autoscale_elastic_range(
     lane: LaneId,
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Result<(), LaneLifecycleError> {
-    if !nexus.enabled || !nexus.autoscale.enabled {
+    if !nexus.autoscale.enabled {
         return Ok(());
     }
     let lane_id = lane.as_u32();
@@ -43777,7 +42424,7 @@ fn ensure_manual_lane_outside_autoscale_elastic_range(
 fn ensure_autoscale_default_lane_is_base(
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Result<(), LaneLifecycleError> {
-    if !nexus.enabled || !nexus.autoscale.enabled {
+    if !nexus.autoscale.enabled {
         return Ok(());
     }
     let lane = nexus.routing_policy.default_lane;
@@ -43879,7 +42526,7 @@ fn ensure_autoscale_runtime_lane_bounds(
 fn ensure_autoscale_runtime_elastic_range(
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Result<(), LaneLifecycleError> {
-    if !nexus.enabled || !nexus.autoscale.enabled {
+    if !nexus.autoscale.enabled {
         return Ok(());
     }
     ensure_autoscale_default_lane_is_base(nexus)?;
@@ -43951,6 +42598,9 @@ fn nexus_lane_committee_size(
     // Keep the exact 3f+1 shape: the canonical 2f+1 commit threshold then
     // guarantees at least f+1 members overlap between any two quorums.
     let fault_tolerance = nexus.dataspace_catalog.by_id(dataspace_id)?.fault_tolerance;
+    if fault_tolerance == 0 {
+        return None;
+    }
     let committee_size = fault_tolerance.checked_mul(3)?.checked_add(1)?;
     if committee_size > nexus.staking.max_validators.get() {
         return None;
@@ -43991,10 +42641,7 @@ fn nexus_lane_id_in_active_autoscale_elastic_range(
     lane_id: LaneId,
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> bool {
-    if !nexus.enabled
-        || !nexus.autoscale.enabled
-        || ensure_autoscale_runtime_lane_bounds(&nexus.autoscale).is_err()
-    {
+    if !nexus.autoscale.enabled || ensure_autoscale_runtime_lane_bounds(&nexus.autoscale).is_err() {
         return false;
     }
     let lane_id = lane_id.as_u32();
@@ -44099,7 +42746,7 @@ fn lane_consensus_identity_matches(
     previous: &iroha_data_model::nexus::LaneConfig,
     current: &iroha_data_model::nexus::LaneConfig,
 ) -> bool {
-    crate::merge::merge_lane_config_hash(previous) == crate::merge::merge_lane_config_hash(current)
+    merge_lane_config_hash(previous) == merge_lane_config_hash(current)
 }
 fn lanes_requiring_consensus_reset(
     previous: &LaneCatalog,
@@ -44138,8 +42785,8 @@ fn lane_reset_identity_matches(previous: &LaneConfigEntry, current: &LaneConfigE
         && previous.proof_scheme == current.proof_scheme
         && previous.manifest_policy == current.manifest_policy
         && previous.confidential_compute == current.confidential_compute
-        && previous.confidential_policy == current.confidential_policy
-        && previous.confidential_access == current.confidential_access
+        && previous.scheduler == current.scheduler
+        && previous.settlement_buffer == current.settlement_buffer
 }
 fn lane_config_entries_match(
     previous: &iroha_config::parameters::actual::LaneConfig,
@@ -44316,6 +42963,7 @@ pub(crate) fn gas_limit_from_parameters(params: &Parameters) -> u64 {
 fn block_proofs_for_entry_from_kura(
     kura: &Kura,
     block_height: NonZeroU64,
+    expected_block_hash: HashOf<BlockHeader>,
     entry_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<BlockProofs, BlockProofError> {
     let height_usize: usize = block_height
@@ -44326,6 +42974,14 @@ fn block_proofs_for_entry_from_kura(
     let block = kura
         .get_block(height)
         .ok_or(BlockProofError::BlockNotFound(block_height))?;
+    let block_hash = block.hash();
+    if block_hash != expected_block_hash {
+        return Err(BlockProofError::BlockHashMismatch {
+            block_height,
+            expected: expected_block_hash,
+            actual: block_hash,
+        });
+    }
     let header = block.header();
     if header.height() != block_height {
         return Err(BlockProofError::BlockHeightMismatch {
@@ -44333,7 +42989,6 @@ fn block_proofs_for_entry_from_kura(
             actual: header.height(),
         });
     }
-    let block_hash = block.hash();
     let executed_block_wire_hash = block
         .executed_block_wire_hash()
         .map_err(|_| BlockProofError::ExecutedBlockWireHashUnavailable(block_height))?;
@@ -44431,6 +43086,7 @@ fn block_proofs_for_entry_from_kura(
         fastpq_transcripts: block.fastpq_transcripts().clone(),
     })
 }
+
 /// Canonical read-only snapshot interface for world-state consumers.
 ///
 /// Provides immutable access to world data and consensus topology metadata
@@ -44548,19 +43204,55 @@ pub trait StateReadOnly: WorldStateSnapshot {
     }
     /// Cached snapshot of all account identifiers currently known to the state view.
     fn accounts_snapshot(&self) -> Arc<Vec<AccountId>>;
-    /// Resolve authoritative validator peer ids for a lane from the snapshot.
+    /// Test-only lane-keyed compatibility resolver.
+    #[cfg(test)]
     fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId>;
-    /// Resolve authoritative validator peer ids for a lane at an explicit
-    /// consensus height.
+    /// Test-only lane-keyed compatibility resolver at an explicit height.
     ///
     /// Callers validating a proposed height must not silently substitute the
     /// pre-state height: key activation, lane lifecycle, and autoscale
     /// ownership are height-sensitive consensus inputs.
+    #[cfg(test)]
     fn authoritative_lane_peer_ids_at_height(
         &self,
         lane_id: LaneId,
         block_height: u64,
     ) -> Vec<PeerId>;
+    /// Resolve the exact canonical `3f+1` committee for a lane/dataspace route
+    /// at an explicit consensus height.
+    ///
+    /// The route is checked as a pair. Missing, inactive, rebound, malformed,
+    /// and undersized authority all return typed errors rather than an empty
+    /// roster that a caller could accidentally reinterpret.
+    fn resolve_lane_committee_at_height(
+        &self,
+        route: LaneAuthorityRoute,
+        authority_height: u64,
+    ) -> Result<LaneAuthorityCommittee, LaneAuthorityError>;
+    /// Return one fallible, WSV-anchored source for canonical block history.
+    fn canonical_history(&self) -> CanonicalHistorySource<'_> {
+        CanonicalHistorySource::new(self.kura(), self.block_hashes())
+    }
+    /// Load a canonical block body with a typed availability or corruption
+    /// failure instead of collapsing either condition into absence.
+    fn canonical_block_by_height(
+        &self,
+        height: NonZeroUsize,
+    ) -> core::result::Result<Arc<SignedBlock>, CanonicalHistoryError> {
+        self.canonical_history().block(height)
+    }
+    /// Load a block body only when it authenticates against this immutable
+    /// view's committed WSV hash at the same height.
+    #[inline]
+    fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+        self.canonical_block_by_height(height).ok()
+    }
+    /// Resolve a block hash from this immutable view's authoritative WSV
+    /// journal, independently of a missing or contradictory Kura index.
+    #[inline]
+    fn block_height_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<NonZeroUsize> {
+        self.canonical_history().block_height_by_hash(hash)
+    }
     /// Get a reference to the block one before the latest block.
     /// Returns None if at least 2 blocks are not committed.
     ///
@@ -44570,36 +43262,21 @@ pub trait StateReadOnly: WorldStateSnapshot {
         self.height()
             .checked_sub(1)
             .and_then(NonZeroUsize::new)
-            .and_then(|height| self.kura().get_block(height))
+            .and_then(|height| self.block_by_height(height))
     }
     /// Get a reference to the latest block. Returns none if genesis is not committed.
     ///
     /// If you only need hash of the latest block prefer using [`Self::latest_block_hash`]
     #[inline]
     fn latest_block(&self) -> Option<Arc<SignedBlock>> {
-        NonZeroUsize::new(self.height()).and_then(|height| self.kura().get_block(height))
+        NonZeroUsize::new(self.height()).and_then(|height| self.block_by_height(height))
     }
-    /// Load all blocks in the block chain from disk, skipping missing Kura entries.
-    fn all_blocks(
-        &self,
-        start: NonZeroUsize,
-    ) -> impl DoubleEndedIterator<Item = Arc<SignedBlock>> + '_ {
-        (start.get()..=self.height()).filter_map(|height| {
-            let height = NonZeroUsize::new(height)?;
-            if self.kura().is_hash_only_block_height(height) {
-                return None;
-            }
-            self.kura().get_block(height).map_or_else(
-                || {
-                    warn!(
-                        height = height.get(),
-                        "missing block in Kura; skipping entry"
-                    );
-                    None
-                },
-                Some,
-            )
-        })
+    /// Visit every canonical slot in the chain from `start`.
+    ///
+    /// The first unavailable, hash-only, or corrupt body is returned as a
+    /// typed error and terminates the cursor; canonical gaps are never skipped.
+    fn all_blocks(&self, start: NonZeroUsize) -> CanonicalHistoryCursor<'_> {
+        self.canonical_history().cursor(start)
     }
     /// Produce Merkle proofs for an entrypoint hash at the given block height.
     ///
@@ -44612,7 +43289,16 @@ pub trait StateReadOnly: WorldStateSnapshot {
         block_height: NonZeroU64,
         entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<BlockProofs, BlockProofError> {
-        block_proofs_for_entry_from_kura(self.kura(), block_height, entry_hash)
+        let height_index: usize = block_height
+            .get()
+            .try_into()
+            .map_err(|_| BlockProofError::HeightOutOfRange(block_height))?;
+        let expected_hash = self
+            .block_hashes()
+            .get(height_index - 1)
+            .copied()
+            .ok_or(BlockProofError::BlockNotFound(block_height))?;
+        block_proofs_for_entry_from_kura(self.kura(), block_height, expected_hash, entry_hash)
     }
     /// Returns [`Some`] milliseconds since the genesis block was
     /// committed, or [`None`] if it wasn't.
@@ -44627,8 +43313,7 @@ pub trait StateReadOnly: WorldStateSnapshot {
             None
         } else {
             let opt = self
-                .kura()
-                .get_block(nonzero!(1_usize))
+                .block_by_height(nonzero!(1_usize))
                 .map(|genesis_block| genesis_block.header().creation_time());
             if opt.is_none() {
                 error!("Failed to get genesis block from Kura.");
@@ -44793,24 +43478,42 @@ macro_rules! impl_state_ro {
                     )
                 }))
             }
+            #[cfg(test)]
             fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
                 let block_height = u64::try_from(self.height()).unwrap_or(u64::MAX);
                 self.authoritative_lane_peer_ids_at_height(lane_id, block_height)
             }
+            #[cfg(test)]
             fn authoritative_lane_peer_ids_at_height(
                 &self,
                 lane_id: LaneId,
                 block_height: u64,
             ) -> Vec<PeerId> {
-                let validator_mode = self.nexus.staking.validator_mode(lane_id, &self.nexus.lane_catalog);
+                let validator_mode = self
+                    .nexus
+                    .staking
+                    .validator_mode(lane_id, &self.nexus.lane_catalog);
                 State::authoritative_lane_peer_ids_from_sources(
                     self.world(),
                     lane_id,
                     validator_mode,
                     self.lane_manifests.as_ref(),
                     &self.nexus,
-                    self.commit_topology(),
                     block_height,
+                )
+            }
+            fn resolve_lane_committee_at_height(
+                &self,
+                route: LaneAuthorityRoute,
+                authority_height: u64,
+            ) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
+                lane_authority::resolve_from_sources(
+                    self.world(),
+                    &self.network_id,
+                    route,
+                    self.lane_manifests.as_ref(),
+                    &self.nexus,
+                    authority_height,
                 )
             }
         }
@@ -46885,8 +45588,8 @@ impl State {
     ///
     /// # Errors
     ///
-    /// Returns an error if an enabled Nexus policy cannot be represented canonically, including
-    /// when configured lane compliance has no loaded authenticated policy set.
+    /// Returns an error if the Nexus policy cannot be represented canonically, including when
+    /// configured lane compliance has no loaded authenticated policy set.
     pub fn execution_policy_digest_v1(
         &self,
     ) -> core::result::Result<
@@ -47302,9 +46005,9 @@ impl_state_ro! { StateBlock<'_>, StateTransaction<'_, '_>, StateView<'_>, StateQ
 pub trait StateReadOnlyWithTransactions: StateReadOnly {
     /// Returns transactions map
     fn transactions(&self) -> &impl TransactionsReadOnly;
-    /// Check if [`SignedTransaction`] is already committed
+    /// Check if a canonical transaction entrypoint is already committed.
     #[inline]
-    fn has_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
+    fn has_entrypoint(&self, hash: HashOf<TransactionEntrypoint>) -> bool {
         self.transactions().get(&hash).is_some()
     }
 }
@@ -47475,7 +46178,7 @@ impl<'state> StateBlock<'state> {
     ) -> Result<(), BlockValidationError> {
         for lane_id in &self.touched_lanes {
             let shard_id = self.nexus.lane_config.shard_id(*lane_id);
-            match cursors.get(shard_id) {
+            match cursors.get(shard_id, *lane_id) {
                 Some(cursor) if cursor.last_block_height == height => {
                     self.record_da_shard_cursor_lag_ok(*lane_id, shard_id);
                 }
@@ -47895,27 +46598,27 @@ impl<'state> StateBlock<'state> {
             accounts_snapshot_cache: OnceCell::new(),
         }
     }
-    pub(crate) fn stage_direct_committed_transactions(
+    pub(crate) fn stage_direct_committed_entrypoints(
         &mut self,
-        transactions: impl IntoIterator<Item = HashOf<SignedTransaction>>,
+        transactions: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
     ) {
-        self.direct_committed_transactions.extend(transactions);
+        self.direct_committed_entrypoints.extend(transactions);
     }
     /// Hash the exact semantic WSV write set currently staged by lane execution.
     fn merge_execution_write_set_root(&self) -> Hash {
         Self::merge_execution_write_set_root_from_overlay(
             &self.world,
-            &self.direct_committed_transactions,
+            &self.direct_committed_entrypoints,
         )
     }
     fn merge_execution_write_set_root_from_overlay(
         world: &WorldBlock<'_>,
-        direct_committed_transactions: &HashSet<HashOf<SignedTransaction>>,
+        direct_committed_entrypoints: &HashSet<HashOf<TransactionEntrypoint>>,
     ) -> Hash {
         let external_event_bytes = Self::merge_execution_external_event_bytes(world);
         Self::merge_execution_write_set_root_from_overlay_with_external_events(
             world,
-            direct_committed_transactions,
+            direct_committed_entrypoints,
             external_event_bytes.as_deref(),
         )
     }
@@ -47924,7 +46627,7 @@ impl<'state> StateBlock<'state> {
     }
     fn merge_execution_write_set_root_from_overlay_with_external_events(
         world: &WorldBlock<'_>,
-        direct_committed_transactions: &HashSet<HashOf<SignedTransaction>>,
+        direct_committed_entrypoints: &HashSet<HashOf<TransactionEntrypoint>>,
         external_event_bytes: Option<&[u8]>,
     ) -> Hash {
         let mut encoded = world.merge_execution_write_set_bytes();
@@ -47932,13 +46635,13 @@ impl<'state> StateBlock<'state> {
             append_merge_write_set_component(&mut encoded, b"external_events");
             append_merge_write_set_component(&mut encoded, external_event_bytes);
         }
-        let mut transaction_membership = direct_committed_transactions
+        let mut entrypoint_membership = direct_committed_entrypoints
             .iter()
             .copied()
             .collect::<Vec<_>>();
-        transaction_membership.sort_unstable();
-        append_merge_write_set_component(&mut encoded, b"direct_committed_transactions");
-        append_merge_write_set_component(&mut encoded, &transaction_membership.encode());
+        entrypoint_membership.sort_unstable();
+        append_merge_write_set_component(&mut encoded, b"direct_committed_entrypoints");
+        append_merge_write_set_component(&mut encoded, &entrypoint_membership.encode());
         Hash::new_from_chunks(&[MERGE_EXECUTION_WRITE_SET_DOMAIN, encoded.as_slice()])
     }
     fn ensure_pristine_execution_control_stage(&self) -> Result<(), MergeLedgerCommitError> {
@@ -47952,7 +46655,7 @@ impl<'state> StateBlock<'state> {
             || self.world.axt_replay_ledger.is_dirty()
             || !self.world.merge_execution_write_set_bytes().is_empty()
             || !self.world.external_event_buf.is_empty()
-            || !self.direct_committed_transactions.is_empty()
+            || !self.direct_committed_entrypoints.is_empty()
         {
             return Err(MergeLedgerCommitError::ExecutionStageNotPristine);
         }
@@ -47998,11 +46701,6 @@ impl<'state> StateBlock<'state> {
         entry: &MergeLedgerEntry,
     ) -> Result<(), MergeLedgerCommitError> {
         self.ensure_pristine_execution_control_stage()?;
-        if !self.state_ref.nexus_snapshot().enabled {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "certified merge entry requires Nexus multilane mode".to_owned(),
-            ));
-        }
         if entry.merge_qc.carrier_height != self._curr_block.height().get()
             || Some(entry.merge_qc.carrier_parent_hash) != self._curr_block.prev_block_hash()
             || entry.merge_qc.view != self._curr_block.view_change_index()
@@ -48293,7 +46991,7 @@ impl<'state> StateBlock<'state> {
         let current_write_set_root =
             Self::merge_execution_write_set_root_from_overlay_with_external_events(
                 &self.world,
-                &self.direct_committed_transactions,
+                &self.direct_committed_entrypoints,
                 authorization.external_event_bytes.as_deref(),
             );
         if !Self::canonical_wsv_merge_commit_authorization_matches(
@@ -48436,9 +47134,7 @@ impl<'state> StateBlock<'state> {
             .into_iter()
             .map(|admission| {
                 let obligation = State::queue_plan_pending_obligation_from_admission(&admission)?;
-                let committed = self.has_transaction(State::queue_plan_entrypoint_membership_hash(
-                    admission.certificate.binding.entrypoint_hash.clone(),
-                ));
+                let committed = self.has_entrypoint(admission.certificate.binding.entrypoint_hash);
                 let active = State::queue_plan_pending_obligation_matches_active_lifecycle(
                     self,
                     &obligation,
@@ -48699,10 +47395,10 @@ impl<'state> StateBlock<'state> {
         }
         Ok(())
     }
-    fn merge_execution_transaction_hashes(
+    fn merge_execution_entrypoint_hashes(
         entrypoints: &[TransactionEntrypoint],
-    ) -> Vec<HashOf<SignedTransaction>> {
-        committed_transaction_hashes_for_entrypoints(entrypoints)
+    ) -> Vec<HashOf<TransactionEntrypoint>> {
+        committed_entrypoint_hashes(entrypoints)
     }
     fn drain_merge_lane_settlement_commitment(
         &mut self,
@@ -48711,7 +47407,6 @@ impl<'state> StateBlock<'state> {
         let descriptor = &execution.proposal.descriptor;
         let mut settlements = self.drain_settlement_records();
         let mut nexus_fees = self.drain_nexus_fee_records();
-        let transaction_hashes = Self::merge_execution_transaction_hashes(&execution.entrypoints);
         let mut tx_count = 0u64;
         let mut total_local_amount = Quantity::zero();
         let mut total_xor_due = Quantity::zero();
@@ -48721,12 +47416,17 @@ impl<'state> StateBlock<'state> {
         let mut receipts = Vec::new();
         let mut nexus_fee_receipts = Vec::new();
         let mut native_amx_receipts = Vec::new();
-        for (tx_hash, native_amx_receipt) in transaction_hashes
-            .into_iter()
+        for (entrypoint, native_amx_receipt) in execution
+            .entrypoints
+            .iter()
             .zip(&execution.native_amx_receipts)
         {
             let mut counted = false;
-            if let Some(record) = settlements.remove(&tx_hash) {
+            let signed_transaction_hash = crate::tx::exact_signed_transaction_hash(entrypoint);
+            if let Some(record) = signed_transaction_hash
+                .as_ref()
+                .and_then(|hash| settlements.remove(hash))
+            {
                 let evidence = crate::fees::SwapEvidence {
                     epsilon_bps: record.epsilon_bps,
                     twap_window_seconds: record.twap_window_seconds,
@@ -48775,7 +47475,10 @@ impl<'state> StateBlock<'state> {
                 receipts.push(record.into_lane_receipt());
                 counted = true;
             }
-            if let Some(record) = nexus_fees.remove(&tx_hash) {
+            if let Some(record) = signed_transaction_hash
+                .as_ref()
+                .and_then(|hash| nexus_fees.remove(hash))
+            {
                 nexus_fee_receipts.push(record.into_lane_receipt(
                     descriptor.lane_block_height,
                     descriptor.lane_id,
@@ -49116,7 +47819,7 @@ impl<'state> StateBlock<'state> {
             mut canonical_wsv_merge_commit_authorization,
             mut canonical_carrier_commit_metadata_authorization,
             pending_nexus_fee_receipt_source_ids,
-            direct_committed_transactions,
+            direct_committed_entrypoints,
             _curr_block,
             committed_fragments,
             #[cfg(feature = "zk-preverify")]
@@ -49180,7 +47883,7 @@ impl<'state> StateBlock<'state> {
                 let current_write_set_root =
                     Self::merge_execution_write_set_root_from_overlay_with_external_events(
                         &world,
-                        &direct_committed_transactions,
+                        &direct_committed_entrypoints,
                         authorization.external_event_bytes.as_deref(),
                     );
                 if !Self::canonical_wsv_merge_commit_authorization_matches(
@@ -49588,15 +48291,17 @@ impl<'state> StateBlock<'state> {
                             .get(),
                     );
                 state_ref.install_sccp_registry_cache(Arc::clone(&sccp_registry));
-                if !direct_committed_transactions.is_empty() {
+                if !direct_committed_entrypoints.is_empty() {
                     let direct_height = NonZeroUsize::new(
                         usize::try_from(_curr_block.height().get()).unwrap_or(usize::MAX),
                     )
                     .expect("direct application block height is non-zero");
-                    state_ref.transactions.record_direct_committed_membership(
-                        direct_committed_transactions.iter().cloned(),
-                        direct_height,
-                    );
+                    state_ref
+                        .transactions
+                        .record_direct_committed_entrypoint_membership(
+                            direct_committed_entrypoints.iter().cloned(),
+                            direct_height,
+                        );
                 }
                 if let Some(pending) = &pending_autoscale_lifecycle {
                     state_ref.prune_committed_lane_lifecycle_state(&pending.catalog_update);
@@ -49856,7 +48561,7 @@ impl<'state> StateBlock<'state> {
         let post_finality_write_set_root =
             Self::merge_execution_write_set_root_from_overlay_with_external_events(
                 &self.world,
-                &self.direct_committed_transactions,
+                &self.direct_committed_entrypoints,
                 authorization.external_event_bytes.as_deref(),
             );
         if !Self::canonical_wsv_merge_commit_authorization_matches(
@@ -49946,8 +48651,10 @@ impl<'state> StateBlock<'state> {
             });
         Ok(())
     }
-    /// Assuming all transactions in the block have been processed,
-    /// apply the remaining block effects outside the world state.
+    /// Apply synthetic-fixture effects without Sumeragi-v2 finality.
+    /// Production callers must use
+    /// [`Self::apply_without_execution_with_verified_v2_finality`].
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::needless_pass_by_value)]
     #[iroha_logger::log(
@@ -49960,103 +48667,97 @@ impl<'state> StateBlock<'state> {
         block: &CommittedBlock,
         topology: Vec<PeerId>,
     ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_qc(block, topology, None)
-    }
-    /// Apply post-execution block effects, optionally using an explicit commit certificate hint
-    /// instead of relying on the global status cache to recover per-block commit-roster evidence.
-    #[allow(clippy::too_many_lines)]
-    #[allow(clippy::needless_pass_by_value)]
-    #[iroha_logger::log(
-        skip_all,
-        fields(block_height = block.as_ref().header().height())
-    )]
-    #[must_use]
-    pub fn apply_without_execution_with_commit_qc(
-        &mut self,
-        block: &CommittedBlock,
-        topology: Vec<PeerId>,
-        commit_qc_hint: Option<&Qc>,
-    ) -> Vec<EventBox> {
-        let (events, authorization) = self.apply_without_execution_with_commit_qc_inner(
-            block,
-            topology,
-            CommitRosterAuthority::Legacy(commit_qc_hint),
-            true,
-        );
+        let (events, authorization) =
+            self.apply_without_execution_inner(block, topology, ApplyTopologyAuthority::Fixture);
         if let Err(err) = authorization {
             error!(
                 height = block.as_ref().header().height().get(),
                 block = %block.as_ref().hash(),
                 ?err,
-                "autonomous carrier metadata authorization failed during legacy apply"
+                "autonomous carrier metadata authorization failed during fixture apply"
             );
         }
         events
     }
-    /// Apply post-execution effects for a block already authenticated by exact v2 finality.
-    ///
-    /// V2 finality is persisted and replayed from Kura's exact artifact. It must not be projected
-    /// into the structurally different legacy commit-roster journal or WSV commit-QC archive.
+    /// Apply effects for a block carrying exact v2 finality authority.
+    /// Topology comes from the frozen artifact roster and is never caller-supplied.
     #[must_use]
     pub(crate) fn apply_without_execution_with_verified_v2_finality(
         &mut self,
         block: &CommittedBlock,
-        topology: Vec<PeerId>,
     ) -> Result<Vec<EventBox>, MergeLedgerCommitError> {
-        let (events, authorization) = self.apply_without_execution_with_commit_qc_inner(
-            block,
-            topology,
-            CommitRosterAuthority::V2Finality,
-            true,
-        );
+        let topology = self.verified_v2_apply_topology(block)?;
+        let (events, authorization) =
+            self.apply_without_execution_inner(block, topology, ApplyTopologyAuthority::V2Finality);
         authorization.map(|()| events)
-    }
-    /// Apply replayed block effects without refreshing per-block roster sidecars.
-    ///
-    /// Kura replay already has durable commit-roster evidence in the roster journal. Rewriting
-    /// retained sidecars for every historical block makes restart cost scale with the full chain
-    /// and can stall a recovering peer before Torii opens.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn apply_without_execution_with_commit_qc_for_replay(
-        &mut self,
-        block: &CommittedBlock,
-        topology: Vec<PeerId>,
-        commit_qc_hint: Option<&Qc>,
-    ) -> Vec<EventBox> {
-        let (events, authorization) = self.apply_without_execution_with_commit_qc_inner(
-            block,
-            topology,
-            CommitRosterAuthority::Legacy(commit_qc_hint),
-            false,
-        );
-        if let Err(err) = authorization {
-            error!(
-                height = block.as_ref().header().height().get(),
-                block = %block.as_ref().hash(),
-                ?err,
-                "autonomous carrier metadata authorization failed during legacy replay"
-            );
-        }
-        events
     }
     /// Apply replayed block effects authenticated by Kura's exact v2 finality artifact.
     ///
-    /// The verified v2 authority supersedes the legacy commit-roster projection. Replay still
-    /// advances the exact commit topology and every ordinary post-execution state transition.
+    /// Replay advances the exact finality-authorized topology and every ordinary
+    /// post-execution state transition.
     #[must_use]
     pub(crate) fn apply_without_execution_with_verified_v2_finality_for_replay(
         &mut self,
         block: &CommittedBlock,
-        topology: Vec<PeerId>,
     ) -> Result<Vec<EventBox>, MergeLedgerCommitError> {
-        let (events, authorization) = self.apply_without_execution_with_commit_qc_inner(
-            block,
-            topology,
-            CommitRosterAuthority::V2Finality,
-            false,
-        );
+        let topology = self.verified_v2_apply_topology(block)?;
+        let (events, authorization) =
+            self.apply_without_execution_inner(block, topology, ApplyTopologyAuthority::V2Finality);
         authorization.map(|()| events)
+    }
+    fn verified_v2_apply_topology(
+        &self,
+        block: &CommittedBlock,
+    ) -> Result<Vec<PeerId>, MergeLedgerCommitError> {
+        let artifact = block.verified_v2_finality_artifact().ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "state apply requires a block committed with verified Sumeragi-v2 finality"
+                    .to_owned(),
+            )
+        })?;
+        let height = block.as_ref().header().height().get();
+        if artifact.height_context.network_id != self.network_id {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "verified v2 finality network {} differs from State network {}",
+                artifact.height_context.network_id, self.network_id
+            )));
+        }
+        if !block.as_ref().header().is_genesis() {
+            let context = self
+                .state_ref
+                .sumeragi_v2_height_context(height)
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "failed to load exact v2 finality context for height {height}: {error}"
+                    ))
+                })?
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "missing exact v2 finality context for height {height}"
+                    ))
+                })?;
+            if context != artifact.height_context {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "committed v2 authority differs from the exact context at height {height}"
+                )));
+            }
+            crate::sumeragi::v2_npos::validate_candidate_records(
+                &context,
+                self.state_ref,
+                block.as_ref().npos_consensus_effects(),
+            )
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "committed v2 block carries invalid NPoS consensus effects: {error}"
+                ))
+            })?;
+        }
+        Ok(artifact
+            .height_context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect())
     }
     fn stage_musubi_resolver_index_checkpoint(
         &mut self,
@@ -50138,12 +48839,11 @@ impl<'state> StateBlock<'state> {
         fields(block_height = block.as_ref().header().height())
     )]
     #[must_use]
-    fn apply_without_execution_with_commit_qc_inner(
+    fn apply_without_execution_inner(
         &mut self,
         block: &CommittedBlock,
         topology: Vec<PeerId>,
-        commit_roster_authority: CommitRosterAuthority<'_>,
-        write_commit_roster_sidecar: bool,
+        topology_authority: ApplyTopologyAuthority,
     ) -> (Vec<EventBox>, Result<(), MergeLedgerCommitError>) {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
@@ -50157,55 +48857,7 @@ impl<'state> StateBlock<'state> {
             .try_into()
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
         let signed_block = block.as_ref();
-        if matches!(commit_roster_authority, CommitRosterAuthority::V2Finality)
-            && !signed_block.header().is_genesis()
-        {
-            let height = signed_block.header().height().get();
-            let context = self
-                .state_ref
-                .sumeragi_v2_height_context(height)
-                .expect("committed v2 block must have a readable finality context")
-                .expect("committed v2 block must have an exact finality context");
-            crate::sumeragi::v2_npos::validate_candidate_records(
-                &context,
-                self.state_ref,
-                signed_block.npos_consensus_effects(),
-            )
-            .expect("committed v2 block must carry valid NPoS consensus effects");
-        }
-        let transactions: std::collections::HashSet<_> = if let Some(entrypoints) =
-            signed_block.external_entrypoints_slice()
-        {
-            if entrypoints
-                .iter()
-                .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)))
-            {
-                entrypoints
-                    .iter()
-                    .map(|entrypoint| {
-                        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(
-                            entrypoint.hash(),
-                        ))
-                    })
-                    .collect()
-            } else {
-                entrypoints
-                    .iter()
-                    .filter_map(|entrypoint| match entrypoint {
-                        TransactionEntrypoint::External(tx) => Some(
-                            crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash,
-                        ),
-                        _ => None,
-                    })
-                    .collect()
-            }
-        } else {
-            signed_block
-                .transactions_vec()
-                .iter()
-                .map(|tx| crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash)
-                .collect()
-        };
+        let transactions = signed_block.entrypoint_hashes().collect::<HashSet<_>>();
         self.transactions.insert_block(transactions, block_height);
         if let Some(bundle) = block.as_ref().da_commitments() {
             let height = block.as_ref().header().height().get();
@@ -50269,242 +48921,102 @@ impl<'state> StateBlock<'state> {
         self.prev_commit_topology
             .mutate_vec(|vec| *vec = prev_topology);
         let checkpoint_topology = topology;
+        #[cfg(not(any(test, feature = "iroha-core-tests")))]
+        let _ = topology_authority;
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         let checkpoint_block_height = block.as_ref().header().height().get();
-        let checkpoint_block_hash = block.as_ref().hash();
-        let commit_qc_hint = match commit_roster_authority {
-            CommitRosterAuthority::Legacy(hint) => hint,
-            CommitRosterAuthority::V2Finality => None,
-        };
-        let hinted_commit_cert = commit_qc_hint
-            .filter(|cert| {
-                cert.height == checkpoint_block_height
-                    && cert.subject_block_hash == checkpoint_block_hash
-                    && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
-            })
-            .cloned();
-        let commit_cert_for_block = (!checkpoint_topology.is_empty())
-            .then_some(hinted_commit_cert.clone())
-            .flatten();
-        let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
-        let active_lane_ids = self
-            .nexus
-            .enabled
-            .then(|| nexus_active_lane_ids(&self.nexus));
-        let checkpoint_lane_ids = if checkpoint_topology.is_empty() {
-            BTreeSet::new()
-        } else {
-            validator_lane_ids_for_peers(&self.world, checkpoint_topology.iter())
-                .into_iter()
-                .filter(|lane_id| {
-                    active_lane_ids
-                        .as_ref()
-                        .is_none_or(|active_lane_ids| active_lane_ids.contains(lane_id))
-                })
-                .collect()
-        };
-        if !checkpoint_lane_ids.is_empty() {
-            let before = world_peers.len();
-            world_peers.retain(|peer| {
-                checkpoint_topology.contains(peer)
-                    || !validator_lane_ids_for_peer(&self.world, peer)
-                        .is_disjoint(&checkpoint_lane_ids)
-            });
-            let filtered = before.saturating_sub(world_peers.len());
-            if filtered > 0 {
-                warn!(
-                    height = block_height,
-                    block = %block_hash,
-                    filtered,
-                    lanes = checkpoint_lane_ids.len(),
-                    "ignoring world peers outside checkpoint topology lanes during block apply reconciliation"
-                );
-            }
-        }
-        let npos_mode_active = self.world.sumeragi_npos_parameters().is_some()
-            || commit_cert_for_block.as_ref().is_some_and(|commit_cert| {
-                commit_cert.mode_tag == crate::sumeragi::consensus::NPOS_TAG
-            });
-        let roster_source = if checkpoint_topology.is_empty() {
-            if world_peers.is_empty() {
-                Vec::new()
-            } else {
-                warn!(
-                    height = block_height,
-                    block = %block_hash,
-                    "commit topology missing during block apply; deriving from world peers"
-                );
-                world_peers.sort();
-                world_peers
-            }
-        } else if world_peers.is_empty() {
-            checkpoint_topology.clone()
-        } else {
-            let checkpoint_set: BTreeSet<_> = checkpoint_topology.iter().cloned().collect();
-            let mut missing: Vec<_> = world_peers
-                .into_iter()
-                .filter(|peer| !checkpoint_set.contains(peer))
-                .collect();
-            if !missing.is_empty() && npos_mode_active {
-                missing.sort();
-                let missing_active_validators =
-                    active_stake_elected_validator_peers_for_checkpoint_lanes(
-                        &self.world,
-                        missing.iter(),
-                        &checkpoint_lane_ids,
-                        checkpoint_block_height,
-                        &self.nexus,
-                    );
-                if missing_active_validators.is_empty() {
-                    warn!(
-                        height = block_height,
-                        block = %block_hash,
-                        missing = missing.len(),
-                        "ignoring non-validator world peers for NPoS commit topology reconciliation"
-                    );
+        #[cfg(any(test, feature = "iroha-core-tests"))]
+        let topology_source = match &topology_authority {
+            ApplyTopologyAuthority::V2Finality => checkpoint_topology.clone(),
+            ApplyTopologyAuthority::Fixture => {
+                let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
+                let active_lane_ids = nexus_active_lane_ids(&self.nexus);
+                let checkpoint_lane_ids = if checkpoint_topology.is_empty() {
+                    BTreeSet::new()
+                } else {
+                    validator_lane_ids_for_peers(&self.world, checkpoint_topology.iter())
+                        .into_iter()
+                        .filter(|lane_id| active_lane_ids.contains(lane_id))
+                        .collect()
+                };
+                if !checkpoint_lane_ids.is_empty() {
+                    let before = world_peers.len();
+                    world_peers.retain(|peer| {
+                        checkpoint_topology.contains(peer)
+                            || !validator_lane_ids_for_peer(&self.world, peer)
+                                .is_disjoint(&checkpoint_lane_ids)
+                    });
+                    let filtered = before.saturating_sub(world_peers.len());
+                    if filtered > 0 {
+                        warn!(
+                            height = block_height,
+                            block = %block_hash,
+                            filtered,
+                            lanes = checkpoint_lane_ids.len(),
+                            "ignoring world peers outside checkpoint topology lanes during fixture reconciliation"
+                        );
+                    }
+                }
+                let npos_mode_active = self.world.sumeragi_npos_parameters().is_some();
+                if checkpoint_topology.is_empty() {
+                    if world_peers.is_empty() {
+                        Vec::new()
+                    } else {
+                        world_peers.sort();
+                        world_peers
+                    }
+                } else if world_peers.is_empty() {
                     checkpoint_topology.clone()
                 } else {
-                    let active_validator_set: BTreeSet<_> =
-                        missing_active_validators.iter().cloned().collect();
-                    let ignored = missing
-                        .iter()
-                        .filter(|peer| !active_validator_set.contains(*peer))
-                        .count();
-                    warn!(
-                        height = block_height,
-                        block = %block_hash,
-                        missing_active_validators = missing_active_validators.len(),
-                        ignored_non_validators = ignored,
-                        lanes = checkpoint_lane_ids.len(),
-                        "commit topology missing active NPoS validators; appending"
-                    );
-                    let mut combined = checkpoint_topology.clone();
-                    combined.extend(missing_active_validators);
-                    combined
+                    let checkpoint_set: BTreeSet<_> = checkpoint_topology.iter().cloned().collect();
+                    let mut missing: Vec<_> = world_peers
+                        .into_iter()
+                        .filter(|peer| !checkpoint_set.contains(peer))
+                        .collect();
+                    if !missing.is_empty() && npos_mode_active {
+                        missing.sort();
+                        let missing_active_validators =
+                            active_stake_elected_validator_peers_for_checkpoint_lanes(
+                                &self.world,
+                                missing.iter(),
+                                &checkpoint_lane_ids,
+                                checkpoint_block_height,
+                                &self.nexus,
+                            );
+                        if missing_active_validators.is_empty() {
+                            checkpoint_topology.clone()
+                        } else {
+                            let mut combined = checkpoint_topology.clone();
+                            combined.extend(missing_active_validators);
+                            combined
+                        }
+                    } else {
+                        missing.sort();
+                        let mut combined = checkpoint_topology.clone();
+                        combined.extend(missing);
+                        combined
+                    }
                 }
-            } else {
-                if !missing.is_empty() {
-                    missing.sort();
-                    warn!(
-                        height = block_height,
-                        block = %block_hash,
-                        missing = missing.len(),
-                        "commit topology missing peers observed in world state; appending"
-                    );
-                }
-                let mut combined = checkpoint_topology.clone();
-                combined.extend(missing);
-                combined
             }
         };
-        let next_topology = if roster_source.is_empty() {
+        #[cfg(not(any(test, feature = "iroha-core-tests")))]
+        let topology_source = checkpoint_topology.clone();
+        let next_topology = if topology_source.is_empty() {
             Vec::new()
         } else {
-            // Always derive commit topology from a deterministic roster source to avoid
-            // clearing the roster when commit QC metadata is unavailable.
+            // Always derive commit topology from a deterministic source.
             let rotation_base = if !prev_topology_for_derivation.is_empty() {
                 prev_topology_for_derivation
             } else if !checkpoint_topology.is_empty() {
                 checkpoint_topology.clone()
             } else {
-                roster_source.clone()
+                topology_source.clone()
             };
             let mut topo = crate::sumeragi::network_topology::Topology::new(rotation_base);
-            topo.block_committed(roster_source, block_hash);
+            topo.block_committed(topology_source, block_hash);
             topo.as_ref().to_vec()
         };
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
-        if !checkpoint_topology.is_empty()
-            && matches!(commit_roster_authority, CommitRosterAuthority::Legacy(_))
-        {
-            let active_lane_ids = self
-                .nexus
-                .enabled
-                .then(|| nexus_active_lane_ids(&self.nexus));
-            let stake_snapshot = CommitStakeSnapshot::from_roster_with_active_lanes(
-                self.world(),
-                &checkpoint_topology,
-                active_lane_ids.as_ref(),
-            );
-            if let Some(commit_cert) = commit_cert_for_block {
-                if commit_cert.validator_set == checkpoint_topology {
-                    let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-                        checkpoint_block_height,
-                        commit_cert.view,
-                        checkpoint_block_hash,
-                        commit_cert.chain_order_hash,
-                        commit_cert.rechain_seq,
-                        commit_cert.parent_state_root,
-                        commit_cert.post_state_root,
-                        commit_cert.validator_set.clone(),
-                        commit_cert.aggregate.signers_bitmap.clone(),
-                        commit_cert.aggregate.bls_aggregate_signature.clone(),
-                        commit_cert.validator_set_hash_version,
-                        None,
-                    );
-                    let recorded = if hinted_commit_cert
-                        .as_ref()
-                        .is_some_and(|hint| hint == &commit_cert)
-                    {
-                        self.state_ref.record_commit_roster_internal(
-                            &commit_cert,
-                            &checkpoint,
-                            stake_snapshot,
-                            false,
-                            false,
-                            write_commit_roster_sidecar,
-                            false,
-                        )
-                    } else {
-                        self.state_ref.record_commit_roster_internal(
-                            &commit_cert,
-                            &checkpoint,
-                            stake_snapshot,
-                            false,
-                            true,
-                            write_commit_roster_sidecar,
-                            false,
-                        )
-                    };
-                    match recorded {
-                        Ok(true) => {
-                            let should_update =
-                                match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
-                                    Some(existing) => existing.view <= commit_cert.view,
-                                    None => true,
-                                };
-                            if should_update {
-                                self.world
-                                    .commit_qcs
-                                    .insert(commit_cert.subject_block_hash, commit_cert.clone());
-                            }
-                        }
-                        Ok(false) => {}
-                        Err(err) => {
-                            error!(
-                                ?err,
-                                height = checkpoint_block_height,
-                                block = %checkpoint_block_hash,
-                                "commit roster journal is fenced; skipping WSV commit-QC publication"
-                            );
-                        }
-                    }
-                } else {
-                    warn!(
-                        height = checkpoint_block_height,
-                        block = %checkpoint_block_hash,
-                        expected = checkpoint_topology.len(),
-                        actual = commit_cert.validator_set.len(),
-                        "skipping commit roster record: validator set mismatch"
-                    );
-                }
-            } else {
-                warn!(
-                    height = checkpoint_block_height,
-                    block = %checkpoint_block_hash,
-                    "missing commit certificate; skipping commit roster record"
-                );
-            }
-        }
         self.stage_native_amx_participant_frontiers(block.as_ref())
             .expect("committed Native AMX participant frontiers must be canonical");
         self.maybe_apply_nexus_autoscale(block);
@@ -50542,13 +49054,11 @@ impl<'state> StateBlock<'state> {
         lane: &mut iroha_data_model::nexus::LaneConfig,
         proposal_height: u64,
     ) -> Result<(), LaneLifecycleError> {
-        let commit_topology = self.commit_topology.iter().cloned().collect::<Vec<_>>();
         State::pin_new_autoscale_lane_committee_from_sources(
             &self.world,
             &self.network_id,
             self.lane_manifests.as_ref(),
             &self.nexus,
-            &commit_topology,
             lane,
             proposal_height,
         )
@@ -50557,7 +49067,7 @@ impl<'state> StateBlock<'state> {
         &self,
         lane_id: LaneId,
         lifecycle_update: &LaneLifecycleCatalogUpdate,
-        proposal_height: u64,
+        _proposal_height: u64,
     ) -> Result<(), LaneLifecycleError> {
         let dataspace = lifecycle_update
             .updated_catalog
@@ -50576,19 +49086,19 @@ impl<'state> StateBlock<'state> {
                 dataspace,
             },
         )?;
-        let validator_mode = prospective_nexus
-            .staking
-            .validator_mode(lane_id, &prospective_nexus.lane_catalog);
-        let commit_topology: Vec<_> = self.commit_topology.iter().cloned().collect();
-        let committee = State::authoritative_lane_peer_ids_from_sources(
-            &self.world,
-            lane_id,
-            validator_mode,
-            self.lane_manifests.as_ref(),
-            &prospective_nexus,
-            &commit_topology,
-            proposal_height,
-        );
+        let committee = prospective_nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == lane_id && lane.dataspace_id == dataspace)
+            .and_then(autoscale_lane_pinned_committee_with_pops)
+            .map(|committee| {
+                committee
+                    .into_iter()
+                    .map(|(peer, _)| peer)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         if committee.len() != required {
             return Err(LaneLifecycleError::AutoscaleCommitteeUnavailable {
                 lane: lane_id,
@@ -51171,7 +49681,7 @@ impl<'state> StateBlock<'state> {
             return;
         }
         let autoscale = self.nexus.autoscale;
-        if !self.nexus.enabled || !autoscale.enabled {
+        if !autoscale.enabled {
             return;
         }
         let block_height = block.as_ref().header().height().get();
@@ -51550,7 +50060,6 @@ impl<'state> StateBlock<'state> {
                 .staged_merge_entry
                 .as_ref()
                 .is_some_and(|entry| entry.execution_batch.is_some())
-            || !self.nexus.enabled
             || !self.nexus.autoscale.enabled
         {
             return Ok(None);
@@ -51959,7 +50468,8 @@ impl<'state> StateBlock<'state> {
         let interval = TimeInterval::new(since, length);
         TimeEvent { interval }
     }
-    /// Apply a committed block to the world state.
+    /// Execute and apply a synthetic fixture commit to world state.
+    /// Production validates first, then uses the capability-gated v2 apply path.
     ///
     /// Execution order:
     /// 1. Transactions (including invoked data triggers)
@@ -51968,6 +50478,7 @@ impl<'state> StateBlock<'state> {
     /// # Panics
     ///
     /// Panics if processing approved transactions or time triggers fails.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     #[iroha_logger::log(skip_all, fields(block_height))]
     pub fn apply(&mut self, block: &CommittedBlock, topology: Vec<PeerId>) -> Vec<EventBox> {
         self.apply_transactions(block);
@@ -51977,6 +50488,7 @@ impl<'state> StateBlock<'state> {
         self.apply_without_execution(block, topology)
     }
     /// Apply all non-erroneous transactions in the given committed block.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn apply_transactions(&mut self, block: &CommittedBlock) {
         let block = block.as_ref();
         for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
@@ -52031,6 +50543,7 @@ impl<'state> StateBlock<'state> {
         self.resolve_queue_plan_pending_obligations_from_block(block)
             .expect("committed block must resolve exact QueuePlan pending application obligations");
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn seed_committed_transaction_context(
         transaction: &mut StateTransaction<'_, '_>,
         tx: &SignedTransaction,
@@ -52392,10 +50905,8 @@ mod tiered_snapshot_diff_tests {
                 iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention:
+                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let kura =
@@ -55675,7 +54186,7 @@ fn load_verified_v2_replay_artifact(
     state: &State,
     kura: &Kura,
     block: &SignedBlock,
-) -> Result<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact> {
+) -> Result<crate::block::VerifiedV2FinalityArtifact> {
     let height = block.header().height().get();
     let block_hash = block.hash();
     let manifest = kura
@@ -55692,10 +54203,11 @@ fn load_verified_v2_replay_artifact(
             "replayed block #{height} commit manifest is not checkpoint-bound: {binding:?}"
         ));
     }
-    let artifact = kura
-        .v2_finality_artifact(height)
+    let verified_artifact = kura
+        .v2_finality_apply_authority(height)
         .wrap_err_with(|| format!("failed to verify v2 finality for replayed block #{height}"))?
         .ok_or_else(|| eyre!("missing verified v2 finality artifact for full block #{height}"))?;
+    let artifact = verified_artifact.artifact();
     artifact
         .validate_for_header(&block.header())
         .map_err(|error| eyre!(error))
@@ -55736,7 +54248,7 @@ fn load_verified_v2_replay_artifact(
             "replayed block #{height} v2 execution commitment does not bind the exact result-bearing block wire"
         ));
     }
-    if !manifest.binds_authenticated_v2_commit_authority(&artifact) {
+    if !manifest.binds_authenticated_v2_commit_authority(artifact) {
         return Err(eyre!(
             "replayed block #{height} commit manifest does not bind its verified v2 authority and execution roots"
         ));
@@ -55746,7 +54258,7 @@ fn load_verified_v2_replay_artifact(
             "replayed block #{height} finality hash differs from its canonical block hash"
         ));
     }
-    Ok(artifact)
+    Ok(verified_artifact)
 }
 fn verify_replay_bootstrap_binding(
     state: &State,
@@ -55801,20 +54313,6 @@ fn verify_replay_bootstrap_binding(
         }
     }
     Ok(())
-}
-fn prune_restored_commit_qcs_for_replay(state_block: &mut StateBlock<'_>, start_height: u64) {
-    let future_qcs: Vec<_> = state_block
-        .world
-        .commit_qcs
-        .iter()
-        .filter_map(|(hash, qc)| (qc.height >= start_height).then_some(*hash))
-        .collect();
-    if future_qcs.is_empty() {
-        return;
-    }
-    for hash in future_qcs {
-        state_block.world.commit_qcs.remove(hash);
-    }
 }
 fn ensure_replayed_results_match_committed(
     height: u64,
@@ -56016,7 +54514,7 @@ enum ReplayBundleEntry {
     Full {
         block: Arc<SignedBlock>,
         checkpoint: crate::kura::WsvCheckpoint,
-        finality: iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
+        finality: crate::block::VerifiedV2FinalityArtifact,
         merge_carrier: Option<ReplayMergeCarrier>,
     },
 }
@@ -56255,12 +54753,6 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     *isolated.lane_manifests.write() = state.lane_manifests.read().clone();
     *isolated.lane_privacy_registry.write() = state.lane_privacy_registry.read().clone();
     *isolated.lane_compliance.write() = state.lane_compliance.read().clone();
-    // The Kura-owned handle and Soracloud runtime are live publication surfaces, not consensus
-    // state. The dry run gets an exact private journal snapshot and no externally callable
-    // Soracloud runtime.
-    isolated.commit_roster_journal = Arc::new(parking_lot::RwLock::new(
-        state.commit_roster_journal.read().clone(),
-    ));
     *isolated.da_commitments.write() = state.da_commitments.read().clone();
     *isolated.da_confidential_compute.write() = state.da_confidential_compute.read().clone();
     *isolated.da_receipt_cursors.write() = state.da_receipt_cursors.read().clone();
@@ -56494,9 +54986,6 @@ fn install_prevalidated_replay_state(state: &mut State, mut final_state: State) 
     // Preserve only the process-owned surfaces. Every other field belongs to
     // the prevalidated replay image and moves as one whole State, so a future
     // consensus/runtime index is included by construction.
-    let final_commit_rosters = final_state.commit_roster_journal.read().clone();
-    *state.commit_roster_journal.write() = final_commit_rosters;
-    final_state.commit_roster_journal = Arc::clone(&state.commit_roster_journal);
     core::mem::swap(&mut state.ivm, &mut final_state.ivm);
     core::mem::swap(&mut state.query_handle, &mut final_state.query_handle);
     core::mem::swap(
@@ -56506,10 +54995,6 @@ fn install_prevalidated_replay_state(state: &mut State, mut final_state: State) 
     core::mem::swap(
         &mut state.da_shard_cursor_persistor,
         &mut final_state.da_shard_cursor_persistor,
-    );
-    core::mem::swap(
-        &mut state.commit_roster_journal_persistence_lock,
-        &mut final_state.commit_roster_journal_persistence_lock,
     );
     core::mem::swap(
         &mut state.query_index_journal,
@@ -56842,7 +55327,7 @@ fn replay_blocks_from_kura_range_inner(
             geometry.push(pending.clone());
         }
         let committed_block = valid_block
-            .commit_with_verified_v2_artifact(finality, replayed_execution_commitment)
+            .commit_with_verified_v2_artifact(finality.clone(), replayed_execution_commitment)
             .unpack(|_| {})
             .map_err(|(_block, error)| eyre!(error))
             .wrap_err_with(|| {
@@ -56867,7 +55352,6 @@ fn replay_blocks_from_kura_range_inner(
                 )
             });
         }
-        prune_restored_commit_qcs_for_replay(&mut state_block, height);
         let signed_entrypoints = committed_block
             .as_ref()
             .external_entrypoints_cloned()
@@ -56918,7 +55402,7 @@ fn replay_blocks_from_kura_range_inner(
         }
         let apply_without_execution_start = Instant::now();
         let _ = state_block
-            .apply_without_execution_with_verified_v2_finality_for_replay(&committed_block, roster)
+            .apply_without_execution_with_verified_v2_finality_for_replay(&committed_block)
             .map_err(|err| {
                 eyre!(err).wrap_err(format!(
                     "failed to authorize replayed carrier metadata for block #{height}"
@@ -57084,20 +55568,7 @@ impl StateTransaction<'_, '_> {
     /// Load a committed block by height from Kura for the current transaction context.
     #[must_use]
     pub fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        self.kura.get_block(height)
-    }
-    /// Load a structurally matched legacy commit certificate for archival tests.
-    ///
-    /// The legacy sidecar/archive values are structural projections only and are unavailable to
-    /// production admission, network response, and recovery paths.
-    #[must_use]
-    #[cfg(test)]
-    pub fn commit_qc_for_block(&self, height: u64, block_hash: HashOf<BlockHeader>) -> Option<Qc> {
-        self.kura
-            .read_roster_metadata(height)
-            .and_then(|sidecar| sidecar.commit_qc)
-            .filter(|commit_qc| commit_qc_matches_block(commit_qc, height, block_hash))
-            .or_else(|| trusted_world_commit_qc_for_block(&self.world, height, block_hash))
+        committed_block_from_kura(self.kura, height, *self.block_hashes.get(height.get() - 1)?)
     }
     /// Current slot derived from the block timestamp.
     #[inline]
@@ -57116,21 +55587,6 @@ impl StateTransaction<'_, '_> {
     /// Refresh AXT policy cache from Space Directory manifests using the current lane catalog.
     #[inline]
     pub fn refresh_axt_policies_from_directory(&mut self) -> Option<AxtPolicySnapshot> {
-        if !self.nexus.enabled {
-            let valid_lanes =
-                axt_cached_policy_retain_lane_ids_at_height(&self.nexus, self.block_height());
-            let stale: Vec<_> = self
-                .world
-                .axt_policies
-                .iter()
-                .filter(|(_, policy)| !valid_lanes.contains(&policy.target_lane))
-                .map(|(dsid, _)| *dsid)
-                .collect();
-            for dsid in stale {
-                self.world.axt_policies.remove(dsid);
-            }
-            return None;
-        }
         let block_height = self.block_height();
         self.world.axt_lane_map = axt_active_lane_map_at_height(&self.nexus, block_height);
         self.world.rebuild_axt_policies_from_space_directory(
@@ -57880,7 +56336,7 @@ impl StateTransaction<'_, '_> {
         }
         for handle in &record.handles {
             let retain_until_slot = retain_until_slot_for_handle(handle, &self.nexus, current_slot);
-            let key = AxtHandleReplayKey::from_handle(&handle.handle);
+            let key = AxtHandleReplayKey::from_handle(handle.intent.asset_dsid, &handle.handle);
             self.world.axt_replay_ledger.insert(
                 key,
                 AxtReplayRecord {

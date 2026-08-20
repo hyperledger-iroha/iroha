@@ -656,6 +656,11 @@ impl VerifiedReleaseV4 {
                 .authenticated
                 .manifest()
                 .reviewed_rustc_binary_sha256,
+            generator_binary_sha256: self.authenticated.manifest().generator_binary_sha256,
+            sealed_candidate_build_report_sha256: self
+                .authenticated
+                .manifest()
+                .sealed_candidate_build_report_sha256,
             candidate_sha256: candidate
                 .sha256()
                 .map_err(|error| eyre!("failed to identify immutable V4 candidate: {error}"))?,
@@ -2079,6 +2084,8 @@ struct VerificationReport {
     authenticated_source_seal_projection_sha256: String,
     reviewed_cargo_binary_sha256: String,
     reviewed_rustc_binary_sha256: String,
+    generator_binary_sha256: String,
+    sealed_candidate_build_report_sha256: String,
     generation: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
@@ -2132,6 +2139,10 @@ impl VerificationReport {
             ),
             reviewed_cargo_binary_sha256: hex::encode(manifest.reviewed_cargo_binary_sha256),
             reviewed_rustc_binary_sha256: hex::encode(manifest.reviewed_rustc_binary_sha256),
+            generator_binary_sha256: hex::encode(manifest.generator_binary_sha256),
+            sealed_candidate_build_report_sha256: hex::encode(
+                manifest.sealed_candidate_build_report_sha256,
+            ),
             generation: manifest.generation.clone(),
             generation_memory_limit_bytes: manifest.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: manifest
@@ -2159,6 +2170,8 @@ struct VerificationReportV4 {
     authenticated_source_seal_projection_sha256: String,
     reviewed_cargo_binary_sha256: String,
     reviewed_rustc_binary_sha256: String,
+    generator_binary_sha256: String,
+    sealed_candidate_build_report_sha256: String,
     generation: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
@@ -2189,6 +2202,10 @@ impl VerificationReportV4 {
                 .clone(),
             reviewed_cargo_binary_sha256: report.reviewed_cargo_binary_sha256.clone(),
             reviewed_rustc_binary_sha256: report.reviewed_rustc_binary_sha256.clone(),
+            generator_binary_sha256: report.generator_binary_sha256.clone(),
+            sealed_candidate_build_report_sha256: report
+                .sealed_candidate_build_report_sha256
+                .clone(),
             generation: report.generation.clone(),
             generation_memory_limit_bytes: report.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: report
@@ -2785,6 +2802,20 @@ mod tests {
                 .is_err()
             );
         }
+    }
+    #[test]
+    fn atomic_activation_rejects_truncated_sequence_as_trusted_root() {
+        let mut policy = valid_device_attestation_policy();
+        policy.trusted_roots[0].der = vec![0x30, 0x01];
+        let error = validate_device_attestation_policy_for_atomic_activation(
+            &policy,
+            POLICY_EVALUATION_TIME_MS,
+        )
+        .expect_err("a sequence marker is not a complete X.509 CA certificate");
+        assert!(
+            error.to_string().contains("DER is invalid"),
+            "unexpected shared-validator error: {error}"
+        );
     }
     #[test]
     fn atomic_activation_rejects_noncanonical_app_policy_text() {

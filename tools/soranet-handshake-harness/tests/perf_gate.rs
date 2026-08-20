@@ -54,6 +54,7 @@ impl PerfFixture {
 }
 #[test]
 fn handshake_perf_gate() {
+    let _serial = crate::serial_guard();
     let nk2 = load_fixture("snnet-interop-nk2-v1");
     let nk3 = load_fixture("snnet-interop-nk3-v1");
     let mut nk2_durations = measure_fixture(&nk2, 128);

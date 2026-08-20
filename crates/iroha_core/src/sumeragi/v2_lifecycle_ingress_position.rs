@@ -1384,9 +1384,7 @@ fn validate_live_queue_structure(
                     .checked_add(1)
                     .ok_or(FairIngressQueueCutError::PositionOverflow)?;
             }
-            if !matches!(source, FairV2IngressSource::Anonymous)
-                && super::super::fair_v2_ingress_is_certified_fence_escape(&entry.inbound)
-            {
+            if super::super::fair_v2_ingress_is_certified_fence_escape(&entry.inbound) {
                 certified_fence_escape_len = certified_fence_escape_len
                     .checked_add(1)
                     .ok_or(FairIngressQueueCutError::PositionOverflow)?;
@@ -1476,10 +1474,10 @@ fn entry_storage_is_exact(
     let Some(key) = entry.wire_key.as_ref() else {
         return false;
     };
-    let expected_source = match entry.inbound.via() {
-        Some(peer) if state.roster.contains(peer) => FairV2IngressSource::Validator(peer.clone()),
-        Some(peer) => FairV2IngressSource::Authenticated(peer.clone()),
-        None => FairV2IngressSource::Anonymous,
+    let expected_source = if state.roster.contains(entry.inbound.via()) {
+        FairV2IngressSource::Validator(entry.inbound.via().clone())
+    } else {
+        FairV2IngressSource::Authenticated(entry.inbound.via().clone())
     };
     let Some(ownership) = entry.inbound.ingress_ownership() else {
         return false;
@@ -1490,7 +1488,7 @@ fn entry_storage_is_exact(
         && *source == expected_source
         && entry.class == FairV2IngressClass::classify(&entry.inbound)
         && entry.encoded_len == entry.encoded_bytes.len()
-        && key.origin.as_ref() == entry.inbound.sender()
+        && &key.origin == entry.inbound.sender()
         && ownership.first.physical_admission_ordinal == entry.admission_ordinal
         && ownership.runtime_physical_cut.is_none()
         && ownership.leader_wire_runtime_receipt.is_none()
@@ -1500,7 +1498,7 @@ fn entry_storage_is_exact(
         && ownership.first.encoded_len == entry.encoded_len
         && ownership.first.class == entry.class
         && ownership.first.semantic_owner_source == *source
-        && ownership.first.semantic_origin.as_ref() == entry.inbound.sender()
+        && &ownership.first.semantic_origin == entry.inbound.sender()
         && snapshot.first.physical_admission_ordinal == entry.admission_ordinal
         && snapshot.runtime_physical_cut.is_none()
         && snapshot.leader_wire_runtime_receipt.is_none()
@@ -1510,7 +1508,7 @@ fn entry_storage_is_exact(
         && snapshot.first.encoded_len == entry.encoded_len
         && snapshot.first.class == entry.class
         && snapshot.first.semantic_owner_source == *source
-        && snapshot.first.semantic_origin.as_ref() == entry.inbound.sender()
+        && &snapshot.first.semantic_origin == entry.inbound.sender()
 }
 fn select_positions<S, V>(
     geometry: &FrozenQueueGeometry<S, V>,
@@ -1718,31 +1716,11 @@ fn target_lifecycle_context(
             | wire::ConsensusMessageV2Payload::VrfReveal(_) => return None,
         },
         BlockMessage::V2(_) => return None,
-        BlockMessage::BlockCreated(_)
-        | BlockMessage::BlockSyncUpdate(_)
-        | BlockMessage::FetchBlockBody(_)
-        | BlockMessage::BlockBodyResponse(_)
-        | BlockMessage::CertifiedBlockFetch(_)
-        | BlockMessage::VrfCommit(_)
-        | BlockMessage::VrfReveal(_)
-        | BlockMessage::ExecWitness(_)
-        | BlockMessage::RbcInitRequest(_)
-        | BlockMessage::RbcChunkRequest(_)
-        | BlockMessage::RbcInit(_)
-        | BlockMessage::RbcChunk(_)
-        | BlockMessage::RbcChunkCompact(_)
-        | BlockMessage::RbcReady(_)
-        | BlockMessage::RbcDeliver(_)
-        | BlockMessage::FetchPendingBlock(_)
-        | BlockMessage::KuraReplicaAdvert(_)
-        | BlockMessage::ProposalHint(_)
-        | BlockMessage::Proposal(_)
+        BlockMessage::KuraReplicaAdvert(_)
         | BlockMessage::LaneBlockProposal(_)
         | BlockMessage::LaneExecutablePayload(_)
         | BlockMessage::LaneBlockNewViewVote(_)
         | BlockMessage::LaneBlockNewViewCertificate(_)
-        | BlockMessage::QcVote(_)
-        | BlockMessage::Qc(_)
         | BlockMessage::LaneBlockVote(_)
         | BlockMessage::LaneBlockQc(_)
         | BlockMessage::LaneBlockCertificate(_)
@@ -1766,9 +1744,9 @@ fn pending_identity(
     append_field(&mut projection, &context_id.encode());
     projection.extend_from_slice(&height.to_le_bytes());
     super::super::fair_v2_ingress_append_source_identity(&mut projection, source);
-    super::super::fair_v2_ingress_append_optional_peer_identity(
+    super::super::fair_v2_ingress_append_peer_identity(
         &mut projection,
-        occurrence.wire_key.origin.as_ref(),
+        &occurrence.wire_key.origin,
     );
     projection.extend_from_slice(occurrence.wire_key.hash.as_ref());
     projection.extend_from_slice(occurrence.encoded_hash.as_ref());
@@ -1786,7 +1764,6 @@ fn pending_identity(
     projection.push(match occurrence.source_class {
         FairV2IngressSourceClass::Validator => 0,
         FairV2IngressSourceClass::Authenticated => 1,
-        FairV2IngressSourceClass::Anonymous => 2,
     });
     projection.push(match occurrence.class {
         FairV2IngressClass::Auxiliary => 0,
@@ -1959,9 +1936,9 @@ mod tests {
         ingress.open().expect("open atomic commit fixture");
         let message = commit_certificate_request(context_id, HEIGHT, &peer, signature_byte);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 message.clone(),
-                Some(peer.clone()),
+                peer.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2164,7 +2141,9 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(message, Some(source))),
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                    message, source
+                )),
                 Ok(FairV2IngressPushDisposition::Enqueued)
             ));
         }
@@ -2259,7 +2238,10 @@ mod tests {
         ingress.open().expect("open foreign-winner ingress");
         let message = commit_certificate_request(foreign_context, HEIGHT, &peer, 9);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(message.clone(), Some(peer))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                message.clone(),
+                peer
+            )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
 
@@ -2298,9 +2280,9 @@ mod tests {
         ingress.open().expect("open ordinary-head ingress");
         let ordinary = commit_certificate_request(context_id, HEIGHT, &peer, 1);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 ordinary.clone(),
-                Some(peer.clone()),
+                peer.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2315,9 +2297,9 @@ mod tests {
         };
         response.signature.clear();
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 invalid_response.clone(),
-                Some(peer.clone()),
+                peer.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2354,17 +2336,17 @@ mod tests {
         ingress.open().expect("open identity test ingress");
         let response = certified_body_response(context_id, HEIGHT);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 response.clone(),
-                Some(first.clone()),
+                first.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
         let first_ordinal = ingress.state.lock().last_admission_ordinal;
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 response.clone(),
-                Some(second.clone()),
+                second.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2414,7 +2396,9 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                rotated.try_push(InboundBlockMessage::new(message, Some(source))),
+                rotated.try_push(InboundBlockMessage::from_authenticated_peer(
+                    message, source
+                )),
                 Ok(FairV2IngressPushDisposition::Enqueued)
             ));
         }
@@ -2496,9 +2480,9 @@ mod tests {
         ingress.open().expect("open test ingress");
         let target_message = commit_certificate_request(context_id, HEIGHT, &first, 1);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 target_message.clone(),
-                Some(first.clone()),
+                first.clone(),
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2539,9 +2523,9 @@ mod tests {
         assert!(!selector_row.is_obsolete());
         assert_same_v2_message(selector_row.inbound().message(), &target_message);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 commit_certificate_request(context_id, HEIGHT, &second, 2),
-                Some(second),
+                second,
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
@@ -2550,7 +2534,10 @@ mod tests {
             "a newly ready source at the physical cut cannot change the frozen prefix"
         );
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(target_message, Some(first))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                target_message,
+                first
+            )),
             Ok(FairV2IngressPushDisposition::Coalesced)
         ));
         assert!(
@@ -2693,7 +2680,7 @@ mod tests {
             (retained_second, second.clone()),
         ] {
             assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(message, Some(via))),
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, via)),
                 Ok(FairV2IngressPushDisposition::Enqueued)
             ));
         }
@@ -2755,7 +2742,9 @@ mod tests {
         ingress.open().expect("open append fixture");
         let selected = commit_certificate_request(context_id, HEIGHT, &first, 1);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(selected, Some(first))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                selected, first
+            )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
         let selected_ordinal = ingress.state.lock().last_admission_ordinal;
@@ -2765,7 +2754,10 @@ mod tests {
             .into_prepared_witness();
         let appended = commit_certificate_request(context_id, HEIGHT, &second, 2);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(appended.clone(), Some(second),)),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                appended.clone(),
+                second,
+            )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
         let append_ordinal = ingress.state.lock().last_admission_ordinal;
@@ -2794,7 +2786,10 @@ mod tests {
             .expect("capture target before same-wire coalescence")
             .into_prepared_witness();
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(message.clone(), Some(peer))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                message.clone(),
+                peer
+            )),
             Ok(FairV2IngressPushDisposition::Coalesced)
         ));
         let before = {
@@ -2847,7 +2842,8 @@ mod tests {
                 started_tx
                     .send(())
                     .expect("same-wire producer start receiver remains live");
-                let result = ingress.try_push(InboundBlockMessage::new(message, Some(peer)));
+                let result =
+                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, peer));
                 result_tx
                     .send(result)
                     .expect("same-wire producer result receiver remains live");
@@ -2907,7 +2903,8 @@ mod tests {
                 started_tx
                     .send(())
                     .expect("append producer start receiver remains live");
-                let result = ingress.try_push(InboundBlockMessage::new(appended, Some(peer)));
+                let result =
+                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(appended, peer));
                 result_tx
                     .send(result)
                     .expect("append producer result receiver remains live");
@@ -2962,7 +2959,10 @@ mod tests {
             "dropping an unpublished exact dequeue releases its producer fence"
         );
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(appended.clone(), Some(peer))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                appended.clone(),
+                peer,
+            )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
 
@@ -2992,9 +2992,9 @@ mod tests {
         ingress.open().expect("open reorder fixture");
         for (signature, peer) in [(1, first), (2, second)] {
             assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                     commit_certificate_request(context_id, HEIGHT, &peer, signature),
-                    Some(peer),
+                    peer,
                 )),
                 Ok(FairV2IngressPushDisposition::Enqueued)
             ));

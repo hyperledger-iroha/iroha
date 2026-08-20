@@ -6205,13 +6205,17 @@ mod tests {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".to_owned(),
                 from: authority.to_string(),
-                to: "destination".to_owned(),
+                to: authority.to_string(),
                 amount: Some("5".parse().expect("canonical spend quantity")),
             },
         };
-        let replay_key = AxtHandleReplayKey::from_parts(binding, 1, 1, lane);
+        let replay_key = AxtHandleReplayKey::from_parts(dsid, binding, 1, 1, lane);
         let mut completed = ivm::axt::HostAxtState::new(descriptor, binding);
         completed
             .record_touch(
@@ -9031,6 +9035,10 @@ seiyaku AliasBoundArguments {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: axt::SpendOp {
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                ])
+                .expect("valid AXT fixture asset id"),
                 kind: "transfer".into(),
                 from: authority_str,
                 to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),

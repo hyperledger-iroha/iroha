@@ -84,7 +84,24 @@ fn authoritative_lane_fixture(mode: AuthoritativeLaneFixtureMode) -> Authoritati
         0x5e,
         "derive authoritative-lane manifest validator fixture key",
     );
-    let authoritative_keypair = checked_torii_test_bls_keypair(0x5f, "derive authoritative-lane manifest peer fixture key");
+    let authoritative_keypair =
+        checked_torii_test_bls_keypair(0x5f, "derive authoritative-lane manifest peer fixture key");
+    let additional_authorities = (0_u8..3)
+        .map(|index| {
+            let validator_keypair = checked_torii_test_ed25519_keypair(
+                0x80 + index,
+                "derive additional authoritative-lane validator fixture key",
+            );
+            let peer_keypair = checked_torii_test_bls_keypair(
+                0x83 + index,
+                "derive additional authoritative-lane peer fixture key",
+            );
+            (
+                AccountId::new(validator_keypair.public_key().clone()),
+                peer_keypair,
+            )
+        })
+        .collect::<Vec<_>>();
     let fallback_keypair = checked_torii_test_ed25519_keypair(
         0x60,
         "derive authoritative-lane fallback peer fixture key",
@@ -111,6 +128,16 @@ fn authoritative_lane_fixture(mode: AuthoritativeLaneFixtureMode) -> Authoritati
                 fallback_keypair.public_key().clone(),
             ),
         ]);
+        online.extend(additional_authorities.iter().enumerate().map(
+            |(index, (_, peer_keypair))| {
+                Peer::new(
+                    format!("127.0.0.1:{}", 10004 + index)
+                        .parse()
+                        .expect("valid additional authoritative address"),
+                    peer_keypair.public_key().clone(),
+                )
+            },
+        ));
     }
     let mut app = mk_app_state_for_tests();
     {
@@ -127,6 +154,11 @@ fn authoritative_lane_fixture(mode: AuthoritativeLaneFixtureMode) -> Authoritati
         topology.clear();
         topology.push(local_peer_id.clone());
         topology.push(authoritative_peer_id.clone());
+        topology.extend(
+            additional_authorities
+                .iter()
+                .map(|(_, peer_keypair)| PeerId::from(peer_keypair.public_key().clone())),
+        );
         topology.commit();
     }
     {
@@ -138,26 +170,43 @@ fn authoritative_lane_fixture(mode: AuthoritativeLaneFixtureMode) -> Authoritati
             &authoritative_keypair,
             "authoritative",
         );
+        for (index, (validator, peer_keypair)) in additional_authorities.iter().enumerate() {
+            ensure_runtime_peer_binding_for_test(
+                state,
+                validator,
+                peer_keypair,
+                &format!("authoritative-{}", index + 2),
+            );
+        }
+        let mut manifest_bindings = vec![(authoritative_validator, authoritative_peer_id.clone())];
+        manifest_bindings.extend(
+            additional_authorities
+                .iter()
+                .map(|(validator, peer_keypair)| {
+                    (
+                        validator.clone(),
+                        PeerId::from(peer_keypair.public_key().clone()),
+                    )
+                }),
+        );
         if matches!(mode, AuthoritativeLaneFixtureMode::OfflineWithHttpBridge) {
+            let manifest_bindings = manifest_bindings
+                .into_iter()
+                .enumerate()
+                .map(|(index, (validator, peer_id))| {
+                    (
+                        validator,
+                        peer_id,
+                        (index == 0).then_some("http://127.0.0.1:19080"),
+                    )
+                })
+                .collect();
             install_lane_manifest_registry_with_torii_urls_for_test(
                 state,
-                &[(
-                    LaneId::SINGLE,
-                    vec![(
-                        authoritative_validator,
-                        authoritative_peer_id.clone(),
-                        Some("http://127.0.0.1:19080"),
-                    )],
-                )],
+                &[(LaneId::SINGLE, manifest_bindings)],
             );
         } else {
-            install_lane_manifest_registry_for_test(
-                state,
-                &[(
-                    LaneId::SINGLE,
-                    vec![(authoritative_validator, authoritative_peer_id.clone())],
-                )],
-            );
+            install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, manifest_bindings)]);
         }
     }
     AuthoritativeLaneFixture {
@@ -192,7 +241,7 @@ async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
         authoritative_without_local.len()
     );
     assert_eq!(candidates.peers, authoritative_without_local);
-    assert_eq!(candidates.authoritative_total_count, 1);
+    assert_eq!(candidates.authoritative_total_count, 4);
     assert_eq!(candidates.offline_authoritative_count, 0);
     assert_eq!(candidates.bridge_authoritative_count, 0);
     assert!(candidates.unavailable_reason.is_none());
@@ -201,6 +250,75 @@ async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
             .peers
             .iter()
             .any(|candidate| candidate.peer_id() == &fallback_peer_id)
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn torii_authority_resolution_rejects_lane_dataspace_mismatch() {
+    let AuthoritativeLaneFixture {
+        mut app,
+        authoritative_peer_id,
+        route,
+        ..
+    } = authoritative_lane_fixture(AuthoritativeLaneFixtureMode::OnlineWithFallback);
+    let authority_height = app
+        .state
+        .resolve_lane_committee(iroha_core::state::LaneAuthorityRoute::new(
+            route.lane_id,
+            route.dataspace_id,
+        ))
+        .expect("fixture route authority should resolve")
+        .authority_height();
+    Arc::get_mut(&mut app)
+        .expect("unique app state")
+        .local_peer_id = Some(authoritative_peer_id.clone());
+    assert!(
+        super::is_local_authoritative_for_route(app.as_ref(), route),
+        "fixture authority must own the exact lane/dataspace route"
+    );
+
+    let mismatched_route = RoutingDecision::new(route.lane_id, DataSpaceId::new(1));
+    assert_ne!(mismatched_route.dataspace_id, route.dataspace_id);
+    assert!(
+        super::authoritative_lane_peer_statuses(app.as_ref(), mismatched_route).is_empty(),
+        "current-height status discovery must not leak lane authority across dataspaces"
+    );
+    assert!(
+        super::authoritative_lane_peer_statuses_at_height(
+            app.as_ref(),
+            mismatched_route,
+            authority_height,
+        )
+        .is_empty(),
+        "height-bound status discovery must enforce the exact lane/dataspace route"
+    );
+    assert!(
+        super::authoritative_lane_peers(app.as_ref(), mismatched_route)
+            .authoritative
+            .is_empty(),
+        "proxy authority discovery must fail closed for a mismatched dataspace"
+    );
+    assert!(
+        !super::is_local_authoritative_for_route(app.as_ref(), mismatched_route),
+        "a validator for the lane's real dataspace must not own a mismatched route"
+    );
+    assert!(
+        !super::should_execute_route_locally(app.as_ref(), mismatched_route),
+        "mismatched routes must never execute locally"
+    );
+    let candidates = super::torii_proxy_candidate_peer_ids(
+        app.as_ref(),
+        &authoritative_peer_id,
+        mismatched_route,
+        None,
+        &[],
+    );
+    assert_eq!(candidates.authoritative_count, 0);
+    assert_eq!(candidates.authoritative_total_count, 0);
+    assert!(candidates.peers.is_empty());
+    assert_eq!(
+        candidates.unavailable_reason,
+        Some(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
     );
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -214,7 +332,10 @@ async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_au
         0x62,
         "derive future-created candidate manifest validator fixture key",
     );
-    let authoritative_keypair = checked_torii_test_bls_keypair(0x63, "derive future-created candidate manifest peer fixture key");
+    let authoritative_keypair = checked_torii_test_bls_keypair(
+        0x63,
+        "derive future-created candidate manifest peer fixture key",
+    );
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let authoritative_validator =
         AccountId::new(authoritative_validator_keypair.public_key().clone());
@@ -287,6 +408,266 @@ async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_au
     );
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[test]
+fn authoritative_lane_peer_statuses_decorate_only_canonical_peer_ids() {
+    let canonical_with_url = PeerId::new(
+        checked_torii_test_bls_keypair(0x8a, "derive canonical URL-bound peer fixture key")
+            .public_key()
+            .clone(),
+    );
+    let canonical_without_url = PeerId::new(
+        checked_torii_test_bls_keypair(0x8b, "derive canonical unbound peer fixture key")
+            .public_key()
+            .clone(),
+    );
+    let non_authoritative = PeerId::new(
+        checked_torii_test_bls_keypair(0x8c, "derive non-authoritative URL peer fixture key")
+            .public_key()
+            .clone(),
+    );
+    let statuses = super::authoritative_lane_peer_statuses_with_manifest_urls(
+        vec![canonical_with_url.clone(), canonical_without_url.clone()],
+        std::collections::BTreeMap::from([
+            (
+                canonical_with_url.clone(),
+                "http://127.0.0.1:19100".to_owned(),
+            ),
+            (
+                non_authoritative.clone(),
+                "http://127.0.0.1:19101".to_owned(),
+            ),
+        ]),
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .map(|status| status.peer_id.clone())
+            .collect::<Vec<_>>(),
+        vec![canonical_with_url, canonical_without_url],
+        "manifest bindings must neither add nor reorder canonical authority"
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .map(|status| status.torii_url.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("http://127.0.0.1:19100"), None],
+        "only the canonical peer with a matching manifest binding receives its URL"
+    );
+    assert!(
+        statuses
+            .iter()
+            .all(|status| status.peer_id != non_authoritative),
+        "a manifest-only peer must not enter the authoritative set"
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn autoscale_proxy_authority_uses_pinned_committee_not_disjoint_manifest_bindings() {
+    let wrong_manifest_validator_keypair = checked_torii_test_ed25519_keypair(
+        0x70,
+        "derive disjoint autoscale manifest validator fixture key",
+    );
+    let wrong_manifest_peer_keypair =
+        checked_torii_test_bls_keypair(0x71, "derive disjoint autoscale manifest peer fixture key");
+    let pinned_keypairs = (0x72_u8..=0x75)
+        .map(|seed| {
+            checked_torii_test_bls_keypair(seed, "derive pinned autoscale peer fixture key")
+        })
+        .collect::<Vec<_>>();
+    let wrong_manifest_validator =
+        AccountId::new(wrong_manifest_validator_keypair.public_key().clone());
+    let wrong_manifest_peer_id = PeerId::new(wrong_manifest_peer_keypair.public_key().clone());
+    let lane_id = LaneId::new(1);
+    let route = RoutingDecision::new(lane_id, DataSpaceId::UNIVERSAL);
+    let mut app = mk_app_state_for_tests();
+    let pinned_peer_ids;
+    {
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+        app_mut.local_peer_id = Some(wrong_manifest_peer_id.clone());
+        let mut online = std::collections::HashSet::from([Peer::new(
+            "127.0.0.1:10100"
+                .parse()
+                .expect("valid wrong-manifest peer address"),
+            wrong_manifest_peer_keypair.public_key().clone(),
+        )]);
+        online.extend(pinned_keypairs.iter().enumerate().map(|(index, keypair)| {
+            Peer::new(
+                format!("127.0.0.1:{}", 10101 + index)
+                    .parse()
+                    .expect("valid pinned peer address"),
+                keypair.public_key().clone(),
+            )
+        }));
+        let (_online_tx, online_rx) = tokio::sync::watch::channel(online);
+        app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+        ensure_runtime_peer_binding_for_test(
+            state,
+            &wrong_manifest_validator,
+            &wrong_manifest_peer_keypair,
+            "wrong-autoscale-manifest",
+        );
+        let mut autoscale_lane = iroha_data_model::nexus::LaneConfig {
+            id: lane_id,
+            alias: "elastic-lane-1".to_owned(),
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+            "true".to_owned(),
+        );
+        autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            "1".to_owned(),
+        );
+        pinned_peer_ids =
+            pin_autoscale_lane_committee_for_test(&mut autoscale_lane, &pinned_keypairs);
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(2).expect("non-zero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                autoscale_lane,
+            ],
+        )
+        .expect("pinned autoscale lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("non-zero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("non-zero max lanes");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        *state.nexus.write() = nexus;
+        install_lane_manifest_registry_with_torii_urls_for_test(
+            state,
+            &[(
+                lane_id,
+                vec![(
+                    wrong_manifest_validator,
+                    wrong_manifest_peer_id.clone(),
+                    Some("http://127.0.0.1:19100"),
+                )],
+            )],
+        );
+        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero authority height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+    }
+    assert_eq!(
+        app.state
+            .resolve_lane_committee(iroha_core::state::LaneAuthorityRoute::new(
+                lane_id,
+                route.dataspace_id,
+            ))
+            .expect("pinned autoscale authority should resolve")
+            .into_validators(),
+        pinned_peer_ids,
+        "state authority must expose the immutable autoscale incarnation committee"
+    );
+    assert_eq!(
+        app.state
+            .manifest_lane_validator_bindings(lane_id)
+            .into_iter()
+            .map(|binding| binding.peer_id)
+            .collect::<Vec<_>>(),
+        vec![wrong_manifest_peer_id.clone()],
+        "fixture manifest authority must be live and disjoint from the pinned committee"
+    );
+    assert!(
+        !pinned_peer_ids.contains(&wrong_manifest_peer_id),
+        "fixture authorities must be disjoint"
+    );
+    let statuses = super::authoritative_lane_peer_statuses(app.as_ref(), route);
+    assert_eq!(
+        statuses
+            .iter()
+            .map(|status| status.peer_id.clone())
+            .collect::<Vec<_>>(),
+        pinned_peer_ids,
+        "mutable manifest bindings must not replace pinned autoscale authority"
+    );
+    assert!(
+        statuses.iter().all(|status| status.torii_url.is_none()),
+        "a URL belonging to a non-authoritative manifest peer must not decorate a pinned peer"
+    );
+    let historical_statuses =
+        super::authoritative_lane_peer_statuses_at_height(app.as_ref(), route, 1);
+    assert_eq!(
+        historical_statuses
+            .iter()
+            .map(|status| status.peer_id.clone())
+            .collect::<Vec<_>>(),
+        pinned_peer_ids,
+        "height-bound routing must preserve the immutable autoscale committee"
+    );
+    assert!(
+        historical_statuses
+            .iter()
+            .all(|status| status.torii_url.is_none()),
+        "height-bound routing must ignore URLs from non-authoritative manifest peers"
+    );
+    let candidates = super::torii_proxy_candidate_peer_ids(
+        app.as_ref(),
+        &wrong_manifest_peer_id,
+        route,
+        None,
+        &[],
+    );
+    assert_eq!(candidates.authoritative_total_count, pinned_peer_ids.len());
+    assert_eq!(candidates.authoritative_count, pinned_peer_ids.len());
+    assert!(
+        candidates
+            .peers
+            .iter()
+            .all(|candidate| pinned_peer_ids.contains(candidate.peer_id())),
+        "proxy candidates must contain only pinned committee peers"
+    );
+    assert!(
+        candidates
+            .peers
+            .iter()
+            .all(|candidate| candidate.peer_id() != &wrong_manifest_peer_id),
+        "the disjoint manifest peer must never receive proxy execution"
+    );
+    let signed_query = ToriiProxyRequestKindV4::SignedQuery {
+        query_bytes: Vec::new(),
+        expected_route: ToriiRouteHintV1::from(route),
+        response_format: ToriiProxyResponseFormatV1::Norito,
+    };
+    assert!(
+        !super::should_execute_incoming_torii_proxy_request_locally(
+            app.as_ref(),
+            &signed_query,
+            route,
+        ),
+        "a local peer present only in the mutable manifest must not execute the routed query"
+    );
+    let pinned_local_peer = pinned_peer_ids[0].clone();
+    Arc::get_mut(&mut app)
+        .expect("unique app state")
+        .local_peer_id = Some(pinned_local_peer.clone());
+    assert!(
+        super::should_execute_incoming_torii_proxy_request_locally(
+            app.as_ref(),
+            &signed_query,
+            route,
+        ),
+        "a pinned committee peer must execute its autoscale route"
+    );
+    assert!(
+        super::is_local_authoritative_for_route(app.as_ref(), route),
+        "the pinned local peer must remain the route authority"
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_peers_are_offline() {
     let AuthoritativeLaneFixture {
@@ -298,8 +679,8 @@ async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_pee
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
     assert_eq!(candidates.authoritative_count, 0);
-    assert_eq!(candidates.authoritative_total_count, 1);
-    assert_eq!(candidates.offline_authoritative_count, 1);
+    assert_eq!(candidates.authoritative_total_count, 4);
+    assert_eq!(candidates.offline_authoritative_count, 4);
     assert_eq!(candidates.bridge_authoritative_count, 0);
     assert!(candidates.peers.is_empty());
     assert_eq!(
@@ -321,8 +702,8 @@ async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_t
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
     assert_eq!(candidates.authoritative_count, 1);
-    assert_eq!(candidates.authoritative_total_count, 1);
-    assert_eq!(candidates.offline_authoritative_count, 1);
+    assert_eq!(candidates.authoritative_total_count, 4);
+    assert_eq!(candidates.offline_authoritative_count, 4);
     assert_eq!(candidates.bridge_authoritative_count, 1);
     assert_eq!(
         candidates.peers,
@@ -468,17 +849,28 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
         0x65,
         "derive authoritative-lane visited validator fixture key",
     );
-    let authoritative_keypair = checked_torii_test_bls_keypair(0x5f, "derive authoritative-lane manifest peer fixture key");
-    let sender_keypair = checked_torii_test_bls_keypair(0x64, "derive authoritative-lane sender peer fixture key");
-    let visited_keypair = checked_torii_test_bls_keypair(0x66, "derive authoritative-lane visited peer fixture key");
+    let offline_validator_keypair = checked_torii_test_ed25519_keypair(
+        0x67,
+        "derive authoritative-lane offline validator fixture key",
+    );
+    let authoritative_keypair =
+        checked_torii_test_bls_keypair(0x5f, "derive authoritative-lane manifest peer fixture key");
+    let sender_keypair =
+        checked_torii_test_bls_keypair(0x64, "derive authoritative-lane sender peer fixture key");
+    let visited_keypair =
+        checked_torii_test_bls_keypair(0x66, "derive authoritative-lane visited peer fixture key");
+    let offline_keypair =
+        checked_torii_test_bls_keypair(0x68, "derive authoritative-lane offline peer fixture key");
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let authoritative_validator =
         AccountId::new(authoritative_validator_keypair.public_key().clone());
     let sender_validator = AccountId::new(sender_validator_keypair.public_key().clone());
     let visited_validator = AccountId::new(visited_validator_keypair.public_key().clone());
+    let offline_validator = AccountId::new(offline_validator_keypair.public_key().clone());
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
     let sender_peer_id = PeerId::from(sender_keypair.public_key().clone());
     let visited_peer_id = PeerId::from(visited_keypair.public_key().clone());
+    let offline_peer_id = PeerId::from(offline_keypair.public_key().clone());
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -530,6 +922,12 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
             &visited_keypair,
             "visited",
         );
+        ensure_runtime_peer_binding_for_test(
+            state,
+            &offline_validator,
+            &offline_keypair,
+            "offline",
+        );
         install_lane_manifest_registry_for_test(
             state,
             &[(
@@ -538,6 +936,7 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
                     (authoritative_validator, authoritative_peer_id.clone()),
                     (sender_validator, sender_peer_id.clone()),
                     (visited_validator, visited_peer_id.clone()),
+                    (offline_validator, offline_peer_id),
                 ],
             )],
         );
@@ -614,7 +1013,7 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
         ],
     );
     assert!(exhausted.peers.is_empty());
-    assert_eq!(exhausted.authoritative_total_count, 3);
+    assert_eq!(exhausted.authoritative_total_count, 4);
     assert_eq!(exhausted.loop_prevention_drops, 3);
     assert_eq!(
         exhausted.unavailable_reason,
@@ -625,7 +1024,8 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
 #[tokio::test]
 async fn local_nexus_read_fanout_completes_without_recursive_self_proxying() {
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
-    let local_peer_id = checked_torii_test_peer_id(0x67, "derive local Nexus fanout peer fixture key");
+    let local_peer_id =
+        checked_torii_test_peer_id(0x67, "derive local Nexus fanout peer fixture key");
     Arc::get_mut(&mut app)
         .expect("unique local Nexus fanout app")
         .local_peer_id = Some(local_peer_id.clone());
@@ -882,7 +1282,10 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
 async fn internal_torii_proxy_route_rejects_unsigned_requests() {
     use tower::ServiceExt as _;
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
-    let local_peer_id = checked_torii_test_peer_id(0x69, "derive unsigned internal Torii proxy receiver fixture key");
+    let local_peer_id = checked_torii_test_peer_id(
+        0x69,
+        "derive unsigned internal Torii proxy receiver fixture key",
+    );
     Arc::get_mut(&mut app)
         .expect("unsigned internal proxy fixture app must be uniquely owned")
         .local_peer_id = Some(local_peer_id);
@@ -906,7 +1309,10 @@ async fn internal_torii_proxy_route_rejects_unsigned_requests() {
         deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
-        visited_peer_ids: vec![checked_torii_test_peer_id(0x6a, "derive unsigned internal Torii proxy visited peer fixture key")],
+        visited_peer_ids: vec![checked_torii_test_peer_id(
+            0x6a,
+            "derive unsigned internal Torii proxy visited peer fixture key",
+        )],
         request: ToriiProxyRequestKindV4::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -1020,8 +1426,10 @@ async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hops_exhausted() {
-    let local_peer_id = checked_torii_test_peer_id(0x68, "derive internal Torii proxy local peer fixture key");
-    let sender_peer_id = checked_torii_test_peer_id(0x6a, "derive internal Torii proxy sender peer fixture key");
+    let local_peer_id =
+        checked_torii_test_peer_id(0x68, "derive internal Torii proxy local peer fixture key");
+    let sender_peer_id =
+        checked_torii_test_peer_id(0x6a, "derive internal Torii proxy sender peer fixture key");
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
@@ -1051,12 +1459,31 @@ async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hop
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
-    let local_keypair = checked_torii_test_bls_keypair(0x6b, "derive internal Torii forward local peer fixture key");
-    let authoritative_keypair = checked_torii_test_bls_keypair(0x6c, "derive internal Torii forward authoritative peer fixture key");
-    let sender_keypair = checked_torii_test_bls_keypair(0x6d, "derive internal Torii forward sender peer fixture key");
+    let local_keypair = checked_torii_test_bls_keypair(
+        0x6b,
+        "derive internal Torii forward local peer fixture key",
+    );
+    let authoritative_keypair = checked_torii_test_bls_keypair(
+        0x6c,
+        "derive internal Torii forward authoritative peer fixture key",
+    );
+    let sender_keypair = checked_torii_test_bls_keypair(
+        0x6d,
+        "derive internal Torii forward sender peer fixture key",
+    );
+    let relay_keypair_a = checked_torii_test_bls_keypair(
+        0x70,
+        "derive internal Torii forward relay A peer fixture key",
+    );
+    let relay_keypair_b = checked_torii_test_bls_keypair(
+        0x71,
+        "derive internal Torii forward relay B peer fixture key",
+    );
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
     let sender_peer_id = PeerId::from(sender_keypair.public_key().clone());
+    let relay_peer_id_a = PeerId::from(relay_keypair_a.public_key().clone());
+    let relay_peer_id_b = PeerId::from(relay_keypair_b.public_key().clone());
     let authoritative_validator = checked_torii_test_account_id(
         0x6e,
         "derive internal Torii forward authoritative validator fixture key",
@@ -1064,6 +1491,14 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
     let sender_validator = checked_torii_test_account_id(
         0x6f,
         "derive internal Torii forward sender validator fixture key",
+    );
+    let relay_validator_a = checked_torii_test_account_id(
+        0x72,
+        "derive internal Torii forward relay A validator fixture key",
+    );
+    let relay_validator_b = checked_torii_test_account_id(
+        0x73,
+        "derive internal Torii forward relay B validator fixture key",
     );
     let mut app = mk_app_state_for_tests();
     {
@@ -1103,6 +1538,18 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
             "authoritative",
         );
         ensure_runtime_peer_binding_for_test(state, &sender_validator, &sender_keypair, "sender");
+        ensure_runtime_peer_binding_for_test(
+            state,
+            &relay_validator_a,
+            &relay_keypair_a,
+            "relay-a",
+        );
+        ensure_runtime_peer_binding_for_test(
+            state,
+            &relay_validator_b,
+            &relay_keypair_b,
+            "relay-b",
+        );
         install_lane_manifest_registry_for_test(
             state,
             &[(
@@ -1110,6 +1557,8 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
                 vec![
                     (authoritative_validator, authoritative_peer_id.clone()),
                     (sender_validator, sender_peer_id.clone()),
+                    (relay_validator_a, relay_peer_id_a),
+                    (relay_validator_b, relay_peer_id_b),
                 ],
             )],
         );
@@ -1178,7 +1627,10 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
 }
 #[tokio::test]
 async fn validate_incoming_soracloud_proxy_request_authority_accepts_generated_hf_primary() {
-    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
+    let primary_peer_id = checked_torii_test_peer_id(
+        0x70,
+        "derive generated-HF incoming proxy primary fixture key",
+    )
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
@@ -1199,7 +1651,10 @@ async fn validate_incoming_soracloud_proxy_request_authority_accepts_generated_h
 }
 #[tokio::test]
 async fn validate_incoming_soracloud_proxy_request_authority_rejects_commitment_mismatch() {
-    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
+    let primary_peer_id = checked_torii_test_peer_id(
+        0x70,
+        "derive generated-HF incoming proxy primary fixture key",
+    )
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
@@ -1226,7 +1681,10 @@ async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_generat
         .expect("unique app state")
         .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::unavailable(
         Some(
-            checked_torii_test_peer_id(0x72, "derive non-generated incoming proxy local fixture key")
+            checked_torii_test_peer_id(
+                0x72,
+                "derive non-generated incoming proxy local fixture key",
+            )
             .to_string(),
         ),
         "authority validation test should not execute the runtime locally",
@@ -1248,10 +1706,14 @@ async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_generat
 }
 #[tokio::test]
 async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_primary_peer() {
-    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
+    let primary_peer_id = checked_torii_test_peer_id(
+        0x70,
+        "derive generated-HF incoming proxy primary fixture key",
+    )
     .to_string();
-    let local_peer_id = checked_torii_test_peer_id(0x71, "derive generated-HF incoming proxy local fixture key")
-    .to_string();
+    let local_peer_id =
+        checked_torii_test_peer_id(0x71, "derive generated-HF incoming proxy local fixture key")
+            .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
@@ -1270,7 +1732,10 @@ async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_primary
 }
 #[tokio::test]
 async fn incoming_proxy_authority_failure_requests_generated_hf_reconcile() {
-    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
+    let primary_peer_id = checked_torii_test_peer_id(
+        0x70,
+        "derive generated-HF incoming proxy primary fixture key",
+    )
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let local_peer_id =
@@ -1310,7 +1775,10 @@ async fn incoming_proxy_authority_failure_requests_generated_hf_reconcile() {
 #[tokio::test]
 async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_requests_reconcile_once()
 {
-    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
+    let primary_peer_id = checked_torii_test_peer_id(
+        0x70,
+        "derive generated-HF incoming proxy primary fixture key",
+    )
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let local_peer_id =
@@ -1415,7 +1883,10 @@ async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_reques
 }
 #[tokio::test]
 async fn resolve_incoming_soracloud_proxy_forward_target_returns_primary() {
-    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
+    let primary_peer_id = checked_torii_test_peer_id(
+        0x70,
+        "derive generated-HF incoming proxy primary fixture key",
+    )
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let local_peer_id =
@@ -1439,10 +1910,14 @@ async fn resolve_incoming_soracloud_proxy_forward_target_returns_primary() {
 }
 #[tokio::test]
 async fn resolve_incoming_soracloud_proxy_forward_target_rejects_unassigned_receiver() {
-    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
+    let primary_peer_id = checked_torii_test_peer_id(
+        0x70,
+        "derive generated-HF incoming proxy primary fixture key",
+    )
     .to_string();
-    let local_peer_id = checked_torii_test_peer_id(0x71, "derive generated-HF incoming proxy local fixture key")
-    .to_string();
+    let local_peer_id =
+        checked_torii_test_peer_id(0x71, "derive generated-HF incoming proxy local fixture key")
+            .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
@@ -1465,7 +1940,10 @@ async fn resolve_incoming_soracloud_proxy_forward_target_rejects_unassigned_rece
 }
 #[tokio::test]
 async fn resolve_incoming_soracloud_proxy_forward_target_rejects_invalid_request() {
-    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
+    let primary_peer_id = checked_torii_test_peer_id(
+        0x70,
+        "derive generated-HF incoming proxy primary fixture key",
+    )
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
@@ -1488,8 +1966,14 @@ async fn resolve_incoming_soracloud_proxy_forward_target_rejects_invalid_request
 async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending_request() {
     let app = mk_app_state_for_tests();
     let request_id = Hash::new(b"soracloud-proxy-unexpected-peer");
-    let expected_peer_id = checked_torii_test_peer_id(0x74, "derive Soracloud proxy expected responder fixture key");
-    let responder_peer_id = checked_torii_test_peer_id(0x75, "derive Soracloud proxy unexpected responder fixture key");
+    let expected_peer_id = checked_torii_test_peer_id(
+        0x74,
+        "derive Soracloud proxy expected responder fixture key",
+    );
+    let responder_peer_id = checked_torii_test_peer_id(
+        0x75,
+        "derive Soracloud proxy unexpected responder fixture key",
+    );
     let (tx, rx) = tokio::sync::oneshot::channel();
     let mut rx = Box::pin(rx);
     app.soracloud_proxy_pending.lock().await.insert(
@@ -1581,7 +2065,10 @@ async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending
 }
 #[tokio::test]
 async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
-    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
+    let primary_peer_id = checked_torii_test_peer_id(
+        0x70,
+        "derive generated-HF incoming proxy primary fixture key",
+    )
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let unexpected_peer_id =
@@ -1593,8 +2080,11 @@ async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
         .soracloud_runtime = Some(Arc::new(
         TestLocalReadRuntime::unavailable(
             Some(
-            checked_torii_test_peer_id(0x76, "derive generated-HF unexpected responder local fixture key")
-            .to_string(),
+                checked_torii_test_peer_id(
+                    0x76,
+                    "derive generated-HF unexpected responder local fixture key",
+                )
+                .to_string(),
             ),
             "unexpected responder reconcile test should not execute the runtime locally",
         )
@@ -1661,7 +2151,10 @@ async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
 async fn soracloud_proxy_response_rejects_unsupported_schema() {
     let app = mk_app_state_for_tests();
     let request_id = Hash::new(b"soracloud-proxy-unsupported-schema");
-    let responder_peer_id = checked_torii_test_peer_id(0x77, "derive Soracloud proxy unsupported schema responder fixture key");
+    let responder_peer_id = checked_torii_test_peer_id(
+        0x77,
+        "derive Soracloud proxy unsupported schema responder fixture key",
+    );
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.soracloud_proxy_pending.lock().await.insert(
         request_id,
@@ -1768,7 +2261,10 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
 async fn process_incoming_torii_proxy_response_marks_late_responses_once() {
     let app = mk_app_state_for_tests();
     let request_id = Hash::new(b"torii-proxy-late-response");
-    let responder_peer_id = checked_torii_test_peer_id(0x79, "derive Torii proxy late-response responder fixture key");
+    let responder_peer_id = checked_torii_test_peer_id(
+        0x79,
+        "derive Torii proxy late-response responder fixture key",
+    );
     super::mark_torii_proxy_request_completed(&app, request_id).await;
     let response = ToriiProxyResponseV1 {
         schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
@@ -1843,10 +2339,11 @@ fn completed_torii_proxy_requests_are_fifo_bounded_and_ttl_pruned() {
 }
 #[tokio::test]
 async fn soracloud_proxy_failure_reports_remote_primary_health() {
-    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
-    .to_string();
-    let local_peer_id = checked_torii_test_peer_id(0x7b, "derive generated-HF proxy local fixture key")
-    .to_string();
+    let primary_peer_id =
+        checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
+            .to_string();
+    let local_peer_id =
+        checked_torii_test_peer_id(0x7b, "derive generated-HF proxy local fixture key").to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let captured_proxy_failures = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut app = mk_app_state_for_tests_with_world(world);
@@ -1884,8 +2381,9 @@ async fn soracloud_proxy_failure_reports_remote_primary_health() {
 }
 #[tokio::test]
 async fn validate_generated_hf_proxy_response_authority_accepts_matching_receipt() {
-    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
-    .to_string();
+    let primary_peer_id =
+        checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
+            .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let app = mk_app_state_for_tests_with_world(world);
@@ -1900,8 +2398,9 @@ async fn validate_generated_hf_proxy_response_authority_accepts_matching_receipt
 }
 #[tokio::test]
 async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_receipt() {
-    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
-    .to_string();
+    let primary_peer_id =
+        checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
+            .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let app = mk_app_state_for_tests_with_world(world);
@@ -1911,7 +2410,10 @@ async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_recei
         .as_mut()
         .expect("generated HF proxy receipt")
         .selected_peer_id = Some(
-        checked_torii_test_peer_id(0x7c, "derive generated-HF proxy mismatched receipt fixture key")
+        checked_torii_test_peer_id(
+            0x7c,
+            "derive generated-HF proxy mismatched receipt fixture key",
+        )
         .to_string(),
     );
     let error = super::validate_generated_hf_proxy_response_authority(
@@ -1926,8 +2428,9 @@ async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_recei
 }
 #[tokio::test]
 async fn validate_generated_hf_proxy_response_authority_rejects_result_commitment_mismatch() {
-    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
-    .to_string();
+    let primary_peer_id =
+        checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
+            .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let app = mk_app_state_for_tests_with_world(world);
@@ -1953,16 +2456,11 @@ enum GeneratedHfFailureReportCase {
     Execution,
 }
 async fn run_generated_hf_failure_report_case(case: GeneratedHfFailureReportCase) {
-    let primary_peer_id = checked_torii_test_peer_id(
-        0x7a,
-        "derive generated-HF proxy primary fixture key",
-    )
-    .to_string();
-    let local_peer_id = checked_torii_test_peer_id(
-        0x7b,
-        "derive generated-HF proxy local fixture key",
-    )
-    .to_string();
+    let primary_peer_id =
+        checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
+            .to_string();
+    let local_peer_id =
+        checked_torii_test_peer_id(0x7b, "derive generated-HF proxy local fixture key").to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let captured_proxy_failures = Arc::new(std::sync::Mutex::new(Vec::new()));
     let captured_reconcile_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2065,8 +2563,9 @@ async fn proxy_execution_failure_reports_remote_primary_health_and_requests_reco
 }
 #[tokio::test]
 async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_primary() {
-    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
-    .to_string();
+    let primary_peer_id =
+        checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
+            .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let local_peer_id =
         active_generated_hf_replica_peer_id(&world, &service_name, &service_version);
@@ -2118,8 +2617,9 @@ async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_prima
 }
 #[tokio::test]
 async fn soracloud_routing_failure_requests_generated_hf_reconcile() {
-    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
-    .to_string();
+    let primary_peer_id =
+        checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
+            .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let captured_reconcile_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut app = mk_app_state_for_tests_with_world(world);

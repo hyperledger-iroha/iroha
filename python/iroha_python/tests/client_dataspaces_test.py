@@ -11,6 +11,7 @@ import requests
 from iroha_torii_client.client import canonical_request_message
 
 from iroha_python import DataspaceSpec, NetworkId, ToriiClient, plan_dataspace, write_dataspace_plan
+from iroha_python.address import AccountAddress
 from iroha_python.crypto import Ed25519KeyPair
 
 FEE_PAYMENT = {
@@ -19,6 +20,10 @@ FEE_PAYMENT = {
 }
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
 NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
+SETTLEMENT_ACCOUNT_ID = AccountAddress.from_account(
+    domain="", public_key=bytes([0xA5]) * 32
+).to_i105()
+SETTLEMENT_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc"
 
 
 class FakeSession:
@@ -53,6 +58,48 @@ def response(status: int, payload: object | None = None) -> requests.Response:
         result._content = json.dumps(payload).encode("utf-8")
         result.headers["Content-Type"] = "application/json"
     return result
+
+
+def canonical_hash(fill: int) -> str:
+    """Build one canonical Norito ``Hash`` JSON literal for fixtures."""
+
+    assert 0 <= fill <= 0xFF and fill & 1 == 1
+    body = f"{fill:02X}" * 32
+    crc = 0xFFFF
+    for byte in f"hash:{body}".encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return f"hash:{body}#{crc:04X}"
+
+
+def lane_config(
+    *,
+    lane_id: int = 0,
+    shard_id: int | None = None,
+    dataspace_id: int = 0,
+    alias: str = "universal",
+) -> dict[str, object]:
+    """Return the complete canonical V1 ``LaneConfig`` JSON surface."""
+
+    return {
+        "id": lane_id,
+        "shard_id": shard_id,
+        "dataspace_id": dataspace_id,
+        "alias": alias,
+        "description": None,
+        "visibility": "public",
+        "lane_type": None,
+        "governance": None,
+        "settlement": None,
+        "storage": "full_replica",
+        "proof_scheme": "merkle_sha256",
+        "manifest_policy": "strict",
+        "confidential_compute": None,
+        "scheduler": None,
+        "settlement_buffer": None,
+        "metadata": {},
+    }
 
 
 def test_plan_dataspace_generates_manifest_catalog_and_summary(tmp_path: Path) -> None:
@@ -494,26 +541,11 @@ def test_operator_signature_headers_accept_raw_private_key_inputs() -> None:
 def lifecycle_status() -> dict[str, object]:
     return {
         "version": 1,
-        "nexus_enabled": True,
         "lane_count": 1,
-        "lanes": [
-            {
-                "id": 0,
-                "dataspace_id": 0,
-                "alias": "universal",
-                "description": None,
-                "visibility": "public",
-                "lane_type": None,
-                "governance": None,
-                "settlement": None,
-                "storage": "full_replica",
-                "proof_scheme": "merkle_sha256",
-                "metadata": {},
-            }
-        ],
-        "catalog_hash": "a1" * 32,
-        "incarnations": [{"lane_id": 0, "incarnation": "b2" * 32}],
-        "incarnation_root": "c3" * 32,
+        "lanes": [lane_config()],
+        "catalog_hash": canonical_hash(0xA1),
+        "incarnations": [{"lane_id": 0, "incarnation": canonical_hash(0xB3)}],
+        "incarnation_root": canonical_hash(0xC3),
     }
 
 
@@ -529,27 +561,36 @@ def test_nexus_lane_lifecycle_status_fetches_exact_json_snapshot() -> None:
     assert session.calls[0]["headers"]["Accept"] == "application/json"
 
 
+def test_nexus_lane_lifecycle_status_rejects_removed_enablement_field() -> None:
+    status = lifecycle_status()
+    status["nexus_enabled"] = True
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([response(200, status)]),
+        max_retries=0,
+    )
+
+    with pytest.raises(ValueError, match="unknown field `nexus_enabled`"):
+        client.nexus_lane_lifecycle_status()
+
+
 def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: pytest.MonkeyPatch) -> None:
     import iroha_python.client as client_module
 
     status = lifecycle_status()
     session = FakeSession([response(200, status)])
     client = ToriiClient("http://torii.example", session=session, max_retries=3)
-    additions = [
+    addition = lane_config(lane_id=5, shard_id=9, dataspace_id=42, alias="is")
+    addition.update(
         {
-            "id": 5,
-            "dataspace_id": 42,
-            "alias": "is",
-            "description": None,
             "visibility": "restricted",
             "lane_type": "cbdc_private",
             "governance": "is_governance",
             "settlement": "boi_rtgs",
-            "storage": "full_replica",
-            "proof_scheme": "merkle_sha256",
             "metadata": {"owner": "boi-poc"},
         }
-    ]
+    )
+    additions = [addition]
     captured: dict[str, object] = {}
 
     class FakeInstruction:
@@ -635,15 +676,336 @@ def test_nexus_lane_lifecycle_rejects_malformed_inputs() -> None:
     with pytest.raises(ValueError, match="duplicates lane"):
         client.nexus_lane_lifecycle([], retire=[1, 1], **auth)
 
-    lane = {"id": 1, "alias": "lane-one"}
+    lane = lane_config(lane_id=1, alias="lane-one")
     with pytest.raises(ValueError, match=r"additions\[1\].id duplicates"):
         client.nexus_lane_lifecycle([lane, lane], **auth)
 
-    with pytest.raises(ValueError, match=r"additions\[0\].id.*u32"):
-        client.nexus_lane_lifecycle([{"id": 1.5, "alias": "bad"}], **auth)
+    invalid_lane = lane_config(lane_id=1, alias="bad")
+    invalid_lane["id"] = 1.5
+    with pytest.raises(TypeError, match=r"additions\[0\].*id.*unsigned integer"):
+        client.nexus_lane_lifecycle([invalid_lane], **auth)
 
     with pytest.raises(ValueError, match="must add or retire"):
         client.nexus_lane_lifecycle([], **auth)
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    (
+        "id",
+        "shard_id",
+        "dataspace_id",
+        "alias",
+        "description",
+        "visibility",
+        "lane_type",
+        "governance",
+        "settlement",
+        "storage",
+        "proof_scheme",
+        "manifest_policy",
+        "confidential_compute",
+        "scheduler",
+        "settlement_buffer",
+        "metadata",
+    ),
+)
+def test_nexus_lane_lifecycle_rejects_incomplete_lane_before_status_fetch(
+    missing_field: str,
+) -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    addition = lane_config(lane_id=3, shard_id=7, dataspace_id=42, alias="payments")
+    del addition[missing_field]
+
+    with pytest.raises(TypeError, match=rf"missing required `{missing_field}`"):
+        client.nexus_lane_lifecycle(
+            [addition],
+            network_id=NETWORK_ID,
+            authority="alice@wonderland",
+            private_key=bytes([13] * 32),
+            fee_payment=FEE_PAYMENT,
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    (
+        ("shard_id", True, "shard_id.*unsigned integer"),
+        ("dataspace_id", -1, "dataspace_id.*between 0"),
+        ("description", 7, "description.*string or null"),
+        ("visibility", "Public", "visibility.*public.*restricted"),
+        ("storage", "full-replica", "storage.*full_replica"),
+        ("proof_scheme", "merkle", "proof_scheme.*merkle_sha256"),
+        ("manifest_policy", "Strict", "manifest_policy.*strict.*audit"),
+        ("confidential_compute", True, "confidential_compute.*object or null"),
+        (
+            "confidential_compute",
+            {
+                "mechanism": "sealed_box",
+                "key_version": 1,
+                "allowed_audiences": [],
+            },
+            "mechanism.*encryption.*secret_sharing",
+        ),
+        (
+            "confidential_compute",
+            {
+                "mechanism": "encryption",
+                "key_version": 0,
+                "allowed_audiences": [],
+            },
+            "key_version.*positive u32",
+        ),
+        (
+            "confidential_compute",
+            {
+                "mechanism": "secret_sharing",
+                "key_version": 1,
+                "allowed_audiences": [" auditor"],
+            },
+            "allowed_audiences.*surrounding whitespace",
+        ),
+        ("scheduler", {}, "scheduler.*missing required"),
+        (
+            "scheduler",
+            {"teu_capacity": None, "starvation_bound_slots": None},
+            "scheduler.*at least one override",
+        ),
+        (
+            "scheduler",
+            {"teu_capacity": 0, "starvation_bound_slots": None},
+            "teu_capacity.*positive u64",
+        ),
+        (
+            "scheduler",
+            {
+                "teu_capacity": 1,
+                "starvation_bound_slots": None,
+                "unexpected": 1,
+            },
+            "scheduler.*unknown field `unexpected`",
+        ),
+        ("settlement_buffer", {}, "settlement_buffer.*missing required"),
+        (
+            "settlement_buffer",
+            {
+                "account_id": "alice@wonderland",
+                "asset_definition_id": SETTLEMENT_ASSET_DEFINITION_ID,
+                "capacity": "1000",
+            },
+            "account_id.*canonical I105",
+        ),
+        (
+            "settlement_buffer",
+            {
+                "account_id": SETTLEMENT_ACCOUNT_ID,
+                "asset_definition_id": "not-an-asset-address",
+                "capacity": "1000",
+            },
+            "asset_definition_id.*canonical asset definition",
+        ),
+        (
+            "settlement_buffer",
+            {
+                "account_id": SETTLEMENT_ACCOUNT_ID,
+                "asset_definition_id": SETTLEMENT_ASSET_DEFINITION_ID,
+                "capacity": "0",
+            },
+            "capacity.*positive XOR quantity",
+        ),
+        (
+            "settlement_buffer",
+            {
+                "account_id": SETTLEMENT_ACCOUNT_ID,
+                "asset_definition_id": SETTLEMENT_ASSET_DEFINITION_ID,
+                "capacity": "0.0000000001",
+            },
+            "capacity.*nine fractional digits",
+        ),
+        ("metadata", [], "metadata.*object"),
+        ("metadata", {"owner": 7}, "metadata.owner.*string"),
+        ("metadata", {"da_shard_id": "7"}, "retired.*shard_id"),
+    ),
+)
+def test_nexus_lane_lifecycle_rejects_noncanonical_lane_fields_before_status_fetch(
+    field: str,
+    value: object,
+    match: str,
+) -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    addition = lane_config(lane_id=3, shard_id=7, dataspace_id=42, alias="payments")
+    addition[field] = value
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        client.nexus_lane_lifecycle(
+            [addition],
+            network_id=NETWORK_ID,
+            authority="alice@wonderland",
+            private_key=bytes([14] * 32),
+            fee_payment=FEE_PAYMENT,
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "retired_key",
+    (
+        "da_manifest_policy",
+        "confidential_compute",
+        "confidential_mechanism",
+        "confidential_key_version",
+        "confidential_access",
+        "confidential_future_policy",
+        "scheduler.teu_capacity",
+        "scheduler.future_policy",
+        "settlement.buffer_account",
+        "settlement.buffer_asset",
+        "settlement.buffer_capacity",
+        "settlement.buffer_future_policy",
+    ),
+)
+def test_nexus_lane_lifecycle_rejects_retired_functional_metadata_before_status_fetch(
+    retired_key: str,
+) -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    addition = lane_config(lane_id=3, shard_id=7, dataspace_id=42, alias="payments")
+    addition["metadata"] = {retired_key: "retired"}
+
+    with pytest.raises(ValueError, match=rf"metadata.{retired_key}.*retired"):
+        client.nexus_lane_lifecycle(
+            [addition],
+            network_id=NETWORK_ID,
+            authority="alice@wonderland",
+            private_key=bytes([14] * 32),
+            fee_payment=FEE_PAYMENT,
+        )
+
+    assert session.calls == []
+
+
+def test_nexus_lane_lifecycle_requires_nonreplicated_confidential_storage() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    addition = lane_config(lane_id=3, shard_id=7, dataspace_id=42, alias="payments")
+    addition["confidential_compute"] = {
+        "mechanism": "encryption",
+        "key_version": 1,
+        "allowed_audiences": [],
+    }
+
+    with pytest.raises(ValueError, match="requires.*commitment_only.*split_replica"):
+        client.nexus_lane_lifecycle(
+            [addition],
+            network_id=NETWORK_ID,
+            authority="alice@wonderland",
+            private_key=bytes([14] * 32),
+            fee_payment=FEE_PAYMENT,
+        )
+
+    assert session.calls == []
+
+
+def test_nexus_lane_lifecycle_canonicalizes_typed_confidential_audiences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import iroha_python.client as client_module
+
+    session = FakeSession([response(200, lifecycle_status())])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    default_lane = lane_config(lane_id=3, dataspace_id=42, alias="payments")
+    default_lane["metadata"] = {"owner": "payments"}
+    default_lane["scheduler"] = {
+        "teu_capacity": 4096,
+        "starvation_bound_slots": None,
+    }
+    default_lane["settlement_buffer"] = {
+        "account_id": SETTLEMENT_ACCOUNT_ID,
+        "asset_definition_id": SETTLEMENT_ASSET_DEFINITION_ID,
+        "capacity": "1500.25",
+    }
+    confidential_lane = lane_config(lane_id=4, dataspace_id=43, alias="private")
+    confidential_lane["storage"] = "split_replica"
+    confidential_lane["manifest_policy"] = "audit"
+    confidential_lane["confidential_compute"] = {
+        "mechanism": "secret_sharing",
+        "key_version": 7,
+        "allowed_audiences": ["operator", "auditor", "operator"],
+    }
+    captured: dict[str, object] = {}
+
+    class FakeInstruction:
+        @staticmethod
+        def nexus_lane_lifecycle(_status_json: str, plan_json: str) -> object:
+            captured["plan"] = json.loads(plan_json)
+            return "set-parameter-instruction"
+
+    class FakeCrypto:
+        Instruction = FakeInstruction
+
+    def fake_submit(*_args: object, **_kwargs: object) -> tuple[str, dict[str, object]]:
+        return "envelope", {"kind": "Applied"}
+
+    monkeypatch.setattr(client_module, "_require_crypto", lambda: FakeCrypto)
+    monkeypatch.setattr(client, "build_and_submit_transaction", fake_submit)
+
+    client.nexus_lane_lifecycle(
+        [default_lane, confidential_lane],
+        network_id=NETWORK_ID,
+        authority="alice@wonderland",
+        private_key=bytes([15] * 32),
+        fee_payment=FEE_PAYMENT,
+    )
+
+    additions = captured["plan"]["additions"]  # type: ignore[index]
+    assert additions[0]["metadata"] == {"owner": "payments"}
+    assert additions[0]["scheduler"] == {
+        "teu_capacity": 4096,
+        "starvation_bound_slots": None,
+    }
+    assert additions[0]["settlement_buffer"] == {
+        "account_id": SETTLEMENT_ACCOUNT_ID,
+        "asset_definition_id": SETTLEMENT_ASSET_DEFINITION_ID,
+        "capacity": "1500.25",
+    }
+    assert additions[1]["manifest_policy"] == "audit"
+    assert additions[1]["confidential_compute"] == {
+        "mechanism": "secret_sharing",
+        "key_version": 7,
+        "allowed_audiences": ["auditor", "operator"],
+    }
+    assert confidential_lane["confidential_compute"]["allowed_audiences"] == [  # type: ignore[index]
+        "operator",
+        "auditor",
+        "operator",
+    ]
+    assert default_lane["scheduler"] == {
+        "teu_capacity": 4096,
+        "starvation_bound_slots": None,
+    }
+
+
+def test_nexus_lane_lifecycle_rejects_unknown_lane_field_before_status_fetch() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    addition = lane_config(lane_id=3, shard_id=7, dataspace_id=42, alias="payments")
+    addition["shard"] = 7
+
+    with pytest.raises(ValueError, match="unknown field `shard`"):
+        client.nexus_lane_lifecycle(
+            [addition],
+            network_id=NETWORK_ID,
+            authority="alice@wonderland",
+            private_key=bytes([15] * 32),
+            fee_payment=FEE_PAYMENT,
+        )
+
+    assert session.calls == []
 
 
 def test_nexus_lane_lifecycle_rejects_retired_operator_only_shape() -> None:
@@ -720,7 +1082,7 @@ def test_nexus_lane_lifecycle_rejects_malformed_status() -> None:
 
     wrong_incarnation = lifecycle_status()
     wrong_incarnation["incarnations"] = [
-        {"lane_id": 1, "incarnation": "b2" * 32}
+        {"lane_id": 1, "incarnation": canonical_hash(0xB3)}
     ]
     client = ToriiClient(
         "http://torii.example",
@@ -739,6 +1101,64 @@ def test_nexus_lane_lifecycle_rejects_malformed_status() -> None:
     )
     with pytest.raises(ValueError, match="incarnation_root"):
         client.nexus_lane_lifecycle_status()
+
+
+def test_nexus_lane_lifecycle_status_requires_explicit_shard_id() -> None:
+    malformed_lane = lane_config()
+    del malformed_lane["shard_id"]
+    malformed = lifecycle_status()
+    malformed["lanes"] = [malformed_lane]
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([response(200, malformed)]),
+        max_retries=0,
+    )
+
+    with pytest.raises(TypeError, match="missing required `shard_id`"):
+        client.nexus_lane_lifecycle_status()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    (
+        ("catalog_hash", "A1" * 32, "canonical.*uppercase hex.*CRC16"),
+        ("catalog_hash", canonical_hash(0xA1).lower(), "canonical.*uppercase hex.*CRC16"),
+        ("catalog_hash", "hash:" + "A1" * 32 + "#0000", "checksum mismatch"),
+        ("incarnation", "B3" * 32, "canonical.*uppercase hex.*CRC16"),
+        ("incarnation_root", "C3" * 32, "canonical.*uppercase hex.*CRC16"),
+    ),
+)
+def test_nexus_lane_lifecycle_rejects_noncanonical_hash_before_native_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+    match: str,
+) -> None:
+    import iroha_python.client as client_module
+
+    malformed = lifecycle_status()
+    if field == "incarnation":
+        malformed["incarnations"] = [{"lane_id": 0, "incarnation": value}]
+    else:
+        malformed[field] = value
+    session = FakeSession([response(200, malformed)])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    def unexpected_bridge() -> object:
+        raise AssertionError("native bridge must not observe malformed lifecycle JSON")
+
+    monkeypatch.setattr(client_module, "_require_crypto", unexpected_bridge)
+    with pytest.raises(ValueError, match=match):
+        client.nexus_lane_lifecycle(
+            [],
+            retire=[0],
+            network_id=NETWORK_ID,
+            authority="alice@wonderland",
+            private_key=bytes([16] * 32),
+            fee_payment=FEE_PAYMENT,
+        )
+
+    assert len(session.calls) == 1
 
 
 def test_nexus_lane_lifecycle_surfaces_stale_transaction_without_refetch(

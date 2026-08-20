@@ -1,4 +1,8 @@
 //! Cross-language acceptance for Swift-built confidential-unshield redeem attachments.
+#[cfg(feature = "zk-tests")]
+#[path = "kaigi_privacy.rs"]
+mod kaigi_privacy;
+
 use iroha_core::zk::{
     ZK_BACKEND_HALO2_IPA,
     confidential_v2::{
@@ -58,3 +62,6 @@ fn swift_confidential_unshield_redeem_attachment_is_canonical_and_verifies() {
         Some(vk)
     ));
 }
+
+#[path = "kagemusha_artifact_v4_streaming.rs"]
+mod kagemusha_artifact_v4_streaming;

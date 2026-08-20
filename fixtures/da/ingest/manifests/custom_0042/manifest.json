@@ -360,7 +360,8 @@
       "scheme": "Rs12_10",
       "value": null
     },
-    "parity_shards": 4
+    "parity_shards": 4,
+    "row_parity_stripes": 0
   },
   "ipa_commitment": [
     [

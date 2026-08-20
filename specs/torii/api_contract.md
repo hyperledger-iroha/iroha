@@ -118,7 +118,8 @@ is a closed record whose optional members have these meanings:
 | `endpoint` | endpoint path or bounded endpoint group associated with the rejection; never a query string or credential |
 | `field`, `expected`, `actual` | field-validation context; values must not contain secrets |
 | `profile`, `chain_discriminant` | selected network-profile context |
-| `tx_hash`, `last_status` | transaction/finality context |
+| `entrypoint_hash` | canonical transaction-entrypoint identity for admission and durability outcomes |
+| `tx_hash`, `last_status` | signed-transaction/finality context |
 | `hint` | human-readable remediation hint, not a stable SDK discriminator |
 | `axt` | typed AXT rejection record |
 
@@ -337,6 +338,19 @@ transaction authority, a source or destination account named by a committed
 batch receipt, or an account holding the exact `CanReadAllLedgerData` operator
 capability. Unsigned, wrong-network, replayed, broadened, and projected requests
 fail closed; there is no legacy detail field on the public status DTO.
+
+## Canonical history availability
+
+Block, block-header, and transaction history share one WSV-anchored Kura
+cursor. Every selected slot must contain a body whose header hash and one-based
+height match the immutable query snapshot. A missing body and an authenticated
+hash-only snapshot slot return a typed canonical-history availability failure;
+a hash or height mismatch returns a typed corruption failure. `FindBlocks`,
+`FindBlockHeaders`, indexed and unindexed `FindTransactions`, transaction
+snapshots and cursor continuations never skip either condition or report a
+successfully exhausted or truncated history. `/v1/ledger/headers` uses the same
+source: availability failures map to `503`, while contradictory durable bodies
+map to `500`.
 
 ## HTTP observability
 

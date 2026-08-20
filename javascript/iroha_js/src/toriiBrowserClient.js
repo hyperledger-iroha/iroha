@@ -1716,16 +1716,11 @@ export class ToriiBrowserClient {
       signal: signalFrom(opts),
       successStatuses: opts.successStatuses ?? [200, 201, 202, 204],
       responseObserver: (response) => {
-        for (const name of [
+        requireMatchingReceiptHashHeader(
+          response,
           "x-iroha-entrypoint-hash",
-          "x-iroha-transaction-hash",
-        ]) {
-          requireMatchingReceiptHashHeader(
-            response,
-            name,
-            expectedEntrypointHash,
-          );
-        }
+          expectedEntrypointHash,
+        );
         requireMatchingReceiptHashHeader(
           response,
           "x-iroha-signed-transaction-hash",
@@ -2396,7 +2391,7 @@ export class ToriiBrowserClient {
     });
   }
 
-  /** Fetch the node-provided execution state root recorded at a block height. */
+  /** Fetch exact Sumeragi-v2 finality carrying the authenticated post-state root. */
   getLedgerStateRoot(height, options = {}) {
     const context = "getLedgerStateRoot options";
     const opts = requireSupportedOptions(options, context, LEDGER_READ_OPTION_KEYS);
@@ -2406,7 +2401,7 @@ export class ToriiBrowserClient {
     });
   }
 
-  /** Fetch the node-provided execution QC at a block height. */
+  /** Fetch the same exact Sumeragi-v2 state-finality carrier for proof consumers. */
   getLedgerStateProof(height, options = {}) {
     const context = "getLedgerStateProof options";
     const opts = requireSupportedOptions(options, context, LEDGER_READ_OPTION_KEYS);
@@ -2685,17 +2680,6 @@ export class ToriiBrowserClient {
           text,
           "Sumeragi typed diagnostics",
         ),
-      ),
-    });
-  }
-
-  getSumeragiTelemetry(options = {}) {
-    const opts = requireObject(options, "getSumeragiTelemetry options");
-    return this._json("GET", "/v1/sumeragi/telemetry", {
-      signal: signalFrom(opts),
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "getSumeragiTelemetry",
       ),
     });
   }

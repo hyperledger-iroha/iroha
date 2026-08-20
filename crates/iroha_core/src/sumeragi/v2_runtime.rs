@@ -1179,13 +1179,10 @@ fn runtime_ingress_causal_origin_projection_hash(
                 );
                 for carrier in carriers {
                     let mut semantic = Vec::new();
-                    match carrier.first.wire_key.origin.as_ref() {
-                        None => semantic.push(0),
-                        Some(origin) => {
-                            semantic.push(1);
-                            append_runtime_identity_field(&mut semantic, &origin.encode());
-                        }
-                    }
+                    append_runtime_identity_field(
+                        &mut semantic,
+                        &carrier.first.wire_key.origin.encode(),
+                    );
                     append_runtime_identity_field(
                         &mut semantic,
                         carrier.first.wire_key.hash.as_ref(),
@@ -2867,33 +2864,11 @@ pub(crate) fn reconstruct_recovered_wal_vote_successor(
     if candidate.statement != Some(inherited) {
         return Err(recovered);
     }
-    let effect_kind = production_adapter_effect_kind(&predecessor);
-    let effect_identity = runtime_effect_identity_hash(
-        effect_kind,
-        &production_adapter_effect_semantic_identity(&predecessor),
+    let pending = PendingRuntimeEffectBinding::from_effect_candidate(
+        parent.runtime_causal_lifecycle_key(),
+        &predecessor,
+        Some(&candidate),
     );
-    let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
-        candidate.kind,
-        &candidate.semantic_identity,
-    ));
-    let causal_lifecycle_key = parent.runtime_causal_lifecycle_key();
-    let projection_hash = pending_runtime_effect_binding_projection_hash(
-        &causal_lifecycle_key,
-        effect_kind,
-        &effect_identity,
-        candidate.kind,
-        candidate.statement,
-        candidate_semantic_identity.as_ref(),
-    );
-    let pending = PendingRuntimeEffectBinding {
-        causal_lifecycle_key,
-        effect_kind,
-        effect_identity,
-        candidate_kind: candidate.kind,
-        candidate_statement: candidate.statement,
-        candidate_semantic_identity,
-        projection_hash,
-    };
     if !pending.validate_exact(&predecessor) {
         return Err(recovered);
     }
@@ -2939,6 +2914,46 @@ fn recovered_prepare_matches_commit_vote(
         && prepare.execution_commitment == vote.execution_commitment
 }
 impl PendingRuntimeEffectBinding {
+    fn from_effect_candidate(
+        causal_lifecycle_key: iroha_crypto::Hash,
+        effect: &AdapterEffect,
+        candidate: Option<&RuntimeEffectCandidateSemantic>,
+    ) -> Self {
+        let effect_kind = production_adapter_effect_kind(effect);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+        );
+        let (candidate_kind, candidate_statement, candidate_semantic_identity) =
+            candidate.map_or((RUNTIME_CANDIDATE_KIND_NONE, None, None), |candidate| {
+                (
+                    candidate.kind,
+                    candidate.statement,
+                    Some(runtime_effect_candidate_semantic_hash(
+                        candidate.kind,
+                        &candidate.semantic_identity,
+                    )),
+                )
+            });
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate_kind,
+            candidate_statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        Self {
+            causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind,
+            candidate_statement,
+            candidate_semantic_identity,
+            projection_hash,
+        }
+    }
+
     /// Reconstruct the unique pending owner of a frame-bound Certified Fetch.
     ///
     /// The caller cannot mint the permit from decoded ledger bytes. It is
@@ -2958,33 +2973,8 @@ impl PendingRuntimeEffectBinding {
         ) {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(effect);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(effect),
-        );
         let candidate = production_adapter_effect_candidate_binding(effect, None).ok()??;
-        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
-            candidate.kind,
-            &candidate.semantic_identity,
-        ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let pending = Self {
-            causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
-        };
+        let pending = Self::from_effect_candidate(causal_lifecycle_key, effect, Some(&candidate));
         pending.validate_exact(effect).then_some(pending)
     }
 }
@@ -3088,43 +3078,14 @@ impl PendingRuntimeEffectBinding {
         if !locator.is_exact() {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(effect);
         let semantic_identity = production_adapter_effect_semantic_identity(effect);
-        let effect_identity = runtime_effect_identity_hash(effect_kind, &semantic_identity);
         let candidate = production_adapter_effect_candidate_binding(effect, None).ok()?;
-        let (candidate_kind, candidate_statement, candidate_semantic_identity) =
-            candidate.map_or((RUNTIME_CANDIDATE_KIND_NONE, None, None), |candidate| {
-                (
-                    candidate.kind,
-                    candidate.statement,
-                    Some(runtime_effect_candidate_semantic_hash(
-                        candidate.kind,
-                        &candidate.semantic_identity,
-                    )),
-                )
-            });
         let mut causal_preimage = Vec::new();
         causal_preimage.extend_from_slice(b"iroha:sumeragi:v2:live-wal-pending-root:v1");
         append_runtime_identity_field(&mut causal_preimage, &locator.encode());
         append_runtime_identity_field(&mut causal_preimage, &semantic_identity);
         let causal_lifecycle_key = iroha_crypto::Hash::new(causal_preimage);
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate_kind,
-            candidate_statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let pending = Self {
-            causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind,
-            candidate_statement,
-            candidate_semantic_identity,
-            projection_hash,
-        };
+        let pending = Self::from_effect_candidate(causal_lifecycle_key, effect, candidate.as_ref());
         pending.validate_exact(effect).then_some(pending)
     }
     /// Borrow the immutable runtime causal-origin lifecycle key.
@@ -3236,28 +3197,8 @@ impl PendingRuntimeEffectBinding {
         if !signed_request_matches {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(successor);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(successor),
-        );
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            RUNTIME_CANDIDATE_KIND_NONE,
-            None,
-            None,
-        );
-        let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: RUNTIME_CANDIDATE_KIND_NONE,
-            candidate_statement: None,
-            candidate_semantic_identity: None,
-            projection_hash,
-        };
+        let successor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, None);
         successor_binding
             .validate_exact(successor)
             .then_some(successor_binding)
@@ -3309,32 +3250,8 @@ impl PendingRuntimeEffectBinding {
         if candidate.statement != Some(inherited) {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(successor);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(successor),
-        );
-        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
-            candidate.kind,
-            &candidate.semantic_identity,
-        ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
-        };
+        let successor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, Some(&candidate));
         successor_binding
             .validate_exact(successor)
             .then_some(successor_binding)
@@ -3382,32 +3299,8 @@ impl PendingRuntimeEffectBinding {
         if candidate.statement != Some(inherited) {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(successor);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(successor),
-        );
-        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
-            candidate.kind,
-            &candidate.semantic_identity,
-        ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
-        };
+        let successor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, Some(&candidate));
         successor_binding
             .validate_exact(successor)
             .then_some(successor_binding)
@@ -3454,32 +3347,8 @@ impl PendingRuntimeEffectBinding {
         if candidate.statement != Some(inherited) {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(successor);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(successor),
-        );
-        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
-            candidate.kind,
-            &candidate.semantic_identity,
-        ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
-        };
+        let successor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, Some(&candidate));
         successor_binding
             .validate_exact(successor)
             .then_some(successor_binding)
@@ -3529,32 +3398,8 @@ impl PendingRuntimeEffectBinding {
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
         let successor_statement = candidate.statement?;
         inherited.commit_refinement_to(successor_statement)?;
-        let effect_kind = production_adapter_effect_kind(successor);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(successor),
-        );
-        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
-            candidate.kind,
-            &candidate.semantic_identity,
-        ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
-        };
+        let successor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, Some(&candidate));
         successor_binding
             .validate_exact(successor)
             .then_some(successor_binding)
@@ -3616,32 +3461,8 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(successor);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(successor),
-        );
-        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
-            candidate.kind,
-            &candidate.semantic_identity,
-        ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
-        };
+        let successor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, Some(&candidate));
         successor_binding
             .validate_exact(successor)
             .then_some(successor_binding)
@@ -3709,32 +3530,8 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(successor);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(successor),
-        );
-        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
-            candidate.kind,
-            &candidate.semantic_identity,
-        ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
-        };
+        let successor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, Some(&candidate));
         successor_binding
             .validate_exact(successor)
             .then_some(successor_binding)
@@ -3928,32 +3725,8 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(successor);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(successor),
-        );
-        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
-            candidate.kind,
-            &candidate.semantic_identity,
-        ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
-        };
+        let successor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, Some(&candidate));
         successor_binding
             .validate_exact(successor)
             .then_some(successor_binding)
@@ -4018,28 +3791,8 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(successor);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(successor),
-        );
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            RUNTIME_CANDIDATE_KIND_NONE,
-            None,
-            None,
-        );
-        let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: RUNTIME_CANDIDATE_KIND_NONE,
-            candidate_statement: None,
-            candidate_semantic_identity: None,
-            projection_hash,
-        };
+        let successor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, None);
         successor_binding
             .validate_exact(successor)
             .then_some(successor_binding)
@@ -4108,28 +3861,8 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let effect_kind = production_adapter_effect_kind(successor);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(successor),
-        );
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            RUNTIME_CANDIDATE_KIND_NONE,
-            None,
-            None,
-        );
-        let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: RUNTIME_CANDIDATE_KIND_NONE,
-            candidate_statement: None,
-            candidate_semantic_identity: None,
-            projection_hash,
-        };
+        let successor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, None);
         successor_binding
             .validate_exact(successor)
             .then_some(successor_binding)
@@ -8894,10 +8627,12 @@ impl BoundedIngress<AdapterCommand> {
         authenticated: AuthenticatedConsensusMessage,
     ) -> Result<EventTag, EnqueueError> {
         let message = authenticated.wire_envelope_for_test();
-        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
-            super::message::BlockMessage::V2(message.clone()),
-            None,
-        ));
+        let mut admitted = super::fair_v2_ingress_admit_for_test(
+            super::InboundBlockMessage::from_authenticated_peer(
+                super::message::BlockMessage::V2(message.clone()),
+                super::authenticated_peer_for_test(),
+            ),
+        );
         let ownership = admitted
             .take_ingress_ownership()
             .expect("real test fair ingress produces exact ownership");
@@ -16564,10 +16299,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         &mut self,
         message: wire::ConsensusMessageV2,
     ) -> Result<EventTag, NetworkIngressError> {
-        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
-            super::message::BlockMessage::V2(message.clone()),
-            None,
-        ));
+        let mut admitted = super::fair_v2_ingress_admit_for_test(
+            super::InboundBlockMessage::from_authenticated_peer(
+                super::message::BlockMessage::V2(message.clone()),
+                super::authenticated_peer_for_test(),
+            ),
+        );
         let ingress_ownership = admitted
             .take_ingress_ownership()
             .expect("real test fair ingress produces exact ownership");
@@ -16889,10 +16626,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     }
     #[cfg(test)]
     pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
-        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
-            super::message::BlockMessage::V2(message.clone()),
-            None,
-        ));
+        let mut admitted = super::fair_v2_ingress_admit_for_test(
+            super::InboundBlockMessage::from_authenticated_peer(
+                super::message::BlockMessage::V2(message.clone()),
+                super::authenticated_peer_for_test(),
+            ),
+        );
         let ownership = admitted
             .take_ingress_ownership()
             .expect("real test fair ingress produces exact ownership");

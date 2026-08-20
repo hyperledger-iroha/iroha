@@ -452,7 +452,7 @@ impl Execute for EnsureAlias {
             &state_transaction.nexus.dataspace_catalog,
             &intent,
             now_ms,
-            state_transaction.nexus.enabled && state_transaction.nexus.endorsement.quorum > 0,
+            state_transaction.nexus.endorsement.quorum > 0,
         )
         .map_err(alias_setup_instruction_error)?;
         // Classification deliberately precedes all quote-guard checks. Exact
@@ -1809,7 +1809,6 @@ mod tests {
         configure_test_fee_asset(&state, &payment_asset);
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = true;
             nexus.endorsement.quorum = 1;
         }
         let domain_id = DomainId::try_new("protected", "universal").expect("protected domain id");

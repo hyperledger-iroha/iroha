@@ -1,4 +1,7 @@
 //! Container enum derive tests for `FromVariant`.
+#[allow(dead_code)]
+#[path = "enum_from_variant_attrs.rs"]
+mod enum_from_variant_attrs;
 use impls::impls;
 use std::{
     cell::{Cell, RefCell},

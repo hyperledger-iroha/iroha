@@ -47,7 +47,6 @@ identity_private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E319
 store_dir = "{}"
 
 [nexus]
-enabled = true
 lane_count = 2
 
 [[nexus.lane_catalog]]
@@ -99,10 +98,6 @@ fn kura_prepares_multilane_storage_layout() -> Result<()> {
     let table: Table = toml.parse().expect("multilane profile must parse");
     let config =
         Config::from_toml_source(TomlSource::inline(table)).expect("multilane config must parse");
-    assert!(
-        config.nexus.enabled,
-        "nexus must be enabled for multilane profile"
-    );
     assert_eq!(
         config.nexus.lane_catalog.lane_count().get(),
         2,

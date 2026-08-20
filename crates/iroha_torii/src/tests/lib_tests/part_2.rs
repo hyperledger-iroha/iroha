@@ -2094,7 +2094,6 @@ async fn alias_resolve_reads_local_binding_when_dataspace_has_no_lane() {
     ])
     .expect("dataspace catalog");
     let nexus = actual::Nexus {
-        enabled: true,
         lane_catalog,
         dataspace_catalog,
         ..actual::Nexus::default()

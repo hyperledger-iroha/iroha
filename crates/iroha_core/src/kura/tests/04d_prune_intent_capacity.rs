@@ -1,6 +1,6 @@
-fn canonical_prune_intent_artifact_fixture() -> KuraPruneIntentV2 {
-    seal_prune_intent_fixture(KuraPruneIntentV2 {
-        version: 2,
+fn canonical_prune_intent_artifact_fixture() -> KuraPruneIntentV3 {
+    seal_prune_intent_fixture(KuraPruneIntentV3 {
+        version: 3,
         source_height: 2,
         source_tip_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
             b"canonical prune source tip",
@@ -11,64 +11,13 @@ fn canonical_prune_intent_artifact_fixture() -> KuraPruneIntentV2 {
         ))),
         retained_merge_entries: 0,
         retained_merge_tip_hash: None,
-        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV3::none(),
         capacity: unsealed_prune_capacity_fixture(),
     })
 }
 fn canonical_prune_intent_artifact_bytes() -> Vec<u8> {
     norito::encode_canonical(&canonical_prune_intent_artifact_fixture())
         .expect("encode canonical prune-intent fixture")
-}
-fn seed_large_commit_roster_for_prune(
-    kura: &Kura,
-    blocks: &[Arc<SignedBlock>],
-    target_height: u64,
-) -> CommitRosterJournalPruneProjectionV2 {
-    let peer = PeerId::new(
-        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-            .expect("generate large-roster BLS key")
-            .public_key()
-            .clone(),
-    );
-    {
-        let mut journal = kura.roster_log.write();
-        for (index, block) in blocks.iter().enumerate() {
-            let height = u64::try_from(index + 1).expect("large-roster height fits u64");
-            let (qc, checkpoint) =
-                archival_roster_row_fixture(height, block.hash(), vec![peer.clone()]);
-            assert!(journal.upsert(qc, checkpoint, None));
-        }
-        journal.persist().expect("persist large source roster");
-    }
-    kura.roster_log
-        .read()
-        .project_truncate_to_height(target_height)
-        .expect("project large retained roster")
-}
-fn commit_roster_file_snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
-    let journal = CommitRosterJournal::journal_path(root);
-    let mut files = Vec::new();
-    let current = journal.join("current");
-    if current.is_file() {
-        files.push((
-            current.clone(),
-            fs::read(&current).expect("read roster pointer"),
-        ));
-    }
-    let generations = journal.join("generations");
-    if generations.is_dir() {
-        for entry in fs::read_dir(&generations).expect("read roster generations") {
-            let path = entry.expect("roster generation entry").path();
-            if path.is_file() {
-                files.push((
-                    path.clone(),
-                    fs::read(&path).expect("read roster generation"),
-                ));
-            }
-        }
-    }
-    files.sort_by(|left, right| left.0.cmp(&right.0));
-    files
 }
 #[test]
 fn canonical_prune_intent_scanners_account_stable_temp_crash_inode_once() {
@@ -212,15 +161,15 @@ fn canonical_prune_intent_exact_artifacts_fail_closed_for_every_untrusted_shape(
         Err(Error::PruneIntentConflict(message)) if message.contains("unexpected reserved publication name")
     ));
     fs::remove_file(&unexpected).expect("remove unexpected reserved-name artifact");
-    let legacy_random_temp = root.join(format!(
-        "{LEGACY_CANONICAL_PRUNE_RANDOM_TEMP_PREFIX}legacy-prune-residue"
+    let forbidden_random_temp = root.join(format!(
+        "{FORBIDDEN_ROOT_ATOMIC_TEMP_PREFIX}unbound-prune-residue"
     ));
-    fs::write(&legacy_random_temp, &bytes).expect("write legacy random prune temp");
+    fs::write(&forbidden_random_temp, &bytes).expect("write unbound random prune temp");
     assert!(matches!(
         Kura::canonical_prune_intent_artifact_inventory(root),
         Err(Error::PruneIntentConflict(message)) if message.contains("unexpected reserved publication name")
     ));
-    fs::remove_file(&legacy_random_temp).expect("remove legacy random prune temp");
+    fs::remove_file(&forbidden_random_temp).expect("remove unbound random prune temp");
     let hardlink_source = root.join("prune-hardlink-source");
     fs::write(&hardlink_source, &bytes).expect("write hardlink source");
     fs::hard_link(&hardlink_source, &stable_path).expect("hardlink lone stable artifact");
@@ -261,15 +210,15 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     let blocks = store_dummy_block_arcs(&kura, 2);
     let preview = admit_prune_intent_fixture(
         &kura,
-        KuraPruneIntentV2 {
-            version: 2,
+        KuraPruneIntentV3 {
+            version: 3,
             source_height: 2,
             source_tip_hash: Some(blocks[1].hash()),
             target_height: 1,
             target_tip_hash: Some(blocks[0].hash()),
             retained_merge_entries: 0,
             retained_merge_tip_hash: None,
-            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV3::none(),
             capacity: unsealed_prune_capacity_fixture(),
         },
     );
@@ -298,116 +247,6 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     assert!(!Kura::prune_intent_temp_path_for(temp_dir.path()).exists());
 }
 #[test]
-fn canonical_prune_capacity_includes_large_commit_roster_generation() {
-    let temp_dir = TempDir::new().expect("large-roster prune temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (mut kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("large-roster Kura");
-    let blocks = store_dummy_block_arcs(&kura, 48);
-    let roster_projection = seed_large_commit_roster_for_prune(&kura, &blocks, 24);
-    assert!(roster_projection.required);
-    assert!(roster_projection.retained_payload_bytes > 4 * 1024);
-    let preview = admit_prune_intent_fixture(
-        &kura,
-        KuraPruneIntentV2 {
-            version: 2,
-            source_height: 48,
-            source_tip_hash: Some(blocks[47].hash()),
-            target_height: 24,
-            target_tip_hash: Some(blocks[23].hash()),
-            retained_merge_entries: 0,
-            retained_merge_tip_hash: None,
-            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
-            capacity: unsealed_prune_capacity_fixture(),
-        },
-    );
-    assert_eq!(preview.capacity.roster, roster_projection);
-    let exact = preview.capacity.admitted_peak_bytes;
-    Arc::get_mut(&mut kura)
-        .expect("large-roster Kura remains exclusive")
-        .max_disk_usage_bytes = exact - 1;
-    assert!(matches!(
-        kura.prune_to_height(24),
-        Err(Error::StorageBudgetExceeded { limit, required, .. })
-            if limit == exact - 1 && required == exact
-    ));
-    assert_eq!(kura.blocks_count(), 48);
-    assert!(kura.roster_log.read().has_entries_above(24));
-    assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
-    Arc::get_mut(&mut kura)
-        .expect("large-roster Kura remains exclusive after rejection")
-        .max_disk_usage_bytes = exact;
-    kura.prune_to_height(24)
-        .expect("exact large-roster prune peak is admitted");
-    assert_eq!(kura.blocks_count(), 24);
-    assert!(!kura.roster_log.read().has_entries_above(24));
-    assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
-}
-#[test]
-fn startup_prune_capacity_reuses_large_roster_admission_exactly() {
-    let temp_dir = TempDir::new().expect("startup large-roster prune temp dir");
-    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (mut kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("startup large-roster Kura");
-    let blocks = store_dummy_block_arcs(&kura, 48);
-    let roster_projection = seed_large_commit_roster_for_prune(&kura, &blocks, 24);
-    assert!(roster_projection.retained_payload_bytes > 4 * 1024);
-    let preview = admit_prune_intent_fixture(
-        &kura,
-        KuraPruneIntentV2 {
-            version: 2,
-            source_height: 48,
-            source_tip_hash: Some(blocks[47].hash()),
-            target_height: 24,
-            target_tip_hash: Some(blocks[23].hash()),
-            retained_merge_entries: 0,
-            retained_merge_tip_hash: None,
-            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
-            capacity: unsealed_prune_capacity_fixture(),
-        },
-    );
-    let exact = preview.capacity.admitted_peak_bytes;
-    Arc::get_mut(&mut kura)
-        .expect("startup large-roster Kura remains exclusive")
-        .max_disk_usage_bytes = exact;
-    kura.fail_prune_after_stage_for_tests(PRUNE_STAGE_INTENT);
-    let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = kura.prune_to_height(24);
-    }));
-    assert!(
-        crash.is_err(),
-        "intent boundary failpoint must stop the prune"
-    );
-    crate::sumeragi::status::clear_consensus_transition_poison_for_tests();
-    let durable_intent = Kura::read_prune_intent(temp_dir.path())
-        .expect("read startup large-roster intent")
-        .expect("startup large-roster intent is durable");
-    assert_eq!(durable_intent.capacity, preview.capacity);
-    let roster_before = commit_roster_file_snapshot(temp_dir.path());
-    let marker_path = kura.block_store.lock().commit_marker_path();
-    let marker_before = fs::read(&marker_path).expect("read pre-recovery block marker");
-    drop(kura);
-    config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact - 1);
-    assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
-        Err(Error::StorageBudgetExceeded { limit, required, .. })
-            if limit == exact - 1 && required == exact
-    ));
-    assert_eq!(commit_roster_file_snapshot(temp_dir.path()), roster_before);
-    assert_eq!(
-        fs::read(&marker_path).expect("read marker after one-under rejection"),
-        marker_before,
-    );
-    assert!(Kura::prune_intent_path_for(temp_dir.path()).is_file());
-    config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact);
-    let (recovered, BlockCount(block_count)) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("exact startup capacity completes large-roster prune");
-    assert_eq!(block_count, 24);
-    assert_eq!(recovered.blocks_count(), 24);
-    assert!(!recovered.roster_log.read().has_entries_above(24));
-    assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
-}
-#[test]
 fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
     let temp_dir = TempDir::new().expect("prune temp-crash temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -421,15 +260,15 @@ fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
     }
     let intent = admit_prune_intent_fixture(
         &kura,
-        KuraPruneIntentV2 {
-            version: 2,
+        KuraPruneIntentV3 {
+            version: 3,
             source_height: 2,
             source_tip_hash: Some(blocks[1].hash()),
             target_height: 1,
             target_tip_hash: Some(blocks[0].hash()),
             retained_merge_entries: 0,
             retained_merge_tip_hash: None,
-            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV3::none(),
             capacity: unsealed_prune_capacity_fixture(),
         },
     );
@@ -504,8 +343,8 @@ fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
     };
     let intent = admit_prune_intent_fixture(
         &kura,
-        KuraPruneIntentV2 {
-            version: 2,
+        KuraPruneIntentV3 {
+            version: 3,
             source_height: 4,
             source_tip_hash: Some(blocks[3].hash()),
             target_height: 2,
@@ -571,8 +410,8 @@ fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
     };
     let intent = admit_prune_intent_fixture(
         &kura,
-        KuraPruneIntentV2 {
-            version: 2,
+        KuraPruneIntentV3 {
+            version: 3,
             source_height: 4,
             source_tip_hash: Some(blocks[3].hash()),
             target_height: 2,
@@ -603,7 +442,42 @@ fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
     assert!(Kura::prune_intent_path_for(temp_dir.path()).is_file());
 }
 #[derive(Encode)]
-struct LegacyKuraPruneIntentV1Fixture {
+struct LegacyKuraPruneSidecarPairProjectionV2Fixture {
+    required: bool,
+    retained_data_bytes: u64,
+    retained_index_bytes: u64,
+}
+#[derive(Encode)]
+struct LegacyKuraPruneSidecarRewriteProjectionV2Fixture {
+    pipeline: LegacyKuraPruneSidecarPairProjectionV2Fixture,
+    roster: LegacyKuraPruneSidecarPairProjectionV2Fixture,
+    sequential_peak_bytes: u64,
+}
+#[derive(Encode)]
+struct RetiredRosterPruneProjectionV2Fixture {
+    required: bool,
+    current_digest: Option<[u8; 32]>,
+    retained_digest: Option<[u8; 32]>,
+    retained_payload_bytes: u64,
+    generation_allocation_bytes: u64,
+    pointer_temporary_bytes: u64,
+    current_pointer_growth_bytes: u64,
+}
+#[derive(Encode)]
+struct LegacyKuraPruneCapacityAdmissionV2Fixture {
+    source_physical_bytes: u64,
+    pending_canonical_bytes: u64,
+    post_wsv_reserved_bytes: u64,
+    certified_bundle_reserved_bytes: u64,
+    autonomous_terminal_reserved_bytes: u64,
+    intent_bytes: u64,
+    marker_temporary_bytes: u64,
+    marker_stable_growth_bytes: u64,
+    roster: RetiredRosterPruneProjectionV2Fixture,
+    admitted_peak_bytes: u64,
+}
+#[derive(Encode)]
+struct LegacyKuraPruneIntentV2Fixture {
     version: u8,
     source_height: u64,
     source_tip_hash: Option<HashOf<BlockHeader>>,
@@ -611,6 +485,8 @@ struct LegacyKuraPruneIntentV1Fixture {
     target_tip_hash: Option<HashOf<BlockHeader>>,
     retained_merge_entries: u64,
     retained_merge_tip_hash: Option<HashOf<MergeLedgerEntry>>,
+    sidecar_rewrite: LegacyKuraPruneSidecarRewriteProjectionV2Fixture,
+    capacity: LegacyKuraPruneCapacityAdmissionV2Fixture,
 }
 fn seed_large_current_tip_sidecar_rewrite(kura: &Kura, tip_hash: HashOf<BlockHeader>) {
     let mut retained = PipelineRecoverySidecar::new(
@@ -638,59 +514,85 @@ fn seed_large_current_tip_sidecar_rewrite(kura: &Kura, tip_hash: HashOf<BlockHea
         },
         Vec::new(),
     ));
-    assert!(kura.write_roster_metadata(&RosterSidecar::new(1, tip_hash, None, None, None,)));
-    assert!(kura.write_roster_metadata(&RosterSidecar::new(
-        2,
-        HashOf::from_untyped_unchecked(Hash::new(b"stale roster successor")),
-        None,
-        None,
-        None,
-    )));
 }
 fn canonical_prune_sidecar_files(kura: &Kura) -> Vec<(PathBuf, Vec<u8>)> {
     let directory = kura.active_blocks_dir.lock().join(PIPELINE_DIR_NAME);
-    [
-        PIPELINE_SIDECARS_DATA_FILE,
-        PIPELINE_SIDECARS_INDEX_FILE,
-        ROSTER_SIDECARS_DATA_FILE,
-        ROSTER_SIDECARS_INDEX_FILE,
-    ]
-    .into_iter()
-    .map(|name| {
-        let path = directory.join(name);
-        let bytes = fs::read(&path).expect("snapshot canonical prune sidecar file");
-        (path, bytes)
-    })
-    .collect()
+    [PIPELINE_SIDECARS_DATA_FILE, PIPELINE_SIDECARS_INDEX_FILE]
+        .into_iter()
+        .map(|name| {
+            let path = directory.join(name);
+            let bytes = fs::read(&path).expect("snapshot canonical prune sidecar file");
+            (path, bytes)
+        })
+        .collect()
 }
 #[test]
-fn legacy_hash_only_prune_intent_layout_is_rejected() {
-    let temp_dir = TempDir::new().expect("legacy prune-intent temp dir");
-    let legacy = LegacyKuraPruneIntentV1Fixture {
-        version: 1,
-        source_height: 2,
-        source_tip_hash: Some(HashOf::from_untyped_unchecked(Hash::new(b"legacy source"))),
-        target_height: 1,
-        target_tip_hash: Some(HashOf::from_untyped_unchecked(Hash::new(b"legacy target"))),
-        retained_merge_entries: 0,
-        retained_merge_tip_hash: None,
-    };
-    let path = Kura::prune_intent_path_for(temp_dir.path());
-    fs::write(
-        &path,
-        norito::encode_canonical(&legacy).expect("encode legacy prune intent"),
-    )
-    .expect("write legacy prune intent");
-    assert!(matches!(
-        Kura::read_prune_intent(temp_dir.path()),
-        Err(Error::PruneIntentConflict(message))
-            if message.contains("failed exact Norito decode")
-                || message.contains("non-canonical identity")
-    ));
-    assert!(path.is_file(), "legacy evidence must remain fail-closed");
+fn pending_v2_prune_intents_are_rejected_before_mutation() {
+    for temporary in [false, true] {
+        let temp_dir = TempDir::new().expect("V2 prune-intent temp dir");
+        let pair = || LegacyKuraPruneSidecarPairProjectionV2Fixture {
+            required: false,
+            retained_data_bytes: 0,
+            retained_index_bytes: 0,
+        };
+        let legacy = LegacyKuraPruneIntentV2Fixture {
+            version: 2,
+            source_height: 2,
+            source_tip_hash: Some(HashOf::from_untyped_unchecked(Hash::new(b"V2 source"))),
+            target_height: 1,
+            target_tip_hash: Some(HashOf::from_untyped_unchecked(Hash::new(b"V2 target"))),
+            retained_merge_entries: 0,
+            retained_merge_tip_hash: None,
+            sidecar_rewrite: LegacyKuraPruneSidecarRewriteProjectionV2Fixture {
+                pipeline: pair(),
+                roster: pair(),
+                sequential_peak_bytes: 0,
+            },
+            capacity: LegacyKuraPruneCapacityAdmissionV2Fixture {
+                source_physical_bytes: 0,
+                pending_canonical_bytes: 0,
+                post_wsv_reserved_bytes: 0,
+                certified_bundle_reserved_bytes: 0,
+                autonomous_terminal_reserved_bytes: 0,
+                intent_bytes: 1,
+                marker_temporary_bytes: 1,
+                marker_stable_growth_bytes: 0,
+                roster: RetiredRosterPruneProjectionV2Fixture {
+                    required: false,
+                    current_digest: None,
+                    retained_digest: None,
+                    retained_payload_bytes: 0,
+                    generation_allocation_bytes: 0,
+                    pointer_temporary_bytes: 0,
+                    current_pointer_growth_bytes: 0,
+                },
+                admitted_peak_bytes: 0,
+            },
+        };
+        let stable = Kura::prune_intent_path_for(temp_dir.path());
+        let path = if temporary {
+            Kura::prune_intent_temp_path_for(temp_dir.path())
+        } else {
+            stable
+        };
+        let bytes = norito::encode_canonical(&legacy).expect("encode V2 prune intent");
+        fs::write(&path, &bytes).expect("write V2 prune intent");
+        let sentinel = temp_dir.path().join("mutation-sentinel");
+        fs::write(&sentinel, b"unchanged").expect("write mutation sentinel");
+        let before = snapshot_regular_test_tree(temp_dir.path());
+        assert!(matches!(
+            Kura::read_prune_intent(temp_dir.path()),
+            Err(Error::PruneIntentConflict(_))
+        ));
+        assert_eq!(
+            snapshot_regular_test_tree(temp_dir.path()),
+            before,
+            "unsupported V2 prune evidence must be rejected before any recovery mutation",
+        );
+    }
 }
 #[test]
-fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
+fn empty_current_tip_cleanup_authenticates_header_only_retained_index() {
     let temp_dir = TempDir::new().expect("empty current-tip prune temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) =
@@ -701,23 +603,26 @@ fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
     let index_path = directory.join(PIPELINE_SIDECARS_INDEX_FILE);
     fs::write(&data_path, b"future-only-pipeline-payload")
         .expect("write future-only pipeline payload");
-    fs::write(
-        &index_path,
-        SidecarIndexEntry {
+    let mut index = SidecarIndexLayout::base_header(1).to_vec();
+    index.extend_from_slice(
+        &SidecarIndexEntry {
             offset: 0,
             len: u64::try_from(b"future-only-pipeline-payload".len())
                 .expect("fixture length fits u64"),
         }
         .to_bytes(),
-    )
-    .expect("write future-only pipeline index");
+    );
+    fs::write(&index_path, index).expect("write future-only pipeline index");
     let projection = {
         let _guard = kura.sidecar_lock.lock();
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(0)
-            .expect("project zero-byte retained output")
+            .expect("project header-only retained index")
     };
     assert!(projection.has_work());
-    assert_eq!(projection.sequential_peak_bytes, 0);
+    assert_eq!(
+        projection.sequential_peak_bytes,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
+    );
     kura.fail_prune_after_stage_for_tests(PRUNE_STAGE_INTENT);
     let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = kura.prune_to_height(0);
@@ -730,7 +635,10 @@ fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
     assert_eq!(intent.source_height, 0);
     assert_eq!(intent.target_height, 0);
     assert!(intent.sidecar_rewrite.has_work());
-    assert_eq!(intent.sidecar_rewrite.sequential_peak_bytes, 0);
+    assert_eq!(
+        intent.sidecar_rewrite.sequential_peak_bytes,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
+    );
     drop(kura);
     let (recovered, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("recover empty current-tip sidecar cleanup");
@@ -745,7 +653,7 @@ fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
         fs::metadata(&index_path)
             .expect("retained empty pipeline index")
             .len(),
-        0,
+        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64,
     );
     recovered
         .validate_pipeline_sidecars_for_prune(0, true)
@@ -753,7 +661,7 @@ fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
 }
 #[test]
-fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
+fn current_tip_sidecar_rewrite_uses_v3_intent_and_exact_peak_capacity() {
     let temp_dir = TempDir::new().expect("current-tip prune-capacity temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
@@ -766,7 +674,6 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
             .expect("project current-tip retained pairs")
     };
     assert!(projection.pipeline.required);
-    assert!(projection.roster.required);
     assert!(
         projection.pipeline.retained_data_bytes > PRUNE_INTENT_MAX_BYTES as u64,
         "the retained pipeline payload must prove that 4 KiB alone is insufficient",
@@ -776,19 +683,13 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
         projection
             .pipeline
             .temp_pair_bytes()
-            .expect("pipeline pair bytes")
-            .max(
-                projection
-                    .roster
-                    .temp_pair_bytes()
-                    .expect("roster pair bytes")
-            ),
-        "sequential rewrites reserve the larger exact pair, not their sum",
+            .expect("pipeline pair bytes"),
+        "the rewrite reserves the exact retained pipeline pair",
     );
     let preview = admit_prune_intent_fixture(
         &kura,
-        KuraPruneIntentV2 {
-            version: 2,
+        KuraPruneIntentV3 {
+            version: 3,
             source_height: 1,
             source_tip_hash: Some(blocks[0].hash()),
             target_height: 1,
@@ -826,7 +727,7 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
     let intent = Kura::read_prune_intent(temp_dir.path())
         .expect("read exact current-tip intent")
         .expect("current-tip intent is durable");
-    assert_eq!(intent.version, 2);
+    assert_eq!(intent.version, 3);
     assert_eq!(intent.source_height, intent.target_height);
     assert_eq!(intent.source_tip_hash, intent.target_tip_hash);
     assert_eq!(intent.sidecar_rewrite, projection);
@@ -834,7 +735,7 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
     assert_eq!(canonical_prune_sidecar_files(&kura), before);
     drop(kura);
     let (recovered, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("recover current-tip V2 sidecar intent");
+        .expect("recover current-tip V3 sidecar intent");
     assert_eq!(count, 1);
     assert_eq!(recovered.blocks_count(), 1);
     assert!(recovered.read_pipeline_metadata(2).is_none());
@@ -858,8 +759,8 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
     };
     let intent = admit_prune_intent_fixture(
         &kura,
-        KuraPruneIntentV2 {
-            version: 2,
+        KuraPruneIntentV3 {
+            version: 3,
             source_height: 1,
             source_tip_hash: Some(blocks[0].hash()),
             target_height: 1,
@@ -904,12 +805,6 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
             .with_extension("norito.tmp")
             .exists()
     );
-    assert!(
-        !pipeline_directory
-            .join(ROSTER_SIDECARS_DATA_FILE)
-            .with_extension("norito.tmp")
-            .exists()
-    );
     config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact);
     let (inspection, _) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("exact startup recovery succeeds with sufficient capacity");
@@ -919,61 +814,4 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
         .expect("startup exact-limit recovery compacts sidecars");
     assert_ne!(canonical_prune_sidecar_files(&inspection), before);
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
-}
-#[test]
-fn startup_rejects_ambiguous_two_pair_rewrite_residues_before_mutation() {
-    let temp_dir = TempDir::new().expect("ambiguous prune-residue temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("ambiguous-residue Kura");
-    let blocks = store_dummy_block_arcs(&kura, 1);
-    seed_large_current_tip_sidecar_rewrite(&kura, blocks[0].hash());
-    let sidecar_rewrite = {
-        let _guard = kura.sidecar_lock.lock();
-        kura.reconcile_and_project_prune_sidecar_rewrites_locked(1)
-            .expect("project ambiguous-residue retained pairs")
-    };
-    kura.persist_prune_intent(&admit_prune_intent_fixture(
-        &kura,
-        KuraPruneIntentV2 {
-            version: 2,
-            source_height: 1,
-            source_tip_hash: Some(blocks[0].hash()),
-            target_height: 1,
-            target_tip_hash: Some(blocks[0].hash()),
-            retained_merge_entries: 0,
-            retained_merge_tip_hash: None,
-            sidecar_rewrite,
-            capacity: unsealed_prune_capacity_fixture(),
-        },
-    ))
-    .expect("persist ambiguous-residue intent");
-    let directory = kura.active_blocks_dir.lock().join(PIPELINE_DIR_NAME);
-    let pipeline_temp = directory
-        .join(PIPELINE_SIDECARS_DATA_FILE)
-        .with_extension("norito.tmp");
-    let roster_temp = directory
-        .join(ROSTER_SIDECARS_DATA_FILE)
-        .with_extension("norito.tmp");
-    fs::copy(directory.join(PIPELINE_SIDECARS_DATA_FILE), &pipeline_temp)
-        .expect("stage pipeline data-only crash residue");
-    fs::copy(directory.join(ROSTER_SIDECARS_DATA_FILE), &roster_temp)
-        .expect("stage roster data-only crash residue");
-    let pipeline_bytes = fs::read(&pipeline_temp).expect("snapshot pipeline residue");
-    let roster_bytes = fs::read(&roster_temp).expect("snapshot roster residue");
-    drop(kura);
-    assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
-        Err(Error::PruneIntentConflict(message))
-            if message.contains("both sequential canonical sidecar pairs")
-    ));
-    assert_eq!(
-        fs::read(&pipeline_temp).expect("pipeline residue remains fail-closed"),
-        pipeline_bytes,
-    );
-    assert_eq!(
-        fs::read(&roster_temp).expect("roster residue remains fail-closed"),
-        roster_bytes,
-    );
-    assert!(Kura::prune_intent_path_for(temp_dir.path()).is_file());
 }

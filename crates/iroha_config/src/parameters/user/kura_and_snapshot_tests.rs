@@ -156,10 +156,12 @@ fn kura_eviction_replica_floor_must_fit_the_protocol_validator_bound() {
     let error = actual::Root::from_toml_source(TomlSource::inline(table))
         .expect_err("impossible keeper floor must fail configuration parsing");
     let report = format!("{error:?}");
-    assert!(
-        report.contains("Kura eviction replica floor 129 exceeds the protocol validator limit 128"),
-        "{report}",
+    let expected = format!(
+        "Kura eviction replica floor {} exceeds the protocol validator limit {}",
+        actual::KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT + 1,
+        actual::KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT,
     );
+    assert!(report.contains(&expected), "{report}",);
 }
 #[cfg(target_pointer_width = "64")]
 #[test]
@@ -178,12 +180,11 @@ fn kura_config_rejects_unrepresentable_replica_advert_peer_geometry() {
     let error = actual::Root::from_toml_source(TomlSource::inline(table))
         .expect_err("unrepresentable nested registry geometry must fail parsing");
     let report = format!("{error:?}");
-    assert!(
-        report.contains(
-            "times the protocol keeper limit 128 exceeds the platform size representation"
-        ),
-        "{report}",
+    let expected = format!(
+        "times the protocol keeper limit {} exceeds the platform size representation",
+        actual::KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT,
     );
+    assert!(report.contains(&expected), "{report}",);
 }
 #[test]
 fn default_snapshot_store_dir_follows_explicit_kura_store_dir() {

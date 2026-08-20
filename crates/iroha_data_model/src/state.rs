@@ -19,7 +19,7 @@ use crate::{
     nft::NftId,
     role::RoleId,
     rwa::RwaId,
-    transaction::signed::SignedTransaction,
+    transaction::signed::TransactionEntrypoint,
     trigger::TriggerId,
 };
 #[cfg(feature = "json")]
@@ -127,11 +127,11 @@ pub struct AccountRoleKey {
     /// Role identifier granted to the account.
     pub role: RoleId,
 }
-/// Pending or queued transaction identified by its hash.
+/// Pending or queued entrypoint identified by its canonical hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct TxQueueKey {
-    /// Hash of the queued transaction.
-    pub hash: HashOf<SignedTransaction>,
+    /// Canonical hash of the queued entrypoint.
+    pub hash: HashOf<TransactionEntrypoint>,
 }
 /// Canonical key for addressing items in the World State View.
 ///
@@ -297,8 +297,9 @@ mod tests {
         let trig_id: TriggerId = "trigger0".parse().unwrap();
         let key: Name = "color".parse().unwrap();
         let role_id: RoleId = "auditor".parse().unwrap();
-        let queue_hash =
-            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([2; Hash::LENGTH]));
+        let queue_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
+            [2; Hash::LENGTH],
+        ));
         let mut keys = vec![
             CanonicalStateKey::Account(alice.clone()),
             CanonicalStateKey::Domain(domain.clone()),

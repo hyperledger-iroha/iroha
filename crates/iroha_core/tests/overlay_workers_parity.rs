@@ -1,6 +1,7 @@
 //! Ensure overlay construction with different `pipeline.workers` settings yields
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! identical outcomes (events and final state), preserving determinism.
+use crate::synthetic_state_snapshots as snapshots;
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -9,7 +10,6 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use mv::storage::StorageReadOnly;
 use std::{borrow::Cow, sync::Arc}; // trait for .get()
-mod snapshots;
 fn test_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(
         iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(

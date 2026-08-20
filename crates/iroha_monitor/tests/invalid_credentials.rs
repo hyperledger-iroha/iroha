@@ -10,6 +10,7 @@ fn monitor_bin() -> Option<PathBuf> {
 }
 #[test]
 fn invalid_endpoint_surfaces_warning() {
+    let _serial = crate::serial_guard();
     let Some(bin) = monitor_bin() else {
         eprintln!("skipping: monitor binary path not provided by cargo");
         return;

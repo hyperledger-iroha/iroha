@@ -16,9 +16,6 @@ use thiserror::Error;
 /// Errors raised while validating confidential-compute commitments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ConfidentialComputeError {
-    /// Lane was flagged as confidential but did not declare a policy/key version.
-    #[error("lane is marked confidential but missing a compute policy/key version")]
-    MissingPolicy,
     /// Storage ticket must be non-zero for confidential lanes.
     #[error("confidential lane requires a non-zero storage ticket")]
     ZeroStorageTicket,
@@ -44,14 +41,11 @@ pub fn validate_confidential_compute_record(
     lane_config: &ConfigLaneConfig,
     record: &DaCommitmentRecord,
 ) -> Result<Option<ConfidentialComputePolicy>, ConfidentialComputeError> {
-    if !lane_config.is_confidential_compute(record.lane_id) {
+    let Some(entry) = lane_config.entry(record.lane_id) else {
         return Ok(None);
-    }
-    let entry = lane_config
-        .entry(record.lane_id)
-        .ok_or(ConfidentialComputeError::MissingPolicy)?;
-    let Some(policy) = lane_config.confidential_compute_policy(record.lane_id) else {
-        return Err(ConfidentialComputeError::MissingPolicy);
+    };
+    let Some(policy) = entry.confidential_compute.as_ref() else {
+        return Ok(None);
     };
     if matches!(entry.storage_profile, LaneStorageProfile::FullReplica) {
         return Err(ConfidentialComputeError::InvalidStorageProfile(
@@ -80,6 +74,7 @@ mod tests {
     use super::*;
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Hash, Signature};
+    use iroha_data_model::da::confidential_compute::ConfidentialComputeMechanism;
     use iroha_data_model::{
         da::{
             commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
@@ -90,18 +85,8 @@ mod tests {
         },
         sorafs::pin_registry::ManifestDigest,
     };
-    fn lane_config(confidential: bool, key_version: Option<u32>) -> ConfigLaneConfig {
-        let mut metadata = std::collections::BTreeMap::new();
-        if confidential {
-            metadata.insert("confidential_compute".to_string(), "true".to_string());
-        }
-        if let Some(version) = key_version {
-            metadata.insert("confidential_key_version".to_string(), version.to_string());
-        }
-        metadata.insert(
-            "confidential_mechanism".to_string(),
-            "encryption".to_string(),
-        );
+    use std::{collections::BTreeSet, num::NonZeroU32};
+    fn lane_config(key_version: Option<NonZeroU32>) -> ConfigLaneConfig {
         let catalog = LaneCatalog::new(
             nonzero_ext::nonzero!(1_u32),
             vec![ModelLaneConfig {
@@ -109,7 +94,13 @@ mod tests {
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "lane0".into(),
                 storage: LaneStorageProfile::SplitReplica,
-                metadata,
+                confidential_compute: key_version.map(|key_version| {
+                    ConfidentialComputePolicy::new(
+                        ConfidentialComputeMechanism::Encryption,
+                        key_version,
+                        BTreeSet::new(),
+                    )
+                }),
                 ..ModelLaneConfig::default()
             }],
         )
@@ -134,24 +125,16 @@ mod tests {
     }
     #[test]
     fn passes_when_policy_and_digests_present() {
-        let config = lane_config(true, Some(3));
+        let config = lane_config(NonZeroU32::new(3));
         let record = record_with_ticket([0x22; 32], [0x33; 32]);
         let policy = validate_confidential_compute_record(&config, &record)
             .expect("validation should succeed")
             .expect("policy must be returned");
-        assert_eq!(policy.key_version, 3);
-    }
-    #[test]
-    fn rejects_missing_policy() {
-        let config = lane_config(true, None);
-        let record = record_with_ticket([0x22; 32], [0x33; 32]);
-        let err = validate_confidential_compute_record(&config, &record)
-            .expect_err("missing policy must fail");
-        assert!(matches!(err, ConfidentialComputeError::MissingPolicy));
+        assert_eq!(policy.key_version.get(), 3);
     }
     #[test]
     fn rejects_zero_ticket_or_payload() {
-        let config = lane_config(true, Some(1));
+        let config = lane_config(NonZeroU32::new(1));
         let zero_ticket = record_with_ticket([0; 32], [0x33; 32]);
         assert!(matches!(
             validate_confidential_compute_record(&config, &zero_ticket).expect_err("zero ticket"),

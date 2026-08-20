@@ -44,11 +44,11 @@ use super::{
     v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask,
-        CertifiedBodyFetchCompletionDisposition, CompletionDisposition,
-        ConsensusBroadcastDisposition, ConsensusSignTask, DurableApplyCompletion,
-        EffectExecutorError, EffectExecutorStatus, EffectRuntime, EffectTransportError,
-        EffectWorkId, PayloadChunkLifecycleDisposition, PendingTipRecoveryAttemptResult,
-        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
+        CompletionDisposition, ConsensusBroadcastDisposition, ConsensusSignTask,
+        DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectRuntime,
+        EffectTransportError, EffectWorkId, PayloadChunkLifecycleDisposition,
+        PendingTipRecoveryAttemptResult, PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
+        V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{
         DurableLaneRolloverAuthority, V2LaneWorkAdapter, V2LaneWorkEffect,
@@ -695,9 +695,7 @@ impl LifecycleCertifiedServeTaskV1 {
         else {
             return Err("claimed Certified-Serve dequeue changed its request family".to_owned());
         };
-        let Some(recipient) = inbound.sender().cloned() else {
-            return Err("claimed Certified-Serve dequeue lost its requester".to_owned());
-        };
+        let recipient = inbound.sender().clone();
         let Some(routes) = inbound.reply_routes() else {
             return Err("claimed Certified-Serve dequeue lost its reply routes".to_owned());
         };
@@ -710,7 +708,7 @@ impl LifecycleCertifiedServeTaskV1 {
             || routes.semantic_target() != &recipient
             || !ownership.validate_exact()
             || !ownership.matches_message(inbound.message())
-            || !ownership.matches_semantic_origin(Some(&recipient))
+            || !ownership.matches_semantic_origin(&recipient)
             || !ownership.matches_reply_routes(Some(routes))
         {
             return Err(
@@ -725,7 +723,7 @@ impl LifecycleCertifiedServeTaskV1 {
             authority: Some(authority),
             lifecycle_ordinal,
             authenticated,
-            recipient: sender.expect("validated Certified-Serve requester remains present"),
+            recipient: sender,
             reply_routes: reply_routes
                 .expect("validated Certified-Serve reply routes remain present"),
             ingress_ownership,

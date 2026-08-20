@@ -509,7 +509,7 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
                 "leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum",
                 "corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmission",
                 "crash_after_proposal_wal_before_signature_replays_exact_intent",
-                "taira_divergent_views_converge_and_commit_within_one_rotation",
+                "divergent_views_converge_and_commit_within_one_rotation",
             )
         ),
         (
@@ -557,26 +557,26 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=530",
-            "readonly expected_multilane_focus_test_count=529",
-            "multilane G-UNIT source count must be sealed as 530",
+            "readonly expected_multilane_focus_test_count=522",
+            "readonly expected_multilane_focus_test_count=521",
+            "multilane G-UNIT source count must be sealed as 522",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 531 ]]; then""",
+                """'[:space:]')" != 523 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 530 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 530 focus rows",
+                """'[:space:]')" != 522 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 522 focus rows",
         ),
         (
-            "The canonical 530-row TSV is",
-            "The canonical 529-row TSV is",
-            "G-UNIT inventory comment must seal 530 rows",
+            "The canonical 522-row TSV is",
+            "The canonical 521-row TSV is",
+            "G-UNIT inventory comment must seal 522 rows",
         ),
         (
-            "including exact 530/530 G-UNIT,",
-            "including exact 529/530 G-UNIT,",
-            "terminal success text must seal exact 530/530 G-UNIT",
+            "including exact 522/522 G-UNIT,",
+            "including exact 521/522 G-UNIT,",
+            "terminal success text must seal exact 522/522 G-UNIT",
         ),
         (
             "  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable\n",
@@ -1302,18 +1302,18 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
-            "contain exactly 530 unique required",
-            "contain exactly 529 unique required",
+            "contain exactly 522 unique required",
+            "contain exactly 521 unique required",
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
-            "tests: 324 core, 143 queue-journal",
-            "tests: 323 core, 143 queue-journal",
+            "tests: 316 core, 143 queue-journal",
+            "tests: 315 core, 143 queue-journal",
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
-            "exact `530/530` source consistency",
-            "exact `529/530` source consistency",
+            "exact `522/522` source consistency",
+            "exact `521/522` source consistency",
         ),
     ),
     ids=(

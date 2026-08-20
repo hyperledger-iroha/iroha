@@ -182,6 +182,7 @@ fn proof_blob_for(
             verifier_version: "v1".to_string(),
             target_dsids: vec![dsid.as_u64()],
             effect_binding: None,
+            remote_spend_intent_commitments: Vec::new(),
         }),
         committed_amount: None,
         amount_commitment: None,
@@ -406,6 +407,10 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: account.into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -553,6 +558,10 @@ fn assert_invalid_handle_values_rejected_without_state_mutation<T: IVMHost>(
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: account.into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -729,6 +738,10 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -823,6 +836,10 @@ fn default_host_rejects_late_proof_manifest_root_mismatch_at_commit() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -927,6 +944,10 @@ fn default_host_rejects_binding_mismatch() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -967,6 +988,10 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
     let first_intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -980,6 +1005,10 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
     let second_intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
@@ -1038,6 +1067,10 @@ fn default_host_rejects_handle_scope_mismatch() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "burn".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1081,6 +1114,10 @@ fn default_host_rejects_handle_subject_mismatch() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1123,6 +1160,10 @@ fn default_host_rejects_commit_without_required_proof() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1169,6 +1210,10 @@ fn handle_proof_fails_closed_without_verifier() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1216,6 +1261,10 @@ fn default_host_rejects_handle_with_invalid_manifest_root() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1260,6 +1309,10 @@ fn default_host_rejects_handle_with_empty_scope() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1303,6 +1356,10 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1359,6 +1416,10 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1468,6 +1529,10 @@ fn commit_requires_proof_for_every_dataspace() {
     let intent_a = RemoteSpendIntent {
         asset_dsid: ds_a,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1481,6 +1546,10 @@ fn commit_requires_proof_for_every_dataspace() {
     let intent_b = RemoteSpendIntent {
         asset_dsid: ds_b,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1700,6 +1769,10 @@ fn wsv_host_policy_checks_root_and_expiry() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1789,6 +1862,10 @@ fn wsv_host_preflights_slot_length_and_skew_then_fails_closed() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1850,6 +1927,10 @@ fn wsv_host_rejects_handle_skew_above_config() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -1963,6 +2044,10 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -2005,6 +2090,10 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: caller.to_string(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -2048,6 +2137,10 @@ fn wsv_host_rejects_missing_policy_binding() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: caller.to_string(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -2099,6 +2192,10 @@ fn wsv_host_policy_checks_target_lane() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -2165,6 +2262,10 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: caller.to_string(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -2260,6 +2361,10 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -2300,6 +2405,10 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
@@ -2378,6 +2487,10 @@ fn axt_policy_rejects_handle_usage() {
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),

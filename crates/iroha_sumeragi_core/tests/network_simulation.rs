@@ -958,7 +958,7 @@ fn crash_after_proposal_wal_before_signature_replays_exact_intent() {
     }
 }
 #[test]
-fn taira_divergent_views_converge_and_commit_within_one_rotation() {
+fn divergent_views_converge_and_commit_within_one_rotation() {
     let mut simulation = Simulation::new(4, VotingMode::Npos, None);
     let subject = Subject::repeat(0x71);
     let prepare = certificate(&simulation.context, 0, Phase::Prepare, subject);

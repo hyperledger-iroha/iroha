@@ -1,4 +1,6 @@
 //! Known-answer tests for the `SoraNet` PQ helper crate.
+#[path = "pq_kat.rs"]
+mod pq_kat;
 use soranet_pq::{
     HedgedRngSeed, MlDsaSuite, MlKemSuite, decapsulate_mlkem, hedged_chacha20_rng, sign_mldsa,
     validate_mlkem_ciphertext, validate_mlkem_public_key, validate_mlkem_secret_key, verify_mldsa,

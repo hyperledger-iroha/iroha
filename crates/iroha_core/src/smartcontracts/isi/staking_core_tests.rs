@@ -63,7 +63,6 @@ fn record_block_commit(state_block: &mut StateBlock<'_>, block: &crate::block::C
 }
 fn setup_state() -> State {
     let mut nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         ..Default::default()
     };
     nexus.lane_catalog = staking_test_lane_catalog();
@@ -265,7 +264,7 @@ fn configure_reward_fixture(
     Mint::asset_quantity(mint_amount, validator_asset.clone())
         .execute(&ALICE_ID, stx)
         .unwrap();
-    stx.nexus.enabled = true;
+
     stx.nexus.fees.fee_sink_account_id = sink.to_string();
     stx.nexus.fees.fee_asset_id = asset_def_id.to_string();
     stx.nexus.lane_catalog = LaneCatalog::new(

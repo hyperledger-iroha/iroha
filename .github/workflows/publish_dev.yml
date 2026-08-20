@@ -52,7 +52,7 @@ jobs:
           push: true
           tags: |
             hyperledger/iroha:dev
-            docker.soramitsu.co.jp/iroha2/iroha:dev
+            docker.soramitsu.co.jp/iroha3/iroha:dev
           labels: commit=${{ github.sha }}
           build-args: |
             "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"

@@ -31,7 +31,6 @@ use iroha_data_model::{
     prelude::{AccountId, ChainId, NetworkId},
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
-use iroha_version::build_line::BuildLine;
 #[cfg(any(test, feature = "test"))]
 use izanami::genesis_support::sign_prepared_genesis_from_config;
 use izanami::genesis_support::{
@@ -59,13 +58,19 @@ use std::{
 use tokio::runtime::Handle;
 use zeroize::{Zeroize as _, Zeroizing};
 mod generation_lifecycle;
+mod kagami_verify_parse;
 mod ownership;
 mod selected_storage;
+mod snapshot_label;
+use kagami_verify_parse::parse_kagami_verify_output;
 use ownership::SupervisorOwnershipLock;
 #[cfg(test)]
 use selected_storage::resolve_selected_peer_storage_paths_with_hook;
 use selected_storage::validate_selected_peer_storage_paths_under_lock;
 pub use selected_storage::{SelectedPeerStoragePaths, resolve_selected_peer_storage_paths};
+#[cfg(test)]
+use snapshot_label::SNAPSHOT_LABEL_MAX_LEN;
+use snapshot_label::{SNAPSHOT_STORAGE_LAYOUT, default_snapshot_slug, sanitize_snapshot_label};
 const DEFAULT_CHAIN_ID: &str = "mochi-local";
 const DEFAULT_TORII_BASE_PORT: u16 = 8080;
 const DEFAULT_P2P_BASE_PORT: u16 = 1337;
@@ -152,13 +157,6 @@ pub enum SupervisorError {
     /// Failed to probe a binary version string.
     #[error("failed to probe `{binary}` version: {message}")]
     VersionProbeFailed { binary: String, message: String },
-    /// Binary build line does not match the expected profile.
-    #[error("binary build-line mismatch for `{binary}`: expected {expected} but detected {found}")]
-    BuildLineMismatch {
-        binary: String,
-        expected: BuildLine,
-        found: BuildLine,
-    },
     /// Attempted to start an already running peer.
     #[error("peer `{alias}` already running")]
     PeerAlreadyRunning { alias: String },
@@ -690,10 +688,6 @@ pub struct BinaryVersionInfo {
     pub path: PathBuf,
     /// Parsed version string when available.
     pub version: Option<String>,
-    /// Inferred build line.
-    pub build_line: BuildLine,
-    /// Whether the binary should support DA/RBC.
-    pub da_rbc_capable: bool,
     /// Raw stdout/stderr captured during probing.
     pub raw_output: Option<String>,
     /// Where the executable was discovered.
@@ -858,22 +852,16 @@ fn default_binary_entry(
     (PathBuf::from(binary), true, BinarySource::AutoDefault)
 }
 fn default_irohad_entry() -> (PathBuf, bool, BinarySource) {
-    const ENV_OVERRIDE: &str = "MOCHI_IROHAD";
-    const CARGO_ENV: &str = "CARGO_BIN_EXE_iroha3d";
-    default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "iroha3d")
+    default_binary_entry("MOCHI_IROHAD", "CARGO_BIN_EXE_iroha3d", "iroha3d")
 }
 fn default_kagami_entry() -> (PathBuf, bool, BinarySource) {
-    const ENV_OVERRIDE: &str = "MOCHI_KAGAMI";
-    const CARGO_ENV: &str = "CARGO_BIN_EXE_kagami";
-    default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "kagami")
+    default_binary_entry("MOCHI_KAGAMI", "CARGO_BIN_EXE_kagami", "kagami")
 }
 fn default_iroha_cli_entry() -> (PathBuf, bool, BinarySource) {
-    const ENV_OVERRIDE: &str = "MOCHI_IROHA_CLI";
-    const CARGO_ENV: &str = "CARGO_BIN_EXE_iroha_cli";
-    default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "iroha_cli")
+    default_binary_entry("MOCHI_IROHA_CLI", "CARGO_BIN_EXE_iroha_cli", "iroha_cli")
 }
 fn resolve_iroha_cli_alias() -> Option<(PathBuf, BinarySource)> {
-    for bin in ["iroha3", "iroha", "iroha2"] {
+    for bin in ["iroha3", "iroha"] {
         let exe_name = format!("{bin}{}", env::consts::EXE_SUFFIX);
         if let Ok(current) = env::current_exe()
             && let Some(dir) = current.parent()
@@ -934,19 +922,6 @@ impl BinaryPaths {
         self.allow_builds = allow;
         self
     }
-    fn verify_build_line(&mut self, expected: BuildLine) -> Result<()> {
-        let versions = self.probe_versions()?;
-        for info in &versions {
-            if info.build_line != expected {
-                return Err(SupervisorError::BuildLineMismatch {
-                    binary: info.name.to_owned(),
-                    expected,
-                    found: info.build_line,
-                });
-            }
-        }
-        Ok(())
-    }
     fn probe_versions(&mut self) -> Result<Vec<BinaryVersionInfo>> {
         let irohad = self.ensure_irohad_ready()?.to_path_buf();
         let irohad_source = self.irohad_source.clone();
@@ -971,13 +946,10 @@ impl BinaryPaths {
         source: BinarySource,
     ) -> Result<BinaryVersionInfo> {
         let (raw_output, version) = probe_version_output(path, name)?;
-        let build_line = infer_build_line(name, path, raw_output.as_deref());
         Ok(BinaryVersionInfo {
             name,
             path: path.to_path_buf(),
             version,
-            build_line,
-            da_rbc_capable: build_line.is_iroha3(),
             raw_output,
             source,
         })
@@ -1242,24 +1214,6 @@ fn probe_version_output(path: &Path, binary: &str) -> Result<(Option<String>, Op
         .map(|line| line.trim().to_owned());
     Ok((raw_output, version))
 }
-fn infer_build_line(name: &str, path: &Path, output: Option<&str>) -> BuildLine {
-    if let Some(raw) = output {
-        let lower = raw.to_ascii_lowercase();
-        if lower.contains("iroha2") || lower.contains("iroha 2") {
-            return BuildLine::Iroha2;
-        }
-        if lower.contains("iroha3") || lower.contains("iroha 3") || lower.contains("nexus") {
-            return BuildLine::Iroha3;
-        }
-    }
-    if let Some(stem) = path.file_stem().and_then(|value| value.to_str()) {
-        let inferred = BuildLine::from_bin_name(stem);
-        if inferred.is_iroha2() || inferred.is_iroha3() {
-            return inferred;
-        }
-    }
-    BuildLine::from_bin_name(name)
-}
 fn is_explicit_path(path: &Path) -> bool {
     path.has_root() || path.components().count() > 1
 }
@@ -1433,7 +1387,7 @@ fn try_build_iroha_cli(workspace: &Path) -> Result<PathBuf> {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("target"));
-    for bin in ["iroha3", "iroha", "iroha2"] {
+    for bin in ["iroha3", "iroha"] {
         let exe_name = format!("{bin}{}", env::consts::EXE_SUFFIX);
         for candidate in [
             target_root.join("debug").join(&exe_name),
@@ -1617,11 +1571,6 @@ impl SupervisorBuilder {
         self.nexus_config = Some(config);
         self
     }
-    /// Enable or disable Nexus features in the rendered peer configs.
-    pub fn nexus_enabled(mut self, enabled: bool) -> Self {
-        set_table_bool(&mut self.nexus_config, "enabled", enabled);
-        self
-    }
     /// Override the configured Nexus lane count.
     pub fn nexus_lane_count(mut self, lane_count: u32) -> Self {
         set_table_u32(&mut self.nexus_config, "lane_count", lane_count);
@@ -1776,9 +1725,6 @@ impl SupervisorBuilder {
             self.chain_id.clone()
         };
         let mut nexus_config = self.nexus_config.clone();
-        if nexus_config.is_none() {
-            set_table_bool(&mut nexus_config, "enabled", false);
-        }
         let mut sumeragi_config = self.sumeragi_config.clone();
         let mut torii_config = self.torii_config.clone();
         normalize_peer_config_overrides(
@@ -1792,22 +1738,20 @@ impl SupervisorBuilder {
             sumeragi: sumeragi_config,
             torii: torii_config,
         };
-        let nexus_enabled = peer_config_overrides
+        let nexus_topology_custom = peer_config_overrides
             .nexus
             .as_ref()
-            .and_then(|table| table.get("enabled"))
-            .and_then(toml::Value::as_bool)
-            .unwrap_or(true);
-        if nexus_enabled && self.profile.consensus_mode != SumeragiConsensusMode::Npos {
+            .is_some_and(nexus_table_uses_custom_topology);
+        if nexus_topology_custom && self.profile.consensus_mode != SumeragiConsensusMode::Npos {
             return Err(SupervisorError::Config(
-                "nexus.enabled = true requires an NPoS signed-genesis consensus mode".to_owned(),
+                "custom Nexus lane topology requires an NPoS signed-genesis consensus mode"
+                    .to_owned(),
             ));
         }
         if self.genesis_profile.is_some() {
             binaries.ensure_irohad_ready()?;
             binaries.ensure_kagami_ready()?;
             binaries.ensure_iroha_cli_ready()?;
-            binaries.verify_build_line(BuildLine::Iroha3)?;
         }
         let mut torii_ports = PortAllocator::new(self.torii_base_port);
         let mut p2p_ports = PortAllocator::new(self.p2p_base_port);
@@ -1938,10 +1882,6 @@ impl SupervisorBuilder {
             .expect("reconciliation failure is always retained")),
         }
     }
-}
-fn set_table_bool(target: &mut Option<toml::Table>, key: &str, value: bool) {
-    let table = target.get_or_insert_with(toml::Table::new);
-    table.insert(key.to_owned(), toml::Value::Boolean(value));
 }
 fn set_table_u32(target: &mut Option<toml::Table>, key: &str, value: u32) {
     let table = target.get_or_insert_with(toml::Table::new);
@@ -2170,8 +2110,6 @@ fn normalize_peer_config_overrides(
     torii: &mut Option<toml::Table>,
 ) -> Result<()> {
     if let Some(table) = nexus.as_mut() {
-        let enabled = parse_table_bool(table, "enabled", "nexus.enabled")?;
-        let enabled_effective = enabled.unwrap_or(true);
         let lane_count = parse_table_u32(table, "lane_count", "nexus.lane_count")?;
         let lane_catalog = parse_table_array(table, "lane_catalog", "nexus.lane_catalog")?;
         let dataspace_catalog =
@@ -2183,7 +2121,6 @@ fn normalize_peer_config_overrides(
         if let Some(catalog) = dataspace_catalog {
             ensure_table_entries(catalog, "nexus.dataspace_catalog")?;
         }
-        let dataspace_len = dataspace_catalog.map_or(0, |values| values.len());
         let lane_count = if lane_count.is_some() {
             lane_count
         } else if lane_summary.len > 0 {
@@ -2198,14 +2135,6 @@ fn normalize_peer_config_overrides(
         } else {
             lane_count
         };
-        if !enabled_effective
-            && (lane_count.unwrap_or(1) > 1 || lane_summary.len > 0 || dataspace_len > 0)
-        {
-            return Err(SupervisorError::Config(
-                "nexus.enabled = false requires lane_count = 1 and empty lane/dataspace catalogs"
-                    .to_owned(),
-            ));
-        }
         if let Some(count) = lane_count {
             if count == 0 {
                 return Err(SupervisorError::Config(
@@ -2238,6 +2167,20 @@ fn normalize_peer_config_overrides(
     ensure_local_mcp_config(torii)?;
     ensure_local_norito_rpc_config(torii)?;
     Ok(())
+}
+fn nexus_table_uses_custom_topology(table: &toml::Table) -> bool {
+    table
+        .get("lane_count")
+        .and_then(toml::Value::as_integer)
+        .is_some_and(|count| count > 1)
+        || table
+            .get("lane_catalog")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|catalog| catalog.len() > 1)
+        || table
+            .get("dataspace_catalog")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|catalog| catalog.len() > 1)
 }
 fn install_managed_account_onboarding_config(
     torii: &mut Option<toml::Table>,
@@ -2312,15 +2255,6 @@ fn ensure_local_norito_rpc_config(torii: &mut Option<toml::Table>) -> Result<()>
         .or_insert(toml::Value::String(LOCAL_NORITO_RPC_STAGE.to_owned()));
     Ok(())
 }
-fn parse_table_bool(table: &toml::Table, key: &str, label: &str) -> Result<Option<bool>> {
-    match table.get(key) {
-        None => Ok(None),
-        Some(toml::Value::Boolean(value)) => Ok(Some(*value)),
-        Some(_) => Err(SupervisorError::Config(format!(
-            "{label} must be a boolean"
-        ))),
-    }
-}
 fn parse_table_u32(table: &toml::Table, key: &str, label: &str) -> Result<Option<u32>> {
     match table.get(key) {
         None => Ok(None),
@@ -2330,9 +2264,7 @@ fn parse_table_u32(table: &toml::Table, key: &str, label: &str) -> Result<Option
                     "{label} must be a positive integer"
                 )));
             }
-            let unsigned = u64::try_from(*value)
-                .map_err(|_| SupervisorError::Config(format!("{label} exceeds the u32 range")))?;
-            u32::try_from(unsigned)
+            u32::try_from(*value)
                 .map_err(|_| SupervisorError::Config(format!("{label} exceeds the u32 range")))
                 .map(Some)
         }
@@ -2388,12 +2320,7 @@ impl LaneCatalogSummary {
                             "nexus.lane_catalog[{idx}].index must be a positive integer"
                         )));
                     }
-                    let unsigned = u64::try_from(*raw).map_err(|_| {
-                        SupervisorError::Config(format!(
-                            "nexus.lane_catalog[{idx}].index exceeds the u32 range"
-                        ))
-                    })?;
-                    u32::try_from(unsigned).map_err(|_| {
+                    u32::try_from(*raw).map_err(|_| {
                         SupervisorError::Config(format!(
                             "nexus.lane_catalog[{idx}].index exceeds the u32 range"
                         ))
@@ -2804,15 +2731,6 @@ impl Supervisor {
     fn run_compatibility_checks(&mut self) -> Result<()> {
         let versions = self.binaries.probe_versions()?;
         if self.genesis.profile.is_some() {
-            for info in &versions {
-                if info.build_line != BuildLine::Iroha3 {
-                    return Err(SupervisorError::BuildLineMismatch {
-                        binary: info.name.to_owned(),
-                        expected: BuildLine::Iroha3,
-                        found: info.build_line,
-                    });
-                }
-            }
             if let Some(report) = &self.genesis.verify_report {
                 if let Some(chain_id) = &report.chain_id
                     && chain_id != &self.chain_id
@@ -5175,72 +5093,6 @@ fn validate_managed_peer_paths_against(
     }
     Ok(())
 }
-fn parse_keyed_value(line: &str, keys: &[&str]) -> Option<String> {
-    let lower = line.to_ascii_lowercase();
-    for key in keys {
-        if let Some(start) = lower.find(key) {
-            let remainder = &line[start + key.len()..];
-            if let Some((_, value)) = remainder
-                .split_once(':')
-                .or_else(|| remainder.split_once('='))
-            {
-                let trimmed = value.trim().trim_matches([',', ';']);
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_owned());
-                }
-            }
-        }
-    }
-    for token in line.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
-        if let Some((key, value)) = token.split_once(['=', ':'])
-            && keys
-                .iter()
-                .any(|candidate| key.eq_ignore_ascii_case(candidate))
-        {
-            let trimmed = value.trim().trim_matches([',', ';']);
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_owned());
-            }
-        }
-    }
-    None
-}
-fn parse_kagami_verify_output(
-    profile: GenesisProfile,
-    vrf_seed_hex: Option<&str>,
-    output: &str,
-) -> KagamiVerifyReport {
-    let mut chain_id = None;
-    let mut peers_with_pop = None;
-    let mut fingerprint = None;
-    let mut vrf_seed = vrf_seed_hex.map(|value| value.to_owned());
-    for line in output.lines() {
-        if chain_id.is_none() {
-            chain_id = parse_keyed_value(line, &["chain_id", "chain id", "chain"]);
-        }
-        if peers_with_pop.is_none() {
-            peers_with_pop = parse_keyed_value(
-                line,
-                &["peers_with_pop", "peers-with-pop", "pop_peers", "pop"],
-            )
-            .and_then(|value| value.parse().ok());
-        }
-        if fingerprint.is_none() {
-            fingerprint = parse_keyed_value(line, &["fingerprint", "hash", "fingerprint_hex"]);
-        }
-        if vrf_seed.is_none() {
-            vrf_seed = parse_keyed_value(line, &["vrf_seed_hex", "vrf-seed", "vrf_seed"]);
-        }
-    }
-    KagamiVerifyReport {
-        profile,
-        chain_id,
-        vrf_seed_hex: vrf_seed,
-        peers_with_pop,
-        fingerprint,
-        raw_output: output.to_owned(),
-    }
-}
 fn default_data_root() -> PathBuf {
     std::env::var_os("MOCHI_DATA_ROOT")
         .map(PathBuf::from)
@@ -5252,52 +5104,6 @@ fn resolve_data_root(data_root: &Path) -> io::Result<PathBuf> {
         Ok(data_root.to_path_buf())
     } else {
         Ok(env::current_dir()?.join(data_root))
-    }
-}
-fn default_snapshot_slug() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO);
-    format!("snapshot-{}-{:03}", now.as_secs(), now.subsec_millis())
-}
-const SNAPSHOT_LABEL_MAX_LEN: usize = 64;
-const SNAPSHOT_STORAGE_LAYOUT: &str = "kura-subdirectory-v1";
-fn sanitize_snapshot_label(label: &str) -> Option<String> {
-    let mut sanitized = String::with_capacity(label.len().min(SNAPSHOT_LABEL_MAX_LEN));
-    let mut previous_was_sep = true;
-    for ch in label.chars() {
-        match ch {
-            'a'..='z' | '0'..='9' => {
-                if sanitized.len() == SNAPSHOT_LABEL_MAX_LEN {
-                    break;
-                }
-                sanitized.push(ch);
-                previous_was_sep = false;
-            }
-            'A'..='Z' => {
-                if sanitized.len() == SNAPSHOT_LABEL_MAX_LEN {
-                    break;
-                }
-                sanitized.push(ch.to_ascii_lowercase());
-                previous_was_sep = false;
-            }
-            '-' | '_' | ' ' | '.' => {
-                if !previous_was_sep && sanitized.len() < SNAPSHOT_LABEL_MAX_LEN {
-                    sanitized.push('-');
-                    previous_was_sep = true;
-                }
-            }
-            _ => {
-                // Skip unsupported characters but continue scanning so alphanumeric
-                // runs can still be recovered.
-            }
-        }
-    }
-    let trimmed = sanitized.trim_matches('-');
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
     }
 }
 struct SnapshotMetadata {

@@ -1,4 +1,6 @@
 //! Regression tests for strict network-address parsing.
+#[path = "numeric_inspect.rs"]
+mod numeric_inspect;
 
 use iroha_primitives::addr::{Ipv6Addr, ParseError, SocketAddrV6};
 

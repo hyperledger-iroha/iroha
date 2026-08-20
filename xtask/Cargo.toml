@@ -1,6 +1,7 @@
 [package]
 name = "xtask"
 autobins = false
+autotests = false
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -31,6 +32,10 @@ required-features = ["dev-tools"]
 name = "xtask"
 path = "src/main.rs"
 required-features = ["dev-tools"]
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [features]
 default = []

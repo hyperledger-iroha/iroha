@@ -74,17 +74,14 @@ from .client_status_models import (
     SumeragiLeaderSnapshot,
     SumeragiPacemakerSnapshot,
     SumeragiParamsSnapshot,
-    SumeragiPhasesEma,
-    SumeragiPhasesSnapshot,
     SumeragiPrfContext,
-    SumeragiQcEntry,
-    SumeragiQcSnapshot,
     SumeragiV2BlockSubject,
     SumeragiV2EquivocationEvidenceRecord,
     SumeragiV2ExecutionCommitment,
     SumeragiV2LaneFinalityManifestCommitment,
     SumeragiV2MergeCarrierCommitment,
     SumeragiV2QcReference,
+    SumeragiV2QcResponse,
     SumeragiV2Round,
     SumeragiV2TimeoutReference,
     StreamingSoranetConfig,
@@ -546,7 +543,6 @@ _SORAFS_ORDERBOOK_LEDGER_EVENT_FIELDS = frozenset(
 _SORAFS_ORDERBOOK_SUBMISSION_RECEIPT_FIELDS = frozenset({"payload", "signature"})
 _SORAFS_ORDERBOOK_SUBMISSION_PAYLOAD_FIELDS = frozenset(
     {
-        "tx_hash",
         "entrypoint_hash",
         "signed_transaction_hash",
         "submitted_at_ms",
@@ -847,6 +843,7 @@ __all__ = [
     "SumeragiV2MergeCarrierCommitment",
     "SumeragiV2ExecutionCommitment",
     "SumeragiV2QcReference",
+    "SumeragiV2QcResponse",
     "SumeragiV2TimeoutReference",
     "SumeragiV2HeightContextStatus",
     "SumeragiV2CommitQcStatus",
@@ -892,7 +889,6 @@ __all__ = [
     "KaigiRelayDomainMetrics",
     "KaigiRelayDetail",
     "KaigiRelayHealthSnapshot",
-    "SumeragiQcEntry",
     "OfflineReadinessBlocker",
     "OfflineVerifierId",
     "OfflineActiveTransferVerifier",
@@ -991,10 +987,7 @@ __all__ = [
     "SubscriptionListPage",
     "SubscriptionActionResult",
     "SubscriptionUsageDraft",
-    "SumeragiQcSnapshot",
     "SumeragiPacemakerSnapshot",
-    "SumeragiPhasesSnapshot",
-    "SumeragiPhasesEma",
     "SumeragiPrfContext",
     "SumeragiLeaderSnapshot",
     "SumeragiParamsSnapshot",
@@ -1518,7 +1511,6 @@ def _require_u64(value: Any, context: str) -> int:
     if value < 0 or value > (1 << 64) - 1:
         raise ValueError(f"{context} must be an unsigned 64-bit integer")
     return value
-
 
 
 
@@ -3290,6 +3282,7 @@ class OfflineErrorDetails:
     actual: Optional[str] = None
     profile: Optional[str] = None
     chain_discriminant: Optional[int] = None
+    entrypoint_hash: Optional[str] = None
     tx_hash: Optional[str] = None
     last_status: Optional[str] = None
     hint: Optional[str] = None
@@ -3494,6 +3487,7 @@ def _offline_error_details(value: Any, context: str) -> OfflineErrorDetails:
         chain_discriminant=_offline_optional_error_unsigned(
             record, "chain_discriminant", context, (1 << 16) - 1
         ),
+        entrypoint_hash=_offline_optional_error_string(record, "entrypoint_hash", context),
         tx_hash=_offline_optional_error_string(record, "tx_hash", context),
         last_status=_offline_optional_error_string(record, "last_status", context),
         hint=_offline_optional_error_string(record, "hint", context),
@@ -3503,9 +3497,7 @@ def _offline_error_details(value: Any, context: str) -> OfflineErrorDetails:
 
 def _offline_error(value: Any, context: str) -> OfflineErrorEnvelope:
     record = _offline_mapping(value, context)
-    code = _offline_exact_string(
-        _offline_required(record, "code", context), f"{context}.code"
-    )
+    code = _offline_exact_string(_offline_required(record, "code", context), f"{context}.code")
     if _OFFLINE_ERROR_CODE_RE.fullmatch(code) is None:
         raise RuntimeError(
             f"{context}.code must be a stable lowercase code of 1 to 64 characters"
@@ -4954,7 +4946,6 @@ class SubscriptionPlanListPage:
 
 
 
-
 @dataclass(frozen=True)
 class SubscriptionListItem:
     """Subscription record returned by list/get endpoints."""
@@ -5013,7 +5004,6 @@ class SubscriptionListPage:
             raise RuntimeError("subscription list `total` must be numeric") from exc
         items = [SubscriptionListItem.from_payload(entry) for entry in items_value]
         return cls(items=items, total=total)
-
 
 
 
@@ -8365,8 +8355,10 @@ class _SumeragiV2StatusParser:
         proposal = cls._exact_mapping(
             value,
             context,
-            {"descriptor", "proposal_hash"},
+            {"descriptor", "proposal_hash", "payload_block_hint"},
         )
+        if proposal["payload_block_hint"] is not None:
+            raise RuntimeError(f"{context}.payload_block_hint must be null")
         descriptor_context = f"{context}.descriptor"
         descriptor = cls._mapping(proposal.get("descriptor"), descriptor_context)
         required_fields = {
@@ -8587,6 +8579,7 @@ class _SumeragiV2StatusParser:
         return {
             "descriptor": normalized_descriptor,
             "proposal_hash": proposal_hash,
+            "payload_block_hint": None,
         }
 
     @classmethod
@@ -11864,16 +11857,42 @@ class ToriiClient(
             parser=parse_sumeragi_json_object,
         )
         return _SumeragiDiagnosticsParser.parse(payload)
-    def get_sumeragi_qc(self) -> SumeragiQcSnapshot:
-        """Fetch HighestQC/LockedQC snapshot (`GET /v1/sumeragi/qc`)."""
+    def get_sumeragi_qc(self) -> SumeragiV2QcResponse:
+        """Fetch authoritative v2 PrepareQC references (`GET /v1/sumeragi/qc`)."""
 
         payload = self._ensure_mapping(
             self._operator_get("/v1/sumeragi/qc").json(),
             "sumeragi qc",
         )
-        highest = self._parse_sumeragi_qc_entry(payload.get("highest_qc"), context="sumeragi qc.highest_qc")
-        locked = self._parse_sumeragi_qc_entry(payload.get("locked_qc"), context="sumeragi qc.locked_qc")
-        return SumeragiQcSnapshot(highest_qc=highest, locked_qc=locked)
+        allowed_fields = {"highest_prepare_qc", "locked_prepare_qc"}
+        unknown_fields = set(payload) - allowed_fields
+        if unknown_fields:
+            raise RuntimeError(
+                f"sumeragi qc contains unknown field {sorted(unknown_fields)[0]}"
+            )
+        missing_fields = allowed_fields - set(payload)
+        if missing_fields:
+            raise RuntimeError(
+                f"sumeragi qc.{sorted(missing_fields)[0]} is required"
+            )
+        highest = _SumeragiV2StatusParser._optional_qc(
+            payload.get("highest_prepare_qc"),
+            context="sumeragi qc.highest_prepare_qc",
+        )
+        locked = _SumeragiV2StatusParser._optional_qc(
+            payload.get("locked_prepare_qc"),
+            context="sumeragi qc.locked_prepare_qc",
+        )
+        for name, certificate in (
+            ("highest_prepare_qc", highest),
+            ("locked_prepare_qc", locked),
+        ):
+            if certificate is not None and certificate.phase != "prepare":
+                raise RuntimeError(f"sumeragi qc.{name}.phase must be prepare")
+        return SumeragiV2QcResponse(
+            highest_prepare_qc=highest,
+            locked_prepare_qc=locked,
+        )
 
     def get_sumeragi_pacemaker(self) -> SumeragiPacemakerSnapshot:
         """Fetch pacemaker configuration snapshot (`GET /v1/sumeragi/pacemaker`)."""
@@ -11883,15 +11902,6 @@ class ToriiClient(
             "sumeragi pacemaker",
         )
         return self._parse_sumeragi_pacemaker(payload, context="sumeragi pacemaker")
-
-    def get_sumeragi_phases(self) -> SumeragiPhasesSnapshot:
-        """Fetch phase latency counters (`GET /v1/sumeragi/phases`)."""
-
-        payload = self._ensure_mapping(
-            self._request("GET", "/v1/sumeragi/phases").json(),
-            "sumeragi phases",
-        )
-        return self._parse_sumeragi_phases(payload, context="sumeragi phases")
 
     def get_sumeragi_leader(self) -> SumeragiLeaderSnapshot:
         """Fetch leader/PRF state (`GET /v1/sumeragi/leader`)."""
@@ -13766,7 +13776,6 @@ class ToriiClient(
                     f"{context}.payload.{key}",
                 )
                 for key in (
-                    "tx_hash",
                     "entrypoint_hash",
                     "signed_transaction_hash",
                 )
@@ -16728,16 +16737,6 @@ class ToriiClient(
         )
 
     @staticmethod
-    def _parse_sumeragi_qc_entry(value: Any, *, context: str) -> SumeragiQcEntry:
-        record = ToriiClient._ensure_mapping(value, context)
-        height = ToriiClient._coerce_unsigned(record.get("height"), f"{context}.height")
-        view = ToriiClient._coerce_unsigned(record.get("view"), f"{context}.view")
-        subject_block_hash = record.get("subject_block_hash")
-        if subject_block_hash is not None and not isinstance(subject_block_hash, str):
-            raise RuntimeError(f"{context}.subject_block_hash must be a string or null")
-        return SumeragiQcEntry(height=height, view=view, subject_block_hash=subject_block_hash)
-
-    @staticmethod
     def _parse_sumeragi_pacemaker(payload: Mapping[str, Any], *, context: str) -> SumeragiPacemakerSnapshot:
         record = ToriiClient._ensure_mapping(payload, context)
 
@@ -16757,50 +16756,6 @@ class ToriiClient(
             round_elapsed_ms=require_unsigned("round_elapsed_ms"),
             view_timeout_target_ms=require_unsigned("view_timeout_target_ms"),
             view_timeout_remaining_ms=require_unsigned("view_timeout_remaining_ms"),
-        )
-
-    @staticmethod
-    def _parse_sumeragi_phases(payload: Mapping[str, Any], *, context: str) -> SumeragiPhasesSnapshot:
-        record = ToriiClient._ensure_mapping(payload, context)
-
-        def require_unsigned(key: str) -> int:
-            if key not in record:
-                raise RuntimeError(f"{context} missing `{key}`")
-            return ToriiClient._coerce_unsigned(record.get(key), f"{context}.{key}")
-
-        ema = ToriiClient._parse_sumeragi_phases_ema(record.get("ema_ms"), context=f"{context}.ema_ms")
-        return SumeragiPhasesSnapshot(
-            propose_ms=require_unsigned("propose_ms"),
-            collect_da_ms=require_unsigned("collect_da_ms"),
-            collect_prevote_ms=require_unsigned("collect_prevote_ms"),
-            collect_precommit_ms=require_unsigned("collect_precommit_ms"),
-            collect_aggregator_ms=require_unsigned("collect_aggregator_ms"),
-            commit_ms=require_unsigned("commit_ms"),
-            pipeline_total_ms=require_unsigned("pipeline_total_ms"),
-            collect_aggregator_gossip_total=require_unsigned("collect_aggregator_gossip_total"),
-            block_created_dropped_by_lock_total=require_unsigned("block_created_dropped_by_lock_total"),
-            block_created_hint_mismatch_total=require_unsigned("block_created_hint_mismatch_total"),
-            block_created_proposal_mismatch_total=require_unsigned("block_created_proposal_mismatch_total"),
-            ema_ms=ema,
-        )
-
-    @staticmethod
-    def _parse_sumeragi_phases_ema(payload: Any, *, context: str) -> SumeragiPhasesEma:
-        record = ToriiClient._ensure_mapping(payload, context)
-
-        def require_unsigned(key: str) -> int:
-            if key not in record:
-                raise RuntimeError(f"{context} missing `{key}`")
-            return ToriiClient._coerce_unsigned(record.get(key), f"{context}.{key}")
-
-        return SumeragiPhasesEma(
-            propose_ms=require_unsigned("propose_ms"),
-            collect_da_ms=require_unsigned("collect_da_ms"),
-            collect_prevote_ms=require_unsigned("collect_prevote_ms"),
-            collect_precommit_ms=require_unsigned("collect_precommit_ms"),
-            collect_aggregator_ms=require_unsigned("collect_aggregator_ms"),
-            commit_ms=require_unsigned("commit_ms"),
-            pipeline_total_ms=require_unsigned("pipeline_total_ms"),
         )
 
     @staticmethod

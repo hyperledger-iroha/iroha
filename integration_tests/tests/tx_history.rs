@@ -164,7 +164,7 @@ async fn submit_entrypoint_maybe_rejected(
         let status = response.status();
         let header_hash = response
             .headers()
-            .get("x-iroha-transaction-hash")
+            .get("x-iroha-entrypoint-hash")
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         let response_body = response.text().await.unwrap_or_default();
@@ -208,7 +208,7 @@ async fn submit_entrypoint_once_maybe_rejected(
     let status = response.status();
     let header_hash = response
         .headers()
-        .get("x-iroha-transaction-hash")
+        .get("x-iroha-entrypoint-hash")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let response_body = response.text().await.unwrap_or_default();

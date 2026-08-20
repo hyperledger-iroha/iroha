@@ -25,7 +25,7 @@ GM/T algorithm family moves from verify-only preview to broader enablement.
 | Team | Responsibilities | Artifacts | Owners |
 |------|------------------|-----------|--------|
 | Crypto WG | Track GM/T spec updates, coordinate third-party audits, maintain deterministic policy (nonce derivation, canonical r∥s). | `sm_program.md`, audit reports, fixture bundles. | Crypto WG lead |
-| Release Engineering | Gate SM features behind explicit config, maintain verify-only default, manage feature rollout checklist. | `release_dual_track_runbook.md`, release manifests, rollout ticket. | Release TL |
+| Release Engineering | Gate SM features behind explicit config, maintain verify-only default, manage feature rollout checklist. | `release_runbook.md`, release manifests, rollout ticket. | Release TL |
 | Ops / SRE | Provide SM enablement checklist, telemetry dashboards (usage, error rates), incident response plan. | Runbooks, Grafana dashboards, onboarding tickets. | Ops/SRE |
 | Legal Liaison | File PRC development/usage reports when nodes run in mainland China; review export posture for each bundle. | Filing templates, export statements. | Legal contact |
 | SDK Program | Surface SM algorithm support consistently, enforce deterministic behaviour, propagate compliance notes to SDK docs. | SDK release notes, docs, CI gating. | SDK leads |
@@ -91,7 +91,7 @@ GM/T algorithm family moves from verify-only preview to broader enablement.
   to simplify compliance reporting.
 
 ## Operator Checklist
-- [ ] Confirm release profile (`scripts/select_release_profile.py`) + SM feature flag.
+- [ ] Confirm the canonical `iroha3` release identity + SM feature flag.
 - [ ] Review `sm_program.md` and this brief; ensure legal filings are recorded.
 - [ ] Enable SM features by compiling with `sm`, updating `crypto.allowed_signing` to include `sm2`, and switching `crypto.default_hash` to `sm3-256` only after determinism safeguards are in place and audit status is green.
 - [ ] Update telemetry dashboards/alerts to include SM counters (verification failures,
@@ -126,7 +126,7 @@ log or export it to PDF as required by local authorities.
 
 ## References
 - `specs/crypto/sm_program.md` — technical architecture and policy.
-- `specs/release_dual_track_runbook.md` — release gating and rollout process.
+- `specs/release_runbook.md` — release gating and rollout process.
 - `specs/sora_nexus_operator_onboarding.md` — sample operator onboarding flow.
 - GM/T 0002-2012, GM/T 0003-2012, GM/T 0004-2012, GB/T 32918 series, RFC 8998.
 

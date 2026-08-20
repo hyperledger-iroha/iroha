@@ -2,15 +2,12 @@
 """Produce or reconstruct one authenticated Kagemusha V4 source projection.
 
 Stable Cargo cannot emit its internal unit graph.  This producer therefore does
-not approximate one from ``cargo metadata``.  It accepts a canonical normalized
-Cargo unit-graph artifact plus an execution policy only when a separate SSH
-controller has signed an exact authorization binding those artifacts to the
-reviewed clean source closure.  The exact V1 execution policy binds direct tool
-identities, capture semantics, and raw/normalized graph digests. The producer
-authenticates both supplied graph artifacts against independent pins and that
-policy; truthful Cargo capture and normalization remain the external
-controller's explicit trust responsibility. Every source fact in the resulting
-projection is still derived locally from the verified signed commit.
+not approximate one from ``cargo metadata``.  It accepts a genuine raw nightly
+Cargo unit graph plus an execution policy only when a separate SSH controller
+has signed an exact authorization binding that capture to the reviewed clean
+source closure.  The producer independently applies the fixed normalization and
+requires byte-for-byte equality with the supplied normalized graph before it
+constructs or verifies a projection.
 """
 
 from __future__ import annotations
@@ -59,21 +56,39 @@ MAX_SIGNATURE_BYTES = 64 * 1024
 MAX_GRAPH_STRING_BYTES = 4096
 MAX_TOOL_BINARY_BYTES = 512 * 1024 * 1024
 MAX_TOOL_VERSION_LINES = 32
-EXECUTION_POLICY_KEYS = {"cargo", "rustc", "schema", "unit_graph"}
+PINNED_CARGO_VERSION_LINE = "cargo 1.93.0-nightly (6c1b61003 2025-10-28)"
+PINNED_RUSTC_VERSION_LINE = "rustc 1.93.1 (01f6ddf75 2026-02-11)"
+EXECUTION_POLICY_KEYS = {"build_inputs", "cargo", "rustc", "schema", "unit_graph"}
 TOOL_IDENTITY_KEYS = {
     "binary_sha256",
     "binary_size_bytes",
+    "capabilities",
     "version_argv",
     "version_stdout_lines",
 }
 EXECUTION_POLICY_UNIT_GRAPH_KEYS = {
     "capture_argv",
     "capture_environment",
+    "capture_receipt",
     "normalization",
     "normalized_sha256",
     "normalized_size_bytes",
     "raw_sha256",
     "raw_size_bytes",
+}
+CAPTURE_RECEIPT_SCHEMA = "iroha.kagemusha.cargo_unit_graph_capture_receipt.v1"
+CAPTURE_RECEIPT_KEYS = {
+    "build_inputs_sha256",
+    "cargo_binary_sha256",
+    "exit_status",
+    "raw_stdout_sha256",
+    "raw_stdout_size_bytes",
+    "rustc_binary_sha256",
+    "schema",
+    "source_commit",
+    "source_tree_sha256",
+    "stderr_sha256",
+    "stderr_size_bytes",
 }
 UNIT_GRAPH_CAPTURE_ARGV = (
     "<DIRECT_CARGO>",
@@ -97,20 +112,7 @@ UNIT_GRAPH_CAPTURE_ARGV = (
     "--jobs",
     "1",
 )
-UNIT_GRAPH_CAPTURE_ENVIRONMENT = {
-    "CARGO_ENCODED_RUSTFLAGS": "",
-    "CARGO_HOME": "<OWNER_CONTROLLED_CACHE_ONLY_CARGO_HOME>",
-    "CARGO_NET_OFFLINE": "true",
-    "HOME": "/var/empty",
-    "LANG": "C",
-    "LC_ALL": "C",
-    "PATH": "/usr/bin:/bin",
-    "RUSTC": "<DIRECT_RUSTC>",
-    "RUSTC_WRAPPER": "",
-    "RUSTC_WORKSPACE_WRAPPER": "",
-    "RUSTFLAGS": "",
-    "TZ": "UTC",
-}
+UNIT_GRAPH_CAPTURE_ENVIRONMENT = dict(builder.SOURCE_SEAL_CAPTURE_ENVIRONMENT)
 UNIT_GRAPH_KEYS = {"roots", "units", "version"}
 UNIT_KEYS = {
     "dependencies",
@@ -302,14 +304,30 @@ def _relative_source_path(value: Any, label: str) -> str:
 
 def _normalized_package_id(value: Any, label: str) -> str:
     package_id = _bounded_ascii(value, label)
-    if "path+file:///" in package_id or (
-        "path+file://" in package_id
-        and "path+file://<PACKAGE_ROOT>" not in package_id
-    ):
-        raise ProjectionProductionError(
-            f"{label} contains an unnormalized absolute path package identity"
-        )
-    scrubbed = package_id.replace("<PACKAGE_ROOT>", "").replace(
+    path_marker = "path+file://<SOURCE_ROOT>/"
+    if "path+file://" in package_id:
+        if (
+            package_id.count("path+file://") != 1
+            or package_id.count(path_marker) != 1
+            or not package_id.endswith(")")
+        ):
+            raise ProjectionProductionError(
+                f"{label} contains an unnormalized absolute path package identity"
+            )
+        relative_root = package_id[:-1].split(path_marker, 1)[1]
+        if (
+            not relative_root
+            or relative_root.startswith(("/", "\\"))
+            or "\\" in relative_root
+            or any(
+                component in ("", ".", "..")
+                for component in relative_root.split("/")
+            )
+        ):
+            raise ProjectionProductionError(
+                f"{label} contains an invalid repository-relative package root"
+            )
+    scrubbed = package_id.replace("<SOURCE_ROOT>", "").replace(
         "<SOURCE_CACHE>", ""
     )
     if "<" in scrubbed or ">" in scrubbed:
@@ -348,6 +366,11 @@ def _validate_tool_identity(
         MAX_TOOL_BINARY_BYTES,
         f"execution-policy {tool} binary size",
     )
+    expected_capabilities = ["cargo-nightly-unit-graph-v1"] if tool == "cargo" else []
+    if identity["capabilities"] != expected_capabilities:
+        raise ProjectionProductionError(
+            f"execution-policy {tool} capabilities are not exact"
+        )
     if identity["version_argv"] != list(version_argv):
         raise ProjectionProductionError(
             f"execution-policy {tool} version argv is not exact"
@@ -361,11 +384,17 @@ def _validate_tool_identity(
         _bounded_ascii(line, f"execution-policy {tool} version line")
         for line in lines
     ]
-    version_pattern = rf"{re.escape(tool)} 1\.93\.[0-9]+(?:[-+ ][ -~]*)?"
-    if re.fullmatch(version_pattern, parsed_lines[0]) is None:
+    expected_version_line = (
+        PINNED_CARGO_VERSION_LINE if tool == "cargo" else PINNED_RUSTC_VERSION_LINE
+    )
+    if parsed_lines[0] != expected_version_line:
         raise ProjectionProductionError(
-            f"execution-policy {tool} version is not Cargo toolchain 1.93"
+            f"execution-policy {tool} version is not the exact pinned build"
         )
+    if tool == "cargo" and "release: 1.93.0-nightly" not in parsed_lines:
+        raise ProjectionProductionError("execution-policy Cargo is not the pinned nightly channel")
+    if tool == "rustc" and "release: 1.93.1" not in parsed_lines:
+        raise ProjectionProductionError("execution-policy rustc release is not exactly 1.93.1")
     return identity
 
 
@@ -393,6 +422,15 @@ def _validate_execution_policy(
         tool="rustc",
         version_argv=("<DIRECT_RUSTC>", "-Vv"),
     )
+    try:
+        builder._validate_build_input_closure(policy["build_inputs"])
+    except builder.CandidateBuildError as error:
+        raise ProjectionProductionError(str(error)) from error
+    if (
+        len(builder._canonical_json_line(policy["build_inputs"]))
+        > builder.MAX_BUILD_INPUT_CLOSURE_BYTES
+    ):
+        raise ProjectionProductionError("build-input closure exceeds its byte bound")
     graph = _object(
         policy["unit_graph"],
         EXECUTION_POLICY_UNIT_GRAPH_KEYS,
@@ -444,6 +482,50 @@ def _validate_execution_policy(
         raise ProjectionProductionError(
             "execution-policy normalized unit graph differs from the supplied graph"
         )
+    try:
+        independently_normalized = builder.normalize_source_seal_unit_graph(
+            raw_unit_graph
+        )
+    except builder.CandidateBuildError as error:
+        raise ProjectionProductionError(
+            f"raw Cargo unit graph cannot be normalized exactly: {error}"
+        ) from error
+    if independently_normalized != normalized_unit_graph:
+        raise ProjectionProductionError(
+            "supplied normalized unit graph differs from the deterministic raw capture normalization"
+        )
+    receipt = _object(
+        graph["capture_receipt"],
+        CAPTURE_RECEIPT_KEYS,
+        "execution-policy Cargo capture receipt",
+    )
+    if receipt["schema"] != CAPTURE_RECEIPT_SCHEMA:
+        raise ProjectionProductionError("Cargo capture-receipt schema differs")
+    build_inputs_sha256 = hashlib.sha256(
+        builder._canonical_json_line(policy["build_inputs"])
+    ).hexdigest()
+    if (
+        receipt["build_inputs_sha256"] != build_inputs_sha256
+        or receipt["cargo_binary_sha256"] != policy["cargo"]["binary_sha256"]
+        or receipt["rustc_binary_sha256"] != policy["rustc"]["binary_sha256"]
+        or receipt["exit_status"] != 0
+        or receipt["raw_stdout_sha256"] != raw_sha256
+        or receipt["raw_stdout_size_bytes"] != raw_size
+    ):
+        raise ProjectionProductionError(
+            "Cargo capture receipt does not bind the successful raw graph execution"
+        )
+    _digest(receipt["source_commit"], 40, "capture-receipt source commit")
+    _digest(
+        receipt["source_tree_sha256"], 64, "capture-receipt source-tree SHA-256"
+    )
+    _digest(receipt["stderr_sha256"], 64, "capture-receipt stderr SHA-256")
+    _bounded_integer(
+        receipt["stderr_size_bytes"],
+        0,
+        MAX_UNIT_GRAPH_BYTES,
+        "capture-receipt stderr size",
+    )
     return policy
 
 
@@ -869,6 +951,14 @@ def _derive_projection_inputs(
         raw_unit_graph_bytes,
         unit_graph_bytes,
     )
+    capture_receipt = execution_policy_value["unit_graph"]["capture_receipt"]
+    if (
+        capture_receipt["source_commit"] != identity.source_commit
+        or capture_receipt["source_tree_sha256"] != identity.source_tree_sha256
+    ):
+        raise ProjectionProductionError(
+            "Cargo capture receipt differs from the authenticated source identity"
+        )
     unit_graph = _validate_normalized_unit_graph(unit_graph_bytes)
     closure_bytes = builder._canonical_json_line(identity.reviewed_source_closure)
     authorization = {
@@ -1024,6 +1114,16 @@ def construct_projection(
             "policy inputs"
         )
 
+    policy_graph = derived.execution_policy["unit_graph"]
+    build_input_bytes = builder._canonical_json_line(
+        derived.execution_policy["build_inputs"]
+    )
+    projected_graph = {
+        **complete_graph,
+        "capture_receipt": policy_graph["capture_receipt"],
+        "raw_sha256": policy_graph["raw_sha256"],
+        "raw_size_bytes": policy_graph["raw_size_bytes"],
+    }
     projection = {
         "build_script_observed": {
             "debug_assertions": False,
@@ -1036,6 +1136,8 @@ def construct_projection(
             "target": builder.SOURCE_SEAL_TARGET,
         },
         "outer_policy": {
+            "build_inputs_hex": build_input_bytes.hex(),
+            "build_inputs_sha256": hashlib.sha256(build_input_bytes).hexdigest(),
             "cargo": {
                 "binary": builder.BINARY_NAME,
                 "explicit_features": list(builder.SOURCE_SEAL_EXPLICIT_FEATURES),
@@ -1043,12 +1145,30 @@ def construct_projection(
                 "profile": "release",
                 "semantic_argv": list(builder.SOURCE_SEAL_SEMANTIC_ARGV),
                 "target": builder.SOURCE_SEAL_TARGET,
-                "unit_graph": complete_graph,
+                "unit_graph": projected_graph,
             },
             "execution_policy_sha256": expected_authorization[
                 "execution_policy_sha256"
             ],
             "schema": builder.SOURCE_SEAL_OUTER_POLICY_SCHEMA,
+            "toolchain": {
+                "cargo": {
+                    "binary_sha256": derived.execution_policy["cargo"][
+                        "binary_sha256"
+                    ],
+                    "binary_size_bytes": derived.execution_policy["cargo"][
+                        "binary_size_bytes"
+                    ],
+                },
+                "rustc": {
+                    "binary_sha256": derived.execution_policy["rustc"][
+                        "binary_sha256"
+                    ],
+                    "binary_size_bytes": derived.execution_policy["rustc"][
+                        "binary_size_bytes"
+                    ],
+                },
+            },
         },
         "reviewed_source_closure_hex": closure_bytes.hex(),
         "reviewed_source_closure_sha256": closure_sha256,
@@ -1076,6 +1196,7 @@ def construct_projection(
 
     receipt = {
         "authorization_sha256": hashlib.sha256(authorization_bytes).hexdigest(),
+        "build_inputs_sha256": hashlib.sha256(build_input_bytes).hexdigest(),
         "cargo_binary_sha256": derived.execution_policy["cargo"][
             "binary_sha256"
         ],

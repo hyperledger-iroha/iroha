@@ -51,11 +51,6 @@
       "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite"
     },
     {
-      "mode": "PrunePeakDropsRosterGeneration",
-      "config": "multilane_autonomous_recovery_capacity_prune_peak_drops_roster_generation_bug.cfg",
-      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite"
-    },
-    {
       "mode": "PrunePeakDropsReservationEnvelope",
       "config": "multilane_autonomous_recovery_capacity_prune_peak_drops_reservation_envelope_bug.cfg",
       "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite"
@@ -83,7 +78,7 @@
         "self.transaction_selection_durability_faulted()",
         "self.lane_reservation_journal.lock().is_none()",
         "let ordered_owner_phases = self.lane_reservation_recovery_phases_locked()?",
-        ".sort_by_key(|record| (record.fifo_ordinal, record.key.signed_transaction_hash))",
+        ".sort_by_key(|record| (record.fifo_ordinal, record.key.entrypoint_hash))",
         "ordered_groups",
         "commit_barriers",
         "prepared_release_barriers",
@@ -224,6 +219,7 @@
       "kind": "method",
       "symbol": "StateBlock::stage_certified_merge_entry",
       "required_tokens": [
+        "self.ensure_pristine_execution_control_stage()?",
         "self.state_ref.validate_certified_merge_entry_for_global_order(entry)?",
         "let Some(batch) = entry.execution_batch.as_ref() else",
         "self.stage_merge_execution_markers(entry.epoch_id, batch)?",
@@ -231,7 +227,7 @@
         "self.staged_merge_entry = Some(entry.clone())"
       ],
       "ordered_tokens": [
-        "self.ensure_pristine_certified_merge_stage()?",
+        "self.ensure_pristine_execution_control_stage()?",
         "self.state_ref.validate_certified_merge_entry_for_global_order(entry)?",
         "State::preexecute_merge_execution_sources_into(self, sources)",
         "self.stage_merge_execution_markers(entry.epoch_id, batch)?",
@@ -552,39 +548,19 @@
       ]
     },
     {
-      "id": "prune_roster_generation_peak_projection",
-      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
-      "coverage": "invariant_chain",
-      "path": "crates/iroha_core/src/commit_roster_journal.rs",
-      "kind": "method",
-      "symbol": "CommitRosterJournalPruneProjectionV2::allocation_peak_with_sidecar",
-      "required_tokens": [
-        "self.current_pointer_growth_bytes .checked_add(sidecar_peak_bytes)",
-        "self.pointer_temporary_bytes.max(post_pointer)",
-        "self.generation_allocation_bytes .checked_add(publication_peak)"
-      ],
-      "ordered_tokens": [
-        "self.current_pointer_growth_bytes .checked_add(sidecar_peak_bytes)",
-        "self.pointer_temporary_bytes.max(post_pointer)",
-        "self.generation_allocation_bytes .checked_add(publication_peak)"
-      ]
-    },
-    {
       "id": "prune_transaction_peak_projection",
       "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
       "coverage": "invariant_chain",
       "path": "crates/iroha_core/src/kura/prune_commit_merge_support.rs",
       "kind": "method",
-      "symbol": "KuraPruneCapacityAdmissionV2::transaction_peak_bytes",
+      "symbol": "KuraPruneCapacityAdmissionV3::transaction_peak_bytes",
       "required_tokens": [
-        "self.roster .allocation_peak_with_sidecar(sidecar.sequential_peak_bytes)",
-        "self.marker_stable_growth_bytes.checked_add(bytes)",
-        "self.marker_temporary_bytes.max(post_marker)"
+        "self.marker_stable_growth_bytes .checked_add(sidecar.sequential_peak_bytes)",
+        ".map(|post_marker| self.marker_temporary_bytes.max(post_marker))"
       ],
       "ordered_tokens": [
-        "self.roster .allocation_peak_with_sidecar(sidecar.sequential_peak_bytes)",
-        "self.marker_stable_growth_bytes.checked_add(bytes)",
-        "self.marker_temporary_bytes.max(post_marker)"
+        "self.marker_stable_growth_bytes .checked_add(sidecar.sequential_peak_bytes)",
+        ".map(|post_marker| self.marker_temporary_bytes.max(post_marker))"
       ]
     },
     {
@@ -593,7 +569,7 @@
       "coverage": "invariant_chain",
       "path": "crates/iroha_core/src/kura/prune_commit_merge_support.rs",
       "kind": "method",
-      "symbol": "KuraPruneCapacityAdmissionV2::required_peak_bytes",
+      "symbol": "KuraPruneCapacityAdmissionV3::required_peak_bytes",
       "required_tokens": [
         "self.source_physical_bytes .checked_add(self.reserved_bytes()?)",
         ".and_then(|bytes| bytes.checked_add(self.intent_bytes))",
@@ -613,20 +589,20 @@
       "kind": "method",
       "symbol": "Kura::prune_to_height",
       "required_tokens": [
-        "let roster_projection =",
-        ".project_truncate_to_height(height)",
+        "let sidecar_rewrite =",
+        "self.reconcile_and_project_prune_sidecar_rewrites_locked(height)?",
         "self.canonical_prune_commit_marker_projection(height)?",
         "self.canonical_prune_capacity_admission_snapshot(",
-        "self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV2 {",
+        "self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV3 {",
         "self.persist_prune_intent(&intent)?",
         "store.prune_with_failpoint(height, fail_stage)"
       ],
       "ordered_tokens": [
-        "let roster_projection =",
-        ".project_truncate_to_height(height)",
+        "let sidecar_rewrite =",
+        "self.reconcile_and_project_prune_sidecar_rewrites_locked(height)?",
         "self.canonical_prune_commit_marker_projection(height)?",
         "self.canonical_prune_capacity_admission_snapshot(",
-        "self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV2 {",
+        "self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV3 {",
         "self.persist_prune_intent(&intent)?",
         "store.prune_with_failpoint(height, fail_stage)"
       ]
@@ -653,60 +629,6 @@
         "kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?",
         "kura.reconcile_merge_carriers_from_durable_blocks_with_authority(",
         "kura.complete_recovered_prune_intent(intent)?"
-      ]
-    },
-    {
-      "id": "prune_roster_authorized_mutation",
-      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
-      "coverage": "invariant_chain",
-      "path": "crates/iroha_core/src/kura/prune_recovery_capacity.rs",
-      "kind": "method",
-      "symbol": "Kura::truncate_roster_for_prune",
-      "required_tokens": [
-        "let remaining_roster = roster_log",
-        "intent.capacity.roster.authorizes(remaining_roster)",
-        "self.validate_recovered_prune_capacity(intent, remaining_roster, remaining_sidecar)?",
-        "let mut candidate = roster_log.clone();",
-        ".truncate_to_height_with_projection(height, intent.capacity.roster)",
-        "*roster_log = candidate;"
-      ],
-      "ordered_tokens": [
-        "let remaining_roster = roster_log",
-        "intent.capacity.roster.authorizes(remaining_roster)",
-        "self.validate_recovered_prune_capacity(intent, remaining_roster, remaining_sidecar)?",
-        "let mut candidate = roster_log.clone();",
-        ".truncate_to_height_with_projection(height, intent.capacity.roster)",
-        "*roster_log = candidate;"
-      ]
-    },
-    {
-      "id": "prune_roster_deterministic_publication",
-      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
-      "coverage": "invariant_chain",
-      "path": "crates/iroha_core/src/commit_roster_journal.rs",
-      "kind": "method",
-      "symbol": "CommitRosterJournal::persist_durable",
-      "required_tokens": [
-        "Self::reconcile_publication_residues(&self.path)?;",
-        ".open(&generation_temp_path)",
-        ".write_all(&bytes)",
-        "fs::rename(&generation_temp_path, &generation_path)",
-        "sync_dir(&generations).map_err(|source| {",
-        ".open(&pointer_temp_path)",
-        ".write_all(pointer_bytes.as_bytes())",
-        "fs::rename(&pointer_temp_path, &current_path)",
-        "sync_dir(&self.path)"
-      ],
-      "ordered_tokens": [
-        "Self::reconcile_publication_residues(&self.path)?;",
-        ".open(&generation_temp_path)",
-        ".write_all(&bytes)",
-        "fs::rename(&generation_temp_path, &generation_path)",
-        "sync_dir(&generations).map_err(|source| {",
-        ".open(&pointer_temp_path)",
-        ".write_all(pointer_bytes.as_bytes())",
-        "fs::rename(&pointer_temp_path, &current_path)",
-        "sync_dir(&self.path)"
       ]
     },
     {

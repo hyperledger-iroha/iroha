@@ -13,7 +13,7 @@ ahead of the SM rollout moving from preview to production.
 
 # Program Snapshot
 
-- **Release scope:** Iroha 2/3 shared codebase, deterministic verification
+- **Release scope:** Iroha 3, deterministic verification
   paths across nodes and SDKs, signing available behind configuration guard.
 - **Current phase:** SM-P3.2 (OpenSSL/Tongsuo backend integration) with Rust
   implementations already shipping for verification and symmetric use-cases.

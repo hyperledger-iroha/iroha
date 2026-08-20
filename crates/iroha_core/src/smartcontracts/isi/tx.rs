@@ -167,7 +167,7 @@ fn transaction_candidate_block_heights(
             intersect_block_candidate_heights(
                 &mut best,
                 block_hash_from_value(&cond.value)
-                    .and_then(|hash| state_ro.kura().get_block_height_by_hash(hash))
+                    .and_then(|hash| state_ro.block_height_by_hash(hash))
                     .into_iter()
                     .collect(),
             );
@@ -204,7 +204,7 @@ fn transaction_candidate_block_heights(
                 cond.values
                     .iter()
                     .filter_map(block_hash_from_value)
-                    .filter_map(|hash| state_ro.kura().get_block_height_by_hash(hash))
+                    .filter_map(|hash| state_ro.block_height_by_hash(hash))
                     .collect(),
             );
         }
@@ -244,8 +244,7 @@ fn transaction_filter_candidate_block_heights(
         intersect_block_candidate_heights(
             &mut best,
             state_ro
-                .kura()
-                .get_block_height_by_hash(*block_hash)
+                .block_height_by_hash(*block_hash)
                 .into_iter()
                 .collect(),
         );
@@ -256,7 +255,7 @@ fn transaction_filter_candidate_block_heights(
             filters
                 .block_in
                 .iter()
-                .filter_map(|hash| state_ro.kura().get_block_height_by_hash(*hash))
+                .filter_map(|hash| state_ro.block_height_by_hash(*hash))
                 .collect(),
         );
     }
@@ -647,13 +646,13 @@ fn committed_merge_transactions_by_height(
 ) -> Result<BTreeMap<NonZeroUsize, Vec<CommittedTransaction>>, QueryExecutionFail> {
     if let Some(candidate_heights) = candidate_heights {
         let mut by_height = BTreeMap::new();
-        for &height in candidate_heights {
-            let block = state_ro.kura().get_block(height).ok_or_else(|| {
-                merge_query_corruption(format!(
-                    "indexed canonical block {} body is unavailable",
-                    height.get()
-                ))
-            })?;
+        for &height in candidate_heights
+            .iter()
+            .filter(|height| height.get() <= state_ro.height())
+        {
+            let block = state_ro
+                .canonical_block_by_height(height)
+                .map_err(QueryExecutionFail::CanonicalHistory)?;
             let Some(reference) = block
                 .execution_context()
                 .and_then(|context| context.merge_entry.as_ref())
@@ -697,12 +696,9 @@ fn committed_merge_transactions_by_height(
             .ok()
             .and_then(NonZeroUsize::new)
             .ok_or_else(|| merge_query_corruption("carrier height is zero or out of range"))?;
-        let block = state_ro.kura().get_block(height).ok_or_else(|| {
-            merge_query_corruption(format!(
-                "canonical carrier block {} body is unavailable",
-                carrier.block_height
-            ))
-        })?;
+        let block = state_ro
+            .canonical_block_by_height(height)
+            .map_err(QueryExecutionFail::CanonicalHistory)?;
         if block.hash() != carrier.block_hash {
             return Err(merge_query_corruption(format!(
                 "carrier record at height {} does not match the canonical block hash",
@@ -801,8 +797,9 @@ pub(crate) struct TransactionHistoryCursor {
 /// # Errors
 ///
 /// Returns [`QueryExecutionFail::Expired`] if an anchored canonical prefix is
-/// no longer available, or [`QueryExecutionFail::Conversion`] when a touched
-/// block, carrier, or certified merge sidecar is inconsistent.
+/// no longer current, [`QueryExecutionFail::CanonicalHistory`] when a touched
+/// block body is unavailable or corrupt, or [`QueryExecutionFail::Conversion`]
+/// when carrier or certified merge-sidecar evidence is inconsistent.
 pub(crate) fn visit_committed_transactions(
     state_ro: &impl StateReadOnly,
     filter: &CompoundPredicate<CommittedTransaction>,
@@ -817,7 +814,6 @@ pub(crate) fn visit_committed_transactions(
 ) -> Result<bool, QueryExecutionFail> {
     anchor.validate(state_ro)?;
     let (predicate_json, candidate_heights) = transaction_query_plan(filter, state_ro);
-    let indexed = candidate_heights.is_some();
     let maximum_height = resume.map_or(anchor.height, |cursor| cursor.height.min(anchor.height));
     let heights: Box<dyn Iterator<Item = NonZeroUsize>> = match candidate_heights {
         Some(heights) => Box::new(
@@ -846,21 +842,10 @@ pub(crate) fn visit_committed_transactions(
         // Read only the canonical block and its compact reference first. The
         // full sidecar may be large, so its authenticated declared work must be
         // charged before Kura resolves or decodes it.
-        let Some(block) = state_ro.kura().get_block_without_merge_sidecar(height) else {
-            if indexed {
-                return Err(merge_query_corruption(format!(
-                    "canonical block {} body is unavailable",
-                    height.get()
-                )));
-            }
-            continue;
-        };
-        if block.hash() != expected_hash {
-            return Err(merge_query_corruption(format!(
-                "canonical block {} hash differs from the anchored query view",
-                height.get()
-            )));
-        }
+        let block = state_ro
+            .canonical_history()
+            .block_without_merge_sidecar(height)
+            .map_err(QueryExecutionFail::CanonicalHistory)?;
         let reference = block
             .execution_context()
             .and_then(|context| context.merge_entry.as_ref());
@@ -1058,15 +1043,20 @@ pub fn committed_transactions_bounded_snapshot(
 ///
 /// # Errors
 ///
-/// Returns [`QueryExecutionFail::Conversion`] when durable carrier, block, or
-/// sidecar evidence is unavailable, malformed, or mutually inconsistent.
+/// Returns [`QueryExecutionFail::CanonicalHistory`] when a canonical block
+/// body is unavailable or corrupt, or [`QueryExecutionFail::Conversion`] when
+/// durable carrier or sidecar evidence is malformed or inconsistent.
 pub fn committed_transactions_snapshot(
     state_ro: &impl StateReadOnly,
 ) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
     let merge_by_height = committed_merge_transactions_by_height(state_ro, None)?;
-    Ok(state_ro
+    let blocks = state_ro
         .all_blocks(nonzero!(1_usize))
         .rev()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(QueryExecutionFail::CanonicalHistory)?;
+    Ok(blocks
+        .into_iter()
         .flat_map(|block| block_committed_transactions_with_merge(&block, &merge_by_height))
         .collect())
 }
@@ -1080,7 +1070,9 @@ pub fn committed_transactions_snapshot(
 /// # Errors
 ///
 /// Returns [`QueryExecutionFail::Conversion`] when the filter is not bounded by
-/// a complete sparse index, or selected durable evidence is unavailable.
+/// a complete sparse index or selected sidecar evidence is inconsistent, and
+/// [`QueryExecutionFail::CanonicalHistory`] when a selected block is
+/// unavailable or corrupt.
 pub fn committed_transactions_indexed_snapshot(
     state_ro: &impl StateReadOnly,
     filter: CompoundPredicate<CommittedTransaction>,
@@ -1111,21 +1103,26 @@ impl ValidQuery for FindTransactions {
             committed_merge_transactions_by_height(state_ro, candidate_heights.as_ref())?;
         let iter: Box<dyn Iterator<Item = CommittedTransaction> + '_> =
             if let Some(candidate_heights) = candidate_heights {
-                Box::new(
-                    candidate_heights
-                        .into_iter()
-                        .rev()
-                        .filter_map(|height| state_ro.kura().get_block(height))
-                        .flat_map(move |block| {
-                            block_committed_transactions_with_merge(&block, &merge_by_height)
-                        }),
-                )
+                let blocks = candidate_heights
+                    .into_iter()
+                    .filter(|height| height.get() <= state_ro.height())
+                    .rev()
+                    .map(|height| state_ro.canonical_block_by_height(height))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(QueryExecutionFail::CanonicalHistory)?;
+                Box::new(blocks.into_iter().flat_map(move |block| {
+                    block_committed_transactions_with_merge(&block, &merge_by_height)
+                }))
             } else {
+                let blocks = state_ro
+                    .all_blocks(nonzero!(1_usize))
+                    .rev()
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(QueryExecutionFail::CanonicalHistory)?;
                 Box::new(
-                    state_ro
-                        .all_blocks(nonzero!(1_usize))
+                    blocks
+                        .into_iter()
                         // Iterate over blocks in descending order (most recent first).
-                        .rev()
                         .flat_map(move |block| {
                             block_committed_transactions_with_merge(&block, &merge_by_height)
                         }),
@@ -1142,19 +1139,20 @@ pub(crate) mod tests {
         block::BlockBuilder,
         tx::{AcceptedTransaction, tests::*},
     };
-    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
     use iroha_data_model::{
         ValidationFail,
         block::{
             BlockExecutionContextBundle, BlockHeader, SignedBlock,
             consensus::{
                 CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
-                LaneBlockQcV1,
+                SumeragiLanePayloadOwnership,
             },
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         merge::{
-            MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate,
+            MergeExecutionBatch, MergeLaneExecution, MergeLaneSignerProof, MergeLedgerEntry,
+            MergeQuorumCertificate,
         },
         prelude::{
             AccountId, DataSpaceId, DataTriggerSequence, InstructionBox, LaneId, NetworkId, PeerId,
@@ -1163,6 +1161,7 @@ pub(crate) mod tests {
         transaction::error::TransactionRejectionReason,
     };
     use std::{
+        collections::BTreeMap,
         num::{NonZeroU64, NonZeroUsize},
         sync::Arc,
         time::Duration,
@@ -1208,48 +1207,300 @@ pub(crate) mod tests {
             .iter()
             .map(|result| Hash::from(result.hash()))
             .collect::<Vec<_>>();
-        let validator_set = Vec::<PeerId>::new();
+        let mut validator_keypairs = (0_u8..4)
+            .map(|index| {
+                KeyPair::try_from_seed(
+                    vec![0xA0_u8.saturating_add(index); 32],
+                    Algorithm::BlsNormal,
+                )
+                .expect("derive deterministic merge-query lane validator")
+            })
+            .collect::<Vec<_>>();
+        validator_keypairs.sort_by(|left, right| {
+            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+        });
+        let validator_set = validator_keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        let validator_count =
+            u32::try_from(validator_set.len()).expect("merge-query validator count fits u32");
+        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+            validator_set.len(),
+        ))
+        .expect("merge-query quorum fits u32");
+        assert_eq!((validator_count, min_quorum), (4, 3));
         let lane_incarnation = Hash::new(b"merge-query-lane-incarnation");
-        let mut descriptor = LaneBlockDescriptorV1 {
+        let accepted_candidate_indices = vec![0, 1];
+        let qc_mode_tag = "permissioned:merge-query-test".to_owned();
+        let mut ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 2,
+            proposal_view: 0,
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
             lane_incarnation,
-            proposal_height: 2,
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
             lane_block_height: 1,
             lane_block_view: 0,
-            subject_hash: Hash::new(b"merge-query-subject"),
-            payload_ownership_hash: Hash::new(b"merge-query-ownership"),
-            rbc_instance_hash: Hash::new(b"merge-query-rbc"),
-            accepted_candidate_indices: vec![0, 1],
+            subject_hash: Hash::prehashed([0; Hash::LENGTH]),
+            qc_mode_tag: qc_mode_tag.clone(),
+            accepted_candidate_indices: accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: entrypoint_hashes.clone(),
+            lane_block_descriptor_hash: Some(Hash::new(b"merge-query-lane-descriptor-placeholder")),
+            lane_block_descriptor_validator_set: validator_set.clone(),
+            lane_block_descriptor_validator_count: validator_count,
+            lane_block_descriptor_min_quorum: min_quorum,
+            payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("compute canonical merge-query lane replay hashes");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        ownership
+            .validate_replay_material()
+            .expect("validate canonical merge-query lane replay material");
+        let descriptor = LaneBlockDescriptorV1 {
+            lane_id: ownership.lane_id,
+            dataspace_id: ownership.dataspace_id,
+            lane_incarnation: ownership.lane_incarnation,
+            proposal_height: ownership.proposal_height,
+            previous_lane_block_height: ownership.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
+            lane_block_height: ownership.lane_block_height,
+            lane_block_view: ownership.lane_block_view,
+            subject_hash: ownership.subject_hash,
+            payload_ownership_hash: ownership.payload_ownership_hash,
+            rbc_instance_hash: ownership.rbc_instance_hash,
+            accepted_candidate_indices,
             accepted_transaction_hashes: entrypoint_hashes.clone(),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
-            validator_count: 0,
-            min_quorum: 0,
-            qc_mode_tag: "merge-query-test".to_owned(),
-            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+            validator_count,
+            min_quorum,
+            qc_mode_tag,
+            descriptor_hash: replay_hashes.lane_block_descriptor_hash,
         };
-        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        assert_eq!(
+            descriptor.computed_descriptor_hash(),
+            descriptor.descriptor_hash,
+            "merge-query ownership and descriptor hashes must agree"
+        );
         let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
             payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
-        let qc = |phase| LaneBlockQcV1 {
-            body: proposal.vote_body(phase),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set: validator_set.clone(),
-            signers_bitmap: Vec::new(),
-            bls_aggregate_signature: Vec::new(),
-            payload_availability_qc: None,
+        crate::lane_consensus::validate_lane_block_proposal(&proposal)
+            .expect("merge-query lane proposal satisfies current ingress validation");
+        let autonomous_network_id = network_id;
+        let autonomous_epoch = epoch;
+        let routing_plans = entrypoints
+            .iter()
+            .map(|_| {
+                crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+                    LaneId::SINGLE,
+                    DataSpaceId::UNIVERSAL,
+                ))
+            })
+            .collect::<Vec<_>>();
+        let reservation_keys = entrypoints
+            .iter()
+            .zip(&routing_plans)
+            .enumerate()
+            .map(|(index, (entrypoint, routing_plan))| {
+                let index_bytes = u64::try_from(index)
+                    .expect("merge-query reservation index fits u64")
+                    .to_le_bytes();
+                crate::queue::LaneQueueReservationKeyV2 {
+                    version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+                    entrypoint_hash: entrypoint.hash(),
+                    queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
+                        b"merge-query-queue-plan-admission".as_slice(),
+                        epoch.to_le_bytes().as_slice(),
+                        index_bytes.as_slice(),
+                    ]),
+                    routing_plan_digest: routing_plan.digest(),
+                    coordinator_leg: routing_plan.coordinator_leg(),
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    lane_incarnation,
+                    proposal_height: proposal.descriptor.proposal_height,
+                    lane_block_height: proposal.descriptor.lane_block_height,
+                    lane_block_view: proposal.descriptor.lane_block_view,
+                    reservation_owner_hash: Hash::new_from_chunks(&[
+                        b"merge-query-reservation-owner".as_slice(),
+                        epoch.to_le_bytes().as_slice(),
+                        index_bytes.as_slice(),
+                    ]),
+                    proposal_identity_hash: proposal.proposal_hash,
+                }
+            })
+            .collect::<Vec<_>>();
+        let native_amx_receipts = vec![None; entrypoints.len()];
+        let producer = crate::lane_consensus::deterministic_lane_author(
+            &validator_set,
+            proposal.descriptor.lane_block_height,
+        )
+        .cloned()
+        .expect("merge-query committee has a deterministic lane author");
+        let producer_keypair = validator_keypairs
+            .iter()
+            .find(|keypair| keypair.public_key() == producer.public_key())
+            .expect("merge-query fixture retains the deterministic producer key");
+        let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
+            autonomous_network_id,
+            autonomous_epoch,
+            proposal.clone(),
+            entrypoints.clone(),
+            reservation_keys,
+            routing_plans,
+            native_amx_receipts.clone(),
+            producer,
+            producer_keypair.private_key(),
+        )
+        .expect("construct canonical merge-query autonomous payload");
+        let validator_pops = validator_keypairs
+            .iter()
+            .map(|keypair| {
+                bls_normal_pop_prove(keypair.private_key())
+                    .expect("derive merge-query validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let availability_body = crate::lane_consensus::lane_payload_availability_body(
+            &payload,
+            &proposal,
+            autonomous_network_id,
+            autonomous_epoch,
+        )
+        .expect("construct canonical merge-query READY body");
+        let prepare_votes = validator_keypairs
+            .iter()
+            .take(usize::try_from(min_quorum).expect("merge-query quorum fits usize"))
+            .map(|keypair| {
+                let availability_vote =
+                    crate::lane_consensus::LanePayloadAvailabilityVoteV1::new_signed(
+                        availability_body.clone(),
+                        PeerId::new(keypair.public_key().clone()),
+                        validator_pops.clone(),
+                        keypair.private_key(),
+                    )
+                    .expect("sign merge-query payload availability vote");
+                let body = proposal.vote_body(CertPhase::Prepare);
+                let signature =
+                    Signature::try_new(keypair.private_key(), &body.signature_preimage())
+                        .expect("sign merge-query lane Prepare vote");
+                crate::lane_consensus::LaneBlockVoteV1 {
+                    body,
+                    signer: PeerId::new(keypair.public_key().clone()),
+                    bls_signature: signature.payload().to_vec(),
+                    payload_availability_vote: Some(availability_vote),
+                }
+            })
+            .collect::<Vec<_>>();
+        let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            proposal.vote_body(CertPhase::Prepare),
+            validator_set.clone(),
+            &prepare_votes,
+        )
+        .expect("aggregate exact merge-query lane PrepareQC");
+        let commit_votes = validator_keypairs
+            .iter()
+            .take(usize::try_from(min_quorum).expect("merge-query quorum fits usize"))
+            .map(|keypair| {
+                let body = proposal.vote_body(CertPhase::Commit);
+                let signature =
+                    Signature::try_new(keypair.private_key(), &body.signature_preimage())
+                        .expect("sign merge-query lane Commit vote");
+                crate::lane_consensus::LaneBlockVoteV1 {
+                    body,
+                    signer: PeerId::new(keypair.public_key().clone()),
+                    bls_signature: signature.payload().to_vec(),
+                    payload_availability_vote: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        let commit_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            proposal.vote_body(CertPhase::Commit),
+            validator_set,
+            &commit_votes,
+        )
+        .expect("aggregate exact merge-query lane CommitQC");
+        let mut signer_proofs = validator_keypairs
+            .iter()
+            .take(usize::try_from(min_quorum).expect("merge-query quorum fits usize"))
+            .map(|keypair| MergeLaneSignerProof {
+                public_key: keypair.public_key().clone(),
+                proof_of_possession: bls_normal_pop_prove(keypair.private_key())
+                    .expect("derive merge-query lane signer proof of possession"),
+            })
+            .collect::<Vec<_>>();
+        signer_proofs.sort_by(|left, right| left.public_key.cmp(&right.public_key));
+        let signer_pops = signer_proofs
+            .iter()
+            .map(|proof| (proof.public_key.clone(), proof.proof_of_possession.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let certified = crate::kura::CertifiedLaneBlockArtifact::new(
+            crate::lane_consensus::CommittedLaneBlockSession {
+                proposal: proposal.clone(),
+                prepare_qc: prepare_qc.clone(),
+                commit_qc: commit_qc.clone(),
+            },
+            signer_pops,
+        );
+        let bundle = crate::kura::AutonomousLaneMergeBundleV1 {
+            version: crate::kura::AutonomousLaneMergeBundleV1::VERSION,
+            autonomous: crate::kura::AutonomousLaneBlockArtifact {
+                format: crate::kura::AutonomousLaneBlockArtifactFormat::Current,
+                executable_payload: payload.clone(),
+                availability_certificate: Some(
+                    crate::lane_consensus::DurableLanePayloadAvailabilityCertificateV1 {
+                        certificate: prepare_qc.clone(),
+                    },
+                ),
+                view_checkpoint: None,
+                new_view_certificates: Vec::new(),
+            },
+            certified,
         };
-        let prepare_qc = qc(CertPhase::Prepare);
-        let commit_qc = qc(CertPhase::Commit);
+        crate::kura::Kura::validate_autonomous_lane_merge_bundle(
+            &bundle,
+            autonomous_network_id,
+            autonomous_epoch,
+        )
+        .expect("validate canonical merge-query autonomous source bundle");
+        let source_bundle = bundle
+            .encode_framed()
+            .expect("encode canonical merge-query autonomous source bundle");
+        let source_bundle_hash = bundle
+            .bundle_hash()
+            .expect("hash canonical merge-query autonomous source bundle");
+        assert_eq!(
+            source_bundle_hash,
+            Hash::new_from_chunks(&[
+                b"iroha:nexus:autonomous-lane-merge-bundle:v1\0",
+                &source_bundle,
+            ]),
+            "merge-query source bytes and domain-separated bundle hash must agree"
+        );
+        let encoded_reservation_keys = payload
+            .reservation_keys
+            .iter()
+            .map(norito::encode_canonical)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("encode canonical merge-query reservation keys");
+        let encoded_routing_plans = payload
+            .routing_plans
+            .iter()
+            .map(norito::encode_canonical)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("encode canonical merge-query routing plans");
         let settlement_commitment = LaneBlockCommitment {
             block_height: 1,
             lane_id: LaneId::SINGLE,
@@ -1266,26 +1517,21 @@ pub(crate) mod tests {
             native_amx_receipts: Vec::new(),
         };
         let execution = MergeLaneExecution {
-            source_bundle: vec![1],
-            source_bundle_hash: Hash::new(b"merge-query-source"),
+            source_bundle,
+            source_bundle_hash,
             proposal: proposal.clone(),
             origin_proposal: proposal,
             prepare_qc,
             commit_qc,
-            signer_proofs: Vec::new(),
-            autonomous_network_id:
-                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-                    iroha_data_model::block::BlockHeader,
-                >::from_untyped_unchecked(
-                    Hash::new(b"merge-query-genesis")
-                )),
-            autonomous_epoch: 0,
-            autonomous_payload_hash: Hash::new(b"merge-query-payload"),
+            signer_proofs,
+            autonomous_network_id,
+            autonomous_epoch,
+            autonomous_payload_hash: payload.payload_hash,
             entrypoint_hashes,
             entrypoints,
-            reservation_keys: vec![vec![1], vec![2]],
-            routing_plans: vec![vec![3], vec![4]],
-            native_amx_receipts: vec![None, None],
+            reservation_keys: encoded_reservation_keys,
+            routing_plans: encoded_routing_plans,
+            native_amx_receipts,
             result_hashes,
             results,
             settlement_hash: iroha_data_model::nexus::compute_settlement_hash(
@@ -1644,6 +1890,55 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("require a positive indexed filter")
         );
+    }
+    #[test]
+    fn indexed_and_unindexed_transaction_history_report_the_same_hash_only_gap() {
+        let fixture = merge_query_fixture();
+        let target_height = fixture
+            .sandbox
+            .state
+            .view()
+            .block_height_by_hash(fixture.target_block_hash)
+            .expect("target transaction carrier must be indexed");
+        fixture
+            .sandbox
+            .state
+            .kura()
+            .force_hash_only_block_for_testing(target_height)
+            .expect("convert target transaction carrier to hash-only form");
+        let state_view = fixture.sandbox.state.view();
+        let indexed_error = committed_transactions_indexed_snapshot(
+            &state_view,
+            CompoundPredicate::from_filters(CommittedTxFilters {
+                entry_eq: Some(fixture.target_entrypoint_hash),
+                ..CommittedTxFilters::default()
+            }),
+        )
+        .expect_err("indexed history must reject a hash-only selected carrier");
+        let unindexed_error =
+            ValidQuery::execute(FindTransactions, CompoundPredicate::PASS, &state_view)
+                .err()
+                .expect("unindexed history must reject the same hash-only carrier");
+        let paginated_error = visit_committed_transactions(
+            &state_view,
+            &CompoundPredicate::PASS,
+            TransactionHistoryAnchor::capture(&state_view),
+            None,
+            |_| Ok(()),
+            |_, _, _| Ok(ControlFlow::Continue(())),
+        )
+        .expect_err("paginated history must surface the same hash-only carrier gap");
+        assert!(matches!(
+            &indexed_error,
+            QueryExecutionFail::CanonicalHistory(
+                iroha_data_model::query::error::CanonicalHistoryError::HashOnlyBodyUnavailable {
+                    height,
+                    ..
+                }
+            ) if *height == u64::try_from(target_height.get()).unwrap()
+        ));
+        assert_eq!(unindexed_error, indexed_error);
+        assert_eq!(paginated_error, indexed_error);
     }
     #[test]
     fn indexed_merge_query_ignores_unselected_corruption_and_fails_on_selected_corruption() {

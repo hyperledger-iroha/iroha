@@ -2537,7 +2537,6 @@ fn configure_recipient_lookup_sbp_dataspace_for_test(
     ])
     .expect("dataspace catalog");
     let nexus = actual::Nexus {
-        enabled: true,
         lane_catalog,
         dataspace_catalog,
         ..actual::Nexus::default()

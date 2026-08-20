@@ -18,12 +18,7 @@ fn lane_reservation_test_state() -> Arc<State> {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    install_single_validator_topology_for_queue_test(&state, 0xD5);
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = false;
-    state
-        .set_nexus(nexus)
-        .expect("use the authoritative canonical single-lane fixture");
+    install_single_validator_topology_for_queue_test(&mut state, 0xD5);
     Arc::new(state)
 }
 fn lane_reservation_scope(
@@ -45,7 +40,7 @@ fn lane_reservation_scope(
     }
 }
 #[test]
-fn lane_reservation_scope_accepts_only_canonical_single_lane_when_nexus_is_disabled() {
+fn lane_reservation_scope_accepts_only_the_canonical_single_lane() {
     let state = lane_reservation_test_state();
     let scope = lane_reservation_scope(&state, b"single-lane-owner", b"single-lane-proposal");
     assert!(Queue::validate_reservation_scope_against_view(&state.view(), scope).is_ok());
@@ -56,28 +51,11 @@ fn lane_reservation_scope_accepts_only_canonical_single_lane_when_nexus_is_disab
         Err(LaneQueueReservationError::InactiveRoute)
     ));
 }
-#[test]
-fn lane_reservation_key_requires_explicit_current_version() {
-    #[derive(Encode)]
-    struct LegacyLaneQueueReservationKeyV1 {
-        signed_transaction_hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
-        routing_plan_digest: Hash,
-        coordinator_leg: RouteLeg,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        lane_incarnation: Hash,
-        proposal_height: u64,
-        lane_block_height: u64,
-        lane_block_view: u64,
-        reservation_owner_hash: Hash,
-        proposal_identity_hash: Hash,
-    }
+fn reservation_key_fixture() -> LaneQueueReservationKeyV2 {
     let route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(7));
     let entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"reservation-key-entrypoint"));
-    let key = LaneQueueReservationKeyV2 {
+    LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: compatibility_queue_hash(entrypoint_hash.clone()),
         entrypoint_hash,
         queue_plan_admission_binding_hash: Hash::new(
             b"reservation-key-queue-plan-admission-binding",
@@ -92,15 +70,13 @@ fn lane_reservation_key_requires_explicit_current_version() {
         lane_block_view: 2,
         reservation_owner_hash: Hash::new(b"reservation-key-owner"),
         proposal_identity_hash: Hash::new(b"reservation-key-proposal"),
-    };
+    }
+}
+
+#[test]
+fn lane_reservation_key_current_layout_roundtrips() {
+    let key = reservation_key_fixture();
     assert_eq!(key.validate(), Ok(()));
-    let mut mismatched_queue_hash = key;
-    mismatched_queue_hash.signed_transaction_hash =
-        HashOf::from_untyped_unchecked(Hash::new(b"mismatched compatibility queue hash"));
-    assert_eq!(
-        mismatched_queue_hash.validate(),
-        Err("lane reservation compatibility transaction hash does not match its entrypoint")
-    );
     let key_digest = key.digest();
     let framed = norito::encode_canonical(&key).expect("encode current reservation key");
     assert_eq!(
@@ -118,9 +94,43 @@ fn lane_reservation_key_requires_explicit_current_version() {
             "reservation identity must ignore the caller's ambient Norito layout"
         );
     }
-    let legacy = LegacyLaneQueueReservationKeyV1 {
-        signed_transaction_hash: key.signed_transaction_hash,
+    for malformed_version in [0, LaneQueueReservationKeyV2::VERSION + 1] {
+        let mut malformed = key;
+        malformed.version = malformed_version;
+        assert_eq!(
+            malformed.validate(),
+            Err("unsupported lane queue reservation key version")
+        );
+    }
+}
+
+#[test]
+fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
+    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+    #[norito(deny_unknown_fields)]
+    struct PreReleaseLaneQueueReservationKeyV2 {
+        version: u16,
+        signed_transaction_hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        queue_plan_admission_binding_hash: Hash,
+        routing_plan_digest: Hash,
+        coordinator_leg: RouteLeg,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        proposal_height: u64,
+        lane_block_height: u64,
+        lane_block_view: u64,
+        reservation_owner_hash: Hash,
+        proposal_identity_hash: Hash,
+    }
+
+    let key = reservation_key_fixture();
+    let pre_release = PreReleaseLaneQueueReservationKeyV2 {
+        version: key.version,
+        signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(key.entrypoint_hash)),
         entrypoint_hash: key.entrypoint_hash,
+        queue_plan_admission_binding_hash: key.queue_plan_admission_binding_hash,
         routing_plan_digest: key.routing_plan_digest,
         coordinator_leg: key.coordinator_leg,
         lane_id: key.lane_id,
@@ -132,20 +142,12 @@ fn lane_reservation_key_requires_explicit_current_version() {
         reservation_owner_hash: key.reservation_owner_hash,
         proposal_identity_hash: key.proposal_identity_hash,
     };
-    let legacy_framed =
-        norito::to_bytes(&legacy).expect("encode legacy versionless reservation key");
+    let pre_release_framed =
+        norito::encode_canonical(&pre_release).expect("encode pre-release reservation key");
     assert!(
-        norito::decode_from_bytes::<LaneQueueReservationKeyV2>(&legacy_framed).is_err(),
-        "a versionless reservation key must fail closed"
+        norito::decode_canonical::<LaneQueueReservationKeyV2>(&pre_release_framed).is_err(),
+        "the duplicate-identity pre-release layout must fail closed"
     );
-    for malformed_version in [0, LaneQueueReservationKeyV2::VERSION + 1] {
-        let mut malformed = key;
-        malformed.version = malformed_version;
-        assert_eq!(
-            malformed.validate(),
-            Err("unsupported lane queue reservation key version")
-        );
-    }
 }
 fn install_test_reservation_journal(queue: &Queue, dir: &tempfile::TempDir) -> PathBuf {
     let path = dir.path().join("lane-queue-reservations.norito");
@@ -190,7 +192,6 @@ fn payload_free_diagnostic_reservation_record(
         version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
         key: LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(entrypoint_hash)),
             entrypoint_hash,
             queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                 b"payload-free-diagnostic-admission",
@@ -300,9 +301,7 @@ fn persist_unreconciled_commit_barrier(
         .commit(key)
         .expect("persist commit before simulated startup-boundary crash");
     let mut reservations = queue.lane_reservations.lock();
-    reservations
-        .live_by_hash
-        .remove(&key.signed_transaction_hash);
+    reservations.live_by_entrypoint.remove(&key.entrypoint_hash);
     reservations.commit_barriers.push(key);
     key
 }
@@ -314,7 +313,7 @@ fn commit_barrier_owns_hash_until_plan_reconciliation() {
     let queue = Queue::test(config_factory(), &time_source);
     install_globally_certified_test_reservation_journals(&queue, &dir);
     let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
-    let hash = transaction.hash();
+    let hash = transaction.hash_as_entrypoint();
     let key = persist_unreconciled_commit_barrier(
         &queue,
         &state,
@@ -350,7 +349,7 @@ fn plan_admission_append_never_owns_queue_mutation_lock() {
         Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
         &transaction,
     );
-    let hash = transaction.hash();
+    let hash = transaction.hash_as_entrypoint();
     let reached = Arc::new(Barrier::new(2));
     let resume = Arc::new(Barrier::new(2));
     queue
@@ -419,7 +418,7 @@ fn plan_admission_append_never_owns_queue_mutation_lock() {
             .expect("durable admission");
     });
     assert!(!queue.durability_transition_active(&hash));
-    assert!(queue.contains_transaction_hash(hash));
+    assert!(queue.contains_entrypoint_hash(hash));
     assert_eq!(queue.queued_len(), 1);
     let claim = queue
         .durable_plan_claims
@@ -442,7 +441,7 @@ fn ordinary_unbound_durable_claim_waits_for_global_admission_without_fault() {
     let queue = Queue::test(config_factory(), &time_source);
     install_globally_certified_test_reservation_journals(&queue, &dir);
     let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
-    let hash = transaction.hash();
+    let hash = transaction.hash_as_entrypoint();
     register_accepted_tx_authority_for_queue_test(
         Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
         &transaction,
@@ -466,7 +465,7 @@ fn ordinary_unbound_durable_claim_waits_for_global_admission_without_fault() {
     assert!(reserved.is_empty());
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.queued_len(), 1);
-    assert!(queue.contains_transaction_hash(hash));
+    assert!(queue.contains_entrypoint_hash(hash));
     assert!(
         queue
             .durable_plan_claims
@@ -484,10 +483,10 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     install_globally_certified_test_reservation_journals(&queue, &dir);
     let selected = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
-    let selected_hash = selected.hash();
+    let selected_hash = selected.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, selected);
     let unrelated = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
-    let unrelated_hash = unrelated.hash();
+    let unrelated_hash = unrelated.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
     let reached = Arc::new(Barrier::new(2));
     let resume = Arc::new(Barrier::new(2));
@@ -539,8 +538,8 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
             1
         );
         assert_eq!(reserved.len(), 1);
-        assert_eq!(reserved[0].key().signed_transaction_hash, selected_hash);
+        assert_eq!(reserved[0].key().entrypoint_hash, selected_hash);
     });
-    assert!(!queue.contains_transaction_hash(unrelated_hash));
+    assert!(!queue.contains_entrypoint_hash(unrelated_hash));
     assert!(!queue.durability_transition_active(&selected_hash));
 }

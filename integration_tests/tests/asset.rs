@@ -261,14 +261,9 @@ fn ivm_build_profile_exists() -> bool {
 }
 fn quiet_network_builder_base() -> NetworkBuilder {
     init_instruction_registry();
-    let mut nexus = toml::Table::new();
-    nexus.insert("enabled".into(), toml::Value::Boolean(false));
-    let mut layer = toml::Table::new();
-    layer.insert("nexus".into(), toml::Value::Table(nexus));
     NetworkBuilder::new()
         .with_peers(4)
         .with_block_cadence(FAST_PIPELINE_TIME)
-        .with_config_table(layer)
         .with_ivm_fuel(IvmFuelConfig::Unset)
 }
 fn quiet_network_builder() -> NetworkBuilder {

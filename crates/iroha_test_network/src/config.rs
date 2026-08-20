@@ -2,9 +2,12 @@
 use crate::init_instruction_registry;
 use color_eyre::{Report, eyre::eyre};
 use iroha_config::base::toml::WriteExt;
-use iroha_config::parameters::actual::{
-    Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline, Root as ActualRoot,
-    Zk as ActualZk,
+use iroha_config::parameters::{
+    actual::{
+        Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline,
+        Root as ActualRoot, Zk as ActualZk,
+    },
+    defaults,
 };
 use iroha_core::{
     block::ValidBlock,
@@ -14,7 +17,7 @@ use iroha_core::{
     state::{State, World},
     sumeragi::network_topology::Topology as CoreTopology,
 };
-use iroha_crypto::{Hash, KeyPair, SignatureOf};
+use iroha_crypto::{Hash, KeyPair, MerkleTree, SignatureOf};
 use iroha_data_model::{
     ChainId, Registrable as _,
     account::{Account, AccountId},
@@ -41,7 +44,7 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{HashOf, Transfer},
     transaction::{Executable, signed::TransactionResultInner},
-    trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
+    trigger::TimeTriggerEntrypoint,
 };
 use iroha_executor_data_model::permission::{
     account::CanRegisterAccount,
@@ -69,7 +72,6 @@ use std::{
     sync::Arc,
 };
 use toml::Table;
-use tracing::warn;
 /// Exact policy commitments derived by isolated genesis pre-execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StagedGenesisPolicyHashes {
@@ -125,6 +127,11 @@ pub fn base_iroha_config() -> Table {
         // There is no need in persistence in tests.
         .write(["snapshot", "mode"], "disabled")
         .write(["kura", "store_dir"], "./storage")
+        .write(
+            ["kura", "lane_history_retention"],
+            i64::try_from(defaults::kura::LANE_HISTORY_RETENTION.get())
+                .expect("Kura lane-history retention default fits a TOML integer"),
+        )
         // Default to broadcasting blocks to the entire test topology so small networks
         // do not stall waiting for block sync retries when some peers miss a gossip hop.
         .write(["network", "block_gossip_size"], 256)
@@ -886,20 +893,22 @@ pub(crate) fn ensure_genesis_results_with_runtime_config(
     zk_config: Option<&ActualZk>,
     runtime_config: Option<&ActualRoot>,
 ) {
-    let tx_count = block.0.transactions_vec().len();
-    let result_count = block.0.results().count();
-    let missing_results = tx_count > 0 && tx_count != result_count;
-    let synthetic_results_need_preexecution = block.0.committed_fragment_count() == Some(0);
+    let has_results = block.0.has_results();
+    let results_are_canonical = genesis_results_are_canonical(&block.0);
+    assert!(
+        !has_results || results_are_canonical,
+        "provided genesis execution results must be complete and canonical"
+    );
     let signature_is_canonical = genesis_signature_is_canonical(&block.0, genesis_key_pair);
-    if !missing_results && !synthetic_results_need_preexecution && signature_is_canonical {
+    if results_are_canonical && signature_is_canonical {
         return;
     }
     // Preserve already computed execution results while restoring the canonical genesis signature.
-    if !missing_results && !synthetic_results_need_preexecution {
+    if has_results {
         block.0 = rebuild_block_with_results(&block.0, genesis_key_pair);
         return;
     }
-    match preexecute_genesis_with_runtime_config(
+    let (executed, _) = preexecute_genesis_with_runtime_config(
         block,
         genesis_account,
         topology,
@@ -908,16 +917,33 @@ pub(crate) fn ensure_genesis_results_with_runtime_config(
         nexus_config,
         zk_config,
         runtime_config,
-    ) {
-        Ok((new_block, _)) => block.0 = new_block,
-        Err(err) => {
-            warn!(
-                ?err,
-                "Failed to pre-execute genesis block; falling back to synthetic success results"
-            );
-            block.0 = build_placeholder_block(&block.0, genesis_key_pair);
-        }
+    )
+    .unwrap_or_else(|error| panic!("genesis pre-execution must succeed: {error:#}"));
+    block.0 = executed;
+}
+fn genesis_results_are_canonical(block: &iroha_data_model::block::SignedBlock) -> bool {
+    if !block.has_results() {
+        return false;
     }
+    let entrypoint_count = block.entrypoint_hashes().len();
+    let result_count = block.results().len();
+    if result_count != entrypoint_count || block.results().any(|result| result.as_ref().is_err()) {
+        return false;
+    }
+    let Ok(minimum_committed_fragments) = u64::try_from(result_count) else {
+        return false;
+    };
+    let Some(actual_committed_fragments) = block.committed_fragment_count() else {
+        return false;
+    };
+    if actual_committed_fragments < minimum_committed_fragments
+        || block.validate_entrypoint_merkle_cache().is_err()
+        || block.validate_result_merkle_cache().is_err()
+    {
+        return false;
+    }
+    let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
+    block.header().result_merkle_root() == expected_result_root
 }
 fn genesis_signature_is_canonical(
     block: &iroha_data_model::block::SignedBlock,
@@ -1002,8 +1028,8 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     let query_handle = LiveQueryStore::start_test();
     let effective_genesis_account = block
         .0
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .map(|tx| tx.authority().clone())
         .unwrap_or_else(|| genesis_account.clone());
     let genesis_domain =
@@ -1054,16 +1080,20 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     let (valid_block, state_block) = match validation {
         Ok(validated) => validated,
         Err((rejected_block, err)) => {
-            let first_tx_error =
-                rejected_block
-                    .results()
-                    .enumerate()
-                    .find_map(|(index, result)| {
-                        result
-                            .as_ref()
-                            .err()
-                            .map(|tx_err| format!("tx#{index}: {tx_err}; details: {tx_err:?}"))
-                    });
+            let first_tx_error = rejected_block
+                .has_results()
+                .then(|| {
+                    rejected_block
+                        .results()
+                        .enumerate()
+                        .find_map(|(index, result)| {
+                            result
+                                .as_ref()
+                                .err()
+                                .map(|tx_err| format!("tx#{index}: {tx_err}; details: {tx_err:?}"))
+                        })
+                })
+                .flatten();
             let mut report = Report::new(err);
             if let Some(first_tx_error) = first_tx_error {
                 report = report.wrap_err(format!(
@@ -1195,53 +1225,24 @@ fn install_preexec_lane_manifests(
         _ => None,
     };
     state.install_lane_compliance_engine(lane_compliance);
-    let lane_manifests = if nexus.enabled {
-        let registry = LaneManifestRegistry::from_config(
-            &nexus.lane_catalog,
-            &nexus.governance,
-            &nexus.registry,
-        );
-        registry
-            .validate_active_coverage_for_catalog(&nexus.lane_catalog)
-            .map_err(|error| {
-                eyre!("validate lane manifest registry for genesis pre-execution: {error}")
-            })?;
-        registry
-    } else {
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
-    };
+    let lane_manifests =
+        LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
+    lane_manifests
+        .validate_active_coverage_for_catalog(&nexus.lane_catalog)
+        .map_err(|error| {
+            eyre!("validate lane manifest registry for genesis pre-execution: {error}")
+        })?;
     state.install_lane_manifests(&Arc::new(lane_manifests));
     Ok(())
-}
-fn build_placeholder_block(
-    template: &iroha_data_model::block::SignedBlock,
-    genesis_key_pair: &KeyPair,
-) -> iroha_data_model::block::SignedBlock {
-    let transactions = template.transactions_vec().clone();
-    let hashes = transactions
-        .iter()
-        .map(|tx| tx.hash_as_entrypoint())
-        .collect::<Vec<_>>();
-    let results = hashes
-        .iter()
-        .map(|_| Ok(DataTriggerSequence::default()))
-        .collect::<Vec<_>>();
-    let mut block = rebuild_block_from_parts(
-        template,
-        transactions,
-        Vec::new(),
-        hashes,
-        results,
-        genesis_key_pair,
-    );
-    block.set_committed_fragment_count(0);
-    block
 }
 fn rebuild_block_with_results(
     template: &iroha_data_model::block::SignedBlock,
     genesis_key_pair: &KeyPair,
 ) -> iroha_data_model::block::SignedBlock {
-    let transactions = template.transactions_vec().clone();
+    let transactions = template
+        .external_transactions()
+        .cloned()
+        .collect::<Vec<_>>();
     let time_triggers = template.time_triggers().cloned().collect::<Vec<_>>();
     let hashes = template.entrypoint_hashes().collect::<Vec<_>>();
     let results = template
@@ -1425,10 +1426,9 @@ mod tests {
                 vec![entry],
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
-        assert_eq!(
-            block.0.results().count(),
-            0,
-            "freshly built genesis block should lack transaction results"
+        assert!(
+            block.0.is_resultless_proposal(),
+            "freshly built genesis must be an explicitly resultless proposal"
         );
         super::ensure_genesis_results(
             &mut block,
@@ -1474,9 +1474,16 @@ mod tests {
             None,
             None,
         );
-        let preserved_count =
-            u64::try_from(block.0.results().count()).expect("genesis result count fits u64") + 1;
-        block.0.set_committed_fragment_count(preserved_count);
+        let minimum_count =
+            u64::try_from(block.0.results().count()).expect("genesis result count fits u64");
+        let preserved_count = block
+            .0
+            .committed_fragment_count()
+            .expect("executed genesis carries its committed fragment count");
+        assert!(
+            preserved_count >= minimum_count,
+            "execution-derived committed count must cover every result row"
+        );
         let rebuilt = super::rebuild_block_with_results(&block.0, &genesis_key_pair);
         assert_eq!(
             rebuilt.committed_fragment_count(),
@@ -1487,9 +1494,19 @@ mod tests {
             super::genesis_signature_is_canonical(&rebuilt, &genesis_key_pair),
             "preserved committed fragment count must be included before the canonical signature"
         );
+        let mut extra_internal_fragments = rebuilt;
+        let augmented_count = preserved_count
+            .checked_add(1)
+            .expect("genesis fixture committed count has room for an internal fragment");
+        extra_internal_fragments.set_committed_fragment_count(augmented_count);
+        assert!(
+            super::genesis_results_are_canonical(&extra_internal_fragments),
+            "deterministic internal fragments may increase the committed count beyond the result count"
+        );
     }
     #[test]
-    fn placeholder_block_advertises_unknown_committed_fragment_count() {
+    #[should_panic(expected = "provided genesis execution results must be complete and canonical")]
+    fn ensure_genesis_results_rejects_noncanonical_fragment_count() {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
@@ -1497,30 +1514,38 @@ mod tests {
             .into_iter()
             .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
         let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
+            peer_id,
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
-        let (block, _genesis_account, _topology_vec, genesis_key_pair) =
+        let (mut block, genesis_account, topology_vec, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
                 vec![entry],
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
-        let placeholder = super::build_placeholder_block(&block.0, &genesis_key_pair);
-        assert_eq!(
-            placeholder.results().count(),
-            block.0.transactions_vec().len(),
-            "placeholder block must still carry result rows for every transaction"
+        super::ensure_genesis_results(
+            &mut block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+            None,
         );
-        assert_eq!(
-            placeholder.committed_fragment_count(),
-            Some(0),
-            "placeholder block must let validation derive committed fragment count"
+        let expected_count =
+            u64::try_from(block.0.results().len()).expect("genesis result count fits u64");
+        assert_ne!(
+            expected_count, 0,
+            "fixture must execute at least one entrypoint"
         );
-        assert!(
-            super::genesis_signature_is_canonical(&placeholder, &genesis_key_pair),
-            "placeholder committed fragment count must be signed canonically"
+        block.0.set_committed_fragment_count(0);
+        super::ensure_genesis_results(
+            &mut block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+            None,
         );
     }
     #[test]
@@ -1654,7 +1679,6 @@ mod tests {
         let catalog =
             LaneCatalog::new(lane_count, vec![lane0, lane1]).expect("lane catalog should validate");
         let nexus = ActualNexus {
-            enabled: true,
             lane_catalog: catalog.clone(),
             lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog),
             ..Default::default()
@@ -1743,7 +1767,6 @@ mod tests {
         ])
         .expect("dataspace catalog should validate");
         let nexus = ActualNexus {
-            enabled: true,
             staking: iroha_config::parameters::actual::NexusStaking {
                 stake_asset_id: stake_asset_id.to_string(),
                 ..Default::default()
@@ -1955,7 +1978,8 @@ mod tests {
         }
     }
     #[test]
-    fn ensure_genesis_results_falls_back_when_preexecution_fails() {
+    #[should_panic(expected = "genesis pre-execution must succeed")]
+    fn ensure_genesis_results_fails_closed_when_preexecution_fails() {
         init_instruction_registry();
         let empty_topology = iroha_primitives::unique_vec::UniqueVec::new();
         let (mut block, genesis_account, _, genesis_key_pair) =
@@ -1965,10 +1989,9 @@ mod tests {
                 Vec::new(),
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
-        assert_eq!(
-            block.0.results().count(),
-            0,
-            "freshly built genesis block should lack transaction results"
+        assert!(
+            block.0.is_resultless_proposal(),
+            "freshly built genesis must be an explicitly resultless proposal"
         );
         super::ensure_genesis_results(
             &mut block,
@@ -1977,20 +2000,6 @@ mod tests {
             &genesis_key_pair,
             None,
             None,
-        );
-        assert!(
-            block.0.has_results(),
-            "fallback path must still populate synthetic results"
-        );
-        let tx_count = block.0.transactions_vec().len();
-        assert_eq!(
-            block.0.results().count(),
-            tx_count,
-            "each genesis transaction needs a matching synthetic result"
-        );
-        assert!(
-            block.0.results().all(|result| result.as_ref().is_ok()),
-            "synthetic fallback results should be successes"
         );
     }
     #[test]
@@ -2006,7 +2015,7 @@ mod tests {
         let block = genesis(Vec::new(), topology, vec![entry]);
         let mut register_pop = 0;
         let mut hsm_bound = 0;
-        for tx in block.0.transactions_vec() {
+        for tx in block.0.external_transactions() {
             match tx.instructions() {
                 Executable::Instructions(isi) => {
                     for instr in isi {
@@ -2043,7 +2052,7 @@ mod tests {
             transaction::Executable,
         };
         fn embedded_manifest_crypto(block: &GenesisBlock) -> ManifestCrypto {
-            for tx in block.0.transactions_vec() {
+            for tx in block.0.external_transactions() {
                 let Executable::Instructions(instrs) = tx.instructions() else {
                     continue;
                 };
@@ -2119,7 +2128,7 @@ mod tests {
             );
             let mut saw_alice = false;
             let mut saw_carpenter = false;
-            for tx in block.0.transactions_vec() {
+            for tx in block.0.external_transactions() {
                 if let Executable::Instructions(instrs) = tx.instructions() {
                     for instr in instrs {
                         if let Some(RegisterBox::Account(isi)) =
@@ -2230,7 +2239,7 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
         let block = genesis(Vec::new(), topology, vec![entry]);
-        let first_tx = block.0.transactions_vec().first().unwrap();
+        let first_tx = block.0.external_transactions().next().unwrap();
         let Executable::Instructions(isi) = first_tx.instructions() else {
             panic!("expected instructions in first transaction");
         };
@@ -2305,8 +2314,7 @@ mod tests {
         );
         let declared_hash = block
             .0
-            .transactions_vec()
-            .iter()
+            .external_transactions()
             .find_map(|tx| {
                 use iroha_data_model::{isi::SetParameter, transaction::Executable};
                 let Executable::Instructions(instrs) = tx.instructions() else {

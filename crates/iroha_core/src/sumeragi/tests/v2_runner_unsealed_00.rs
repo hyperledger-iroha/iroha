@@ -129,44 +129,6 @@ fn canonical_body_recovery_successor_request_gets_a_fresh_retry_deadline() {
     );
 }
 #[test]
-fn committed_lane_status_publisher_retries_revision_drift_without_publication() {
-    let _guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
-    let revision = Cell::new((1_u64, 1_u64, 1_u64));
-    let mut publisher = CommittedLaneStatusPublisher::default();
-    assert!(publisher.publish_if_changed_with(|| revision.get(), Vec::new));
-    assert_eq!(publisher.published_revision, Some((1, 1, 1)));
-    revision.set((2, 1, 1));
-    let projection_ran = Cell::new(false);
-    assert!(
-        !publisher.publish_if_changed_with(
-            || revision.get(),
-            || {
-                projection_ran.set(true);
-                revision.set((3, 1, 1));
-                Vec::new()
-            },
-        ),
-        "a projection spanning two revisions must not replace the global status root"
-    );
-    assert!(projection_ran.get());
-    assert_eq!(
-        publisher.published_revision,
-        Some((1, 1, 1)),
-        "revision drift must retain the prior acknowledgement for retry"
-    );
-    assert!(
-        super::super::status::committed_lane_blocks_snapshot().is_empty(),
-        "revision drift must retain the prior global status root"
-    );
-    assert!(
-        publisher.publish_if_changed_with(|| revision.get(), Vec::new),
-        "the next stable runner edge must retry the newer revision"
-    );
-    assert_eq!(publisher.published_revision, Some((3, 1, 1)));
-    super::super::status::clear_v2_status();
-}
-#[test]
 fn pending_tip_recovery_gate_precedes_lane_work_construction() {
     let constructed = Cell::new(false);
     let error = construct_after_pending_tip_application_recovery(true, false, || {
@@ -416,8 +378,10 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
             signature: vec![0x5A],
         },
     ));
-    let ordinary_non_serve =
-        InboundBlockMessage::new(BlockMessage::V2(non_serve.clone()), Some(peer.clone()));
+    let ordinary_non_serve = InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(non_serve.clone()),
+        peer.clone(),
+    );
     assert!(matches!(
         prepare_decided_lane_recovery_ingress(&ordinary_non_serve, context.height),
         DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
@@ -425,7 +389,7 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
     let mut wrong_version = non_serve;
     wrong_version.protocol_version = wrong_version.protocol_version.saturating_sub(1);
     let wrong_version =
-        InboundBlockMessage::new(BlockMessage::V2(wrong_version), Some(peer.clone()));
+        InboundBlockMessage::from_authenticated_peer(BlockMessage::V2(wrong_version), peer.clone());
     assert!(matches!(
         prepare_decided_lane_recovery_ingress(&wrong_version, context.height),
         DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
@@ -541,9 +505,9 @@ fn leader_wire_runtime_ingress_fixture() -> (
         .expect("bind runner leader-wire gate");
     ingress.open().expect("open runner leader-wire ingress");
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message.clone()),
-            Some(semantic_origin.clone()),
+            semantic_origin.clone(),
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -593,9 +557,9 @@ fn fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry() {
         None
     );
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message),
-            Some(semantic_origin),
+            semantic_origin,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Coalesced)
     ));

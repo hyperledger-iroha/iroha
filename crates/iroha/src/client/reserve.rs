@@ -834,7 +834,6 @@ mod tests {
             max_pending_movements_per_provider: 4,
             max_open_appeals_per_provider: 2,
         };
-        policy.validate().expect("valid reserve policy fixture");
         let policy_digest = policy.digest().expect("digest reserve policy fixture");
         ReserveAuthorityPolicyRecordV1 {
             policy,
@@ -1314,12 +1313,10 @@ mod tests {
         let response = page_response(&escaped_page);
         assert!(response.body().len() > RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1);
         assert!(response.body().len() <= RESERVE_JSON_RESPONSE_MAX_BYTES_V1);
-        assert!(
-            norito::to_bytes(&escaped_page)
-                .expect("encode escaped appeal page as Norito")
-                .len()
-                <= RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1
-        );
+        let norito_len = norito::to_bytes(&escaped_page)
+            .expect("encode escaped appeal page as Norito")
+            .len();
+        assert!(norito_len <= RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1);
         validate_appeals_response(response, &SorafsReserveAppealReadbackFilter::default())
             .expect("large escaped JSON with bounded canonical Norito is valid");
         let movements = (1..=RESERVE_DEFAULT_PAGE_LIMIT_V1)

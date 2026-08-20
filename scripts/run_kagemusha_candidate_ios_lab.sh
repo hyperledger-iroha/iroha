@@ -814,7 +814,7 @@ if [[ "$("$LIPO_BINARY" -archs "$NATIVE_LIBRARY")" != "arm64" ]]; then
   exit 1
 fi
 
-APP_BUNDLE_ID="org.hyperledger.iroha.kagemusha-candidate-lab.host"
+APP_BUNDLE_ID="org.hyperledger.iroha.kagemusha.appattestlab"
 INSTALL_JSON="$TRANSIENT/install.json"
 "$XCRUN_BINARY" devicectl device install app \
   --device "$DEVICE_ID" \

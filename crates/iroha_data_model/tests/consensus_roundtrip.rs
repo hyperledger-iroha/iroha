@@ -1,20 +1,22 @@
 //! Ensure the Norito consensus message types support encode/decode roundtrips.
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleTree, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
+    NetworkId,
     block::{
-        BlockSignature, Header as BlockHeader,
+        Header as BlockHeader,
         consensus::{
             CertPhase, ConsensusBlockHeader, ConsensusGenesisModeParams, ConsensusGenesisParams,
-            Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, ExecKv, ExecWitness,
-            ExecWitnessMsg, LaneBlockCommitment, LaneSettlementReceipt, NposGenesisParams,
-            PERMISSIONED_TAG, Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk, RbcDeliver,
-            RbcInit, RbcReady, RbcReadySignature, Reconfig, SumeragiQcEntry, SumeragiQcSnapshot,
-            VrfCommit, VrfReveal,
+            Evidence, EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg, LaneBlockCommitment,
+            LaneSettlementReceipt, NposGenesisParams, PERMISSIONED_TAG, Proposal, Qc, QcAggregate,
+            QcRef, QcVote, SumeragiV2EquivocationEvidence, VrfCommit, VrfReveal,
         },
         consensus_v2::{
-            ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION as V2_PROTOCOL_VERSION,
-            SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
-            SumeragiV2StatusPhase,
+            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+            ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId,
+            PROTOCOL_VERSION as V2_PROTOCOL_VERSION, PayloadEncoding, QuorumCertificateRef,
+            SumeragiV2BodyState, SumeragiV2Equivocation, SumeragiV2HeightContextStatus,
+            SumeragiV2QcResponse, SumeragiV2Status, SumeragiV2StatusPhase, TimeoutVote,
+            ValidatorPower,
         },
     },
     nexus::{DataSpaceId, LaneId},
@@ -22,7 +24,7 @@ use iroha_data_model::{
 };
 use norito::{
     NoritoDeserialize,
-    codec::{Decode, Encode},
+    codec::{Decode, DecodeAll, Encode},
 };
 use std::{
     convert::TryFrom,
@@ -52,9 +54,6 @@ fn sample_bytes(seed: u8, len: usize) -> Vec<u8> {
         })
         .collect()
 }
-fn checked_random_keypair() -> KeyPair {
-    KeyPair::try_random().expect("test fixture random key generation should succeed")
-}
 fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
         panic!("{algorithm:?} consensus fixture key generation should succeed: {err}")
@@ -63,11 +62,14 @@ fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
 fn checked_bls_keypair() -> KeyPair {
     checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
 }
-fn checked_random_peer_id() -> PeerId {
-    PeerId::from(checked_random_keypair().public_key().clone())
-}
 fn checked_bls_peer_id() -> PeerId {
     PeerId::new(checked_bls_keypair().public_key().clone())
+}
+
+fn checked_bls_peer_id_from_seed(seed: u8) -> PeerId {
+    let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+        .expect("derive checked BLS consensus fixture keypair");
+    PeerId::new(key_pair.public_key().clone())
 }
 fn assert_roundtrip<T>(value: &T)
 where
@@ -137,13 +139,6 @@ fn rng_hash(rng: &mut DeterministicRng) -> Hash {
 }
 fn rng_block_hash(rng: &mut DeterministicRng) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(rng_hash(rng))
-}
-fn rng_ascii_string(rng: &mut DeterministicRng, max_len: usize) -> String {
-    let max_len = max_len.max(1);
-    let len = rng.range_inclusive(1, max_len);
-    (0..len)
-        .map(|_| (b'a' + (rng.next_u8() % 26)) as char)
-        .collect()
 }
 fn rng_cert_phase_any(rng: &mut DeterministicRng) -> CertPhase {
     match rng.up_to(2) {
@@ -344,164 +339,65 @@ fn rng_vrf_reveal(rng: &mut DeterministicRng) -> VrfReveal {
         bls_sig: rng.bytes(96),
     }
 }
-fn rng_reconfig(rng: &mut DeterministicRng) -> Reconfig {
-    let roster_len = rng.range_inclusive(1, 4);
-    let mut roster = Vec::with_capacity(roster_len);
-    for _ in 0..roster_len {
-        roster.push(checked_random_peer_id());
-    }
-    Reconfig {
-        new_roster: roster,
-        activation_height: rng.next_u64(),
-    }
-}
-fn rng_roster(rng: &mut DeterministicRng) -> Vec<PeerId> {
-    let roster_len = rng.range_inclusive(1, 4);
-    let mut roster = Vec::with_capacity(roster_len);
-    for _ in 0..roster_len {
-        roster.push(checked_random_peer_id());
-    }
-    roster
-}
-fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
-    let roster = rng_roster(rng);
-    let roster_hash = Hash::new(roster.encode());
-    let height = rng.next_u64().max(1);
-    let view = rng.next_u64();
-    let total_chunks = u32::try_from(rng.range_inclusive(1, 8)).expect("range bound fits u32");
-    let chunk_size_bytes = u32::try_from(rng.range_inclusive(1, 128)).expect("range bound fits");
-    let payload_size_bytes = u64::from(chunk_size_bytes)
-        .saturating_mul(u64::from(total_chunks.saturating_sub(1)))
-        .saturating_add(
-            u64::try_from(rng.range_inclusive(
-                1,
-                usize::try_from(chunk_size_bytes).expect("u32 fits usize"),
-            ))
-            .expect("range bound fits"),
-        );
-    let mut chunk_digests = Vec::with_capacity(total_chunks as usize);
-    for _ in 0..total_chunks {
-        chunk_digests.push(rng.array32());
-    }
-    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
-        .root()
-        .map(Hash::from)
-        .expect("chunk root");
-    let block_header = BlockHeader::new(
-        NonZeroU64::new(height).expect("block height must be non-zero"),
-        None,
-        None,
-        None,
-        0,
-        view,
-    );
-    let leader_key = checked_random_keypair();
-    let (_, leader_private) = leader_key.into_parts();
-    let leader_signature = BlockSignature::new(
-        0,
-        SignatureOf::try_from_hash(&leader_private, block_header.hash())
-            .expect("fixture block header signature must sign"),
-    );
-    RbcInit {
-        block_hash: block_header.hash(),
-        height,
-        view,
-        epoch: rng.next_u64(),
-        roster,
-        roster_hash,
-        total_chunks,
-        encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-        chunk_size_bytes,
-        payload_size_bytes,
-        data_shards: 0,
-        parity_shards: 0,
-        chunk_digests,
-        payload_hash: rng_hash(rng),
-        chunk_root,
-        block_header,
-        leader_signature,
-    }
-}
-fn rng_rbc_chunk_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcChunk {
-    let total = init.total_chunks.max(1);
-    let upper = total.saturating_sub(1) as usize;
-    let idx = u32::try_from(rng.range_inclusive(0, upper)).expect("chunk index must fit into u32");
-    RbcChunk {
-        block_hash: init.block_hash,
-        height: init.height,
-        view: init.view,
-        epoch: init.epoch,
-        idx,
-        bytes: rng.bytes(64),
-    }
-}
-fn rng_rbc_ready_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcReady {
-    RbcReady {
-        block_hash: init.block_hash,
-        height: init.height,
-        view: init.view,
-        epoch: init.epoch,
-        roster_hash: init.roster_hash,
-        chunk_root: init.chunk_root,
-        sender: rng.next_u32(),
-        signature: rng.bytes(64),
-    }
-}
-fn rng_rbc_ready_signature_from(rng: &mut DeterministicRng) -> RbcReadySignature {
-    RbcReadySignature {
-        sender: rng.next_u32(),
-        signature: rng.bytes(64),
-    }
-}
-fn rng_rbc_deliver_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcDeliver {
-    RbcDeliver {
-        block_hash: init.block_hash,
-        height: init.height,
-        view: init.view,
-        epoch: init.epoch,
-        roster_hash: init.roster_hash,
-        chunk_root: init.chunk_root,
-        sender: rng.next_u32(),
-        signature: rng.bytes(64),
-        ready_signatures: (0..rng.up_to(2))
-            .map(|_| rng_rbc_ready_signature_from(rng))
-            .collect(),
-    }
-}
 fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
-    match rng.up_to(2) {
-        0 => {
-            let mut v1 = rng_commit_vote(rng);
-            if matches!(v1.phase, CertPhase::NewView) {
-                v1.phase = CertPhase::Prepare;
-                v1.highest_qc = None;
-            }
-            let mut v2 = v1.clone();
-            v2.block_hash = rng_block_hash(rng);
-            let kind = match v1.phase {
-                CertPhase::Commit => EvidenceKind::DoubleCommit,
-                CertPhase::Prepare | CertPhase::NewView => EvidenceKind::DoublePrepare,
-            };
-            Evidence {
-                kind,
-                payload: EvidencePayload::DoubleVote { v1, v2 },
-            }
-        }
-        1 => Evidence {
-            kind: EvidenceKind::InvalidQc,
-            payload: EvidencePayload::InvalidQc {
-                certificate: rng_commit_qc(rng),
-                reason: rng_ascii_string(rng, 32),
+    let mut roster = [0xA1, 0xA2, 0xA3, 0xA4]
+        .into_iter()
+        .map(|seed| ValidatorPower {
+            validator: checked_bls_peer_id_from_seed(seed),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    roster.sort();
+    let height = rng.next_u64().max(1);
+    let context = HeightContext {
+        network_id: NetworkId::from_genesis_hash(rng_block_hash(rng)),
+        protocol_version: V2_PROTOCOL_VERSION,
+        height,
+        epoch: rng.next_u64(),
+        epoch_end_height: height,
+        next_epoch_snapshot: None,
+        mode: ConsensusMode::Permissioned,
+        parent_commit_qc: None,
+        snapshot_bootstrap: None,
+        quorum: DualQuorum::from_roster(&roster).expect("strict four-validator fixture quorum"),
+        roster,
+        nexus_amx_context_hash: rng_hash(rng),
+        execution_policy_hash: rng_hash(rng),
+        da_layout: DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 4,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 1024,
+            max_chunk_count: 512,
+        },
+        leader_seed: <[u8; Hash::LENGTH]>::from(rng_hash(rng)),
+    };
+    let round = ConsensusRound {
+        context_id: context.id(),
+        height,
+        view: rng.next_u64(),
+    };
+    let proofs_of_possession = (0..context.roster.len()).map(|_| rng.bytes(96)).collect();
+    Evidence {
+        equivocation: SumeragiV2EquivocationEvidence {
+            context,
+            proofs_of_possession,
+            conflict: SumeragiV2Equivocation::TimeoutVote {
+                first: TimeoutVote {
+                    round,
+                    highest_prepare_qc: None,
+                    signer: 0,
+                    signature: rng.bytes(96),
+                },
+                second: TimeoutVote {
+                    round,
+                    highest_prepare_qc: None,
+                    signer: 0,
+                    signature: rng.bytes(96),
+                },
             },
         },
-        2 => Evidence {
-            kind: EvidenceKind::InvalidProposal,
-            payload: EvidencePayload::InvalidProposal {
-                proposal: rng_proposal(rng),
-                reason: rng_ascii_string(rng, 32),
-            },
-        },
-        _ => unreachable!("rng.up_to(2) must be within 0..=2"),
     }
 }
 fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> EvidenceRecord {
@@ -551,21 +447,36 @@ fn rng_sumeragi_v2_status(rng: &mut DeterministicRng) -> SumeragiV2Status {
         liveness: Default::default(),
     }
 }
-fn rng_sumeragi_qc_entry(rng: &mut DeterministicRng) -> SumeragiQcEntry {
-    SumeragiQcEntry {
-        height: rng.next_u64(),
-        view: rng.next_u64(),
-        subject_block_hash: if rng.next_bool() {
-            Some(rng_block_hash(rng))
-        } else {
-            None
-        },
+fn rng_sumeragi_v2_qc_response(rng: &mut DeterministicRng) -> SumeragiV2QcResponse {
+    fn prepare_qc(rng: &mut DeterministicRng) -> QuorumCertificateRef {
+        let round = ConsensusRound {
+            context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(rng_hash(
+                rng,
+            ))),
+            height: rng.next_u64(),
+            view: rng.next_u64(),
+        };
+        QuorumCertificateRef {
+            round,
+            proposal_round: round,
+            phase: GlobalPhase::Prepare,
+            subject: BlockSubject {
+                parent_block_hash: rng.next_bool().then(|| rng_block_hash(rng)),
+                block_hash: rng_block_hash(rng),
+                payload_hash: rng_hash(rng),
+            },
+            execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
+                rng_hash(rng),
+                rng_hash(rng),
+                rng_hash(rng),
+                rng.next_u64().max(1),
+                rng_hash(rng),
+            ),
+        }
     }
-}
-fn rng_sumeragi_qc_snapshot(rng: &mut DeterministicRng) -> SumeragiQcSnapshot {
-    SumeragiQcSnapshot {
-        highest_qc: rng_sumeragi_qc_entry(rng),
-        locked_qc: rng_sumeragi_qc_entry(rng),
+    SumeragiV2QcResponse {
+        highest_prepare_qc: Some(prepare_qc(rng)),
+        locked_prepare_qc: Some(prepare_qc(rng)),
     }
 }
 #[test]
@@ -705,29 +616,9 @@ fn consensus_messages_norito_roundtrip() {
         validator_set: validator_set.clone(),
         aggregate: aggregate.clone(),
     };
-    let double_prepare = Evidence {
-        kind: EvidenceKind::DoublePrepare,
-        payload: EvidencePayload::DoubleVote {
-            v1: prepare_vote.clone(),
-            v2: other_prepare_vote.clone(),
-        },
-    };
-    let invalid_cert = Evidence {
-        kind: EvidenceKind::InvalidQc,
-        payload: EvidencePayload::InvalidQc {
-            certificate: commit_cert.clone(),
-            reason: "aggregate mismatch".to_owned(),
-        },
-    };
-    let invalid_proposal = Evidence {
-        kind: EvidenceKind::InvalidProposal,
-        payload: EvidencePayload::InvalidProposal {
-            proposal,
-            reason: "payload commitment mismatch".to_owned(),
-        },
-    };
+    let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0002));
     let evidence_record = EvidenceRecord {
-        evidence: invalid_cert.clone(),
+        evidence: evidence.clone(),
         recorded_at_height: 44,
         recorded_at_view: 8,
         recorded_at_ms: 1_702_000_123,
@@ -768,84 +659,6 @@ fn consensus_messages_norito_roundtrip() {
         signer: 5,
         bls_sig: vec![0x45; 96],
     };
-    let peer_ids = vec![checked_random_peer_id(), checked_random_peer_id()];
-    let reconfig = Reconfig {
-        new_roster: peer_ids,
-        activation_height: 100,
-    };
-    let roster = vec![checked_random_peer_id(), checked_random_peer_id()];
-    let roster_hash = Hash::new(roster.encode());
-    let chunk_digests = vec![[0x31; 32], [0x32; 32], [0x33; 32]];
-    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
-        .root()
-        .map(Hash::from)
-        .expect("chunk root");
-    let block_header = BlockHeader::new(
-        NonZeroU64::new(44).expect("block height must be non-zero"),
-        None,
-        None,
-        None,
-        0,
-        7,
-    );
-    let leader_key = checked_random_keypair();
-    let (_, leader_private) = leader_key.into_parts();
-    let leader_signature = BlockSignature::new(
-        0,
-        SignatureOf::try_from_hash(&leader_private, block_header.hash())
-            .expect("fixture block header signature must sign"),
-    );
-    let rbc_init = RbcInit {
-        block_hash: block_header.hash(),
-        height: 44,
-        view: 7,
-        epoch: 2,
-        roster,
-        roster_hash,
-        total_chunks: 3,
-        encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-        chunk_size_bytes: 128,
-        payload_size_bytes: 257,
-        data_shards: 0,
-        parity_shards: 0,
-        chunk_digests,
-        payload_hash: sample_hash(0x31),
-        chunk_root,
-        block_header,
-        leader_signature,
-    };
-    let rbc_chunk = RbcChunk {
-        block_hash: rbc_init.block_hash,
-        height: rbc_init.height,
-        view: rbc_init.view,
-        epoch: rbc_init.epoch,
-        idx: 1,
-        bytes: sample_bytes(0x40, 32),
-    };
-    let rbc_ready = RbcReady {
-        block_hash: rbc_init.block_hash,
-        height: rbc_init.height,
-        view: rbc_init.view,
-        epoch: rbc_init.epoch,
-        roster_hash,
-        chunk_root: rbc_init.chunk_root,
-        sender: 15,
-        signature: sample_bytes(0x50, 64),
-    };
-    let rbc_deliver = RbcDeliver {
-        block_hash: rbc_init.block_hash,
-        height: rbc_init.height,
-        view: rbc_init.view,
-        epoch: rbc_init.epoch,
-        roster_hash,
-        chunk_root: rbc_init.chunk_root,
-        sender: 16,
-        signature: sample_bytes(0x60, 64),
-        ready_signatures: vec![RbcReadySignature {
-            sender: 3,
-            signature: sample_bytes(0x61, 64),
-        }],
-    };
     assert_roundtrip(&cert_header);
     assert_roundtrip(&block_header);
     assert_roundtrip(&proposal);
@@ -856,28 +669,366 @@ fn consensus_messages_norito_roundtrip() {
     assert_roundtrip(&aggregate);
     assert_roundtrip(&commit_cert);
     assert_roundtrip(&new_view_cert);
-    assert_roundtrip(&double_prepare);
-    assert_roundtrip(&invalid_cert);
-    assert_roundtrip(&invalid_proposal);
+    assert_roundtrip(&evidence);
     assert_roundtrip(&evidence_record);
     assert_roundtrip(&exec_witness);
     assert_roundtrip(&exec_witness_msg);
     assert_roundtrip(&vrf_commit);
     assert_roundtrip(&vrf_reveal);
-    assert_roundtrip(&reconfig);
-    assert_roundtrip(&rbc_init);
-    assert_roundtrip(&rbc_chunk);
-    assert_roundtrip(&rbc_ready);
-    assert_roundtrip(&rbc_deliver);
+}
+#[test]
+#[allow(clippy::too_many_lines)]
+fn current_qc_json_requires_highest_qc_and_rejects_unknown_fields() {
+    macro_rules! assert_required_highest_qc {
+        ($ty:ty, $value:expr) => {{
+            let expected: $ty = $value;
+            let json = norito::json::to_value(&expected).expect("serialize current QC JSON");
+            assert!(
+                json.get("highest_qc")
+                    .is_some_and(norito::json::Value::is_null),
+                "{} must serialize an absent highest QC as an explicit null",
+                stringify!($ty)
+            );
+            assert_eq!(
+                norito::json::from_value::<$ty>(json.clone())
+                    .expect("decode explicit highest-QC slot"),
+                expected
+            );
+
+            let mut missing = json.clone();
+            assert!(
+                missing
+                    .as_object_mut()
+                    .expect("current QC JSON object")
+                    .remove("highest_qc")
+                    .is_some()
+            );
+            assert!(
+                norito::json::from_value::<$ty>(missing).is_err(),
+                "{} must reject an omitted highest-QC slot",
+                stringify!($ty)
+            );
+
+            let mut unknown = json;
+            unknown
+                .as_object_mut()
+                .expect("current QC JSON object")
+                .insert(
+                    "pre_release_field".to_owned(),
+                    norito::json::Value::Bool(true),
+                );
+            assert!(
+                norito::json::from_value::<$ty>(unknown).is_err(),
+                "{} must reject unknown JSON fields",
+                stringify!($ty)
+            );
+        }};
+    }
+
+    let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+    let vote = QcVote {
+        phase: CertPhase::Prepare,
+        block_hash: sample_block_hash(0x71),
+        parent_state_root: zero_root,
+        post_state_root: zero_root,
+        height: 70,
+        view: 8,
+        epoch: 3,
+        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        highest_qc: None,
+        signer: 2,
+        bls_sig: sample_bytes(0x72, 48),
+    };
+    assert_required_highest_qc!(QcVote, vote);
+
+    let aggregate = QcAggregate {
+        signers_bitmap: vec![0b0000_0111],
+        bls_aggregate_signature: sample_bytes(0x73, 96),
+    };
+    let validator_set = Vec::<PeerId>::new();
+    let qc = Qc {
+        phase: CertPhase::Commit,
+        subject_block_hash: sample_block_hash(0x74),
+        parent_state_root: sample_hash(0x75),
+        post_state_root: sample_hash(0x76),
+        height: 70,
+        view: 8,
+        epoch: 3,
+        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        mode_tag: PERMISSIONED_TAG.to_owned(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: 1,
+        validator_set,
+        aggregate: aggregate.clone(),
+    };
+    assert_required_highest_qc!(Qc, qc);
+
+    let mut aggregate_json =
+        norito::json::to_value(&aggregate).expect("serialize current QC aggregate JSON");
+    assert_eq!(
+        norito::json::from_value::<QcAggregate>(aggregate_json.clone())
+            .expect("decode current QC aggregate JSON"),
+        aggregate
+    );
+    aggregate_json
+        .as_object_mut()
+        .expect("current QC aggregate JSON object")
+        .insert(
+            "pre_release_field".to_owned(),
+            norito::json::Value::Bool(true),
+        );
+    assert!(
+        norito::json::from_value::<QcAggregate>(aggregate_json).is_err(),
+        "QcAggregate must reject unknown JSON fields"
+    );
+}
+#[test]
+#[allow(clippy::too_many_lines)]
+fn qc_and_evidence_record_reject_shortened_pre_release_binary_layouts() {
+    #[derive(Encode)]
+    struct PreReleaseQcVote {
+        phase: CertPhase,
+        block_hash: HashOf<BlockHeader>,
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        chain_order_hash: Hash,
+        rechain_seq: u64,
+        signer: u32,
+        bls_sig: Vec<u8>,
+    }
+    #[derive(Encode)]
+    struct PreReleaseQc {
+        phase: CertPhase,
+        subject_block_hash: HashOf<BlockHeader>,
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        chain_order_hash: Hash,
+        rechain_seq: u64,
+        mode_tag: String,
+        validator_set_hash: HashOf<Vec<PeerId>>,
+        validator_set_hash_version: u16,
+        validator_set: Vec<PeerId>,
+        aggregate: QcAggregate,
+    }
+    #[derive(Encode)]
+    struct PreReleaseEvidenceRecord {
+        evidence: Evidence,
+        recorded_at_height: u64,
+        recorded_at_view: u64,
+        recorded_at_ms: u64,
+    }
+    #[derive(Encode)]
+    struct PreReleaseEvidenceRecordWithoutNullableSlots {
+        evidence: Evidence,
+        recorded_at_height: u64,
+        recorded_at_view: u64,
+        recorded_at_ms: u64,
+        penalty_applied: bool,
+        penalty_cancelled: bool,
+    }
+
+    let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+    let vote = QcVote {
+        phase: CertPhase::Prepare,
+        block_hash: sample_block_hash(0x81),
+        parent_state_root: zero_root,
+        post_state_root: zero_root,
+        height: 80,
+        view: 9,
+        epoch: 4,
+        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        highest_qc: None,
+        signer: 7,
+        bls_sig: sample_bytes(0x82, 48),
+    };
+    assert_roundtrip(&vote);
+    let shortened_vote = PreReleaseQcVote {
+        phase: vote.phase,
+        block_hash: vote.block_hash,
+        parent_state_root: vote.parent_state_root,
+        post_state_root: vote.post_state_root,
+        height: vote.height,
+        view: vote.view,
+        epoch: vote.epoch,
+        chain_order_hash: vote.chain_order_hash,
+        rechain_seq: vote.rechain_seq,
+        signer: vote.signer,
+        bls_sig: vote.bls_sig.clone(),
+    }
+    .encode();
+    assert!(
+        QcVote::decode_all(&mut shortened_vote.as_slice()).is_err(),
+        "QcVote must reject the pre-release layout without highest_qc"
+    );
+
+    let validator_set = Vec::<PeerId>::new();
+    let aggregate = QcAggregate {
+        signers_bitmap: vec![0b0000_0111],
+        bls_aggregate_signature: sample_bytes(0x83, 96),
+    };
+    let qc = Qc {
+        phase: CertPhase::Commit,
+        subject_block_hash: sample_block_hash(0x84),
+        parent_state_root: sample_hash(0x85),
+        post_state_root: sample_hash(0x86),
+        height: 80,
+        view: 9,
+        epoch: 4,
+        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        mode_tag: PERMISSIONED_TAG.to_owned(),
+        highest_qc: None,
+        validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH])),
+        validator_set_hash_version: 1,
+        validator_set,
+        aggregate,
+    };
+    assert_roundtrip(&qc);
+    let shortened_qc = PreReleaseQc {
+        phase: qc.phase,
+        subject_block_hash: qc.subject_block_hash,
+        parent_state_root: qc.parent_state_root,
+        post_state_root: qc.post_state_root,
+        height: qc.height,
+        view: qc.view,
+        epoch: qc.epoch,
+        chain_order_hash: qc.chain_order_hash,
+        rechain_seq: qc.rechain_seq,
+        mode_tag: qc.mode_tag.clone(),
+        validator_set_hash: qc.validator_set_hash,
+        validator_set_hash_version: qc.validator_set_hash_version,
+        validator_set: qc.validator_set.clone(),
+        aggregate: qc.aggregate.clone(),
+    }
+    .encode();
+    assert!(
+        Qc::decode_all(&mut shortened_qc.as_slice()).is_err(),
+        "Qc must reject the pre-release layout without highest_qc"
+    );
+
+    let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0084));
+    let record = EvidenceRecord {
+        evidence,
+        recorded_at_height: 84,
+        recorded_at_view: 9,
+        recorded_at_ms: 1_702_000_456,
+        penalty_applied: true,
+        penalty_cancelled: false,
+        penalty_cancelled_at_height: None,
+        penalty_applied_at_height: Some(85),
+        consensus_admitted_at_height: Some(84),
+    };
+    assert_roundtrip(&record);
+    let shortened_record = PreReleaseEvidenceRecord {
+        evidence: record.evidence.clone(),
+        recorded_at_height: record.recorded_at_height,
+        recorded_at_view: record.recorded_at_view,
+        recorded_at_ms: record.recorded_at_ms,
+    }
+    .encode();
+    assert!(
+        EvidenceRecord::decode_all(&mut shortened_record.as_slice()).is_err(),
+        "EvidenceRecord must reject the pre-release layout without penalty and admission state"
+    );
+
+    let pending_record = EvidenceRecord {
+        evidence: record.evidence.clone(),
+        recorded_at_height: 86,
+        recorded_at_view: 10,
+        recorded_at_ms: 1_702_000_789,
+        penalty_applied: false,
+        penalty_cancelled: false,
+        penalty_cancelled_at_height: None,
+        penalty_applied_at_height: None,
+        consensus_admitted_at_height: None,
+    };
+    assert_roundtrip(&pending_record);
+    let omitted_nullable_slots = PreReleaseEvidenceRecordWithoutNullableSlots {
+        evidence: pending_record.evidence.clone(),
+        recorded_at_height: pending_record.recorded_at_height,
+        recorded_at_view: pending_record.recorded_at_view,
+        recorded_at_ms: pending_record.recorded_at_ms,
+        penalty_applied: pending_record.penalty_applied,
+        penalty_cancelled: pending_record.penalty_cancelled,
+    }
+    .encode();
+    assert!(
+        EvidenceRecord::decode_all(&mut omitted_nullable_slots.as_slice()).is_err(),
+        "EvidenceRecord must encode explicit None tags for every nullable storage slot"
+    );
+}
+#[test]
+fn sumeragi_v2_equivocation_evidence_json_is_closed_and_exact() {
+    let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0090)).equivocation;
+    let json = norito::json::to_value(&evidence).expect("serialize current v2 evidence JSON");
+    assert_eq!(
+        norito::json::from_value::<SumeragiV2EquivocationEvidence>(json.clone())
+            .expect("decode current v2 evidence JSON"),
+        evidence
+    );
+
+    let context = json
+        .get("context")
+        .and_then(norito::json::Value::as_object)
+        .expect("v2 evidence context JSON object");
+    for field in [
+        "next_epoch_snapshot",
+        "parent_commit_qc",
+        "snapshot_bootstrap",
+    ] {
+        assert!(
+            context.get(field).is_some_and(norito::json::Value::is_null),
+            "nullable context field {field} must remain an explicit null"
+        );
+    }
+
+    for field in ["context", "proofs_of_possession", "conflict"] {
+        let mut missing = json.clone();
+        assert!(
+            missing
+                .as_object_mut()
+                .expect("v2 evidence JSON object")
+                .remove(field)
+                .is_some()
+        );
+        assert!(
+            norito::json::from_value::<SumeragiV2EquivocationEvidence>(missing).is_err(),
+            "current v2 evidence JSON must require {field}"
+        );
+    }
+
+    let mut unknown = json;
+    unknown
+        .as_object_mut()
+        .expect("v2 evidence JSON object")
+        .insert(
+            "pre_release_field".to_owned(),
+            norito::json::Value::Bool(true),
+        );
+    assert!(
+        norito::json::from_value::<SumeragiV2EquivocationEvidence>(unknown).is_err(),
+        "current v2 evidence JSON must reject unknown fields"
+    );
 }
 #[test]
 fn consensus_roundtrip_deterministic_fuzz() {
     let mut rng = DeterministicRng::new(0xD4E5_F607_89AB_CDEF);
+    assert_roundtrip(&SumeragiV2QcResponse::default());
     for _ in 0..64 {
         let status = rng_sumeragi_v2_status(&mut rng);
         assert_roundtrip(&status);
-        let qc_snapshot = rng_sumeragi_qc_snapshot(&mut rng);
-        assert_roundtrip(&qc_snapshot);
+        let qc_response = rng_sumeragi_v2_qc_response(&mut rng);
+        assert_roundtrip(&qc_response);
         let genesis = rng_consensus_genesis_params(&mut rng);
         if let ConsensusGenesisModeParams::Npos(npos) = &genesis.mode {
             assert_roundtrip(npos);
@@ -918,21 +1069,45 @@ fn consensus_roundtrip_deterministic_fuzz() {
         assert_roundtrip(&vrf_commit);
         let vrf_reveal = rng_vrf_reveal(&mut rng);
         assert_roundtrip(&vrf_reveal);
-        let reconfig = rng_reconfig(&mut rng);
-        assert_roundtrip(&reconfig);
         let evidence = rng_evidence(&mut rng);
         assert_roundtrip(&evidence);
         let evidence_record = rng_evidence_record(&mut rng, evidence);
         assert_roundtrip(&evidence_record);
-        let rbc_init = rng_rbc_init(&mut rng);
-        assert_roundtrip(&rbc_init);
-        let rbc_chunk = rng_rbc_chunk_from(&mut rng, &rbc_init);
-        assert_roundtrip(&rbc_chunk);
-        let rbc_ready = rng_rbc_ready_from(&mut rng, &rbc_init);
-        assert_roundtrip(&rbc_ready);
-        let rbc_deliver = rng_rbc_deliver_from(&mut rng, &rbc_init);
-        assert_roundtrip(&rbc_deliver);
     }
+}
+#[test]
+fn sumeragi_v2_qc_response_requires_both_current_fields() {
+    let retired = r#"{
+        "highest_qc": {"height": 10, "view": 2, "subject_block_hash": null},
+        "locked_qc": {"height": 9, "view": 1, "subject_block_hash": null}
+    }"#;
+    assert!(norito::json::from_str::<SumeragiV2QcResponse>(retired).is_err());
+    for missing in [
+        "{}",
+        r#"{"highest_prepare_qc":null}"#,
+        r#"{"locked_prepare_qc":null}"#,
+    ] {
+        assert!(norito::json::from_str::<SumeragiV2QcResponse>(missing).is_err());
+    }
+    assert_eq!(
+        norito::json::from_str::<SumeragiV2QcResponse>(
+            r#"{"highest_prepare_qc":null,"locked_prepare_qc":null}"#,
+        )
+        .expect("explicit null PrepareQC options are canonical"),
+        SumeragiV2QcResponse::default(),
+    );
+    let canonical = norito::json::to_value(&SumeragiV2QcResponse::default())
+        .expect("render required nullable PrepareQC slots");
+    assert!(
+        canonical
+            .get("highest_prepare_qc")
+            .is_some_and(|value| value.is_null())
+    );
+    assert!(
+        canonical
+            .get("locked_prepare_qc")
+            .is_some_and(|value| value.is_null())
+    );
 }
 #[test]
 fn lane_commitment_fixtures_roundtrip() {

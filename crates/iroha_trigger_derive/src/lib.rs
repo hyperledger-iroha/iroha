@@ -1,8 +1,7 @@
 //! Crate with trigger procedural macros.
+iroha_derive::define_emitter_ext!();
 use manyhow::{Emitter, emit, manyhow};
 use proc_macro2::TokenStream;
-mod emitter_ext;
-use crate::emitter_ext::EmitterExt;
 mod entrypoint;
 /// Annotate the user-defined function that starts the execution of the trigger.
 ///

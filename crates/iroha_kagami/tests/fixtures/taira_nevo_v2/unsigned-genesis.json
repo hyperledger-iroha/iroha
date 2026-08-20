@@ -1,7 +1,7 @@
 {
   "chain": "fc56984b-2be7-431d-840e-21514d1883f0",
   "chain_discriminant": 369,
-  "consensus_fingerprint": "0x6679f78af39ad62147e20c504d21eadb579a9840fda4979e67b6b623d218cf37",
+  "consensus_fingerprint": "0x6ccda6979ccf79088c0b1bb0e1728ecb5f08f25586db98944eca4f6f647afb46",
   "consensus_mode": "Npos",
   "sumeragi_v2": {
     "da_layout": {
@@ -176,22 +176,24 @@
               "id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
               "logo": null,
               "metadata": {
-                "currency_code": "SBD",
-                "display_code": "e-SBD",
-                "display_name": "Digital Solomon Islands Dollar"
+                "currency_code": "DS",
+                "display_code": "DS",
+                "display_name": "Digital Shekel",
+                "iso_currency_code": "ILS",
+                "symbol": "₪"
               },
               "mintable": "Infinitely",
               "owning_domain": null,
               "spec": {
                 "scale": 2
               },
-              "name": "sbd"
+              "name": "ds"
             }
           }
         },
         {
           "SetAssetDefinitionAlias": {
-            "alias": "sbd#cbsi",
+            "alias": "ds#boi.is",
             "asset_definition_id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
             "lease_expiry_ms": null
           }
@@ -300,7 +302,7 @@
           "max_output_bytes": 8388608
         },
         "sumeragi": {
-          "block_cadence_ms": 1000,
+          "block_cadence_ms": 4000,
           "max_clock_drift_ms": 1000
         },
         "transaction": {

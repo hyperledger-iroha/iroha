@@ -94,6 +94,10 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
             LaneConfigMetadata {
@@ -108,6 +112,10 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
             LaneConfigMetadata {
@@ -122,6 +130,10 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
                 settlement: None,
                 storage: LaneStorageProfile::FullReplica,
                 proof_scheme: DaProofScheme::default(),
+                manifest_policy: Default::default(),
+                confidential_compute: None,
+                scheduler: None,
+                settlement_buffer: None,
                 metadata: BTreeMap::default(),
             },
         ],
@@ -154,8 +166,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
-        block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, block_count) =
@@ -172,7 +183,6 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
     state.prepare_configured_primary_geometry_anchor(&lane_catalog)?;
     state.restore_kura_lane_segments_before_startup_replay()?;
     state.set_nexus_from_config(iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_catalog: lane_catalog.clone(),
         configured_lane_catalog: lane_catalog.clone(),
         lane_config: lane_config.clone(),
@@ -255,17 +265,21 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
             Json::new("zv"),
         ))],
     );
-    let decision_core = router.route(&tx_core);
+    let decision_core = router
+        .try_route(&tx_core)
+        .expect("core routing should resolve");
     assert_eq!(
         decision_core,
         RoutingDecision::new(LaneId::new(0), DataSpaceId::UNIVERSAL)
     );
-    let decision_gov = router.route(&tx_gov);
+    let decision_gov = router
+        .try_route(&tx_gov)
+        .expect("governance routing should resolve");
     assert_eq!(
         decision_gov,
         RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1))
     );
-    let decision_zk = router.route(&tx_zk);
+    let decision_zk = router.try_route(&tx_zk).expect("zk routing should resolve");
     assert_eq!(
         decision_zk,
         RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))

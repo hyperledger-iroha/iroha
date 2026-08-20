@@ -57,12 +57,43 @@ fn canonical_block_stream_message() -> Vec<u8> {
     let transaction = transaction
         .with_instructions(std::iter::empty::<iroha_data_model::isi::InstructionBox>())
         .sign(signer.key_pair().private_key());
-    let block = SignedBlock::genesis(
+    let mut block = SignedBlock::genesis(
         vec![transaction],
         signer.key_pair().private_key(),
         None,
         None,
     );
+    let entrypoint_hashes = block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect::<Vec<_>>();
+    block
+        .set_transaction_results(
+            Vec::new(),
+            &entrypoint_hashes,
+            vec![Ok(
+                iroha_data_model::transaction::DataTriggerSequence::default(),
+            )],
+        )
+        .expect("attach canonical successful mock block result");
+    let final_signature = iroha_data_model::block::BlockSignature::new(
+        0,
+        iroha_crypto::SignatureOf::try_from_hash(signer.key_pair().private_key(), block.hash())
+            .expect("sign result-bearing mock block"),
+    );
+    block
+        .replace_signatures(std::collections::BTreeSet::from([final_signature]))
+        .expect("replace result-bearing mock-block signature");
+    let mut final_signatures = block.signatures();
+    let final_signature = final_signatures
+        .next()
+        .expect("result-bearing mock-block signature");
+    assert_eq!(final_signature.index(), 0);
+    assert!(final_signatures.next().is_none());
+    final_signature
+        .signature()
+        .verify_hash(signer.key_pair().public_key(), block.hash())
+        .expect("verify result-bearing mock-block signature");
     norito::to_bytes(&BlockMessage(block)).expect("canonical block message must encode")
 }
 fn canonical_event_stream_message() -> Vec<u8> {
@@ -651,6 +682,22 @@ mod tests {
         assert_eq!(block_message.0.header().height(), NonZeroU64::MIN);
         assert_eq!(block_message.0.external_entrypoint_count(), 1);
         assert_eq!(block_message.0.signatures().len(), 1);
+        assert_eq!(block_message.0.committed_fragment_count(), Some(1));
+        block_message
+            .0
+            .validate_entrypoint_merkle_cache()
+            .expect("mock block entrypoint Merkle cache must be canonical");
+        block_message
+            .0
+            .validate_result_merkle_cache()
+            .expect("mock block result Merkle cache must be canonical");
+        assert_eq!(
+            block_message.0.header().result_merkle_root(),
+            block_message
+                .0
+                .result_merkle_commitment()
+                .map(|commitment| *commitment.root())
+        );
         let event_message: EventMessage = norito::decode_from_bytes(&data.event_frame)
             .expect("default event frame must be a canonical EventMessage");
         assert!(matches!(

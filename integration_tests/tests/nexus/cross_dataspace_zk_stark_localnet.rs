@@ -330,7 +330,6 @@ fn localnet_builder() -> NetworkBuilder {
                 ]),
             );
             layer
-                .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
                 .write(["norito", "allow_gpu_compression"], false)
                 .write(

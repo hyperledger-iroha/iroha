@@ -376,6 +376,9 @@ class TairaDevnetTests(unittest.TestCase):
 
     def test_build_command_has_no_retired_release_features(self) -> None:
         command = module.cargo_build_command("local-release", Path("/tmp/taira-target"))
+        self.assertEqual(command[0], str(REPO_ROOT / "scripts" / "cargo_fast.sh"))
+        self.assertIn("--stable-local-metadata", command)
+        self.assertEqual(command[command.index("--target-dir") + 1], "/tmp/taira-target")
         self.assertEqual(command.count("--bin"), 3)
         rendered = " ".join(command)
         self.assertNotIn("external-software-signer-bin", rendered)
@@ -393,7 +396,7 @@ class TairaDevnetTests(unittest.TestCase):
                 return None
 
             @staticmethod
-            def read() -> bytes:
+            def read(_limit: int = -1) -> bytes:
                 return b"Healthy"
 
         with mock.patch.object(module.urllib.request, "urlopen", return_value=PlainResponse()):
@@ -401,6 +404,37 @@ class TairaDevnetTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(payload, "Healthy")
+
+    def test_http_request_rejects_an_oversized_response(self) -> None:
+        class OversizedResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            @staticmethod
+            def read(limit: int = -1) -> bytes:
+                assert limit == module.MAX_HTTP_RESPONSE_BYTES + 1
+                return b"x" * limit
+
+        with mock.patch.object(
+            module.urllib.request,
+            "urlopen",
+            return_value=OversizedResponse(),
+        ):
+            with self.assertRaisesRegex(module.DevnetError, "HTTP response exceeds"):
+                module.http_request("http://127.0.0.1:29080/health")
+
+    def test_managed_directory_rejects_an_oversized_marker(self) -> None:
+        state = self.root / "state"
+        state.mkdir()
+        (state / module.MARKER).write_bytes(b"x" * (module.MAX_MARKER_BYTES + 1))
+
+        with self.assertRaisesRegex(module.DevnetError, "devnet marker exceeds"):
+            module.managed_root(state, create=False)
 
     def test_failure_log_tail_reads_only_a_bounded_suffix(self) -> None:
         target = self.root / "network"

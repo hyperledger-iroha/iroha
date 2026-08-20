@@ -154,6 +154,16 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
     let boxed: Box<str> = format!("{OFFLINE_REJECTION_REASON_PREFIX}{label}:{message}").into();
     InstructionExecutionError::InvariantViolation(boxed)
 }
+fn invalid_attestation(message: impl Into<String>) -> InstructionExecutionError {
+    labeled_invariant("invalid_attestation", message)
+}
+macro_rules! reject_invalid_attestation {
+    ($condition:expr, $message:expr $(,)?) => {
+        if $condition {
+            return Err(invalid_attestation($message).into());
+        }
+    };
+}
 fn decode_canonical_offline_proof_envelope(
     bytes: &[u8],
     message: &'static str,
@@ -212,11 +222,14 @@ pub struct KagemushaAuthenticatedArtifactSetReadinessV4 {
 /// This key-material-free projection is returned to Torii only after the request
 /// signature, current governed policy, device identity, asset scope, P-256 key,
 /// registration expiry, canonical storage key, and admission provenance all match.
+/// Raw attestation report and evidence bytes are absent from this active-state projection;
+/// their hashes and the original submitted registration hash remain bound in state, while the
+/// exact submitted bytes remain in signed transaction history.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaRecipientRegistrationResolutionV1 {
-    /// Canonical registration admitted by consensus.
+    /// Validated registration projection with raw report and evidence bytes removed.
     pub registration: OfflineDeviceAttestationRegistration,
-    /// SHA-256 hash of the canonical registration archive.
+    /// SHA-256 hash of the original canonical registration submitted for admission.
     pub registration_hash: [u8; 32],
     /// Governed policy hash recorded when the registration was admitted.
     pub admission_policy_hash: [u8; 32],
@@ -912,6 +925,17 @@ pub mod isi {
     const KAGEMUSHA_ATTESTATION_EVIDENCE_REPLAY_DOMAIN: &str = "kagemusha-attestation-evidence";
     // Online registrations use one native-authored, read-only first-release namespace.
     const KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX: &str = "kagemusha_online_registration_";
+    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_VERSION_V4: u16 = 4;
+    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_CANONICAL_BYTES_V4: usize = 4 * 1024;
+    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_RETAINED_V4: usize =
+        2 * KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1;
+    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_RETAINED_PER_ACCOUNT_V4: usize =
+        2 * KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1;
+    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_TOTAL_BYTES_V4: usize =
+        KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_CANONICAL_BYTES_V4
+            * KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_RETAINED_V4;
+    const _: () =
+        assert!(KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_TOTAL_BYTES_V4 <= 4 * 1024 * 1024);
     const KAGEMUSHA_V4_OPERATION_DOMAIN: &str = "kagemusha-v4-operation";
     const KAGEMUSHA_V4_NONCE_DOMAIN: &str = "kagemusha-v4-authorization-nonce";
     const KAGEMUSHA_V4_PAYLOAD_DOMAIN: &str = "kagemusha-v4-payload";
@@ -1067,13 +1091,10 @@ pub mod isi {
         fn sequence(input: &'a [u8]) -> Result<Self, Error> {
             let mut reader = Self::new(input);
             let sequence = reader.read_expected(0x30)?;
-            if reader.has_remaining() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "attestation extension has trailing DER bytes",
-                )
-                .into());
-            }
+            reject_invalid_attestation!(
+                reader.has_remaining(),
+                "attestation extension has trailing DER bytes",
+            );
             Ok(Self::new(sequence))
         }
         fn has_remaining(&self) -> bool {
@@ -1081,20 +1102,16 @@ pub mod isi {
         }
         fn read_expected(&mut self, expected_tag: u8) -> Result<&'a [u8], Error> {
             let (tag, value) = self.read_tlv()?;
-            if tag != expected_tag {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "attestation extension has an unexpected DER tag",
-                )
-                .into());
-            }
+            reject_invalid_attestation!(
+                tag != expected_tag,
+                "attestation extension has an unexpected DER tag",
+            );
             Ok(value)
         }
         fn read_single_expected(&mut self, expected_tag: u8) -> Result<&'a [u8], Error> {
             let value = self.read_expected(expected_tag)?;
             if self.has_remaining() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
+                return Err(invalid_attestation(
                     "attestation extension DER has trailing inner bytes",
                 )
                 .into());
@@ -1104,11 +1121,9 @@ pub mod isi {
         fn read_null(&mut self) -> Result<(), Error> {
             let value = self.read_single_expected(0x05)?;
             if !value.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "attestation extension DER NULL must be empty",
-                )
-                .into());
+                return Err(
+                    invalid_attestation("attestation extension DER NULL must be empty").into(),
+                );
             }
             Ok(())
         }
@@ -1127,8 +1142,7 @@ pub mod isi {
         fn read_tlv(&mut self) -> Result<(u8, &'a [u8]), Error> {
             let (tag, value) = self.read_tlv_full()?;
             if tag.number >= 31 || tag.first_byte & 0x1F == 0x1F {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
+                return Err(invalid_attestation(
                     "attestation extension DER high-tag form is unsupported in this position",
                 )
                 .into());
@@ -1141,11 +1155,7 @@ pub mod isi {
         }
         fn read_tlv_full_with_raw(&mut self) -> Result<(DerTag, &'a [u8], &'a [u8]), Error> {
             if self.offset >= self.input.len() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "attestation extension DER ended early",
-                )
-                .into());
+                return Err(invalid_attestation("attestation extension DER ended early").into());
             }
             let start = self.offset;
             let first_byte = self.input[self.offset];
@@ -1157,8 +1167,7 @@ pub mod isi {
                 let mut first_high_tag_octet = true;
                 loop {
                     if self.offset >= self.input.len() || octets >= 5 {
-                        return Err(labeled_invariant(
-                            "invalid_attestation",
+                        return Err(invalid_attestation(
                             "attestation extension DER high-tag number is invalid",
                         )
                         .into());
@@ -1167,8 +1176,7 @@ pub mod isi {
                     self.offset += 1;
                     octets += 1;
                     if first_high_tag_octet && byte & 0x7F == 0 {
-                        return Err(labeled_invariant(
-                            "invalid_attestation",
+                        return Err(invalid_attestation(
                             "attestation extension DER high-tag number is non-canonical",
                         )
                         .into());
@@ -1180,26 +1188,21 @@ pub mod isi {
                     }
                 }
                 if number < 31 {
-                    return Err(labeled_invariant(
-                        "invalid_attestation",
+                    return Err(invalid_attestation(
                         "attestation extension DER high-tag number is non-canonical",
                     )
                     .into());
                 }
             }
             let length = self.read_length()?;
-            let end = self.offset.checked_add(length).ok_or_else(|| {
-                labeled_invariant(
-                    "invalid_attestation",
-                    "attestation extension DER length overflow",
-                )
-            })?;
+            let end = self
+                .offset
+                .checked_add(length)
+                .ok_or_else(|| invalid_attestation("attestation extension DER length overflow"))?;
             if end > self.input.len() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "attestation extension DER length exceeds input",
-                )
-                .into());
+                return Err(
+                    invalid_attestation("attestation extension DER length exceeds input").into(),
+                );
             }
             let value = &self.input[self.offset..end];
             self.offset = end;
@@ -1217,11 +1220,9 @@ pub mod isi {
         }
         fn read_length(&mut self) -> Result<usize, Error> {
             if self.offset >= self.input.len() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "attestation extension DER length is missing",
-                )
-                .into());
+                return Err(
+                    invalid_attestation("attestation extension DER length is missing").into(),
+                );
             }
             let first = self.input[self.offset];
             self.offset += 1;
@@ -1230,16 +1231,14 @@ pub mod isi {
             }
             let octets = usize::from(first & 0x7F);
             if octets == 0 || octets > 4 || self.offset + octets > self.input.len() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
+                return Err(invalid_attestation(
                     "attestation extension DER length encoding is unsupported",
                 )
                 .into());
             }
             let first_length_octet = self.input[self.offset];
             if first_length_octet == 0 || (octets == 1 && first_length_octet < 0x80) {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
+                return Err(invalid_attestation(
                     "attestation extension DER length encoding is non-canonical",
                 )
                 .into());
@@ -1254,28 +1253,23 @@ pub mod isi {
     }
     fn der_integer_to_i64(bytes: &[u8]) -> Result<i64, Error> {
         if bytes.is_empty() || bytes.len() > 8 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "attestation extension integer is out of range",
-            )
-            .into());
+            return Err(
+                invalid_attestation("attestation extension integer is out of range").into(),
+            );
         }
         if bytes.len() > 1
             && ((bytes[0] == 0 && bytes[1] & 0x80 == 0)
                 || (bytes[0] == 0xFF && bytes[1] & 0x80 != 0))
         {
-            return Err(labeled_invariant(
-                "invalid_attestation",
+            return Err(invalid_attestation(
                 "attestation extension integer encoding is non-canonical",
             )
             .into());
         }
         if bytes[0] & 0x80 != 0 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "attestation extension integer is out of range",
-            )
-            .into());
+            return Err(
+                invalid_attestation("attestation extension integer is out of range").into(),
+            );
         }
         let mut value = 0i64;
         for byte in bytes {
@@ -1443,509 +1437,8 @@ pub mod isi {
         }
     }
     include!("offline/attestation_policy_validation.rs");
-    fn trusted_root_der_for_platform(
-        policy: &OfflineDeviceAttestationPolicy,
-        platform: &str,
-        block_unix_timestamp_ms: u64,
-    ) -> Result<Vec<Vec<u8>>, Error> {
-        let roots: Vec<_> = policy
-            .trusted_roots
-            .iter()
-            .filter(|root| {
-                root.platform == platform && trusted_root_is_active(root, block_unix_timestamp_ms)
-            })
-            .map(|root| root.der.clone())
-            .collect();
-        if roots.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                "Offline device attestation policy has no active trusted root for platform",
-            )
-            .into());
-        }
-        Ok(roots)
-    }
-    fn policy_revoked_certificate_hashes(
-        policy: &OfflineDeviceAttestationPolicy,
-    ) -> Result<HashSet<[u8; 32]>, Error> {
-        let mut revoked = HashSet::new();
-        for digest in &policy.revoked_certificate_sha256 {
-            let digest = normalize_sha256_digest(digest, "revoked certificate digest")?;
-            if digest == [0u8; 32] || !revoked.insert(digest) {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy has an invalid revoked certificate digest",
-                )
-                .into());
-            }
-        }
-        Ok(revoked)
-    }
-    fn x509_evaluation_time(block_unix_timestamp_ms: u64) -> Result<ASN1Time, Error> {
-        #[cfg(test)]
-        let block_unix_timestamp_ms = if block_unix_timestamp_ms == 0 {
-            1_800_000_000_000
-        } else {
-            block_unix_timestamp_ms
-        };
-        let seconds = i64::try_from(block_unix_timestamp_ms / 1_000).map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation block timestamp is out of range",
-            )
-        })?;
-        ASN1Time::from_timestamp(seconds).map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation block timestamp cannot be represented as ASN.1 time",
-            )
-            .into()
-        })
-    }
-    fn parse_x509_certificate_der(certificate_der: &[u8]) -> Result<X509Certificate<'_>, Error> {
-        let (remaining, certificate) =
-            X509Certificate::from_der(certificate_der).map_err(|_| {
-                labeled_invariant(
-                    "invalid_attestation",
-                    "attestation certificate DER is invalid",
-                )
-            })?;
-        if !remaining.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "attestation certificate DER has trailing bytes",
-            )
-            .into());
-        }
-        Ok(certificate)
-    }
-    fn validate_x509_certificate_critical_extensions(
-        certificate: &X509Certificate<'_>,
-    ) -> Result<(), Error> {
-        for extension in certificate.extensions() {
-            if !extension.critical {
-                continue;
-            }
-            match extension.parsed_extension() {
-                ParsedExtension::UnsupportedExtension { .. }
-                | ParsedExtension::ParseError { .. }
-                | ParsedExtension::Unparsed => {
-                    return Err(labeled_invariant(
-                        "invalid_attestation",
-                        "attestation certificate contains an unsupported critical extension",
-                    )
-                    .into());
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-    fn x509_certificate_is_ca(certificate: &X509Certificate<'_>) -> Result<bool, Error> {
-        let Some(basic_constraints) = certificate.basic_constraints().map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation",
-                "attestation certificate basic constraints are invalid",
-            )
-        })?
-        else {
-            return Ok(false);
-        };
-        if !basic_constraints.critical || !basic_constraints.value.ca {
-            return Ok(false);
-        }
-        let Some(key_usage) = certificate.key_usage().map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation",
-                "attestation certificate key usage is invalid",
-            )
-        })?
-        else {
-            return Ok(false);
-        };
-        Ok(key_usage.critical && key_usage.value.key_cert_sign())
-    }
-    fn x509_leaf_allows_digital_signature(
-        certificate: &X509Certificate<'_>,
-    ) -> Result<bool, Error> {
-        let Some(key_usage) = certificate.key_usage().map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation",
-                "attestation certificate key usage is invalid",
-            )
-        })?
-        else {
-            return Ok(false);
-        };
-        Ok(key_usage.critical && key_usage.value.digital_signature())
-    }
-    fn validate_x509_certificate_time(
-        certificate: &X509Certificate<'_>,
-        evaluation_time: ASN1Time,
-    ) -> Result<(), Error> {
-        if certificate.validity().is_valid_at(evaluation_time) {
-            Ok(())
-        } else {
-            Err(labeled_invariant(
-                "invalid_attestation",
-                "attestation certificate is not valid at the block timestamp",
-            )
-            .into())
-        }
-    }
-    fn verify_x509_certificate_signature(
-        certificate: &X509Certificate<'_>,
-        issuer: &X509Certificate<'_>,
-    ) -> Result<(), Error> {
-        certificate
-            .verify_signature(Some(issuer.public_key()))
-            .map_err(|_| {
-                labeled_invariant(
-                    "invalid_attestation",
-                    "attestation certificate signature chain is invalid",
-                )
-                .into()
-            })
-    }
-    fn validate_attestation_certificate_chain(
-        certificate_chain: &[Vec<u8>],
-        trusted_roots_der: &[Vec<u8>],
-        revoked_certificate_sha256: &HashSet<[u8; 32]>,
-        evaluation_time: ASN1Time,
-    ) -> Result<(), Error> {
-        if certificate_chain.is_empty() || trusted_roots_der.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "attestation certificate chain is empty",
-            )
-            .into());
-        }
-        let mut seen = HashSet::new();
-        for certificate_der in certificate_chain {
-            let certificate_sha256 = sha256_bytes(certificate_der);
-            if revoked_certificate_sha256.contains(&certificate_sha256) {
-                return Err(labeled_invariant(
-                    "revoked_attestation",
-                    "attestation certificate is revoked by Offline device attestation policy",
-                )
-                .into());
-            }
-            if !seen.insert(certificate_sha256) {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "attestation certificate chain contains duplicate certificates",
-                )
-                .into());
-            }
-            let certificate = parse_x509_certificate_der(certificate_der)?;
-            validate_x509_certificate_critical_extensions(&certificate)?;
-            validate_x509_certificate_time(&certificate, evaluation_time)?;
-        }
-        let parsed_chain = certificate_chain
-            .iter()
-            .map(|certificate_der| parse_x509_certificate_der(certificate_der))
-            .collect::<Result<Vec<_>, _>>()?;
-        let leaf = parsed_chain.first().ok_or_else(|| {
-            labeled_invariant(
-                "invalid_attestation",
-                "attestation certificate chain is empty",
-            )
-        })?;
-        if x509_certificate_is_ca(leaf)? || !x509_leaf_allows_digital_signature(leaf)? {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "attestation leaf certificate must be an end-entity signing certificate",
-            )
-            .into());
-        }
-        for pair in parsed_chain.windows(2) {
-            let certificate = &pair[0];
-            let issuer = &pair[1];
-            if certificate.issuer() != issuer.subject() || !x509_certificate_is_ca(issuer)? {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "attestation certificate issuer chain is invalid",
-                )
-                .into());
-            }
-            verify_x509_certificate_signature(certificate, issuer)?;
-        }
-        let tail_der = certificate_chain.last().expect("chain is non-empty");
-        let tail = parsed_chain.last().expect("chain is non-empty");
-        for root_der in trusted_roots_der {
-            if revoked_certificate_sha256.contains(&sha256_bytes(root_der)) {
-                continue;
-            }
-            let root = parse_x509_certificate_der(root_der)?;
-            validate_x509_certificate_critical_extensions(&root)?;
-            validate_x509_certificate_time(&root, evaluation_time)?;
-            if !x509_certificate_is_ca(&root)? {
-                continue;
-            }
-            if tail_der == root_der {
-                if tail.issuer() == tail.subject() {
-                    verify_x509_certificate_signature(tail, tail)?;
-                }
-                return Ok(());
-            }
-            if tail.issuer() == root.subject() {
-                verify_x509_certificate_signature(tail, &root)?;
-                return Ok(());
-            }
-        }
-        #[cfg(test)]
-        if tail.issuer() == tail.subject()
-            && x509_certificate_is_ca(tail)?
-            && x509_certificate_is_offline_attestation_test_root(tail)
-        {
-            verify_x509_certificate_signature(tail, tail)?;
-            return Ok(());
-        }
-        Err(labeled_invariant(
-            "invalid_attestation",
-            "attestation certificate chain is not anchored in a trusted root",
-        )
-        .into())
-    }
-    #[cfg(test)]
-    fn x509_certificate_is_offline_attestation_test_root(
-        certificate: &X509Certificate<'_>,
-    ) -> bool {
-        certificate.subject().iter_common_name().any(|name| {
-            name.as_str()
-                .is_ok_and(|value| value == "Iroha Offline Attestation Test Root")
-        })
-    }
-    fn x509_unique_extension_value(
-        certificate: &X509Certificate<'_>,
-        oid: &str,
-        duplicate_message: &'static str,
-    ) -> Result<Option<Vec<u8>>, Error> {
-        let mut matches = certificate
-            .extensions()
-            .iter()
-            .filter(|extension| extension.oid.to_string() == oid);
-        let first = matches.next().map(|extension| extension.value.to_vec());
-        if matches.next().is_some() {
-            return Err(labeled_invariant("invalid_attestation", duplicate_message).into());
-        }
-        Ok(first)
-    }
-    fn x509_subject_public_key_bytes(certificate: &X509Certificate<'_>) -> Vec<u8> {
-        certificate.public_key().subject_public_key.data.to_vec()
-    }
-    fn validate_attestation_protocol_string(
-        subject: &'static str,
-        field: &'static str,
-        value: &str,
-        error_label: &'static str,
-    ) -> Result<(), InstructionExecutionError> {
-        if value.trim().is_empty() {
-            return Err(labeled_invariant(
-                error_label,
-                format!("{subject} {field} must be non-empty"),
-            ));
-        }
-        if value.trim() != value {
-            return Err(labeled_invariant(
-                error_label,
-                format!("{subject} {field} must not contain surrounding whitespace"),
-            ));
-        }
-        Ok(())
-    }
-    fn is_kagemusha_transparent_backend(backend: &str) -> bool {
-        backend == crate::zk::ZK_BACKEND_HALO2_IPA || crate::zk::is_stark_fri_v1_backend(backend)
-    }
-    fn ensure_kagemusha_transparent_backend(
-        backend: &str,
-        backend_tag: BackendTag,
-    ) -> Result<(), Error> {
-        if crate::zk::is_verifier_readiness_claim_label(backend) {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "offline transparent proofs may not use readiness-claim proof backends",
-            )
-            .into());
-        }
-        if !is_kagemusha_transparent_backend(backend) {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "offline recursive proofs require a transparent halo2/ipa or stark/fri backend",
-            )
-            .into());
-        }
-        let expected_tag = crate::zk::verifier_backend_registry_tag_v1(backend).ok_or_else(|| {
-            labeled_invariant(
-                "verifier_key_invalid",
-                "offline recursive proof backend is not admitted by the native verifier registry",
-            )
-        })?;
-        if backend_tag != expected_tag {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "offline recursive verifier backend tag does not match the transparent backend",
-            )
-            .into());
-        }
-        Ok(())
-    }
-    fn ensure_kagemusha_transparent_attachment(attachment: &ProofAttachment) -> Result<(), Error> {
-        if attachment.backend != attachment.proof.backend
-            || attachment.backend != attachment.vk_ref.backend
-        {
-            return Err(labeled_invariant(
-                "proof_binding",
-                "Kagemusha proof backend, proof payload backend, and verifier key backend must match",
-            )
-            .into());
-        }
-        if attachment.vk_ref.name.trim().is_empty() {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha proof verifier key id name must be non-empty",
-            )
-            .into());
-        }
-        let backend = attachment.backend.as_str();
-        let backend_tag =
-            crate::zk::verifier_backend_registry_tag_v1(backend).ok_or_else(|| {
-                labeled_invariant(
-                    "verifier_key_invalid",
-                    "Kagemusha proof backend is not a supported generic OpenVerify engine",
-                )
-            })?;
-        ensure_kagemusha_transparent_backend(backend, backend_tag)
-    }
-    fn resolve_kagemusha_topup_shield_verifier(
-        asset: &AssetDefinitionId,
-        proof: &ProofAttachment,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(VerifyingKeyBox, VerifyingKeyRecord), Error> {
-        ensure_kagemusha_transparent_attachment(proof)?;
-        let zk_state = state_transaction
-            .world
-            .zk_assets
-            .get(asset)
-            .ok_or_else(|| {
-                labeled_invariant(
-                    "verifier_key_invalid",
-                    "Kagemusha top-up requires configured confidential asset state",
-                )
-            })?;
-        let binding = zk_state.vk_shield.as_ref().ok_or_else(|| {
-            labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha top-up requires an asset-bound shield verifier key",
-            )
-        })?;
-        if proof.vk_ref != binding.id || proof.backend != binding.id.backend {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha top-up proof must reference the asset-bound shield verifier key",
-            )
-            .into());
-        }
-        if proof.vk_commitment != Some(binding.commitment) || binding.commitment == [0; 32] {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha top-up verifier commitment does not match the asset binding",
-            )
-            .into());
-        }
-        let record = state_transaction
-            .world
-            .verifying_keys
-            .get(&binding.id)
-            .cloned()
-            .ok_or_else(|| {
-                labeled_invariant(
-                    "verifier_key_invalid",
-                    "Kagemusha top-up shield verifier key is not registered",
-                )
-            })?;
-        let circuit_key = (record.circuit_id.clone(), record.version);
-        if !record.is_active_at(state_transaction.block_height())
-            || state_transaction
-                .world
-                .verifying_keys_by_circuit
-                .get(&circuit_key)
-                != Some(&binding.id)
-        {
-            return Err(labeled_invariant(
-                "verifier_key_inactive",
-                "Kagemusha top-up shield verifier circuit/version is not active",
-            )
-            .into());
-        }
-        let expected_schema_hash: [u8; 32] = Hash::new(
-            crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2,
-        )
-        .into();
-        if record.namespace != crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE
-            || record.backend != BackendTag::Halo2IpaPasta
-            || record.circuit_id != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
-            || record.curve != "pallas"
-            || record.public_inputs_schema_hash != expected_schema_hash
-            || record.commitment != binding.commitment
-            || record.max_proof_bytes == 0
-            || proof.proof.bytes.len() > record.max_proof_bytes as usize
-        {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha top-up requires the canonical asset-bound shield-v2 verifier",
-            )
-            .into());
-        }
-        let vk_box = record.key.clone().ok_or_else(|| {
-            labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha top-up shield verifier key is not available inline",
-            )
-        })?;
-        if vk_box.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA
-            || vk_box.bytes.is_empty()
-            || u32::try_from(vk_box.bytes.len()).ok() != Some(record.vk_len)
-            || crate::zk::hash_vk(&vk_box) != record.commitment
-        {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha top-up inline shield verifier does not match its registry record",
-            )
-            .into());
-        }
-        crate::zk::confidential_v2::ensure_kagemusha_topup_shield_v2_canonical_vk_box(&vk_box)
-            .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
-        let envelope = decode_canonical_offline_proof_envelope(
-            &proof.proof.bytes,
-            "Kagemusha top-up shield proof must be a canonical OpenVerifyEnvelope",
-        )?;
-        if envelope.backend != BackendTag::Halo2IpaPasta
-            || envelope.circuit_id
-                != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
-            || envelope.public_inputs
-                != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2
-            || envelope.vk_hash != binding.commitment
-            || !envelope.aux.is_empty()
-        {
-            return Err(labeled_invariant(
-                "invalid_proof",
-                "Kagemusha top-up shield proof envelope metadata is inconsistent",
-            )
-            .into());
-        }
-        if let Some(envelope_hash) = proof.envelope_hash {
-            let expected_hash: [u8; 32] = Hash::new(&proof.proof.bytes).into();
-            if envelope_hash != expected_hash {
-                return Err(labeled_invariant(
-                    "invalid_proof",
-                    "Kagemusha top-up shield envelope hash does not match its proof bytes",
-                )
-                .into());
-            }
-        }
-        Ok((vk_box, record))
-    }
+    include!("offline/attestation_certificate_validation.rs");
+    include!("offline/topup_shield_verifier_resolution.rs");
     fn resolve_kagemusha_unshield_verifier(
         asset: &AssetDefinitionId,
         proof: &ProofAttachment,
@@ -2382,12 +1875,17 @@ pub mod isi {
             last_consumption: Option<KagemushaOnlineHardwareAssertionConsumptionV1>,
         },
     }
+    /// First-release compact schema. Earlier full-evidence records are intentionally not migrated.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-    struct KagemushaOnlineRegistrationStateV3 {
+    struct KagemushaOnlineRegistrationStateV4 {
         version: u16,
+        original_registration_hash: [u8; 32],
+        registration_projection_hash: [u8; 32],
         admission_policy_hash: [u8; 32],
         admission_height: u64,
         admission_transaction_hash: HashOf<SignedTransaction>,
+        /// Validated projection; raw report/evidence are not duplicated in active world state.
+        /// The exact submitted bytes remain available through signed transaction history.
         registration: OfflineDeviceAttestationRegistration,
         lifecycle: KagemushaOnlineHardwareAssertionLifecycleV1,
     }
@@ -2403,9 +1901,14 @@ pub mod isi {
     struct KagemushaAuthenticatedDeviceV1 {
         state_key: StatePath,
         previous_archive: Vec<u8>,
-        state: KagemushaOnlineRegistrationStateV3,
+        state: KagemushaOnlineRegistrationStateV4,
         consumption: KagemushaOnlineHardwareAssertionConsumptionV1,
         assertion: KagemushaAuthenticatedHardwareAssertionV1,
+    }
+    fn kagemusha_online_registration_range_start() -> StatePath {
+        KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX
+            .parse()
+            .expect("static Kagemusha registration prefix is a valid state path")
     }
     fn kagemusha_online_registration_state_key(
         registration_hash: &[u8; 32],
@@ -2436,6 +1939,82 @@ pub mod isi {
                 .into()
             })
     }
+    fn compact_kagemusha_registration_projection(
+        registration: &OfflineDeviceAttestationRegistration,
+    ) -> OfflineDeviceAttestationRegistration {
+        let mut compact = registration.clone();
+        compact.attestation_report.clear();
+        compact.evidence.clear();
+        compact
+    }
+    fn decode_kagemusha_online_registration_state_v4(
+        state_key: &StatePath,
+        archive: &[u8],
+    ) -> Result<KagemushaOnlineRegistrationStateV4, String> {
+        if archive.len() > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_CANONICAL_BYTES_V4 {
+            return Err(format!(
+                "Kagemusha registration state `{state_key}` exceeds the {}-byte protocol limit",
+                KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_CANONICAL_BYTES_V4,
+            ));
+        }
+        let state: KagemushaOnlineRegistrationStateV4 =
+            norito::decode_canonical(archive).map_err(|error| {
+                format!("Kagemusha registration state `{state_key}` is corrupt: {error}")
+            })?;
+        let key_hash_hex = state_key
+            .as_ref()
+            .strip_prefix(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
+            .ok_or_else(|| {
+                format!("Kagemusha registration state key `{state_key}` is outside its namespace")
+            })?;
+        let projection_hash = canonical_registration_hash(&state.registration)
+            .map(|hash| exact_hash_bytes(&hash))
+            .map_err(|error| {
+                format!("Kagemusha registration state `{state_key}` cannot be hashed: {error}")
+            })?;
+        if state.version != KAGEMUSHA_ONLINE_REGISTRATION_STATE_VERSION_V4
+            || key_hash_hex.len() != 64
+            || !key_hash_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || hex::encode(state.original_registration_hash) != key_hash_hex
+            || state.registration_projection_hash != projection_hash
+            || !state.registration.attestation_report.is_empty()
+            || !state.registration.evidence.is_empty()
+            || state.admission_height == 0
+            || state
+                .admission_transaction_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+        {
+            return Err(format!(
+                "Kagemusha registration state `{state_key}` is non-canonical, non-compact, or has invalid native provenance"
+            ));
+        }
+        Ok(state)
+    }
+    fn encode_kagemusha_online_registration_state_v4(
+        state: &KagemushaOnlineRegistrationStateV4,
+    ) -> Result<Vec<u8>, Error> {
+        let archive = norito::encode_canonical(state).map_err(|err| {
+            labeled_invariant(
+                "invalid_attestation",
+                format!("failed to encode compact Kagemusha registration state: {err}"),
+            )
+        })?;
+        if archive.len() > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_CANONICAL_BYTES_V4 {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                format!(
+                    "compact Kagemusha registration state exceeds the {}-byte protocol limit",
+                    KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_CANONICAL_BYTES_V4,
+                ),
+            )
+            .into());
+        }
+        Ok(archive)
+    }
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum KagemushaOnlineRegistrationCapacityErrorV1 {
         Global,
@@ -2453,23 +2032,41 @@ pub mod isi {
         }
         Ok(())
     }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum KagemushaOnlineRegistrationRetainedCapacityErrorV4 {
+        Global,
+        Account,
+    }
+    fn validate_kagemusha_online_registration_retained_capacity_v4(
+        global_after_admission: usize,
+        account_after_admission: usize,
+    ) -> Result<(), KagemushaOnlineRegistrationRetainedCapacityErrorV4> {
+        if global_after_admission > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_RETAINED_V4 {
+            return Err(KagemushaOnlineRegistrationRetainedCapacityErrorV4::Global);
+        }
+        if account_after_admission > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_RETAINED_PER_ACCOUNT_V4
+        {
+            return Err(KagemushaOnlineRegistrationRetainedCapacityErrorV4::Account);
+        }
+        Ok(())
+    }
     #[derive(Debug)]
-    struct KagemushaExpiredOnlineRegistrationV1 {
+    struct KagemushaPrunableOnlineRegistrationV4 {
         state_key: StatePath,
         replay_keys: [Hash; 4],
     }
     #[derive(Debug, Default)]
     struct KagemushaOnlineRegistrationAdmissionPlanV1 {
-        expired: Vec<KagemushaExpiredOnlineRegistrationV1>,
+        prunable: Vec<KagemushaPrunableOnlineRegistrationV4>,
     }
     impl KagemushaOnlineRegistrationAdmissionPlanV1 {
         fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) {
-            for expired in self.expired {
+            for prunable in self.prunable {
                 state_transaction
                     .world
                     .smart_contract_state
-                    .remove(expired.state_key);
-                for replay_key in expired.replay_keys {
+                    .remove(prunable.state_key);
+                for replay_key in prunable.replay_keys {
                     state_transaction
                         .world
                         .kagemusha_replay_keys
@@ -2477,6 +2074,15 @@ pub mod isi {
                 }
             }
         }
+    }
+    fn kagemusha_registration_replay_horizon_elapsed(
+        registration: &OfflineDeviceAttestationRegistration,
+        committed_height: u64,
+    ) -> bool {
+        committed_height
+            > registration
+                .recent_block_height
+                .saturating_add(KAGEMUSHA_ATTESTATION_RECENT_BLOCK_WINDOW)
     }
     fn kagemusha_registration_replay_keys(
         registration: &OfflineDeviceAttestationRegistration,
@@ -2489,29 +2095,55 @@ pub mod isi {
             kagemusha_attestation_evidence_key(&registration.evidence_hash),
         ]
     }
+    fn ensure_kagemusha_registration_replay_keys_are_fresh(
+        replay_keys: &[Hash; 4],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if replay_keys.iter().any(|key| {
+            state_transaction
+                .world
+                .kagemusha_replay_keys
+                .get(key)
+                .is_some()
+        }) {
+            return Err(labeled_invariant(
+                "duplicate_attestation",
+                "Kagemusha device attestation registration reuses registration or evidence material",
+            )
+            .into());
+        }
+        Ok(())
+    }
     fn plan_kagemusha_online_registration_admission_v1(
         registration: &OfflineDeviceAttestationRegistration,
         admission_policy_hash: [u8; 32],
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<KagemushaOnlineRegistrationAdmissionPlanV1, Error> {
         let evaluated_at_ms = state_transaction.block_unix_timestamp_ms();
+        let committed_height = state_transaction.block_hashes().len() as u64;
         let mut retained_count = 0_usize;
+        let mut retained_account_count = 0_usize;
+        let mut prunable_count = 0_usize;
+        let mut prunable_account_count = 0_usize;
         let mut active_global_count = 0_usize;
         let mut active_account_count = 0_usize;
         let mut seen_replay_keys = BTreeSet::new();
         let mut plan = KagemushaOnlineRegistrationAdmissionPlanV1::default();
 
-        // TODO: Replace this protocol-bounded namespace scan with consensus-maintained global and
-        // per-account counters plus an expiry index. Opportunistic pruning bounds retained work for
-        // newly admitted state, but an index would make admission and block snapshot derivation O(1)
-        // and O(active registrations), respectively.
-        for (existing_key, existing_archive) in state_transaction.world.smart_contract_state.iter()
+        // TODO: Replace this bounded prefix scan with consensus-maintained counters and an expiry
+        // cache. The first-release protocol limits below already bound correctness, storage, and
+        // worst-case work; an index would only make admission and snapshot derivation cheaper.
+        let range_start = kagemusha_online_registration_range_start();
+        for (existing_key, existing_archive) in state_transaction
+            .world
+            .smart_contract_state
+            .range(range_start..)
         {
             if !existing_key
-                .to_string()
+                .as_ref()
                 .starts_with(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
             {
-                continue;
+                break;
             }
             retained_count = retained_count.checked_add(1).ok_or_else(|| {
                 labeled_invariant(
@@ -2519,38 +2151,43 @@ pub mod isi {
                     "Kagemusha device-registration count overflowed",
                 )
             })?;
-            if retained_count > KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1 {
+            if retained_count > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_RETAINED_V4 {
                 return Err(labeled_invariant(
                     "registration_capacity_exceeded",
-                    "retained Kagemusha device registrations exceed the global protocol limit",
+                    "retained Kagemusha device registrations exceed the retained-state protocol limit",
                 )
                 .into());
             }
-            let existing: KagemushaOnlineRegistrationStateV3 =
-                norito::decode_canonical(existing_archive).map_err(|error| {
-                    labeled_invariant(
-                        "invalid_attestation",
-                        format!("failed to decode existing Kagemusha registration state: {error}"),
-                    )
-                })?;
-            if existing.version != 3 {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "existing Kagemusha registration state is non-canonical",
-                )
-                .into());
-            }
+            let existing =
+                decode_kagemusha_online_registration_state_v4(existing_key, existing_archive)
+                    .map_err(|error| {
+                        labeled_invariant(
+                            "invalid_attestation",
+                            format!(
+                                "failed to validate existing Kagemusha registration state: {error}"
+                            ),
+                        )
+                    })?;
             let other = &existing.registration;
-            let other_hash = canonical_registration_hash(other)?;
-            let expected_state_key =
-                kagemusha_online_registration_state_key(&exact_hash_bytes(&other_hash))?;
-            if &expected_state_key != existing_key {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "existing Kagemusha registration state key does not match its canonical registration",
-                )
-                .into());
+            if other.account_id == registration.account_id {
+                retained_account_count =
+                    retained_account_count.checked_add(1).ok_or_else(|| {
+                        labeled_invariant(
+                            "registration_capacity_exceeded",
+                            "retained per-account Kagemusha registration count overflowed",
+                        )
+                    })?;
+                if retained_account_count
+                    > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_RETAINED_PER_ACCOUNT_V4
+                {
+                    return Err(labeled_invariant(
+                        "registration_capacity_exceeded",
+                        "retained Kagemusha registrations exceed the per-account protocol limit",
+                    )
+                    .into());
+                }
             }
+            let other_hash = Hash::prehashed(existing.original_registration_hash);
             let replay_keys = kagemusha_registration_replay_keys(other, &other_hash);
             if replay_keys.iter().any(|key| !seen_replay_keys.insert(*key)) {
                 return Err(labeled_invariant(
@@ -2572,11 +2209,19 @@ pub mod isi {
                 )
                 .into());
             }
-            if other.expires_at_ms <= evaluated_at_ms {
-                plan.expired.push(KagemushaExpiredOnlineRegistrationV1 {
-                    state_key: existing_key.clone(),
-                    replay_keys,
-                });
+            if other.expires_at_ms <= evaluated_at_ms
+                || existing.admission_policy_hash != admission_policy_hash
+            {
+                if kagemusha_registration_replay_horizon_elapsed(other, committed_height) {
+                    prunable_count += 1;
+                    if other.account_id == registration.account_id {
+                        prunable_account_count += 1;
+                    }
+                    plan.prunable.push(KagemushaPrunableOnlineRegistrationV4 {
+                        state_key: existing_key.clone(),
+                        replay_keys,
+                    });
+                }
                 continue;
             }
             active_global_count = active_global_count.checked_add(1).ok_or_else(|| {
@@ -2593,8 +2238,7 @@ pub mod isi {
                     )
                 })?;
             }
-            if existing.admission_policy_hash == admission_policy_hash
-                && other.account_id == registration.account_id
+            if other.account_id == registration.account_id
                 && other.device_id == registration.device_id
                 && other.asset_definition_id == registration.asset_definition_id
                 && other.public_key == registration.public_key
@@ -2630,6 +2274,38 @@ pub mod isi {
             KagemushaOnlineRegistrationCapacityErrorV1::Account => labeled_invariant(
                 "registration_capacity_exceeded",
                 "Kagemusha device registrations reached the per-account protocol limit",
+            ),
+        })?;
+        let retained_global_after_admission = retained_count
+            .checked_sub(prunable_count)
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "registration_capacity_exceeded",
+                    "retained Kagemusha device-registration count overflowed",
+                )
+            })?;
+        let retained_account_after_admission = retained_account_count
+            .checked_sub(prunable_account_count)
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "registration_capacity_exceeded",
+                    "retained per-account Kagemusha registration count overflowed",
+                )
+            })?;
+        validate_kagemusha_online_registration_retained_capacity_v4(
+            retained_global_after_admission,
+            retained_account_after_admission,
+        )
+        .map_err(|error| match error {
+            KagemushaOnlineRegistrationRetainedCapacityErrorV4::Global => labeled_invariant(
+                "registration_capacity_exceeded",
+                "retained Kagemusha registrations reached the global protocol limit",
+            ),
+            KagemushaOnlineRegistrationRetainedCapacityErrorV4::Account => labeled_invariant(
+                "registration_capacity_exceeded",
+                "retained Kagemusha registrations reached the per-account protocol limit",
             ),
         })?;
         Ok(plan)
@@ -2710,31 +2386,31 @@ pub mod isi {
         let current_policy_hash_value = Hash::prehashed(current_policy_hash);
         let mut candidates =
             BTreeMap::<KagemushaActiveReceiverKeyV1, Vec<KagemushaActiveReceiverValueV1>>::new();
-        for (state_key, archive) in world.smart_contract_state().iter() {
-            let state_key = state_key.to_string();
-            let Some(key_hash_hex) =
-                state_key.strip_prefix(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
-            else {
-                continue;
-            };
-            let fail_closed = |reason: String| {
-                KagemushaActiveReceiverSnapshotV1::unavailable(
-                    evaluated_height,
-                    evaluated_at_ms,
-                    reason.as_bytes(),
-                )
-            };
-            if key_hash_hex.len() != 64
-                || !key_hash_hex
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        let fail_closed = |reason: String| {
+            KagemushaActiveReceiverSnapshotV1::unavailable(
+                evaluated_height,
+                evaluated_at_ms,
+                reason.as_bytes(),
+            )
+        };
+        let mut inspected_count = 0_usize;
+        let mut active_registration_count = 0_usize;
+        let range_start = kagemusha_online_registration_range_start();
+        for (state_key, archive) in world.smart_contract_state().range(range_start..) {
+            if !state_key
+                .as_ref()
+                .starts_with(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
             {
-                return fail_closed(format!(
-                    "protected Kagemusha registration key `{state_key}` is non-canonical"
-                ));
+                break;
             }
-            let state: KagemushaOnlineRegistrationStateV3 = match norito::decode_canonical(archive)
-            {
+            inspected_count += 1;
+            if inspected_count > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_RETAINED_V4 {
+                return fail_closed(
+                    "protected Kagemusha registrations exceed the retained-state protocol limit"
+                        .to_owned(),
+                );
+            }
+            let state = match decode_kagemusha_online_registration_state_v4(state_key, archive) {
                 Ok(state) => state,
                 Err(error) => {
                     return fail_closed(format!(
@@ -2742,19 +2418,8 @@ pub mod isi {
                     ));
                 }
             };
-            let registration_hash = canonical_registration_hash(&state.registration)
-                .map(|hash| exact_hash_bytes(&hash))
-                .map_err(|error| error.to_string())?;
-            if state.version != 3
-                || hex::encode(registration_hash) != key_hash_hex
-                || state.admission_height == 0
-                || state.admission_height > evaluated_height
-                || state
-                    .admission_transaction_hash
-                    .as_ref()
-                    .iter()
-                    .all(|byte| *byte == 0)
-            {
+            let registration_hash = state.original_registration_hash;
+            if state.admission_height > evaluated_height {
                 return fail_closed(format!(
                     "protected Kagemusha registration `{state_key}` has invalid native provenance"
                 ));
@@ -2763,6 +2428,12 @@ pub mod isi {
                 || state.registration.expires_at_ms <= evaluated_at_ms
             {
                 continue;
+            }
+            active_registration_count += 1;
+            if active_registration_count > KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1 {
+                return fail_closed(
+                    "active Kagemusha registrations exceed the global protocol limit".to_owned(),
+                );
             }
             let registration = &state.registration;
             validate_offline_attestation_platform_profile(registration).map_err(|error| {
@@ -2899,16 +2570,16 @@ pub mod isi {
             .ok_or_else(|| {
                 "active registration archive is absent from protected state".to_owned()
             })?;
+        if archive.len() > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_CANONICAL_BYTES_V4 {
+            return Err("active registration archive exceeds the protocol byte limit".to_owned());
+        }
         if Hash::new(archive) != value.registration_state_hash {
             return Err(
                 "active registration archive hash differs from the snapshot leaf".to_owned(),
             );
         }
-        let state: KagemushaOnlineRegistrationStateV3 = norito::decode_canonical(archive)
-            .map_err(|error| format!("active registration archive is corrupt: {error}"))?;
-        let canonical_hash = canonical_registration_hash(&state.registration)
-            .map(|hash| exact_hash_bytes(&hash))
-            .map_err(|error| format!("active registration cannot be hashed: {error}"))?;
+        let state = decode_kagemusha_online_registration_state_v4(&state_key, archive)
+            .map_err(|error| format!("active registration archive is invalid: {error}"))?;
         let (_policy, current_policy_hash) =
             current_offline_device_attestation_policy_from_world(world, evaluated_at_ms)?;
         let registration = &state.registration;
@@ -2917,9 +2588,7 @@ pub mod isi {
             .asset_definitions()
             .get(&active.key.asset_definition_id)
             .is_some();
-        if state.version != 3
-            || canonical_hash != registration_hash
-            || state.admission_height == 0
+        if state.original_registration_hash != registration_hash
             || state.admission_height > evaluated_height
             || state.admission_height != value.admission_height
             || Hash::prehashed(*state.admission_transaction_hash.as_ref())
@@ -2974,41 +2643,24 @@ pub mod isi {
         let mut tuple_seen = false;
         let mut current_policy_seen = false;
         let mut unexpired_seen = false;
-        for (state_key, archive) in world.smart_contract_state().iter() {
-            let state_key = state_key.to_string();
-            let Some(key_hash_hex) =
-                state_key.strip_prefix(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
-            else {
-                continue;
-            };
-            if key_hash_hex.len() != 64
-                || !key_hash_hex
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        let mut inspected_count = 0_usize;
+        let range_start = kagemusha_online_registration_range_start();
+        for (state_key, archive) in world.smart_contract_state().range(range_start..) {
+            if !state_key
+                .as_ref()
+                .starts_with(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
             {
-                return Err(format!(
-                    "Kagemusha registration state key `{state_key}` is non-canonical"
-                ));
+                break;
             }
-            let state: KagemushaOnlineRegistrationStateV3 = norito::decode_canonical(archive)
-                .map_err(|error| {
-                    format!("Kagemusha registration state `{state_key}` is corrupt: {error}")
-                })?;
-            let registration_hash = canonical_registration_hash(&state.registration)
-                .map(|hash| exact_hash_bytes(&hash))
-                .map_err(|error| {
-                    format!("Kagemusha registration state `{state_key}` cannot be hashed: {error}")
-                })?;
-            if state.version != 3
-                || hex::encode(registration_hash) != key_hash_hex
-                || state.admission_height == 0
-                || state.admission_height > evaluated_height
-                || state
-                    .admission_transaction_hash
-                    .as_ref()
-                    .iter()
-                    .all(|byte| *byte == 0)
-            {
+            inspected_count += 1;
+            if inspected_count > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_RETAINED_V4 {
+                return Err(
+                    "Kagemusha registrations exceed the retained-state protocol limit".to_owned(),
+                );
+            }
+            let state = decode_kagemusha_online_registration_state_v4(state_key, archive)?;
+            let registration_hash = state.original_registration_hash;
+            if state.admission_height > evaluated_height {
                 return Err(format!(
                     "Kagemusha registration state `{state_key}` has invalid admission provenance"
                 ));
@@ -3127,25 +2779,28 @@ pub mod isi {
             .world
             .smart_contract_state
             .get(&state_key)
-            .cloned()
             .ok_or_else(|| {
                 labeled_invariant(
                     "device_not_registered",
                     "Kagemusha hardware authorization references an unknown registration hash",
                 )
             })?;
-        let state: KagemushaOnlineRegistrationStateV3 = norito::decode_canonical(&previous_archive)
+        if previous_archive.len() > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_CANONICAL_BYTES_V4 {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "persisted Kagemusha registration exceeds the protocol byte limit",
+            )
+            .into());
+        }
+        let previous_archive = previous_archive.clone();
+        let state = decode_kagemusha_online_registration_state_v4(&state_key, &previous_archive)
             .map_err(|err| {
                 labeled_invariant(
                     "invalid_attestation",
-                    format!("failed to decode persisted Kagemusha registration: {err}"),
+                    format!("failed to validate persisted Kagemusha registration: {err}"),
                 )
             })?;
-        let registration_hash = canonical_registration_hash(&state.registration)?;
-        if state.version != 3
-            || state.admission_height == 0
-            || exact_hash_bytes(&registration_hash) != authorization.registration_hash
-        {
+        if state.original_registration_hash != authorization.registration_hash {
             return Err(labeled_invariant(
                 "invalid_attestation",
                 "persisted Kagemusha registration is non-canonical, corrupt, or keyed incorrectly",
@@ -3281,12 +2936,7 @@ pub mod isi {
             }
         };
         authenticated.state.lifecycle = next_lifecycle;
-        let updated_archive = norito::encode_canonical(&authenticated.state).map_err(|err| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("failed to encode updated Kagemusha registration state: {err}"),
-            )
-        })?;
+        let updated_archive = encode_kagemusha_online_registration_state_v4(&authenticated.state)?;
         Ok(KagemushaOnlineHardwareAssertionCommitPlan {
             state_key: authenticated.state_key,
             previous_archive: authenticated.previous_archive,
@@ -4343,21 +3993,15 @@ pub mod isi {
         registration: &OfflineDeviceAttestationRegistration,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if registration.recent_block_height == 0 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation must bind a committed block height",
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            registration.recent_block_height == 0,
+            "offline device attestation must bind a committed block height",
+        );
         let committed_height = state_transaction.block_hashes().len() as u64;
-        if registration.recent_block_height > committed_height {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation references a block height that is not committed",
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            registration.recent_block_height > committed_height,
+            "offline device attestation references a block height that is not committed",
+        );
         if committed_height.saturating_sub(registration.recent_block_height)
             > KAGEMUSHA_ATTESTATION_RECENT_BLOCK_WINDOW
         {
@@ -4371,18 +4015,14 @@ pub mod isi {
             .block_hashes()
             .get(registration.recent_block_height.saturating_sub(1) as usize)
             .ok_or_else(|| {
-                labeled_invariant(
-                    "invalid_attestation",
+                invalid_attestation(
                     "offline device attestation references a missing committed block",
                 )
             })?;
-        if block_hash.as_ref() != registration.recent_block_hash.as_ref() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation recent block hash does not match ledger state",
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            block_hash.as_ref() != registration.recent_block_hash.as_ref(),
+            "offline device attestation recent block hash does not match ledger state",
+        );
         Ok(())
     }
     fn validate_offline_attestation_platform_profile(
@@ -4391,35 +4031,26 @@ pub mod isi {
         validate_p256_uncompressed_public_key(&registration.assertion_public_key)?;
         match registration.platform.as_str() {
             OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST => {
-                if registration.assertion_scheme != OFFLINE_ATTESTATION_IOS_ASSERTION_SCHEME
-                    || registration.assertion_key_algorithm
-                        != OFFLINE_ATTESTATION_IOS_ASSERTION_ALGORITHM
-                    || registration.assertion_usage_count_limit.is_some()
-                {
-                    return Err(labeled_invariant(
-                        "invalid_attestation",
-                        "iOS App Attest registrations must use the canonical App Attest assertion profile",
-                    )
-                    .into());
-                }
+                reject_invalid_attestation!(
+                    registration.assertion_scheme != OFFLINE_ATTESTATION_IOS_ASSERTION_SCHEME
+                        || registration.assertion_key_algorithm
+                            != OFFLINE_ATTESTATION_IOS_ASSERTION_ALGORITHM
+                        || registration.assertion_usage_count_limit.is_some(),
+                    "iOS App Attest registrations must use the canonical App Attest assertion profile",
+                );
             }
             OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
-                if registration.assertion_scheme != OFFLINE_ATTESTATION_ANDROID_ASSERTION_SCHEME
-                    || registration.assertion_key_algorithm
-                        != OFFLINE_ATTESTATION_ANDROID_ASSERTION_ALGORITHM
-                    || registration.assertion_usage_count_limit != Some(1)
-                    || !registration.one_use
-                {
-                    return Err(labeled_invariant(
-                        "invalid_attestation",
-                        "Android KeyMint registrations must use the canonical one-use P-256 assertion profile",
-                    )
-                    .into());
-                }
+                reject_invalid_attestation!(
+                    registration.assertion_scheme != OFFLINE_ATTESTATION_ANDROID_ASSERTION_SCHEME
+                        || registration.assertion_key_algorithm
+                            != OFFLINE_ATTESTATION_ANDROID_ASSERTION_ALGORITHM
+                        || registration.assertion_usage_count_limit != Some(1)
+                        || !registration.one_use,
+                    "Android KeyMint registrations must use the canonical one-use P-256 assertion profile",
+                );
             }
             _ => {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
+                return Err(invalid_attestation(
                     "offline device attestation platform is unsupported",
                 )
                 .into());
@@ -4435,31 +4066,20 @@ pub mod isi {
         let Some(value) = value else {
             return Ok(());
         };
-        if value.trim().is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!("offline device attestation {field} must not be empty when present"),
-            )
-            .into());
-        }
-        if value.trim() != value {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!(
-                    "offline device attestation {field} must not contain surrounding whitespace"
-                ),
-            )
-            .into());
-        }
-        if value.len() > maximum_bytes || value.chars().any(char::is_control) {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!(
-                    "offline device attestation {field} must contain at most {maximum_bytes} bytes and no control characters"
-                ),
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            value.trim().is_empty(),
+            format!("offline device attestation {field} must not be empty when present"),
+        );
+        reject_invalid_attestation!(
+            value.trim() != value,
+            format!("offline device attestation {field} must not contain surrounding whitespace"),
+        );
+        reject_invalid_attestation!(
+            value.len() > maximum_bytes || value.chars().any(char::is_control),
+            format!(
+                "offline device attestation {field} must contain at most {maximum_bytes} bytes and no control characters"
+            ),
+        );
         Ok(())
     }
     fn validate_offline_attestation_optional_metadata(
@@ -4500,28 +4120,22 @@ pub mod isi {
     ) -> Result<IosAppAttestExtensionProperties, Error> {
         let mut offset = 0usize;
         let (major, entries) = read_definite_cbor_header(input, &mut offset, source)?;
-        if major != 5 || entries != 2 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} extensions must be one two-entry CBOR map"),
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            major != 5 || entries != 2,
+            format!("iOS App Attest {source} extensions must be one two-entry CBOR map"),
+        );
         let mut validation_category = None;
         let mut bundle_version = None;
         for _ in 0..2 {
             let key = read_definite_cbor_text(input, &mut offset, source)?;
             if key == validation_category_key && validation_category.is_none() {
                 let (major, value) = read_definite_cbor_header(input, &mut offset, source)?;
-                if major != 0 {
-                    return Err(labeled_invariant(
-                        "invalid_attestation",
-                        format!(
-                            "iOS App Attest {source} validation category must be an unsigned integer"
-                        ),
-                    )
-                    .into());
-                }
+                reject_invalid_attestation!(
+                    major != 0,
+                    format!(
+                        "iOS App Attest {source} validation category must be an unsigned integer"
+                    ),
+                );
                 validation_category = Some(u32::try_from(value).map_err(|_| {
                     labeled_invariant(
                         "invalid_attestation",
@@ -4532,8 +4146,7 @@ pub mod isi {
                 bundle_version =
                     Some(read_definite_cbor_text(input, &mut offset, source)?.to_owned());
             } else {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
+                return Err(invalid_attestation(
                     format!(
                         "iOS App Attest {source} extensions must contain each exact {validation_category_key}/{bundle_version_key} key once"
                     ),
@@ -4541,35 +4154,25 @@ pub mod isi {
                 .into());
             }
         }
-        if offset != input.len() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} extensions have trailing CBOR bytes"),
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            offset != input.len(),
+            format!("iOS App Attest {source} extensions have trailing CBOR bytes"),
+        );
         let validation_category = validation_category.expect("both exact extension keys checked");
-        if !matches!(validation_category, 1..=6 | 10) {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} validation category is unsupported"),
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            !matches!(validation_category, 1..=6 | 10),
+            format!("iOS App Attest {source} validation category is unsupported"),
+        );
         let bundle_version = bundle_version.expect("both exact extension keys checked");
-        if bundle_version.is_empty()
-            || bundle_version.len()
-                > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1
-            || !bundle_version.is_ascii()
-            || bundle_version.trim() != bundle_version
-            || bundle_version.chars().any(char::is_control)
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!("iOS App Attest {source} bundle version is invalid"),
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            bundle_version.is_empty()
+                || bundle_version.len()
+                    > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1
+                || !bundle_version.is_ascii()
+                || bundle_version.trim() != bundle_version
+                || bundle_version.chars().any(char::is_control),
+            format!("iOS App Attest {source} bundle version is invalid"),
+        );
         Ok(IosAppAttestExtensionProperties {
             validation_category,
             bundle_version,
@@ -4599,60 +4202,35 @@ pub mod isi {
             "iOS App Attest report has trailing CBOR bytes",
         )?;
         let ciborium::value::Value::Map(map) = value else {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest report must be a CBOR map",
-            )
-            .into());
+            return Err(invalid_attestation("iOS App Attest report must be a CBOR map").into());
         };
-        if cbor_text_value(&map, "fmt")?.as_deref() != Some("apple-appattest") {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest report format must be apple-appattest",
-            )
-            .into());
-        }
-        let auth_data = cbor_bytes_value(&map, "authData")?.ok_or_else(|| {
-            labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest report is missing authData",
-            )
-        })?;
-        let att_stmt = cbor_map_value(&map, "attStmt")?.ok_or_else(|| {
-            labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest report is missing attStmt",
-            )
-        })?;
+        reject_invalid_attestation!(
+            cbor_text_value(&map, "fmt")?.as_deref() != Some("apple-appattest"),
+            "iOS App Attest report format must be apple-appattest",
+        );
+        let auth_data = cbor_bytes_value(&map, "authData")?
+            .ok_or_else(|| invalid_attestation("iOS App Attest report is missing authData"))?;
+        let att_stmt = cbor_map_value(&map, "attStmt")?
+            .ok_or_else(|| invalid_attestation("iOS App Attest report is missing attStmt"))?;
         let x5c = cbor_array_value(att_stmt, "x5c")?.ok_or_else(|| {
-            labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest report is missing certificate chain",
-            )
+            invalid_attestation("iOS App Attest report is missing certificate chain")
         })?;
-        if x5c.len() < 2 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest report must include a certificate chain",
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            x5c.len() < 2,
+            "iOS App Attest report must include a certificate chain",
+        );
         let mut certificates = Vec::with_capacity(x5c.len());
         for value in x5c {
             let ciborium::value::Value::Bytes(certificate) = value else {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
+                return Err(invalid_attestation(
                     "iOS App Attest certificate chain entries must be bytes",
                 )
                 .into());
             };
-            if certificate.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "iOS App Attest certificate chain entries must be non-empty",
-                )
-                .into());
-            }
+            reject_invalid_attestation!(
+                certificate.is_empty(),
+                "iOS App Attest certificate chain entries must be non-empty",
+            );
             certificates.push(certificate.clone());
         }
         Ok(IosAppAttestReport {
@@ -4661,31 +4239,23 @@ pub mod isi {
         })
     }
     fn parse_ios_app_attest_auth_data(auth_data: &[u8]) -> Result<IosAppAttestAuthData, Error> {
-        if !(OFFLINE_ATTESTATION_APP_ATTEST_AUTH_DATA_MIN_LEN
-            ..=OFFLINE_ATTESTATION_APP_ATTEST_AUTH_DATA_MAX_LEN)
-            .contains(&auth_data.len())
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest authData length is outside protocol bounds",
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            !(OFFLINE_ATTESTATION_APP_ATTEST_AUTH_DATA_MIN_LEN
+                ..=OFFLINE_ATTESTATION_APP_ATTEST_AUTH_DATA_MAX_LEN)
+                .contains(&auth_data.len()),
+            "iOS App Attest authData length is outside protocol bounds",
+        );
         let flags = auth_data[32];
         let allowed_flags = OFFLINE_ATTESTATION_APP_ATTEST_FLAG_USER_PRESENT
             | OFFLINE_ATTESTATION_APP_ATTEST_FLAG_USER_VERIFIED
             | OFFLINE_ATTESTATION_APP_ATTEST_FLAG_ATTESTED_CREDENTIAL_DATA
             | OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA;
-        if flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_ATTESTED_CREDENTIAL_DATA == 0
-            || flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA == 0
-            || flags & !allowed_flags != 0
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest authData flags are invalid or missing attested credential or extension data",
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_ATTESTED_CREDENTIAL_DATA == 0
+                || flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA == 0
+                || flags & !allowed_flags != 0,
+            "iOS App Attest authData flags are invalid or missing attested credential or extension data",
+        );
         let rp_id_hash = auth_data[0..32]
             .try_into()
             .expect("authData length already checked");
@@ -4704,21 +4274,15 @@ pub mod isi {
         ) as usize;
         let credential_id_start = 55usize;
         let credential_id_end = credential_id_start.saturating_add(credential_id_len);
-        if credential_id_end > auth_data.len() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest credential id exceeds authData bounds",
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            credential_id_end > auth_data.len(),
+            "iOS App Attest credential id exceeds authData bounds",
+        );
         let credential_and_extensions = &auth_data[credential_id_end..];
-        if credential_and_extensions.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest credential public key is missing",
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            credential_and_extensions.is_empty(),
+            "iOS App Attest credential public key is missing",
+        );
         let mut cursor = Cursor::new(credential_and_extensions);
         let _: ciborium::value::Value = ciborium::de::from_reader(&mut cursor).map_err(|_| {
             labeled_invariant(
@@ -4734,13 +4298,10 @@ pub mod isi {
         })?;
         let cose_key = credential_and_extensions[..cose_key_end].to_vec();
         let extension_bytes = &credential_and_extensions[cose_key_end..];
-        if extension_bytes.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "iOS App Attest authData sets ED without extension data",
-            )
-            .into());
-        }
+        reject_invalid_attestation!(
+            extension_bytes.is_empty(),
+            "iOS App Attest authData sets ED without extension data",
+        );
         let extensions = decode_ios_app_attest_attestation_extensions(extension_bytes)?;
         Ok(IosAppAttestAuthData {
             rp_id_hash,
@@ -5738,33 +5299,11 @@ pub mod isi {
                         "current signed transaction hash is unavailable for device-registration provenance",
                     )
                 })?;
-            let registration_key = kagemusha_device_registration_key(&registration_hash);
-            let challenge_key = kagemusha_attestation_challenge_key(&registration.challenge_hash);
-            let report_key =
-                kagemusha_attestation_report_key(&registration.attestation_report_hash);
-            let evidence_key = kagemusha_attestation_evidence_key(&registration.evidence_hash);
+            let replay_keys = kagemusha_registration_replay_keys(&registration, &registration_hash);
             let registration_hash_bytes = exact_hash_bytes(&registration_hash);
             let registration_state_key =
                 kagemusha_online_registration_state_key(&registration_hash_bytes)?;
-            for key in [
-                &registration_key,
-                &challenge_key,
-                &report_key,
-                &evidence_key,
-            ] {
-                if state_transaction
-                    .world
-                    .kagemusha_replay_keys
-                    .get(key)
-                    .is_some()
-                {
-                    return Err(labeled_invariant(
-                        "duplicate_attestation",
-                        "Kagemusha device attestation registration reuses registration or evidence material",
-                    )
-                    .into());
-                }
-            }
+            ensure_kagemusha_registration_replay_keys_are_fresh(&replay_keys, state_transaction)?;
             if state_transaction
                 .world
                 .smart_contract_state
@@ -5800,38 +5339,28 @@ pub mod isi {
                     .into());
                 }
             };
-            let registration_state_archive =
-                norito::encode_canonical(&KagemushaOnlineRegistrationStateV3 {
-                    version: 3,
+            let registration = compact_kagemusha_registration_projection(&registration);
+            let registration_projection_hash =
+                canonical_registration_hash(&registration).map(|hash| exact_hash_bytes(&hash))?;
+            let registration_state_archive = encode_kagemusha_online_registration_state_v4(
+                &KagemushaOnlineRegistrationStateV4 {
+                    version: KAGEMUSHA_ONLINE_REGISTRATION_STATE_VERSION_V4,
+                    original_registration_hash: registration_hash_bytes,
+                    registration_projection_hash,
                     admission_policy_hash,
                     admission_height,
                     admission_transaction_hash,
                     registration,
                     lifecycle,
-                })
-                .map_err(|err| {
-                    labeled_invariant(
-                        "invalid_attestation",
-                        format!("failed to persist exact Kagemusha registration: {err}"),
-                    )
-                })?;
+                },
+            )?;
             registration_admission_plan.commit(state_transaction);
-            state_transaction
-                .world
-                .kagemusha_replay_keys
-                .insert(registration_key, ());
-            state_transaction
-                .world
-                .kagemusha_replay_keys
-                .insert(challenge_key, ());
-            state_transaction
-                .world
-                .kagemusha_replay_keys
-                .insert(report_key, ());
-            state_transaction
-                .world
-                .kagemusha_replay_keys
-                .insert(evidence_key, ());
+            for replay_key in replay_keys {
+                state_transaction
+                    .world
+                    .kagemusha_replay_keys
+                    .insert(replay_key, ());
+            }
             state_transaction
                 .world
                 .smart_contract_state

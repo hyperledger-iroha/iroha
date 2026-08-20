@@ -928,7 +928,7 @@ mod tests {
             schemas,
             "TransactionPayload",
             &openapi_contract_strings("openapi.transaction_payload.required").collect::<Vec<_>>(),
-            &["nonce", "attachments"],
+            &["nonce"],
         );
         let properties = schemas["TransactionPayload"]["properties"]
             .as_object()
@@ -1073,6 +1073,65 @@ mod tests {
         }
     }
     #[test]
+    fn authenticated_transaction_nullable_fields_are_required_and_nullable() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+
+        let payload = &schemas["TransactionPayload"];
+        assert!(
+            payload["required"]
+                .as_array()
+                .expect("TransactionPayload required fields")
+                .iter()
+                .any(|field| field.as_str() == Some("attachments"))
+        );
+        assert_eq!(
+            payload["properties"]["attachments"]["type"],
+            norito::json!(["string", "null"])
+        );
+
+        for variant in schemas["FeePaymentIntent"]["oneOf"]
+            .as_array()
+            .expect("fee-payment variants")
+        {
+            let value = &variant["properties"]["value"];
+            assert_eq!(
+                value.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
+            );
+            assert!(
+                value["required"]
+                    .as_array()
+                    .expect("fee-payment required fields")
+                    .iter()
+                    .any(|field| field.as_str() == Some("gas_limit"))
+            );
+            assert_eq!(
+                value["properties"]["gas_limit"]["type"],
+                norito::json!(["integer", "null"])
+            );
+        }
+
+        let receipt_payload = &schemas["TransactionSubmissionReceipt"]["properties"]["payload"];
+        assert_eq!(
+            receipt_payload
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            receipt_payload["required"]
+                .as_array()
+                .expect("receipt-payload required fields")
+                .iter()
+                .any(|field| field.as_str() == Some("signed_transaction_hash"))
+        );
+        assert_eq!(
+            receipt_payload["properties"]["signed_transaction_hash"]["type"],
+            norito::json!(["string", "null"])
+        );
+    }
+    #[test]
     fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
         let document = canonical_document();
         let schemas = component_schemas(&document);
@@ -1186,6 +1245,11 @@ mod tests {
         assert!(axt_properties.contains_key("next_handle_counter"));
         assert!(!axt_properties.contains_key("next_min_handle_era"));
         assert!(!axt_properties.contains_key("next_min_sub_nonce"));
+        let error_details_properties = schemas["ErrorDetails"]["properties"]
+            .as_object()
+            .expect("error details properties");
+        assert!(error_details_properties.contains_key("entrypoint_hash"));
+        assert!(error_details_properties.contains_key("tx_hash"));
     }
     #[test]
     fn static_account_operations_publish_exact_auth_and_private_responses() {
@@ -3807,7 +3871,7 @@ mod tests {
                 .and_then(Value::as_str),
             Some("operator")
         );
-        for path in ["/v1/sumeragi/pacemaker", "/v1/sumeragi/phases"] {
+        for path in ["/v1/sumeragi/pacemaker"] {
             let operation = paths
                 .get(path)
                 .and_then(Value::as_object)

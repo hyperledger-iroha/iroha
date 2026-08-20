@@ -2219,7 +2219,7 @@ count|sign_dispatch|DurableRecoveredLifecycleNextWalVoteSign|2|recovered Sign at
 required|sign_dispatch|PreparedRecoveredLifecycleSignCarrier::NextWalVote|recovered Sign attestation lost its next-WAL Vote carrier
 required|sign_dispatch|.project_task(identity)|recovered Sign attestation lost its typed task projection
 end
-case|transition_surface_is_ordered_borrow_bound_and_inert
+case|transition_surface_is_ordered_borrow_bound_and_published
 region|production|body_pipeline|begin|-|before|include!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
 region|authorized|body_pipeline|after|fn stage_body_stage_transition|before|/// Fully reduced coordinator copy
 region|fetch|body_pipeline|after|pub(super) fn prepare_sealed_fetch_store_transition|before|/// Stage one sealed Store retirement and exact Validate admission
@@ -2496,7 +2496,7 @@ count|production|assemble_storage_only_with_recovered_wal_sign_and_body_pipeline
 end
 case|certified_fetch_completion_source_keeps_the_durable_cut_ordered
 region|transaction|selector|after|pub(crate) fn complete_certified_fetch_body_persistence(|before|fn publish_certified_fetch_ready_authority(
-order|transaction|18|prepare_lifecycle_ingress_selector(|certified_fetch_current_location(|prepare_selected_certified_fetch_completion(|bind_durable_body_receipt(receipt)|prepare_certified_fetch_ready_projection(|prepare_lifecycle_certified_fetch_completion(|prepare_certified_body_fetch_owner_removal(|matches_selected_response(|into_exact_certified_fetch_dequeue(|begin_fail_stop_operation()|persist_exact_staged_successor()|exact_dequeue.commit(ingress)|commit_after_exact_dequeue(dequeued)|ready.commit()|commit_lifecycle_certified_fetch_completion|service_prepared.commit(operation.permit())|work_ack.commit()|operation.complete()|completion transaction omitted {required}
+order|transaction|19|prepare_lifecycle_ingress_selector(|certified_fetch_current_location(|prepare_selected_certified_fetch_completion(|bind_durable_body_receipt(receipt)|prepare_certified_fetch_ready_projection(|prepare_lifecycle_certified_fetch_completion(|prepare_certified_body_fetch_owner_removal(|matches_selected_response(|into_exact_certified_fetch_dequeue(|begin_fail_stop_operation()|persist_exact_staged_successor()|exact_dequeue.commit(ingress)|commit_after_exact_dequeue(dequeued)|ready.commit()|commit_lifecycle_certified_fetch_completion|service_prepared.commit(operation.permit())|work_ack.commit()|mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)|operation.complete()|completion transaction omitted {required}
 forbidden|transaction|runtime_lifecycle_ordinal|certified Fetch completion must not use a runtime lifecycle ordinal
 forbidden|transaction|BodyAvailableReservation|certified Fetch completion must not reopen body-available reservation
 end
@@ -2507,4 +2507,49 @@ forbidden|whole|LifecycleRunnerRankSnapshot|turn outcome must not retain a rank 
 forbidden|whole|into_parts|turn outcome must not expose cursor constituents
 forbidden|whole|pub executor:|turn outcome must not expose an executor
 forbidden|whole|pub services:|turn outcome must not expose services
+end
+case|ordinary_certified_body_pipeline_reserves_executes_and_publishes_ready_validate
+region|classifier|scheduler_inputs|after|pub(crate) fn classify_completion_ready_work(|before|/// Plan one turn from the complete directly-owned production Ready census.
+region|completion|turn_driver|after|fn settle_parked_lifecycle_durable_validate_completion(|before|fn publish_ready_durable_validate(
+region|publication|turn_driver|after|fn publish_ready_durable_validate(|before|fn advance_certified_body_pipeline(&mut self)
+region|dispatch|turn_driver|after|fn advance_certified_body_pipeline(&mut self)|before|fn drive_recovered_ingress_selector
+region|worker|worker|begin|-|end|-
+region|sealed_publication|body_pipeline|at|impl<'coordinator, 'registry, 'adapter>\n    PreparedSealedValidateSignTransition|before|include!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
+region|body_pipeline|body_pipeline|begin|-|end|-
+region|effects|effects|begin|-|end|-
+region|runtime|runtime|begin|-|end|-
+required|classifier|LifecycleWorkClass::Validate => self|ordinary Validate classification lost its exact carrier branch
+required|classifier|.attest_ready_validate_demand(&self.registry, *ordinal)|ordinary Validate classification lost exact coordinator/registry attestation
+required|classifier|return ProductionCompletionReadyWorkV1::CertifiedBodyPipeline;|authenticated ordinary Validate no longer enters the canonical body scheduler
+order|dispatch|4|LifecycleDurableValidateDispatchKeyV1::from_claimed(|capture_lifecycle_durable_validate_capacity(key)|begin_durable_validate_dispatch(|reservation.commit(dispatch)|Ready Validate must reserve its exact worker position before the Waiting mutation and command publication
+required|dispatch|rollback_unpublished_body_claim|backpressure or pre-publication failure lost exact claim rollback
+required|completion|LifecycleDurableValidateCompletionKindV1::Retry|durable Validate completion lost its typed retry branch
+required|completion|LifecycleDurableValidateRetryV1::Unavailable(completion)|backpressured retry no longer retains the exact completion owner
+required|completion|LifecycleDurableValidateRetryV1::RestartRequired|invalid or disconnected retry ownership no longer fails closed
+required|completion|complete_durable_validate_dispatch(|executed Validate completion no longer returns Waiting to one authenticated Ready carrier
+required|completion|close_output_for_restart()|failed Validate completion publication no longer closes output for restart
+required|worker|LifecycleDurableValidateDispatchKeyV1|the dedicated Validate owner lost its address-keyed identity
+required|worker|BTreeMap<LifecycleDurableValidateDispatchKeyV1, V2IoTrackedLifecycleDurableValidateV1>|the dedicated Validate queue lost its exact keyed ownership index
+required|worker|LifecycleDurableValidateCapacityReservationV1|Ready Validate lost its pre-Wait capacity reservation
+required|worker|LifecycleDurableValidateWorkerResultV1|the worker lost its typed Validate completion owner
+required|worker|retry_lifecycle_durable_validate(dispatch)|the retained Validate command lost exact-key retry
+required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedInactive|validated inactive outcome lost terminal publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedNoEffect|validated no-effect outcome lost terminal publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedInactive|rejected inactive outcome lost terminal publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedNoEffect|rejected no-effect outcome lost terminal publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedApply|validated Apply outcome lost successor publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedPersist|validated Persist outcome lost Sign successor publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedReport|rejected report outcome lost invalid-body successor publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedBusy|validated Busy outcome lost its reducer-fence settlement
+required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedBusy|rejected Busy outcome lost its reducer-fence settlement
+count|publication|.persist_and_publish()|4|each non-Busy Validate outcome family must use one sealed persistence/publication transaction
+required|publication|settle_sealed_validate_busy(lease, wait)|Busy Validate must remain durably recoverable and retry only after its exact reducer fence
+count|sealed_publication|pub(super) fn persist_and_publish(|4|Validate terminal, report, Apply, and Sign each require one consuming sealed transaction
+count|sealed_publication|persist_exact_staged_successor(&staged)|4|every Validate publication family must fsync its exact staged LedgerV1 successor
+forbidden|body_pipeline|atomic-publication gap|completed Validate branches must not retain the former publication blocker
+forbidden|effects|RetainedCertifiedBodyResponse|the retired ordinary response carrier returned
+forbidden|effects|retained_certified_body_response|the retired ordinary response slot returned
+forbidden|effects|accept_certified_body_response_with_ingress_ownership|the legacy ordinary response admission path returned
+forbidden|runtime|retained_response_predecessor_target_ordinal|the legacy predecessor ordinal returned
+forbidden|runtime|retained_response_predecessor_retry_attempted|the legacy predecessor retry latch returned
 end

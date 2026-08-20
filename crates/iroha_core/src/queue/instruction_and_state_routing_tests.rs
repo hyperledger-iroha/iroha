@@ -248,77 +248,30 @@ include!("gossip_routing_metadata_tests.rs");
 include!("gossip_route_validation_tests.rs");
 include!("drain_revalidation_tests.rs");
 #[test]
-fn disabled_nexus_consensus_route_accepts_only_single_universal() {
-    let mut nexus = Nexus::default();
-    nexus.enabled = false;
-    assert_eq!(
-        crate::state::consensus_lane_dataspace_at_height(LaneId::SINGLE, &nexus, 1),
-        Some(DataSpaceId::UNIVERSAL)
-    );
-    assert_eq!(
-        crate::state::consensus_lane_dataspace_at_height(LaneId::new(1), &nexus, 1),
-        None
-    );
-}
-#[test]
-fn state_backed_queue_routes_canonical_disabled_nexus_single_lane() {
-    let mut state = State::new(
-        world_with_test_domains(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = false;
-    state
-        .set_nexus(nexus)
-        .expect("apply disabled Nexus state for default route test");
-    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let queue = Queue::test(config_factory(), &time_source);
-    let (authority, key_pair) = gen_account_in("wonderland");
-    let tx = accepted_tx_with(
-        authority,
-        &key_pair,
-        &time_source,
-        vec![InstructionBox::from(Log::new(
-            Level::INFO,
-            "disabled Nexus default universal route".into(),
-        ))],
-        Metadata::default(),
-    );
-    let expected =
-        RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-    assert_eq!(
-        queue
-            .route_plan_with_state(&tx, &state)
-            .expect("disabled Nexus should keep the default universal route admissible"),
-        expected
-    );
-    assert_eq!(
-        queue
-            .route_plan_for_gossip_with_state(&tx, &state)
-            .expect("disabled Nexus gossip should keep the default route admissible"),
-        expected
-    );
-}
-#[test]
 fn route_for_gossip_with_state_falls_back_to_view_router_path() {
     struct ViewOnlyRouter {
         lane: LaneId,
         dataspace: DataSpaceId,
     }
     impl LaneRouter for ViewOnlyRouter {
-        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
-            panic!("route() should not be used for view-only routers");
+        fn try_route(
+            &self,
+            _tx: &dyn TransactionRoutingView,
+        ) -> Result<RoutingDecision, RoutingResolveError> {
+            Ok(RoutingDecision::new(self.lane, self.dataspace))
         }
-        fn route_with_view(
+        fn try_route_with_view(
             &self,
             _tx: &dyn TransactionRoutingView,
             _state_view: &StateView<'_>,
-        ) -> RoutingDecision {
-            RoutingDecision::new(self.lane, self.dataspace)
+        ) -> Result<RoutingDecision, RoutingResolveError> {
+            Ok(RoutingDecision::new(self.lane, self.dataspace))
         }
-        fn route_without_state(&self, _tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
-            None
+        fn try_route_without_state(
+            &self,
+            _tx: &dyn TransactionRoutingView,
+        ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+            Ok(None)
         }
     }
     let kura = Kura::blank_kura_for_testing();
@@ -355,7 +308,6 @@ fn route_plan_with_state_syncs_queue_router_to_fresh_default_lane() {
         (fresh.lane_id, fresh.dataspace_id),
     ]);
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.lane_catalog = (*fresh_lanes).clone();
     nexus.dataspace_catalog = (*fresh_dataspaces).clone();
     nexus.fees.base_fee = Quantity::zero();
@@ -406,7 +358,6 @@ fn push_in_view_syncs_queue_router_to_fresh_default_lane() {
         (fresh.lane_id, fresh.dataspace_id),
     ]);
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.autoscale.enabled = false;
     nexus.lane_catalog = (*fresh_lanes).clone();
     nexus.lane_config =
@@ -436,15 +387,15 @@ fn push_in_view_syncs_queue_router_to_fresh_default_lane() {
         ))],
         Metadata::default(),
     );
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     queue
         .push(tx, state.view())
         .expect("push should sync route");
     assert_eq!(
         queue
-            .routing_decisions
+            .routing_plans
             .get(&hash)
-            .map(|entry| *entry.value()),
+            .map(|entry| entry.value().coordinator_route()),
         Some(fresh)
     );
     assert_eq!(queue.routing_policy.read().default_lane, fresh.lane_id);
@@ -472,7 +423,7 @@ fn route_plan_with_state_rejects_stale_policy_even_when_old_lane_still_exists() 
         },
     };
     let mut current_nexus = state.nexus_snapshot();
-    current_nexus.enabled = true;
+
     current_nexus.lane_catalog = (*lane_catalog).clone();
     current_nexus.dataspace_catalog = (*dataspace_catalog).clone();
     current_nexus.routing_policy.rules = vec![current_rule.clone()];
@@ -535,7 +486,7 @@ fn precomputed_state_routing_plan_rejects_stale_policy_even_when_old_lane_still_
         description: None,
     };
     let mut current_nexus = state.nexus_snapshot();
-    current_nexus.enabled = true;
+
     current_nexus.lane_catalog = (*lane_catalog).clone();
     current_nexus.dataspace_catalog = (*dataspace_catalog).clone();
     current_nexus.routing_policy.rules = vec![LaneRoutingRule {
@@ -555,7 +506,7 @@ fn precomputed_state_routing_plan_rejects_stale_policy_even_when_old_lane_still_
     let queue = Queue::test(config_factory(), &time_source);
     queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     let stale_plan = queue
         .router
         .read()
@@ -670,18 +621,24 @@ fn reconfiguration_does_not_consult_replacement_router_for_pending_work() {
         dataspace: DataSpaceId,
     }
     impl LaneRouter for ViewOnlyRouter {
-        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
-            panic!("route() should not be used for view-only routers");
+        fn try_route(
+            &self,
+            _tx: &dyn TransactionRoutingView,
+        ) -> Result<RoutingDecision, RoutingResolveError> {
+            Ok(RoutingDecision::new(self.lane, self.dataspace))
         }
-        fn route_with_view(
+        fn try_route_with_view(
             &self,
             _tx: &dyn TransactionRoutingView,
             _state_view: &StateView<'_>,
-        ) -> RoutingDecision {
-            RoutingDecision::new(self.lane, self.dataspace)
+        ) -> Result<RoutingDecision, RoutingResolveError> {
+            Ok(RoutingDecision::new(self.lane, self.dataspace))
         }
-        fn route_without_state(&self, _tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
-            None
+        fn try_route_without_state(
+            &self,
+            _tx: &dyn TransactionRoutingView,
+        ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+            Ok(None)
         }
     }
     let kura = Kura::blank_kura_for_testing();
@@ -690,7 +647,7 @@ fn reconfiguration_does_not_consult_replacement_router_for_pending_work() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.as_ref().hash();
+    let hash = tx.as_ref().hash_as_entrypoint();
     queue.push(tx, state.view()).expect("push");
     let expected_lane = LaneId::SINGLE;
     let expected_dataspace = DataSpaceId::UNIVERSAL;
@@ -708,9 +665,10 @@ fn reconfiguration_does_not_consult_replacement_router_for_pending_work() {
         true,
     );
     let routing = queue
-        .routing_decisions
+        .routing_plans
         .get(&hash)
-        .expect("routing decision should exist");
+        .expect("routing plan should exist")
+        .coordinator_route();
     assert_eq!(routing.lane_id, expected_lane);
     assert_eq!(routing.dataspace_id, expected_dataspace);
 }
@@ -720,7 +678,7 @@ fn reconfiguration_ignores_state_free_future_lane_hint_for_pending_work() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     queue
         .push(tx, state.view())
         .expect("initial live route should enqueue on active default lane");
@@ -747,9 +705,9 @@ fn reconfiguration_ignores_state_free_future_lane_hint_for_pending_work() {
     assert!(queue.txs.get(&hash).is_some());
     assert_eq!(
         queue
-            .routing_decisions
+            .routing_plans
             .get(&hash)
-            .map(|entry| *entry.value()),
+            .map(|entry| entry.value().coordinator_route()),
         Some(RoutingDecision::default())
     );
     assert_eq!(
@@ -760,9 +718,11 @@ fn reconfiguration_ignores_state_free_future_lane_hint_for_pending_work() {
         Some(RoutingDecision::default())
     );
     assert_eq!(
-        routing_ledger::get_plan(&hash).map(|plan| plan.coordinator_route()),
+        queue
+            .routing_plan_hint(&hash)
+            .map(|plan| plan.coordinator_route()),
         Some(RoutingDecision::default()),
-        "replacement router hints must not rewrite the admitted routing ledger"
+        "replacement router hints must not rewrite the admitted queue plan"
     );
     assert!(!queue.accepted_work_validation_faulted());
 }

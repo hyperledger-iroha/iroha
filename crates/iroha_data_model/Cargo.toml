@@ -131,10 +131,6 @@ harness = false
 name = "chain_wire"
 harness = false
 
-[[test]]
-name = "ui"
-required-features = ["trybuild-tests"]
-
 [[bin]]
 name = "axt_fixtures"
 path = "src/bin/axt_fixtures.rs"

@@ -30,7 +30,7 @@ def test_musubi_fixture_owner_is_declared_but_never_default() -> None:
     metadata = TARGET_INVENTORY.load_metadata(ROOT)
     target = ("iroha_data_model", "musubi_fixtures")
 
-    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == 113
+    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == 111
     assert target in TARGET_INVENTORY.all_workspace_bins(metadata)
     assert target not in TARGET_INVENTORY.resolved_default_bins(metadata)
 
@@ -59,7 +59,7 @@ def test_external_software_signer_requires_explicit_release_opt_in() -> None:
     assert signer["required-features"] == [marker]
 
     caller_markers = {
-        "scripts/build_line.sh": (
+        "scripts/build_canonical_binaries.sh": (
             "--features irohad/external-software-signer-bin,iroha_cli/cli"
         ),
         "ci/check_sorafs_cli_release.sh": "--features external-software-signer-bin",

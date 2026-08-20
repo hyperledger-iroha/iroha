@@ -337,7 +337,7 @@ impl Kura {
                         "autonomous lifecycle per-height retention count overflows",
                     )
                 })?;
-                if *retained > self.roster_sidecar_retention.get() {
+                if *retained > self.lane_history_retention.get() {
                     return Err(Self::invalid_lane_artifact_error(
                         path,
                         "autonomous lifecycle attempts exceed the per-height retention bound",
@@ -918,7 +918,7 @@ impl Kura {
             &entry,
             batch,
             execution,
-            Self::merge_lane_block_artifact(execution),
+            Self::merge_lane_block_execution_source(execution),
             carrier_block_height,
             carrier_block_hash,
         );
@@ -1430,7 +1430,7 @@ impl Kura {
                 entry,
                 batch,
                 execution,
-                Self::merge_lane_block_artifact(execution),
+                Self::merge_lane_block_execution_source(execution),
                 carrier.block_height,
                 carrier.block_hash,
             );
@@ -1801,7 +1801,7 @@ impl Kura {
             }
             for key in expected_keys {
                 if seen_transaction_hashes
-                    .insert(key.signed_transaction_hash, *key)
+                    .insert(key.entrypoint_hash, *key)
                     .is_some()
                     || !seen_entrypoint_hashes.insert(key.entrypoint_hash.clone())
                 {

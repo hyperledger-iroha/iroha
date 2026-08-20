@@ -384,9 +384,9 @@ fn production_leader_wire_binding_parks_queued_carriers_atomically_before_unbind
         },
     ));
     ingress
-        .try_push(InboundBlockMessage::new(
+        .try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(timeout_vote),
-            Some(validator.clone()),
+            validator.clone(),
         ))
         .expect("queue one durable productive carrier");
     let unbound_chunk = wire::ConsensusMessageV2::new(
@@ -401,9 +401,9 @@ fn production_leader_wire_binding_parks_queued_carriers_atomically_before_unbind
         }),
     );
     ingress
-        .try_push(InboundBlockMessage::new(
+        .try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(unbound_chunk),
-            Some(validator.clone()),
+            validator.clone(),
         ))
         .expect("queue one proofless producer carrier");
     assert_eq!(ingress.snapshot_at(Instant::now()).depth, 2);
@@ -2255,6 +2255,49 @@ fn recovered_decision_fetch_queue_parks_generic_drain_and_uses_unified_completio
     assert!(worker.contains("tracked.state = V2IoWorkState::Active;"));
     assert!(worker.contains("tracked.state = V2IoWorkState::CompletionPending;"));
     assert!(!worker.contains("drain_recovered_decision_fetch_body_completion"));
+}
+
+#[test]
+fn ordinary_certified_body_pipeline_has_no_retained_compatibility_carrier() {
+    let effects = include_str!("v2_effects.rs");
+    let runtime = include_str!("v2_runtime.rs");
+    let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
+    let ordinary_consumer = include_str!("v2_runner/ordinary_ingress_consumer.rs");
+    let turn_driver = include_str!("v2_lifecycle_turn_driver.rs");
+
+    for (source, forbidden) in [
+        (effects, concat!("RetainedCertifiedBody", "Response")),
+        (effects, concat!("retained_certified_body_", "response")),
+        (
+            effects,
+            concat!("accept_certified_body_", "response_with_ingress_ownership"),
+        ),
+        (runtime, "retained_response_predecessor_target_ordinal"),
+        (runtime, "retained_response_predecessor_retry_attempted"),
+        (
+            run_inner,
+            concat!("service_retained_certified_", "response"),
+        ),
+        (
+            run_inner,
+            concat!("retry_retained_certified_body_", "response"),
+        ),
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "retired ordinary response compatibility surface returned: {forbidden}",
+        );
+    }
+    assert!(
+        ordinary_consumer.contains("retired certified body response outside lifecycle selection")
+    );
+    assert!(
+        ordinary_consumer
+            .contains("a selected fetch response must instead complete through lifecycle")
+    );
+    assert!(!ordinary_consumer.contains(concat!("accept_certified_body_", "response(")));
+    assert!(turn_driver.contains("drive_certified_fetch_ingress_selector(selector, runner)"));
+    assert!(turn_driver.contains("complete_certified_fetch_body_persistence("));
 }
 
 #[test]

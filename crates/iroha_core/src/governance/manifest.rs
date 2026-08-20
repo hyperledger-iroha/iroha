@@ -164,6 +164,7 @@ impl ManifestSourceLoadBudget {
 }
 /// Minimal manifest descriptor parsed from disk.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
+#[norito(deny_unknown_fields)]
 struct ManifestFile {
     /// Lane alias the manifest targets.
     pub lane: Option<String>,
@@ -188,6 +189,7 @@ struct ManifestFile {
 }
 /// Manifest-level validator binding descriptor.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
+#[norito(deny_unknown_fields)]
 struct ManifestValidatorBindingFile {
     /// Validator authority account literal.
     pub validator: Option<String>,
@@ -220,6 +222,7 @@ struct ManifestMerkleCommitment {
 }
 /// Governance catalog overlay loaded from distribution cache.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
+#[norito(deny_unknown_fields)]
 struct GovernanceCatalogFile {
     /// Default governance module identifier applied when lanes omit an override.
     pub default_module: Option<String>,
@@ -229,6 +232,7 @@ struct GovernanceCatalogFile {
 }
 /// Governance module descriptor loaded from distribution cache.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
+#[norito(deny_unknown_fields)]
 struct GovernanceModuleFile {
     /// Module type (e.g., `parliament`, `stake_weighted`).
     pub module_type: Option<String>,
@@ -455,8 +459,6 @@ struct ManifestArtifacts {
 pub struct GovernanceHooks {
     /// Runtime upgrade admission policy.
     pub runtime_upgrade: Option<RuntimeUpgradeHook>,
-    /// Unrecognised hooks preserved for future modules.
-    pub unknown: BTreeMap<String, JsonValue>,
 }
 /// Runtime upgrade governance hook.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -487,9 +489,7 @@ impl GovernanceHooks {
                         })?;
                         parsed.runtime_upgrade = Some(hook);
                     }
-                    other => {
-                        parsed.unknown.insert(other.to_string(), value.clone());
-                    }
+                    other => return Err(format!("unsupported governance hook `{other}`")),
                 }
             }
         }
@@ -501,6 +501,14 @@ impl RuntimeUpgradeHook {
         let JsonValue::Object(map) = value else {
             return Err("runtime_upgrade hook must be a JSON object".into());
         };
+        for key in map.keys() {
+            if !matches!(
+                key.as_str(),
+                "allow" | "require_metadata" | "metadata_key" | "allowed_ids"
+            ) {
+                return Err(format!("unsupported runtime_upgrade field `{key}`"));
+            }
+        }
         let mut allow = true;
         if let Some(entry) = map.get("allow") {
             match entry {
@@ -658,10 +666,12 @@ impl GovernanceRules {
             if q == 0 {
                 return Err("validator quorum must be greater than zero".into());
             }
-            if !validators.is_empty()
-                && usize::try_from(q)
-                    .ok()
-                    .is_some_and(|q_usize| q_usize > validators.len())
+            if validators.is_empty() {
+                return Err("validator quorum requires an explicit validator set".into());
+            }
+            if usize::try_from(q)
+                .ok()
+                .is_some_and(|q_usize| q_usize > validators.len())
             {
                 return Err(format!(
                     "validator quorum {q} exceeds validator set size {} for lane `{alias}`",
@@ -2595,7 +2605,6 @@ mod tests {
                     metadata_key: None,
                     allowed_ids: None,
                 }),
-                unknown: BTreeMap::new(),
             },
         };
         let status = LaneManifestStatus {
@@ -3373,6 +3382,25 @@ mod tests {
         );
     }
     #[test]
+    fn governance_overlay_rejects_unknown_structural_fields() {
+        for (index, source) in [
+            br#"{"default_module":"council","moduels":{}}"#.as_slice(),
+            br#"{"modules":{"council":{"module_type":"council_multisig","parameterz":{}}}}"#
+                .as_slice(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut budget = ManifestSourceLoadBudget::default();
+            let result =
+                LaneManifestRegistry::parse_bounded_governance_overlay_json(source, &mut budget);
+            assert!(
+                result.is_err(),
+                "unknown governance-overlay field case {index} must fail closed"
+            );
+        }
+    }
+    #[test]
     fn manifest_rejects_invalid_validator() {
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
@@ -3441,6 +3469,69 @@ mod tests {
         assert!(registry.ensure_lane_ready(LaneId::new(0)).is_err());
     }
     #[test]
+    fn manifest_rejects_quorum_without_validators() {
+        crate::test_alias::ensure();
+        let mut governance = GovernanceCatalog::default();
+        governance
+            .modules
+            .insert("parliament".to_string(), ConfigGovernanceModule::default());
+        let dir = tempdir().expect("tmp dir");
+        let path = dir.path().join("gov.manifest.json");
+        fs::write(
+            &path,
+            r#"{"lane":"gov","governance":"parliament","quorum":1}"#,
+        )
+        .expect("write manifest");
+
+        let error = LaneManifestRegistry::validate_manifest(
+            &path,
+            LaneId::new(0),
+            "gov",
+            Some("parliament"),
+            &governance,
+        )
+        .expect_err("quorum without an explicit validator set must fail closed");
+        assert!(
+            error.contains("quorum requires an explicit validator set"),
+            "unexpected quorum-only manifest error: {error}"
+        );
+    }
+    #[test]
+    fn manifest_rejects_unknown_structural_fields_and_hooks() {
+        crate::test_alias::ensure();
+        let mut governance = GovernanceCatalog::default();
+        governance
+            .modules
+            .insert("parliament".to_string(), ConfigGovernanceModule::default());
+        let alice = account_id_literal(&ALICE_ID);
+        let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone());
+        let cases = [
+            r#"{"lane":"gov","governance":"parliament","validatorz":[]}"#.to_owned(),
+            format!(
+                r#"{{"lane":"gov","governance":"parliament","validators":[{{"validator":"{alice}","peer_id":"{alice_peer}","weight":1}}]}}"#
+            ),
+            r#"{"lane":"gov","governance":"parliament","hooks":{"runtime_upgrdae":{"allow":false}}}"#.to_owned(),
+            r#"{"lane":"gov","governance":"parliament","hooks":{"runtime_upgrade":{"alow":false}}}"#.to_owned(),
+        ];
+
+        for (index, source) in cases.into_iter().enumerate() {
+            let dir = tempdir().expect("tmp dir");
+            let path = dir.path().join("gov.manifest.json");
+            fs::write(&path, source).expect("write manifest");
+            let result = LaneManifestRegistry::validate_manifest(
+                &path,
+                LaneId::new(0),
+                "gov",
+                Some("parliament"),
+                &governance,
+            );
+            assert!(
+                result.is_err(),
+                "unknown-field case {index} must fail closed"
+            );
+        }
+    }
+    #[test]
     fn manifest_parses_validators_and_namespaces() {
         crate::test_alias::ensure();
         let lane_catalog = LaneCatalog::new(
@@ -3481,8 +3572,7 @@ mod tests {
                         "require_metadata": true,
                         "metadata_key": "gov_upgrade_id",
                         "allowed_ids": [" upgrade-q1 "]
-                    }},
-                    "custom_hook": {{"uri":"https://example.com"}}
+                    }}
                 }}
             }}"#
             ),
@@ -3530,7 +3620,6 @@ mod tests {
             .as_ref()
             .expect("allowed ids present");
         assert!(allowed_ids.contains("upgrade-q1"));
-        assert!(rules.hooks.unknown.contains_key("custom_hook"));
     }
     #[test]
     fn manifest_rejects_duplicate_protected_namespace() {

@@ -15,16 +15,16 @@
         ingress.open().expect("open configured roster");
         let message = v2_certified_body_response(7, 0, 64);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 message.clone(),
-                Some(validator.clone()),
+                validator.clone(),
             )),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
         ));
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 message.clone(),
-                Some(validator.clone()),
+                validator.clone(),
             )),
             Ok(super::FairV2IngressPushDisposition::Coalesced)
         ));
@@ -43,7 +43,9 @@
         );
         assert_eq!(illegally_refreshed.runtime_physical_cut(), Some(2));
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(message, Some(validator))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                message, validator,
+            )),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
         ));
         let mut retry = ingress

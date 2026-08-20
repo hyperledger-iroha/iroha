@@ -142,10 +142,12 @@ impl RuntimeEffectOwnership {
             wire::ConsensusMessageV2Payload::Proposal(proposal),
         ));
         let message = authenticated.wire_envelope_for_test();
-        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
-            super::message::BlockMessage::V2(message.clone()),
-            None,
-        ));
+        let mut admitted = super::fair_v2_ingress_admit_for_test(
+            super::InboundBlockMessage::from_authenticated_peer(
+                super::message::BlockMessage::V2(message.clone()),
+                super::authenticated_peer_for_test(),
+            ),
+        );
         let Some(fair_ingress) = admitted.take_ingress_ownership() else {
             return false;
         };

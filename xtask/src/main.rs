@@ -12086,61 +12086,20 @@ mod openapi_tests {
         );
     }
     #[test]
-    fn manifest_writers_reject_empty_openapi_before_output() {
-        let tmp = tempdir().expect("tempdir");
-        let spec_path = tmp.path().join("torii.json");
-        let stub_bytes =
-            norito::json::to_vec(&empty_openapi_stub()).expect("serialize empty OpenAPI");
-        fs::write(&spec_path, &stub_bytes).expect("write empty OpenAPI");
-        let key_path = tmp.path().join("key.hex");
-        fs::write(&key_path, hex::encode([0x42_u8; 32])).expect("write key");
-        let detached =
-            sign_manifest_payload_for_test(&stub_bytes, &key_path).expect("sign fixture payload");
-        for (name, result, manifest_path) in [
-            {
-                let manifest_path = tmp.path().join("signed.json");
-                let result = write_openapi_manifest(
-                    &spec_path,
-                    &manifest_path,
-                    &key_path,
-                    &clean_generator_provenance(),
-                );
-                ("signed", result, manifest_path)
-            },
-            {
-                let manifest_path = tmp.path().join("detached.json");
-                let result = write_openapi_manifest_with_signature(
-                    &spec_path,
-                    &manifest_path,
-                    detached,
-                    &clean_generator_provenance(),
-                    None,
-                );
-                ("detached", result, manifest_path)
-            },
-            {
-                let manifest_path = tmp.path().join("unsigned.json");
-                let result = write_openapi_manifest_unsigned(
-                    &spec_path,
-                    &manifest_path,
-                    &clean_generator_provenance(),
-                    None,
-                );
-                ("unsigned", result, manifest_path)
-            },
-        ] {
-            let err = result.expect_err("empty OpenAPI must not produce a manifest");
-            assert!(
-                err.to_string()
-                    .contains("empty/stub specifications are forbidden"),
-                "unexpected {name} manifest error: {err}"
-            );
-            assert!(
-                !manifest_path.exists(),
-                "{name} manifest must not be created for an empty OpenAPI document"
-            );
-        }
+    fn router_state_uses_configured_genesis_identity() {
+        let _data_dir = TestDataDirGuard::new();
+        let cfg = mk_minimal_root_cfg();
+        let kura = Kura::blank_kura_for_testing();
+        let (network_id, state) = openapi_router_state(&cfg, kura, LiveQueryStore::start_test());
+        assert_eq!(
+            network_id,
+            iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash)
+        );
+        assert_eq!(state.network_id_ref(), &network_id);
+        assert_eq!(state.chain_id_ref(), &cfg.common.chain);
     }
+    // Direct fragment keeps this cohesive OpenAPI regression test together under the source cap.
+    include!("tests/openapi_empty_manifest_writers.rs");
     #[test]
     fn manifest_verifier_rejects_digest_matching_empty_openapi() {
         let tmp = tempdir().expect("tempdir");
@@ -13763,14 +13722,7 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
-    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-        World::default(),
-        kura.clone(),
-        query_store,
-        cfg.common.chain.clone(),
-        network_id,
-    ));
+    let (network_id, state) = openapi_router_state(&cfg, kura.clone(), query_store);
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
@@ -13794,6 +13746,21 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
     let router = torii.api_router_for_tests();
     let spec = fetch_openapi_from_router(router, OPENAPI_ENDPOINT_CANDIDATES).await;
     Ok(spec)
+}
+fn openapi_router_state(
+    cfg: &actual::Root,
+    kura: Arc<Kura>,
+    query_store: iroha_core::query::store::LiveQueryStoreHandle,
+) -> (iroha_data_model::NetworkId, Arc<State>) {
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+    let state = State::new_with_chain_and_network_id_for_testing(
+        World::default(),
+        kura,
+        query_store,
+        cfg.common.chain.clone(),
+        network_id,
+    );
+    (network_id, Arc::new(state))
 }
 async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Option<Value> {
     let mut token_header = std::env::var("TORII_OPENAPI_TOKEN")

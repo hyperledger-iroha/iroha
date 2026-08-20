@@ -194,10 +194,12 @@ mod thread_builder_tests {
         assert!(!is_bls_normal_public_key(ed25519_key.public_key()));
     }
 }
-/// Build the initial validator topology from trusted peers.
-/// Enforces BLS-normal keys and, when configured with a `PoP` map, treats peers
-/// with valid PoPs as the validator subset. BLS trusted peers without a PoP are
-/// kept as network-trusted peers but are not included in consensus.
+/// Build the initial validator topology as the authenticated subset of trusted peers.
+///
+/// Every returned validator is a trusted peer with a BLS-normal key and an
+/// explicit, valid proof of possession. An empty PoP map therefore yields an
+/// empty validator roster, while PoPs for keys outside the trusted-peer set are
+/// ignored. The result is deduplicated and canonically ordered by [`PeerId`].
 pub fn filter_validators_from_trusted(
     tp: &iroha_config::parameters::actual::TrustedPeers,
 ) -> Vec<PeerId> {
@@ -211,64 +213,144 @@ pub fn filter_validators_from_trusted(
         }
         baseline.insert(PeerId::new(pk.clone()));
     }
-    let mut out = if tp.pops.is_empty() {
-        baseline.clone()
-    } else {
-        let mut filtered: BTreeSet<PeerId> = BTreeSet::new();
-        let mut missing = 0usize;
-        for peer_id in &baseline {
-            let pk = peer_id.public_key();
-            let Some(pop) = tp.pops.get(pk) else {
-                missing = missing.saturating_add(1);
-                continue;
-            };
-            if let Err(e) = iroha_crypto::bls_normal_pop_verify(pk, pop) {
-                iroha_logger::warn!(?pk, ?e, "invalid PoP; excluding peer from consensus");
-                continue;
-            }
-            filtered.insert(peer_id.clone());
+    let mut validators = BTreeSet::new();
+    let mut missing = 0usize;
+    for peer_id in &baseline {
+        let pk = peer_id.public_key();
+        let Some(pop) = tp.pops.get(pk) else {
+            missing = missing.saturating_add(1);
+            continue;
+        };
+        if let Err(error) = iroha_crypto::bls_normal_pop_verify(pk, pop) {
+            iroha_logger::warn!(?pk, ?error, "invalid PoP; excluding peer from consensus");
+            continue;
         }
-        if missing > 0 {
-            iroha_logger::info!(
-                missing,
-                baseline = baseline.len(),
-                pops = tp.pops.len(),
-                validators = filtered.len(),
-                "excluding trusted peers without validator PoPs from consensus roster"
-            );
-        }
-        filtered
-    };
-    // If PoP filtering leaves the bootstrap roster empty but the configuration
-    // still includes PoP records, fall back to those so startup does not silently
-    // collapse into a single-node topology when addresses were omitted.
-    if out.is_empty() && !tp.pops.is_empty() {
-        iroha_logger::warn!(
-            roster_peers = tp.others.len().saturating_add(1),
+        validators.insert(peer_id.clone());
+    }
+    if missing > 0 {
+        iroha_logger::info!(
+            missing,
+            baseline = baseline.len(),
             pops = tp.pops.len(),
-            "validator roster resolved empty from trusted peers; falling back to PoP map"
+            validators = validators.len(),
+            "excluding trusted peers without validator PoPs from consensus roster"
         );
-        for (bls_pk, pop) in &tp.pops {
-            if let Err(e) = iroha_crypto::bls_normal_pop_verify(bls_pk, pop) {
-                iroha_logger::warn!(?bls_pk, ?e, "invalid PoP; excluding peer from consensus");
-                continue;
-            }
-            out.insert(PeerId::new(bls_pk.clone()));
-        }
-        if out.is_empty() {
-            iroha_logger::warn!(
-                pops = tp.pops.len(),
-                "validator roster still empty after PoP fallback"
-            );
-        }
     }
     iroha_logger::info!(
-        validators = out.len(),
+        validators = validators.len(),
         configured_peers = tp.others.len().saturating_add(1),
         pops = tp.pops.len(),
         "resolved validator roster from trusted peers"
     );
-    out.into_iter().collect()
+    validators.into_iter().collect()
+}
+
+#[cfg(test)]
+mod validator_pop_filter_tests {
+    use super::filter_validators_from_trusted;
+    use iroha_config::parameters::actual::TrustedPeers;
+    use iroha_crypto::{Algorithm, KeyPair, PublicKey, bls_normal_pop_prove};
+    use iroha_data_model::peer::{Peer, PeerId};
+    use std::collections::BTreeMap;
+
+    fn bls_key(seed: &[u8]) -> KeyPair {
+        KeyPair::try_from_seed(seed.to_vec(), Algorithm::BlsNormal)
+            .expect("derive BLS validator fixture")
+    }
+
+    fn peer(key: &KeyPair, port: u16) -> Peer {
+        Peer::new(
+            format!("127.0.0.1:{port}")
+                .parse()
+                .expect("fixture peer address"),
+            key.public_key().clone(),
+        )
+    }
+
+    fn trusted_peers(
+        myself: &KeyPair,
+        others: &[&KeyPair],
+        pops: BTreeMap<PublicKey, Vec<u8>>,
+    ) -> TrustedPeers {
+        TrustedPeers {
+            myself: peer(myself, 21_000),
+            others: others
+                .iter()
+                .enumerate()
+                .map(|(index, key)| {
+                    peer(
+                        key,
+                        21_001_u16
+                            .checked_add(u16::try_from(index).expect("fixture peer index"))
+                            .expect("fixture peer port"),
+                    )
+                })
+                .collect(),
+            pops,
+        }
+    }
+
+    #[test]
+    fn validator_filter_requires_explicit_pops_even_when_map_is_empty() {
+        let local = bls_key(b"validator-filter-empty-local");
+        let other = bls_key(b"validator-filter-empty-other");
+        let trusted = trusted_peers(&local, &[&other], BTreeMap::new());
+
+        assert!(filter_validators_from_trusted(&trusted).is_empty());
+    }
+
+    #[test]
+    fn validator_filter_returns_only_trusted_bls_peers_with_valid_pops() {
+        let local = bls_key(b"validator-filter-valid-local");
+        let eligible = bls_key(b"validator-filter-valid-other");
+        let missing = bls_key(b"validator-filter-missing-pop");
+        let invalid = bls_key(b"validator-filter-invalid-pop");
+        let observer = KeyPair::try_from_seed(
+            b"validator-filter-ed25519-observer".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive non-validator fixture");
+        let pop_only = bls_key(b"validator-filter-pop-only");
+        let pops = BTreeMap::from([
+            (
+                local.public_key().clone(),
+                bls_normal_pop_prove(local.private_key()).expect("local validator PoP"),
+            ),
+            (
+                eligible.public_key().clone(),
+                bls_normal_pop_prove(eligible.private_key()).expect("other validator PoP"),
+            ),
+            (invalid.public_key().clone(), Vec::new()),
+            (
+                pop_only.public_key().clone(),
+                bls_normal_pop_prove(pop_only.private_key()).expect("untrusted key PoP"),
+            ),
+        ]);
+        let trusted = trusted_peers(&local, &[&eligible, &missing, &invalid, &observer], pops);
+        let mut expected = vec![
+            PeerId::new(local.public_key().clone()),
+            PeerId::new(eligible.public_key().clone()),
+        ];
+        expected.sort();
+
+        assert_eq!(filter_validators_from_trusted(&trusted), expected);
+    }
+
+    #[test]
+    fn validator_filter_never_synthesizes_pop_only_keys() {
+        let local = bls_key(b"validator-filter-uncredentialed-local");
+        let pop_only = bls_key(b"validator-filter-untrusted-pop");
+        let trusted = trusted_peers(
+            &local,
+            &[],
+            BTreeMap::from([(
+                pop_only.public_key().clone(),
+                bls_normal_pop_prove(pop_only.private_key()).expect("untrusted key PoP"),
+            )]),
+        );
+
+        assert!(filter_validators_from_trusted(&trusted).is_empty());
+    }
 }
 /// Return the caller's genesis/height-context selected mode for a height.
 pub fn effective_consensus_mode_for_height(
@@ -696,42 +778,40 @@ pub enum LaneRelayMessage {
         vote: crate::lane_consensus::LaneDrainVoteV1,
     },
 }
-/// One normalized live-consensus message plus its protocol and transport identities.
+/// One normalized network-origin consensus message plus its authenticated identities.
 #[derive(Clone, Debug)]
 pub struct InboundBlockMessage {
     message: BlockMessage,
     /// Semantic protocol origin used for validation and response routing.
-    sender: Option<PeerId>,
+    sender: PeerId,
     /// Authenticated transport hop used exclusively for resource isolation.
-    via: Option<PeerId>,
+    via: PeerId,
     /// Exact authenticated route which may carry a response to this occurrence.
     reply_routes: Option<NetworkReplyRoutes>,
     /// Process-local exact ownership evidence retained across fair admission.
     ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
 }
 impl InboundBlockMessage {
-    /// Normalize one direct or synthetic message.
-    ///
-    /// Direct messages use the same identity as their semantic sender and
-    /// authenticated transport source. Synthetic messages leave both unset.
-    pub fn new(message: BlockMessage, sender: Option<PeerId>) -> Self {
+    /// Build one message delivered directly by an authenticated transport peer.
+    pub(crate) fn from_authenticated_peer(message: BlockMessage, sender: PeerId) -> Self {
         Self {
-            message: message.normalize(),
+            message,
             via: sender.clone(),
             sender,
             reply_routes: None,
             ingress_ownership: None,
         }
     }
-    /// Normalize one transport message while preserving a relayed protocol origin.
+    /// Build one transport message while preserving a relayed protocol origin.
     ///
     /// `sender` remains visible to consensus validation and response routing;
     /// `via` is the authenticated hop charged for every bounded ingress owner.
-    pub fn from_transport(message: BlockMessage, sender: PeerId, via: PeerId) -> Self {
+    #[cfg(test)]
+    fn from_transport(message: BlockMessage, sender: PeerId, via: PeerId) -> Self {
         Self {
-            message: message.normalize(),
-            sender: Some(sender),
-            via: Some(via),
+            message,
+            sender,
+            via,
             reply_routes: None,
             ingress_ownership: None,
         }
@@ -757,22 +837,22 @@ impl InboundBlockMessage {
         }
         let reply_routes = NetworkReplyRoutes::try_from_route(reply_route)?;
         Ok(Self {
-            message: message.normalize(),
-            sender: Some(sender),
-            via: Some(via),
+            message,
+            sender,
+            via,
             reply_routes: Some(reply_routes),
             ingress_ownership: None,
         })
     }
     /// Consume the envelope and return the normalized message and semantic origin.
     #[cfg(test)]
-    pub(crate) fn into_message_and_sender(self) -> (BlockMessage, Option<PeerId>) {
+    pub(crate) fn into_message_and_sender(self) -> (BlockMessage, PeerId) {
         (self.message, self.sender)
     }
     /// Consume the envelope without losing its local-only authenticated reply authority.
     pub(crate) fn into_message_sender_and_reply_routes(
         self,
-    ) -> (BlockMessage, Option<PeerId>, Option<NetworkReplyRoutes>) {
+    ) -> (BlockMessage, PeerId, Option<NetworkReplyRoutes>) {
         (self.message, self.sender, self.reply_routes)
     }
     /// Borrow the bounded fair-ingress ownership carrier attached at
@@ -792,9 +872,9 @@ impl InboundBlockMessage {
     pub(crate) fn message(&self) -> &BlockMessage {
         &self.message
     }
-    /// Borrow the semantic protocol origin, when one was supplied.
-    pub(crate) fn sender(&self) -> Option<&PeerId> {
-        self.sender.as_ref()
+    /// Borrow the authenticated semantic protocol origin.
+    pub(crate) const fn sender(&self) -> &PeerId {
+        &self.sender
     }
     /// Borrow the exact authenticated return-route set before fair removal.
     ///
@@ -805,9 +885,14 @@ impl InboundBlockMessage {
         self.reply_routes.as_ref()
     }
     /// Borrow the authenticated transport hop used for resource isolation.
-    pub(crate) fn via(&self) -> Option<&PeerId> {
-        self.via.as_ref()
+    pub(crate) const fn via(&self) -> &PeerId {
+        &self.via
     }
+}
+#[cfg(test)]
+/// Generate an authenticated transport identity for an isolated ingress fixture.
+pub(crate) fn authenticated_peer_for_test() -> PeerId {
+    PeerId::from(iroha_crypto::KeyPair::random().public_key().clone())
 }
 /// Ownership-aware result of one non-blocking Sumeragi ingress attempt.
 #[derive(Debug)]
@@ -837,20 +922,17 @@ impl<T> SumeragiIngressDisposition<T> {
 enum FairV2IngressSource {
     Validator(PeerId),
     Authenticated(PeerId),
-    Anonymous,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FairV2IngressSourceClass {
     Validator,
     Authenticated,
-    Anonymous,
 }
 impl FairV2IngressSource {
     const fn class(&self) -> FairV2IngressSourceClass {
         match self {
             Self::Validator(_) => FairV2IngressSourceClass::Validator,
             Self::Authenticated(_) => FairV2IngressSourceClass::Authenticated,
-            Self::Anonymous => FairV2IngressSourceClass::Anonymous,
         }
     }
 }
@@ -927,7 +1009,7 @@ struct FairV2IngressEntry {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct FairV2IngressWireKey {
-    origin: Option<PeerId>,
+    origin: PeerId,
     hash: CryptoHash,
 }
 /// Closed productive v2 ingress class carried only in node-local metadata.
@@ -1884,7 +1966,6 @@ impl FairV2IngressMessageKind {
                 Some(Self::LaneHistoricalRecoveryResponse)
             }
             BlockMessage::KuraReplicaAdvert(_) => Some(Self::KuraReplicaAdvert),
-            _ => None,
         }
     }
     const fn is_v2(self) -> bool {
@@ -1981,8 +2062,8 @@ struct FairV2IngressOwnershipOccurrence {
     /// minted from the same internal source.
     lifecycle_ordinal: Option<u128>,
     wire_key: FairV2IngressWireKey,
-    semantic_origin: Option<PeerId>,
-    authenticated_via: Option<PeerId>,
+    semantic_origin: PeerId,
+    authenticated_via: PeerId,
     authenticated_via_is_validator: bool,
     authenticated_source: FairV2IngressSource,
     semantic_owner_source: FairV2IngressSource,
@@ -2037,24 +2118,14 @@ fn fair_v2_ingress_append_peer_identity(projection: &mut Vec<u8>, peer: &PeerId)
     );
     projection.extend_from_slice(&encoded);
 }
-fn fair_v2_ingress_append_optional_peer_identity(projection: &mut Vec<u8>, peer: Option<&PeerId>) {
-    match peer {
-        None => projection.push(0),
-        Some(peer) => {
-            projection.push(1);
-            fair_v2_ingress_append_peer_identity(projection, peer);
-        }
-    }
-}
 fn fair_v2_ingress_append_source_identity(projection: &mut Vec<u8>, source: &FairV2IngressSource) {
     match source {
-        FairV2IngressSource::Anonymous => projection.push(0),
         FairV2IngressSource::Validator(peer) => {
-            projection.push(1);
+            projection.push(0);
             fair_v2_ingress_append_peer_identity(projection, peer);
         }
         FairV2IngressSource::Authenticated(peer) => {
-            projection.push(2);
+            projection.push(1);
             fair_v2_ingress_append_peer_identity(projection, peer);
         }
     }
@@ -2345,8 +2416,8 @@ impl FairV2IngressOwnershipEvidence {
     }
     /// Whether the carrier's semantic request origin is the independently
     /// retained inbound sender.
-    pub(crate) fn matches_semantic_origin(&self, origin: Option<&PeerId>) -> bool {
-        self.validate_exact() && self.first.semantic_origin.as_ref() == origin
+    pub(crate) fn matches_semantic_origin(&self, origin: &PeerId) -> bool {
+        self.validate_exact() && &self.first.semantic_origin == origin
     }
     /// Decode the exact canonical v2 envelope retained by this ownership
     /// carrier. The full carrier is validated before any projection is
@@ -2370,7 +2441,7 @@ impl FairV2IngressOwnershipEvidence {
     /// because their wire bytes and counters match.
     pub(crate) fn process_local_projection_hash(&self) -> CryptoHash {
         let mut projection = Vec::new();
-        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v10");
+        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v11");
         for occurrence in [&self.first, &self.latest] {
             projection.push(u8::try_from(occurrence.action.index()).unwrap_or(u8::MAX));
             projection.extend_from_slice(&occurrence.physical_admission_ordinal.to_le_bytes());
@@ -2381,14 +2452,8 @@ impl FairV2IngressOwnershipEvidence {
                     projection.extend_from_slice(&ordinal.to_le_bytes());
                 }
             }
-            fair_v2_ingress_append_optional_peer_identity(
-                &mut projection,
-                occurrence.semantic_origin.as_ref(),
-            );
-            fair_v2_ingress_append_optional_peer_identity(
-                &mut projection,
-                occurrence.authenticated_via.as_ref(),
-            );
+            fair_v2_ingress_append_peer_identity(&mut projection, &occurrence.semantic_origin);
+            fair_v2_ingress_append_peer_identity(&mut projection, &occurrence.authenticated_via);
             projection.push(u8::from(occurrence.authenticated_via_is_validator));
             fair_v2_ingress_append_source_identity(
                 &mut projection,
@@ -2398,10 +2463,7 @@ impl FairV2IngressOwnershipEvidence {
                 &mut projection,
                 &occurrence.semantic_owner_source,
             );
-            fair_v2_ingress_append_optional_peer_identity(
-                &mut projection,
-                occurrence.wire_key.origin.as_ref(),
-            );
+            fair_v2_ingress_append_peer_identity(&mut projection, &occurrence.wire_key.origin);
             projection.extend_from_slice(occurrence.wire_key.hash.as_ref());
             projection.push(occurrence.message_kind.projection_code());
             projection.push(match occurrence.class {
@@ -2609,10 +2671,7 @@ impl FairV2IngressOwnershipEvidence {
             && self.first.encoded_bytes.as_ref() == self.latest.encoded_bytes.as_ref()
             && self.first.encoded_len == self.latest.encoded_len
             && self.leader_wire_token.as_ref().is_none_or(|token| {
-                self.first
-                    .semantic_origin
-                    .as_ref()
-                    .is_some_and(|origin| &token.identity.semantic_origin == origin)
+                token.identity.semantic_origin == self.first.semantic_origin
                     && token.identity.canonical_wire_hash == self.first.wire_key.hash
                     && token.slot.semantic_origin == token.identity.semantic_origin
                     && token.slot.phase == token.identity.phase
@@ -2718,24 +2777,20 @@ impl FairV2IngressOwnershipOccurrence {
         let is_timeout_vote = fair_v2_ingress_message_is_timeout_vote(&decoded);
         let is_certified_fence_escape = fair_v2_ingress_message_is_certified_fence_escape(&decoded);
         let is_transport_completion = self.class == FairV2IngressClass::TransportCompletion;
-        let uses_certified_fence_escape_reserve = is_certified_fence_escape
-            && !matches!(&self.authenticated_source, FairV2IngressSource::Anonymous);
+        let uses_certified_fence_escape_reserve = is_certified_fence_escape;
         let semantic_exact = self.wire_key.origin == self.semantic_origin
             && self.wire_key.hash == CryptoHash::new(self.encoded_bytes.as_ref())
             && self.encoded_len == self.encoded_bytes.len()
             && cursor.is_empty()
             && decoded_class == self.class
             && decoded_kind == Some(self.message_kind);
-        let source_exact = match (&self.authenticated_source, &self.authenticated_via) {
-            (FairV2IngressSource::Validator(source), Some(via)) => {
-                self.authenticated_via_is_validator && source == via
+        let source_exact = match &self.authenticated_source {
+            FairV2IngressSource::Validator(source) => {
+                self.authenticated_via_is_validator && source == &self.authenticated_via
             }
-            (FairV2IngressSource::Authenticated(source), Some(via)) => {
-                !self.authenticated_via_is_validator && source == via
+            FairV2IngressSource::Authenticated(source) => {
+                !self.authenticated_via_is_validator && source == &self.authenticated_via
             }
-            (FairV2IngressSource::Anonymous, None) => !self.authenticated_via_is_validator,
-            (FairV2IngressSource::Validator(_) | FairV2IngressSource::Authenticated(_), None)
-            | (FairV2IngressSource::Anonymous, Some(_)) => false,
         };
         let capacities_exact = self.resource_before.message_capacity
             == self.resource_after.message_capacity
@@ -2872,22 +2927,17 @@ impl FairV2IngressOwnershipOccurrence {
                 }
                 _ => self.resource_before == self.resource_after,
             };
-        let routes_bind_semantic_origin = self.semantic_origin.as_ref().is_none_or(|origin| {
-            self.routes_before
-                .iter()
-                .chain(self.routes_candidate.iter())
-                .chain(self.routes_after.iter())
-                .all(|routes| routes.semantic_target() == origin)
-        });
-        let candidate_binds_authenticated_via = self.authenticated_via.as_ref().map_or_else(
-            || self.routes_candidate.is_none(),
-            |via| {
-                self.routes_candidate
-                    .iter()
-                    .flat_map(|routes| routes.iter())
-                    .all(|route| route.is_authenticated_via(via))
-            },
-        );
+        let routes_bind_semantic_origin = self
+            .routes_before
+            .iter()
+            .chain(self.routes_candidate.iter())
+            .chain(self.routes_after.iter())
+            .all(|routes| routes.semantic_target() == &self.semantic_origin);
+        let candidate_binds_authenticated_via = self
+            .routes_candidate
+            .iter()
+            .flat_map(|routes| routes.iter())
+            .all(|route| route.is_authenticated_via(&self.authenticated_via));
         let candidate_is_retained = self.routes_candidate.iter().all(|candidate| {
             candidate.iter().all(|route| {
                 self.routes_after
@@ -3251,13 +3301,15 @@ fn fair_v2_ingress_current_protected_slots(
     state: &FairV2IngressState,
     authenticated_non_validator_source_capacity: Option<usize>,
 ) -> usize {
+    if authenticated_non_validator_source_capacity.is_none() {
+        return 0;
+    }
     let materialized = state
         .lanes
         .iter()
         .map(|(source, lane)| {
             fair_v2_ingress_lane_protected_slots(
                 source.class(),
-                !state.roster.is_empty(),
                 lane.entries.len(),
                 lane.progress_len
                     .saturating_sub(lane.timeout_vote_len)
@@ -3369,17 +3421,13 @@ fn fair_v2_ingress_required_capacity(
     let Some(authenticated_non_validator_source_capacity) =
         authenticated_non_validator_source_capacity
     else {
-        if roster_len == 0 {
-            return Some(1);
-        }
-        return roster_len
-            .checked_mul(5)
-            .and_then(|required| required.checked_add(2));
+        return roster_len.checked_mul(5);
     };
-    iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
-        roster_len,
-        authenticated_non_validator_source_capacity,
-    )
+    roster_len.checked_mul(5).and_then(|required| {
+        authenticated_non_validator_source_capacity
+            .checked_mul(3)
+            .and_then(|authenticated_sources| required.checked_add(authenticated_sources))
+    })
 }
 fn fair_v2_ingress_reserve_ordinary_lifecycle_ordinal(
     state: &FairV2IngressState,
@@ -3394,25 +3442,12 @@ fn fair_v2_ingress_reserve_ordinary_lifecycle_ordinal(
 }
 const fn fair_v2_ingress_lane_protected_slots(
     source_class: FairV2IngressSourceClass,
-    reserve_anonymous_completion: bool,
     depth: usize,
     has_ordinary_progress: bool,
     has_certified_fence_escape: bool,
     has_timeout_vote: bool,
     has_transport_completion: bool,
 ) -> usize {
-    if matches!(source_class, FairV2IngressSourceClass::Anonymous) {
-        if !reserve_anonymous_completion {
-            return if depth == 0 { 1 } else { 0 };
-        }
-        let missing_transport_completion = if has_transport_completion { 0 } else { 1 };
-        let missing_generic_slots = 2_usize.saturating_sub(depth);
-        return if missing_generic_slots > missing_transport_completion {
-            missing_generic_slots
-        } else {
-            missing_transport_completion
-        };
-    }
     if matches!(source_class, FairV2IngressSourceClass::Authenticated) {
         let missing_certified_fence_escape = if has_certified_fence_escape { 0 } else { 1 };
         let missing_transport_completion = if has_transport_completion { 0 } else { 1 };
@@ -3444,11 +3479,9 @@ fn fair_v2_ingress_required_byte_capacity(
     authenticated_non_validator_source_capacity: Option<usize>,
     source_byte_capacity: usize,
 ) -> Option<usize> {
-    iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-        roster_len,
-        authenticated_non_validator_source_capacity.unwrap_or(0),
-        source_byte_capacity,
-    )
+    roster_len
+        .checked_add(authenticated_non_validator_source_capacity.unwrap_or(0))
+        .and_then(|source_count| source_count.checked_mul(source_byte_capacity))
 }
 fn fair_v2_ingress_compact_len_prefix_bytes(value: usize) -> Option<usize> {
     let value = u64::try_from(value).ok()?;
@@ -3852,7 +3885,6 @@ enum FairV2IngressRejectReason {
     OwnershipEvidenceInvalid,
     SourceLaneInvalid,
     UnauthorizedTransportCompletion,
-    ProductiveOriginMissing,
     ProductiveOriginOutsideRoster,
     WrongHeightContext,
     LeaderWireObsoleteOrConflicting,
@@ -3923,8 +3955,8 @@ fn select_fair_v2_ingress_candidate<T>(
 /// progress slot, one certified-fence-escape slot, one distinct TimeoutVote slot,
 /// and one transport-completion slot. Every authenticated non-validator hop
 /// independently owns three slots: general work, certified fence escape, and
-/// transport completion. Only messages without an authenticated transport hop share the two-position
-/// anonymous lane. A current-roster completion forwarded by a non-validator
+/// transport completion. Senderless messages have no ingress representation.
+/// A current-roster completion forwarded by a non-validator
 /// source, or a proof-carrying historical-recovery response from a predecessor
 /// signer, stays in that exact authenticated source's lane and cannot spend
 /// another source's reservation. The latter is authorized downstream against
@@ -3948,14 +3980,13 @@ fn select_fair_v2_ingress_candidate<T>(
 /// Canonical wire bytes are charged to fixed aggregate and per-source budgets.
 /// Within each validator partition, ordinary traffic, certified fence escape,
 /// TimeoutVote, and payload transport completion own disjoint byte regions.
-/// Authenticated non-validator partitions isolate certified escape as well;
-/// anonymous partitions separate only ordinary and completion bytes.
+/// Authenticated non-validator partitions isolate certified escape as well.
 /// Lane-local control uses ordinary progress while atomic certificate recovery
 /// owns its isolated certified reservation; exact
 /// executable-payload and proof-carrying historical-recovery response bytes
 /// share the completion reservation. Roster
 /// installation succeeds only when the configured authenticated-source
-/// geometry plus the anonymous lane own isolated byte partitions.
+/// geometry owns isolated byte partitions.
 /// `CommitCertificateResponse` remains reducer-producing Progress and uses the
 /// certified reservation only when it embeds a CommitQC.
 pub(crate) struct FairV2Ingress {
@@ -4050,8 +4081,7 @@ impl FairV2Ingress {
         outbound_high_frame_byte_capacity: usize,
         authenticated_non_validator_source_capacity: Option<usize>,
     ) -> Self {
-        let mut lanes = BTreeMap::new();
-        lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
+        let lanes = BTreeMap::new();
         Self {
             queue_identity: Arc::new(()),
             capacity,
@@ -4220,20 +4250,12 @@ impl FairV2Ingress {
                         .filter(|entry| fair_v2_ingress_is_timeout_vote(&entry.inbound))
                         .count()
                 );
-                let source_has_certified_reserve =
-                    !matches!(source, FairV2IngressSource::Anonymous);
                 debug_assert_eq!(
                     lane.certified_fence_escape_len,
-                    if source_has_certified_reserve {
-                        lane.entries
-                            .iter()
-                            .filter(|entry| {
-                                fair_v2_ingress_is_certified_fence_escape(&entry.inbound)
-                            })
-                            .count()
-                    } else {
-                        0
-                    }
+                    lane.entries
+                        .iter()
+                        .filter(|entry| fair_v2_ingress_is_certified_fence_escape(&entry.inbound))
+                        .count()
                 );
                 debug_assert_eq!(
                     lane.transport_completion_len,
@@ -4272,20 +4294,17 @@ impl FairV2Ingress {
                 debug_assert!(
                     lane.transport_completion_bytes <= self.transport_completion_byte_reserve
                 );
-                let actual_certified_fence_escape_bytes = if source_has_certified_reserve {
-                    lane.entries
-                        .iter()
-                        .filter(|entry| fair_v2_ingress_is_certified_fence_escape(&entry.inbound))
-                        .map(|entry| {
-                            debug_assert!(
-                                entry.encoded_len <= self.certified_fence_escape_byte_reserve
-                            );
-                            entry.encoded_len
-                        })
-                        .sum::<usize>()
-                } else {
-                    0
-                };
+                let actual_certified_fence_escape_bytes = lane
+                    .entries
+                    .iter()
+                    .filter(|entry| fair_v2_ingress_is_certified_fence_escape(&entry.inbound))
+                    .map(|entry| {
+                        debug_assert!(
+                            entry.encoded_len <= self.certified_fence_escape_byte_reserve
+                        );
+                        entry.encoded_len
+                    })
+                    .sum::<usize>();
                 debug_assert!(lane.certified_fence_escape_len <= 1);
                 debug_assert_eq!(
                     lane.certified_fence_escape_bytes,
@@ -4322,7 +4341,8 @@ impl FairV2Ingress {
                                     .saturating_sub(self.transport_completion_byte_reserve)
                         }
                     ));
-                } else if matches!(source, FairV2IngressSource::Authenticated(_)) {
+                } else {
+                    debug_assert!(matches!(source, FairV2IngressSource::Authenticated(_)));
                     debug_assert_eq!(lane.timeout_vote_bytes, 0);
                     let reserved_bytes = lane
                         .certified_fence_escape_bytes
@@ -4337,19 +4357,6 @@ impl FairV2Ingress {
                                     .saturating_sub(self.transport_completion_byte_reserve)
                         }
                     ));
-                } else {
-                    debug_assert_eq!(lane.certified_fence_escape_bytes, 0);
-                    debug_assert_eq!(lane.timeout_vote_bytes, 0);
-                    debug_assert!(
-                        lane.bytes
-                            .checked_sub(lane.transport_completion_bytes)
-                            .is_some_and(|ordinary_bytes| {
-                                ordinary_bytes
-                                    <= self
-                                        .source_byte_capacity
-                                        .saturating_sub(self.transport_completion_byte_reserve)
-                            })
-                    );
                 }
             }
             if state.open {
@@ -4527,7 +4534,6 @@ impl FairV2Ingress {
                 FairV2IngressLane::default(),
             );
         }
-        lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
         let _service_guard = self.service_lock.lock();
         let mut state = self.state.lock();
         state.open = false;
@@ -4901,7 +4907,7 @@ impl FairV2Ingress {
         }
         let retirement = bound.park_sealed_ingress(carriers)?;
 
-        let mut empty_lanes = state
+        let empty_lanes = state
             .roster
             .iter()
             .cloned()
@@ -4912,7 +4918,6 @@ impl FairV2Ingress {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        empty_lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
         state.lanes = empty_lanes;
         state.pending_wire_owners.clear();
         state.ready.clear();
@@ -5357,8 +5362,8 @@ impl FairV2Ingress {
                 encoded
             }
             BlockMessage::KuraReplicaAdvert(advert) => {
-                if inbound.sender() != Some(&advert.keeper)
-                    || inbound.via() != Some(&advert.keeper)
+                if inbound.sender() != &advert.keeper
+                    || inbound.via() != &advert.keeper
                     || advert.verify_keeper_signature().is_err()
                 {
                     return Err(FairV2IngressPushError::rejected(
@@ -5402,12 +5407,10 @@ impl FairV2Ingress {
         if !state.open {
             return Err(FairV2IngressPushError::Closed(inbound));
         }
-        let source = match inbound.via() {
-            Some(peer) if state.roster.contains(peer) => {
-                FairV2IngressSource::Validator(peer.clone())
-            }
-            Some(peer) => FairV2IngressSource::Authenticated(peer.clone()),
-            None => FairV2IngressSource::Anonymous,
+        let source = if state.roster.contains(inbound.via()) {
+            FairV2IngressSource::Validator(inbound.via.clone())
+        } else {
+            FairV2IngressSource::Authenticated(inbound.via.clone())
         };
         let authenticated_via_is_validator = matches!(&source, FairV2IngressSource::Validator(_));
         if let Some((key, owner_source)) = wire_key.as_ref().and_then(|key| {
@@ -5571,11 +5574,9 @@ impl FairV2Ingress {
         let lane_timeout_vote_len = lane.timeout_vote_len;
         let lane_transport_completion_len = lane.transport_completion_len;
         let is_validator_source = matches!(source, FairV2IngressSource::Validator(_));
-        let uses_certified_fence_escape_reserve = !matches!(source, FairV2IngressSource::Anonymous)
-            && fair_v2_ingress_is_certified_fence_escape(&inbound);
-        let is_current_validator_origin = inbound
-            .sender()
-            .is_some_and(|peer| state.roster.contains(peer));
+        let uses_certified_fence_escape_reserve =
+            fair_v2_ingress_is_certified_fence_escape(&inbound);
+        let is_current_validator_origin = state.roster.contains(inbound.sender());
         let is_historical_recovery_response =
             message_kind == FairV2IngressMessageKind::LaneHistoricalRecoveryResponse;
         // Ordinary transport completions are protocol-valid only for a
@@ -5587,9 +5588,7 @@ impl FairV2Ingress {
         // authenticated semantic origin, so a validator removed from the
         // successor roster can finish an old lane without granting arbitrary
         // old peers current-height completion authority.
-        let authenticated_historical_recovery_response = is_historical_recovery_response
-            && inbound.sender().is_some()
-            && inbound.via().is_some();
+        let authenticated_historical_recovery_response = is_historical_recovery_response;
         if is_transport_completion
             && !is_current_validator_origin
             && !authenticated_historical_recovery_response
@@ -5626,7 +5625,7 @@ impl FairV2Ingress {
                     .saturating_sub(self.timeout_vote_byte_reserve)
                     .saturating_sub(self.transport_completion_byte_reserve),
             )
-        } else if matches!(source, FairV2IngressSource::Authenticated(_)) {
+        } else {
             let reserved_bytes = lane
                 .certified_fence_escape_bytes
                 .checked_add(lane.transport_completion_bytes)
@@ -5637,14 +5636,6 @@ impl FairV2Ingress {
                     .expect("reserved byte owners are included in the source total"),
                 self.source_byte_capacity
                     .saturating_sub(self.certified_fence_escape_byte_reserve)
-                    .saturating_sub(self.transport_completion_byte_reserve),
-            )
-        } else {
-            (
-                lane.bytes
-                    .checked_sub(lane.transport_completion_bytes)
-                    .expect("non-validator completion bytes are included in the source total"),
-                self.source_byte_capacity
                     .saturating_sub(self.transport_completion_byte_reserve),
             )
         };
@@ -5671,12 +5662,7 @@ impl FairV2Ingress {
         let leader_wire_derivation = if state.requires_leader_wire_lifecycle_gate
             && fair_v2_ingress_is_productive_leader_wire(inbound.message())
         {
-            let Some(semantic_origin) = inbound.sender().cloned() else {
-                return Err(FairV2IngressPushError::rejected(
-                    inbound,
-                    FairV2IngressRejectReason::ProductiveOriginMissing,
-                ));
-            };
+            let semantic_origin = inbound.sender().clone();
             if !state.roster.contains(&semantic_origin) {
                 return Err(FairV2IngressPushError::rejected(
                     inbound,
@@ -5793,44 +5779,46 @@ impl FairV2Ingress {
         // retains enough continuation potential that servicing one entry can
         // restore every reservation of the resulting state. The incoming item
         // is part of the projection.
-        let protected_slots_after_admission = state
-            .lanes
-            .iter()
-            .map(|(lane_source, lane)| {
-                let is_target = *lane_source == source;
-                let projected_len = lane.entries.len() + usize::from(is_target);
-                let projected_timeout_vote_len =
-                    lane.timeout_vote_len + usize::from(is_target && is_timeout_vote);
-                let projected_certified_fence_escape_len = lane.certified_fence_escape_len
-                    + usize::from(is_target && uses_certified_fence_escape_reserve);
-                let projected_transport_completion_len = lane.transport_completion_len
-                    + usize::from(is_target && is_transport_completion);
-                let projected_ordinary_progress_len = lane
-                    .progress_len
-                    .saturating_sub(lane.timeout_vote_len)
-                    .saturating_sub(lane.certified_fence_escape_len)
-                    + usize::from(
-                        is_target
-                            && class == FairV2IngressClass::Progress
-                            && !is_timeout_vote
-                            && !uses_certified_fence_escape_reserve,
-                    );
-                fair_v2_ingress_lane_protected_slots(
-                    lane_source.class(),
-                    !state.roster.is_empty(),
-                    projected_len,
-                    projected_ordinary_progress_len != 0,
-                    projected_certified_fence_escape_len != 0,
-                    projected_timeout_vote_len != 0,
-                    projected_transport_completion_len != 0,
-                )
-            })
-            .sum::<usize>();
-        let Some(protected_slots_after_admission) =
-            protected_slots_after_admission.checked_add(if source_lane_is_new {
+        let protected_slots_after_admission = self
+            .authenticated_non_validator_source_capacity
+            .map_or(0, |_| {
+                state
+                    .lanes
+                    .iter()
+                    .map(|(lane_source, lane)| {
+                        let is_target = *lane_source == source;
+                        let projected_len = lane.entries.len() + usize::from(is_target);
+                        let projected_timeout_vote_len =
+                            lane.timeout_vote_len + usize::from(is_target && is_timeout_vote);
+                        let projected_certified_fence_escape_len = lane.certified_fence_escape_len
+                            + usize::from(is_target && uses_certified_fence_escape_reserve);
+                        let projected_transport_completion_len = lane.transport_completion_len
+                            + usize::from(is_target && is_transport_completion);
+                        let projected_ordinary_progress_len = lane
+                            .progress_len
+                            .saturating_sub(lane.timeout_vote_len)
+                            .saturating_sub(lane.certified_fence_escape_len)
+                            + usize::from(
+                                is_target
+                                    && class == FairV2IngressClass::Progress
+                                    && !is_timeout_vote
+                                    && !uses_certified_fence_escape_reserve,
+                            );
+                        fair_v2_ingress_lane_protected_slots(
+                            lane_source.class(),
+                            projected_len,
+                            projected_ordinary_progress_len != 0,
+                            projected_certified_fence_escape_len != 0,
+                            projected_timeout_vote_len != 0,
+                            projected_transport_completion_len != 0,
+                        )
+                    })
+                    .sum::<usize>()
+            });
+        let Some(protected_slots_after_admission) = protected_slots_after_admission.checked_add(
+            if self.authenticated_non_validator_source_capacity.is_some() && source_lane_is_new {
                 fair_v2_ingress_lane_protected_slots(
                     source.class(),
-                    !state.roster.is_empty(),
                     1,
                     class == FairV2IngressClass::Progress
                         && !is_timeout_vote
@@ -5841,8 +5829,8 @@ impl FairV2Ingress {
                 )
             } else {
                 0
-            })
-        else {
+            },
+        ) else {
             reject_after_leader_wire_admission!();
         };
         let Some(materialized_authenticated_after) = state
@@ -6017,7 +6005,7 @@ impl FairV2Ingress {
             ) {
                 reject_after_leader_wire_admission!();
             }
-            if inbound.sender() != Some(&request.requester) {
+            if inbound.sender() != &request.requester {
                 reject_after_leader_wire_admission!();
             }
             let Some(reply_routes) = inbound.reply_routes() else {
@@ -6440,9 +6428,7 @@ impl FairV2Ingress {
                     .checked_sub(1)
                     .expect("Progress count includes every Progress entry");
             }
-            if !matches!(source, FairV2IngressSource::Anonymous)
-                && fair_v2_ingress_is_certified_fence_escape(&entry.inbound)
-            {
+            if fair_v2_ingress_is_certified_fence_escape(&entry.inbound) {
                 lane.certified_fence_escape_len = lane
                     .certified_fence_escape_len
                     .checked_sub(1)
@@ -6577,7 +6563,7 @@ impl FairV2Ingress {
 /// Admit one test envelope through the real fair-ingress ownership seam.
 #[cfg(test)]
 pub(crate) fn fair_v2_ingress_admit_for_test(inbound: InboundBlockMessage) -> InboundBlockMessage {
-    let roster = inbound.via().cloned().into_iter().collect::<Vec<_>>();
+    let roster = vec![inbound.via().clone()];
     fair_v2_ingress_admit_with_roster_for_test(inbound, roster)
 }
 /// Admit one test envelope with an explicit frozen semantic validator roster.
@@ -6747,34 +6733,18 @@ impl SumeragiHandle {
         sender: PeerId,
         message: BlockMessage,
     ) -> SumeragiIngressDisposition<InboundBlockMessage> {
-        self.try_incoming_block_message_owned(InboundBlockMessage::new(message, Some(sender)))
-    }
-    /// Enqueue a canonical v2, live auxiliary, or retained lane-local message without blocking.
-    pub fn incoming_block_message(&self, message: BlockMessage) -> bool {
-        self.try_incoming_block_message_owned(InboundBlockMessage::new(message, None))
-            .accepted_or_coalesced()
+        self.try_incoming_block_message_owned(InboundBlockMessage::from_authenticated_peer(
+            message, sender,
+        ))
     }
     /// Enqueue a canonical message from an authenticated transport peer.
     pub fn incoming_block_message_from(&self, sender: PeerId, message: BlockMessage) {
         let _ = self.try_incoming_block_message_from_owned(sender, message);
     }
-    /// Try to enqueue a canonical message without blocking.
-    pub fn try_incoming_block_message(&self, message: BlockMessage) -> bool {
-        self.try_incoming_block_message_owned(InboundBlockMessage::new(message, None))
-            .accepted_or_coalesced()
-    }
     /// Try to enqueue a canonical message from an authenticated transport peer.
     pub fn try_incoming_block_message_from(&self, sender: PeerId, message: BlockMessage) -> bool {
         self.try_incoming_block_message_from_owned(sender, message)
             .accepted_or_coalesced()
-    }
-    /// Reject retired v1 control-flow frames.
-    pub fn incoming_consensus_control_flow_message(&self, _message: ControlFlow) {
-        iroha_logger::debug!("rejecting decode-only Sumeragi v1 control-flow frame");
-    }
-    /// Reject retired v1 control-flow frames.
-    pub fn try_incoming_consensus_control_flow_message(&self, _message: ControlFlow) -> bool {
-        false
     }
     /// Try to transfer one exact lane-relay item to its serialized owner.
     pub fn try_incoming_lane_relay_owned(
@@ -6967,7 +6937,7 @@ fn test_sumeragi_handle_with_source_geometry(
     );
     block
         .configure_roster(std::iter::empty())
-        .expect("test anonymous lane fits configured capacity");
+        .expect("an empty test roster requires no ingress reservation");
     block.open().expect("open configured test ingress");
     let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(block_capacity);
     let (wake_tx, _wake_rx) = mpsc::sync_channel(1);
@@ -7446,7 +7416,7 @@ mod authoritative_runtime_gate_tests {
         let validator = peers.pop().expect("validator");
         ingress
             .configure_roster([validator])
-            .expect("one validator, two authenticated relays, and anonymous fit exactly");
+            .expect("one validator and two authenticated relays fit exactly");
         ingress.open().expect("open exact source geometry");
         {
             let state = ingress.state.lock();
@@ -7490,7 +7460,7 @@ mod authoritative_runtime_gate_tests {
         let first = ingress
             .try_recv()
             .expect("source A owns the first fair turn");
-        assert_eq!(first.via(), Some(&source_a));
+        assert_eq!(first.via(), &source_a);
         {
             let state = ingress.state.lock();
             assert_eq!(
@@ -7510,9 +7480,9 @@ mod authoritative_runtime_gate_tests {
         let second = ingress
             .try_recv()
             .expect("source B remains ahead of newly admitted source C");
-        assert_eq!(second.via(), Some(&source_b));
+        assert_eq!(second.via(), &source_b);
         let third = ingress.try_recv().expect("source C receives its fair turn");
-        assert_eq!(third.via(), Some(&source_c));
+        assert_eq!(third.via(), &source_c);
         assert!(ingress.try_recv().is_none());
     }
     include!("tests/mod_authoritative_runtime_gate_04_routes_and_dequeue.rs");
@@ -7532,7 +7502,7 @@ mod authoritative_runtime_gate_tests {
         )
         .expect("live target-bound route must be retained");
         let (_, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
-        assert_eq!(sender, Some(semantic_origin.clone()));
+        assert_eq!(sender, semantic_origin.clone());
         assert_eq!(reply_routes.expect("live reply route set").len(), 1);
         let inactive = routes.mint_via(semantic_origin.clone(), authenticated_via.clone());
         assert!(routes.retire(&inactive));
@@ -7583,7 +7553,7 @@ mod authoritative_runtime_gate_tests {
         ingress.close();
         ingress
             .configure_roster([source_a.clone(), source_b.clone()])
-            .expect("two authenticated lanes plus anonymous reserve fit");
+            .expect("two authenticated validator lanes fit");
         ingress.open().expect("open configured roster");
         let request = v2_auxiliary_prepare(0);
         for (via, route) in [
@@ -7625,7 +7595,7 @@ mod authoritative_runtime_gate_tests {
             "one semantic request owns all authenticated return routes"
         );
         let delivered = ingress.try_recv().expect("deliver the queued occurrence");
-        assert_eq!(delivered.sender(), Some(&semantic_origin));
+        assert_eq!(delivered.sender(), &semantic_origin);
         let (_, _, delivered_routes) = delivered.into_message_sender_and_reply_routes();
         let delivered_routes = delivered_routes.expect("authenticated routes survive dequeue");
         assert_eq!(delivered_routes.len(), 2);
@@ -7688,7 +7658,7 @@ mod authoritative_runtime_gate_tests {
         let request = v2_auxiliary_prepare(0);
         ingress
             .configure_roster([validator])
-            .expect("one validator, one authenticated relay, and anonymous fit exactly");
+            .expect("one validator and one authenticated relay fit exactly");
         ingress.open().expect("open exact source geometry");
         let inbound = |message: BlockMessage, via: PeerId, route: NetworkReplyRoute| {
             InboundBlockMessage::try_from_transport_with_reply_route(
@@ -7740,7 +7710,7 @@ mod authoritative_runtime_gate_tests {
         ingress.close();
         ingress
             .configure_roster([source_a.clone(), source_b.clone()])
-            .expect("two authenticated lanes plus anonymous reserve fit");
+            .expect("two authenticated validator lanes fit");
         ingress.open().expect("open configured roster");
         let inbound = |via: PeerId, route: NetworkReplyRoute| {
             InboundBlockMessage::try_from_transport_with_reply_route(
@@ -7942,13 +7912,14 @@ mod authoritative_runtime_gate_tests {
         mutated.latest.wire_key.hash = CryptoHash::new(b"mutated semantic hash");
         rejected("semantic hash", mutated);
         let mut mutated = evidence.clone();
-        mutated.latest.semantic_origin = None;
+        mutated.latest.semantic_origin = super::authenticated_peer_for_test();
         rejected("semantic origin", mutated);
         let mut mutated = evidence.clone();
-        mutated.latest.authenticated_via = None;
+        mutated.latest.authenticated_via = super::authenticated_peer_for_test();
         rejected("authenticated delivery peer", mutated);
         let mut mutated = evidence.clone();
-        mutated.latest.authenticated_source = super::FairV2IngressSource::Anonymous;
+        mutated.latest.authenticated_source =
+            super::FairV2IngressSource::Authenticated(super::authenticated_peer_for_test());
         rejected("authenticated source", mutated);
         let mut mutated = evidence.clone();
         mutated.latest.message_kind = super::FairV2IngressMessageKind::V2Proposal;
@@ -8007,7 +7978,7 @@ mod authoritative_runtime_gate_tests {
         ingress.close();
         ingress
             .configure_roster([authenticated_via.clone()])
-            .expect("validator plus anonymous lane fit");
+            .expect("authenticated validator lane fits");
         ingress.open().expect("open configured roster");
         for origin in [origin_a, origin_b] {
             assert!(matches!(
@@ -8072,6 +8043,24 @@ mod authoritative_runtime_gate_tests {
         );
     }
     include!("tests/mod_authoritative_runtime_gate_06_source_isolation.rs");
+    macro_rules! assert_push {
+        ($ingress:expr, $message:expr, $sender:expr, Ok($expected:ident) $(, $reason:literal)?) => {
+            assert!(matches!(
+                $ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                    $message, $sender
+                )),
+                Ok(super::FairV2IngressPushDisposition::$expected)
+            ) $(, $reason)?);
+        };
+        ($ingress:expr, $message:expr, $sender:expr, Err($expected:ident) $(, $reason:literal)?) => {
+            assert!(matches!(
+                $ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                    $message, $sender
+                )),
+                Err(super::FairV2IngressPushError::$expected(_))
+            ) $(, $reason)?);
+        };
+    }
     #[test]
     fn fair_v2_ingress_completion_corridor_survives_ordinary_progress_and_timeout_saturation() {
         let validator = validator_peers(1).pop().expect("validator fixture");
@@ -8099,45 +8088,33 @@ mod authoritative_runtime_gate_tests {
         );
         ingress
             .configure_roster([validator.clone()])
-            .expect("validator and anonymous partitions fit");
+            .expect("validator partition fits");
         ingress.open().expect("open configured roster");
         assert_eq!(
-            FairV2IngressClass::classify(&InboundBlockMessage::new(
+            FairV2IngressClass::classify(&InboundBlockMessage::from_authenticated_peer(
                 progress.clone(),
-                Some(validator.clone()),
+                validator.clone(),
             )),
             FairV2IngressClass::Progress
         );
         assert_eq!(
-            FairV2IngressClass::classify(&InboundBlockMessage::new(
+            FairV2IngressClass::classify(&InboundBlockMessage::from_authenticated_peer(
                 body_response.clone(),
-                Some(validator.clone()),
+                validator.clone(),
             )),
             FairV2IngressClass::TransportCompletion
         );
         for message in [auxiliary, progress, timeout] {
-            assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(message, Some(validator.clone()))),
-                Ok(super::FairV2IngressPushDisposition::Enqueued)
-            ));
+            assert_push!(ingress, message, validator.clone(), Ok(Enqueued));
         }
-        assert!(
-            matches!(
-                ingress.try_push(InboundBlockMessage::new(
-                    second_progress,
-                    Some(validator.clone()),
-                )),
-                Err(super::FairV2IngressPushError::Full(_))
-            ),
+        assert_push!(
+            ingress,
+            second_progress,
+            validator.clone(),
+            Err(Full),
             "ordinary Progress cannot spend the completion corridor"
         );
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                body_response,
-                Some(validator.clone()),
-            )),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
+        assert_push!(ingress, body_response, validator.clone(), Ok(Enqueued));
         let delivered = ingress
             .try_recv_if(super::fair_v2_ingress_is_transport_completion)
             .expect("body response bypasses saturated ordinary, Progress, and timeout owners");
@@ -8148,11 +8125,11 @@ mod authoritative_runtime_gate_tests {
                 ..
             })
         ));
-        assert!(
-            matches!(
-                ingress.try_push(InboundBlockMessage::new(chunk, Some(validator))),
-                Ok(super::FairV2IngressPushDisposition::Enqueued)
-            ),
+        assert_push!(
+            ingress,
+            chunk,
+            validator,
+            Ok(Enqueued),
             "PayloadChunk shares the released completion corridor"
         );
     }
@@ -8170,70 +8147,45 @@ mod authoritative_runtime_gate_tests {
             super::FairV2Ingress::new(12, 3 * source_bytes, source_bytes, 0, completion_bytes);
         ingress
             .configure_roster([first.clone(), second.clone()])
-            .expect("two validators and anonymous source fit");
+            .expect("two validator sources fit");
         ingress.open().expect("open configured roster");
         let oversized = v2_message_with_bytes(7, completion_bytes + 1);
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(oversized, Some(first.clone()))),
-            Err(super::FairV2IngressPushError::Rejected(_))
-        ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(chunk.clone(), Some(first.clone()))),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(chunk, Some(first.clone()))),
-            Ok(super::FairV2IngressPushDisposition::Coalesced)
-        ));
-        assert!(
-            matches!(
-                ingress.try_push(InboundBlockMessage::new(
-                    response.clone(),
-                    Some(first.clone())
-                )),
-                Err(super::FairV2IngressPushError::Full(_))
-            ),
+        assert_push!(ingress, oversized, first.clone(), Err(Rejected));
+        assert_push!(ingress, chunk.clone(), first.clone(), Ok(Enqueued));
+        assert_push!(ingress, chunk, first.clone(), Ok(Coalesced));
+        assert_push!(
+            ingress,
+            response.clone(),
+            first.clone(),
+            Err(Full),
             "one source serializes chunk/response conflicts through one shared owner"
         );
-        assert!(
-            matches!(
-                ingress.try_push(InboundBlockMessage::new(
-                    response.clone(),
-                    Some(second.clone())
-                )),
-                Ok(super::FairV2IngressPushDisposition::Enqueued)
-            ),
+        assert_push!(
+            ingress,
+            response.clone(),
+            second.clone(),
+            Ok(Enqueued),
             "one validator cannot consume another validator's completion owner"
         );
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(response.clone(), Some(outsider))),
-            Err(super::FairV2IngressPushError::Rejected(_))
-        ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(response.clone(), None)),
-            Err(super::FairV2IngressPushError::Rejected(_))
-        ));
+        assert_push!(ingress, response.clone(), outsider, Err(Rejected));
         let first_completion = ingress
-            .try_recv_if(|inbound| inbound.sender() == Some(&first))
+            .try_recv_if(|inbound| inbound.sender() == &first)
             .expect("fair service releases the first validator's completion owner");
         assert!(super::fair_v2_ingress_is_transport_completion(
             &first_completion
         ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(response, Some(first))),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
+        assert_push!(ingress, response, first, Ok(Enqueued));
     }
     #[test]
     fn fair_v2_ingress_rejects_insufficient_roster_byte_partition() {
         let validators = validator_peers(2);
-        let ingress = super::FairV2Ingress::new(12, 2 * 1024, 1024, 0, 0);
+        let ingress = super::FairV2Ingress::new(12, 2 * 1024 - 1, 1024, 0, 0);
         let error = ingress
             .configure_roster(validators)
-            .expect_err("two validators plus anonymous require three byte partitions");
+            .expect_err("two validators require two exact byte partitions");
         assert!(error.is_bytes());
-        assert_eq!(error.configured(), 2 * 1024);
-        assert_eq!(error.required(), 3 * 1024);
+        assert_eq!(error.configured(), 2 * 1024 - 1);
+        assert_eq!(error.required(), 2 * 1024);
     }
     #[test]
     fn fair_v2_ingress_reserves_timeout_vote_bytes_behind_auxiliary_pressure() {
@@ -8247,30 +8199,20 @@ mod authoritative_runtime_gate_tests {
             super::FairV2Ingress::new(7, 2 * source_capacity, source_capacity, timeout_vote_len, 0);
         ingress
             .configure_roster([validator.clone()])
-            .expect("validator and anonymous byte partitions fit");
+            .expect("validator byte partition fits");
         ingress.open().expect("open configured roster");
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(auxiliary, Some(validator.clone()),)),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                v2_auxiliary_prepare(1),
-                Some(validator.clone()),
-            )),
-            Err(super::FairV2IngressPushError::Full(_))
-        ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                timeout_vote,
-                Some(validator.clone()),
-            )),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
+        assert_push!(ingress, auxiliary, validator.clone(), Ok(Enqueued));
+        assert_push!(
+            ingress,
+            v2_auxiliary_prepare(1),
+            validator.clone(),
+            Err(Full)
+        );
+        assert_push!(ingress, timeout_vote, validator.clone(), Ok(Enqueued));
         let delivered = ingress
             .try_recv_if(super::fair_v2_ingress_is_timeout_vote)
             .expect("reserved timeout vote bypasses the byte-saturated auxiliary prefix");
-        assert_eq!(delivered.sender(), Some(&validator));
+        assert_eq!(delivered.sender(), &validator);
         assert!(super::fair_v2_ingress_is_timeout_vote(&delivered));
     }
     #[test]
@@ -8287,27 +8229,15 @@ mod authoritative_runtime_gate_tests {
             super::FairV2Ingress::new(7, 2 * source_capacity, source_capacity, reserve, 0);
         ingress
             .configure_roster([validator.clone()])
-            .expect("validator and anonymous byte partitions fit");
+            .expect("validator byte partition fits");
         ingress.open().expect("open configured roster");
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(first, Some(validator.clone()))),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                second.clone(),
-                Some(validator.clone()),
-            )),
-            Err(super::FairV2IngressPushError::Full(_))
-        ));
+        assert_push!(ingress, first, validator.clone(), Ok(Enqueued));
+        assert_push!(ingress, second.clone(), validator.clone(), Err(Full));
         let delivered = ingress
             .try_recv_if(super::fair_v2_ingress_is_timeout_vote)
             .expect("fair service releases the first TimeoutVote byte owner");
         assert!(super::fair_v2_ingress_is_timeout_vote(&delivered));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(second, Some(validator))),
-            Ok(super::FairV2IngressPushDisposition::Enqueued)
-        ));
+        assert_push!(ingress, second, validator, Ok(Enqueued));
     }
     #[test]
     fn fair_v2_ingress_maximum_valid_timeout_vote_fits_production_byte_reserve() {
@@ -8739,11 +8669,16 @@ mod authoritative_runtime_gate_tests {
         ingress.open().expect("exactly sized ingress opens");
         let oversized = v2_certified_body_response(9, 0, required + 1);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(oversized, Some(validator.clone()))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                oversized,
+                validator.clone()
+            )),
             Err(super::FairV2IngressPushError::Rejected(_))
         ));
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(response, Some(validator))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                response, validator
+            )),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
         ));
     }
@@ -8819,7 +8754,7 @@ mod authoritative_runtime_gate_tests {
         ingress.close();
         ingress
             .configure_roster(validators)
-            .expect("two validators, their protected owners, and anonymous fit");
+            .expect("two validators and their protected owners fit");
         ingress.open().expect("open configured roster");
         assert!(
             handle.try_incoming_block_message_from(
@@ -8838,15 +8773,15 @@ mod authoritative_runtime_gate_tests {
         let target = ingress
             .try_recv_if(fair_v2_ingress_is_certified_body_request)
             .expect("the exact request passes the blocked first-ready source");
-        assert_eq!(target.sender(), Some(&target_source));
+        assert_eq!(target.sender(), &target_source);
         let later_request = ingress
             .try_recv_if(fair_v2_ingress_is_certified_body_request)
             .expect("the later Serve request becomes eligible after the target drains");
-        assert_eq!(later_request.sender(), Some(&first_ready_source));
+        assert_eq!(later_request.sender(), &first_ready_source);
         let predecessor = ingress
             .try_recv_if(|_| true)
             .expect("the blocked preexisting entry remains queued");
-        assert_eq!(predecessor.sender(), Some(&first_ready_source));
+        assert_eq!(predecessor.sender(), &first_ready_source);
         assert_eq!(vote_height(&predecessor), Some(1));
         assert_eq!(ingress.len(), 0);
     }
@@ -8862,7 +8797,7 @@ mod authoritative_runtime_gate_tests {
         ingress.close();
         ingress
             .configure_roster(validators)
-            .expect("five validators, their protected owners, and anonymous fit");
+            .expect("five validators and their protected owners fit");
         ingress.open().expect("open configured roster");
         assert!(matches!(
             ingress.try_push(v2_certified_body_request_inbound(&target_source)),
@@ -8892,11 +8827,11 @@ mod authoritative_runtime_gate_tests {
         let target = ingress
             .try_recv_if(fair_v2_ingress_is_certified_body_request)
             .expect("the cutoff target remains selectable");
-        assert_eq!(target.sender(), Some(&target_source));
+        assert_eq!(target.sender(), &target_source);
         let control = ingress
             .try_recv_if(|_| true)
             .expect("later control proceeds after the target drains");
-        assert_eq!(control.sender(), Some(&control_source));
+        assert_eq!(control.sender(), &control_source);
         assert_eq!(
             vote_phase(&control),
             Some(wire::GlobalPhase::Commit),
@@ -8905,7 +8840,7 @@ mod authoritative_runtime_gate_tests {
         let completion = ingress
             .try_recv_if(|_| true)
             .expect("later completion proceeds after the target drains");
-        assert_eq!(completion.sender(), Some(&completion_source));
+        assert_eq!(completion.sender(), &completion_source);
         assert!(matches!(
             completion.message(),
             BlockMessage::V2(wire::ConsensusMessageV2 {
@@ -8916,7 +8851,7 @@ mod authoritative_runtime_gate_tests {
         let priority = ingress
             .try_recv_if(|_| true)
             .expect("later priority work proceeds after the target drains");
-        assert_eq!(priority.sender(), Some(&priority_source));
+        assert_eq!(priority.sender(), &priority_source);
         assert!(matches!(
             priority.message(),
             BlockMessage::V2(wire::ConsensusMessageV2 {
@@ -8927,7 +8862,7 @@ mod authoritative_runtime_gate_tests {
         let causal = ingress
             .try_recv_if(|_| true)
             .expect("later causal work proceeds after the target drains");
-        assert_eq!(causal.sender(), Some(&causal_source));
+        assert_eq!(causal.sender(), &causal_source);
         assert_eq!(vote_phase(&causal), Some(wire::GlobalPhase::Prepare));
         assert_eq!(vote_height(&causal), Some(12));
         assert_eq!(ingress.len(), 0);
@@ -8945,13 +8880,13 @@ mod authoritative_runtime_gate_tests {
         );
         ingress
             .configure_roster([validator.clone()])
-            .expect("validator and anonymous protected owners fit");
+            .expect("validator protected owners fit");
         ingress.open().expect("open configured roster");
         let message = v2_certified_body_response(7, 0, 64);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 message.clone(),
-                Some(validator.clone()),
+                validator.clone(),
             )),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
         ));
@@ -8967,7 +8902,10 @@ mod authoritative_runtime_gate_tests {
                 .admission_ordinal
         };
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(message, Some(validator.clone()))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                message,
+                validator.clone()
+            )),
             Ok(super::FairV2IngressPushDisposition::Coalesced)
         ));
         {
@@ -8988,7 +8926,7 @@ mod authoritative_runtime_gate_tests {
         ingress.close();
         ingress
             .configure_roster([validator.clone()])
-            .expect("rollover reinstalls the validator and anonymous lanes");
+            .expect("rollover reinstalls the validator lane");
         {
             let state = ingress.state.lock();
             assert_eq!(state.len, 0, "rollover clears prior queued ownership");
@@ -8999,9 +8937,9 @@ mod authoritative_runtime_gate_tests {
         }
         ingress.open().expect("open the rolled-over roster");
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 v2_auxiliary_prepare(8),
-                Some(validator.clone()),
+                validator.clone(),
             )),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
         ));
@@ -9025,9 +8963,9 @@ mod authoritative_runtime_gate_tests {
         };
         ingress.state.lock().last_admission_ordinal = u64::MAX;
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 v2_auxiliary_prepare(9),
-                Some(validator),
+                validator,
             )),
             Err(super::FairV2IngressPushError::FailStop(_))
         ));
@@ -9066,26 +9004,26 @@ mod authoritative_runtime_gate_tests {
         }
         assert_eq!(
             super::fair_v2_ingress_required_capacity(0, None),
-            Some(1),
-            "the test-only anonymous geometry remains unchanged",
+            Some(0),
+            "an empty authenticated roster needs no hidden source lane",
         );
         assert_eq!(
             super::fair_v2_ingress_required_capacity(4, None),
-            Some(22),
-            "the test-only roster geometry remains unchanged",
+            Some(20),
+            "the roster-only geometry reserves five classes per validator",
         );
     }
     #[test]
     fn v2_ingress_rejects_capacity_without_per_validator_progress_reservations() {
-        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(21);
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(19);
         ingress.close();
         let error = ingress
             .configure_roster(validator_peers(4))
             .expect_err(
                 "four validators require ordinary, progress, certified, TimeoutVote, and transport-completion slots",
             );
-        assert_eq!(error.configured(), 21);
-        assert_eq!(error.required(), 22);
+        assert_eq!(error.configured(), 19);
+        assert_eq!(error.required(), 20);
         assert_eq!(ingress.open(), Err(error));
     }
 }

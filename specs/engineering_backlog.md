@@ -6191,7 +6191,7 @@ redistributable schemas, and official trust/revocation bundles.
   default and algorithm-specific random-key helpers, and bridge finality proof,
   bundle, authority-set, and verifier fixtures now use checked
   BLS/default/Ed25519 random-key helpers; block signing, genesis,
-  previous-roster evidence, FastPQ/result-proof, and canonical-wire fixtures now
+  FastPQ/result-proof and canonical-wire fixtures now
   use checked BLS/default random-key helpers; consensus roundtrip QC,
   reconfiguration, RBC, Sumeragi status, and message fixtures now use checked
   BLS/default random-key and peer-id helpers; SoraCloud signer fixtures now use
@@ -6527,10 +6527,7 @@ redistributable schemas, and official trust/revocation bundles.
 							  `iroha_data_model` signed-block/I105 vector, and
 							  `iroha_torii_shared` permissions-preimage examples now also use checked
 							  Ed25519 generation or seed derivation and surface entropy or fixture-key
-							  failures through their example `main` result paths; the `iroha_kagami`
-							  Taira Kaigi localnet example now also derives its optional seed-based
-							  genesis signer through checked seed expansion and reports failures
-							  through the example result path; `iroha_js_host`
+							  failures through their example `main` result paths; `iroha_js_host`
 							  N-API Ed25519/generic keypair exports and the relay envelope sample now
 							  also use checked random generation or seed derivation, mapping failures
 							  into N-API errors instead of panic-only keypair wrappers; Offline
@@ -9261,7 +9258,7 @@ redistributable schemas, and official trust/revocation bundles.
     duplicate-free target dataspace sets. DefaultHost also binds handles to the
     manifest root carried by inline, recorded, or late proof envelopes before
     failing closed without a verifier. The focused `fastpq_prover` AXT binding slice,
-    `iroha_data_model` `proof_matches_manifest` slice, `ivm_abi`
+    `iroha_data_model` `proof_envelope_shape_matches_manifest` slice, `ivm_abi`
     `preflight_fastpq_v1_proof_envelope` test, `ivm` `axt_host_flow` target, and
     `ivm` `host_unknown_syscall`/`core_host_policy` targets are green as of
     2026-05-02. FastPQ AXT deterministic account fixtures now derive
@@ -10628,8 +10625,8 @@ redistributable schemas, and official trust/revocation bundles.
     and compact-fetch fixtures now use checked Ed25519 seed expansion before
     message wire, certified-fetch, and compact RBC regressions consume them;
     feature-gated core Sumeragi main-loop deterministic, retransmit, seeded BLS
-    peer, P2P refresh, NPoS canonicalization, and canonical payload
-    previous-roster fixtures now use checked seed expansion before main-loop
+    peer, P2P refresh, NPoS canonicalization, and canonical payload fixtures now
+    use checked seed expansion before main-loop
     regressions consume them;
     core state default streaming key material, ZK-ACE identity account helpers,
     and governance-stage decision fixtures now use checked Ed25519 seed

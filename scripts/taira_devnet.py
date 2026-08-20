@@ -37,6 +37,8 @@ MARKER = ".iroha-taira-devnet"
 MARKER_BODY = "managed by scripts/taira_devnet.py\n"
 MAX_BUNDLE_TEXT_BYTES = 8 * 1024 * 1024
 MAX_LOG_TAIL_BYTES = 64 * 1024
+MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
+MAX_MARKER_BYTES = 128
 MAX_PID_FILE_BYTES = 32
 
 
@@ -108,7 +110,11 @@ def managed_root(path: Path, *, create: bool) -> Path:
     if not path.is_dir():
         fail(f"devnet path is not a directory: {path}")
     if marker.exists():
-        if marker.is_symlink() or marker.read_text(encoding="utf-8") != MARKER_BODY:
+        if marker.is_symlink() or read_bounded_text(
+            marker,
+            limit=MAX_MARKER_BYTES,
+            label="devnet marker",
+        ) != MARKER_BODY:
             fail(f"invalid devnet marker: {marker}")
     elif any(path.iterdir()):
         fail(f"refusing unmarked non-empty directory: {path}")
@@ -335,13 +341,15 @@ def cargo_build_command(profile: str, target_dir: Path) -> list[str]:
     """Return the single current-workspace build used by ``up``."""
 
     return [
-        "cargo",
+        str(REPO_ROOT / "scripts" / "cargo_fast.sh"),
+        "--target-dir",
+        str(target_dir),
+        "--stable-local-metadata",
+        "--",
         "build",
         "--locked",
         "--profile",
         profile,
-        "--target-dir",
-        str(target_dir),
         "-p",
         "iroha_kagami",
         "--bin",
@@ -395,8 +403,6 @@ def generate_network(
             "--out-dir",
             str(target),
             "--fresh-random-keys",
-            "--build-line",
-            "iroha3",
             "--sora-profile",
             "nexus",
             "--consensus-mode",
@@ -451,11 +457,13 @@ def http_request(url: str, payload: object | None = None) -> tuple[int, object |
     try:
         with urllib.request.urlopen(request, timeout=3) as response:
             status = response.status
-            body = response.read()
+            body = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as error:
         return error.code, None
     except (OSError, ValueError):
         return 0, None
+    if len(body) > MAX_HTTP_RESPONSE_BYTES:
+        fail(f"HTTP response exceeds the {MAX_HTTP_RESPONSE_BYTES}-byte safety bound: {url}")
     if not body:
         return status, None
     try:

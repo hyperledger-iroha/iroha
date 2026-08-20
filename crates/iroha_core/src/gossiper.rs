@@ -70,6 +70,7 @@ enum RestrictedTargetPlan {
         targets: Vec<PeerId>,
     },
 }
+type EntrypointHash = HashOf<TransactionEntrypoint>;
 const DROP_REASON_NO_RESTRICTED_TARGETS: &str = "no_restricted_targets";
 const DROP_REASON_PUBLIC_OVERLAY_REFUSED: &str = "restricted_public_overlay_refused";
 const DROP_REASON_ROUTE_MISMATCH: &str = "route_mismatch";
@@ -162,7 +163,7 @@ fn validate_queue_plan_gossip_certificate(
 #[derive(Debug, Clone)]
 struct PeerRecentSuppressionEntry {
     peer_id: PeerId,
-    tx_hash: HashOf<SignedTransaction>,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
     expires_tick: u64,
 }
 fn tx_gossip_frame_payload_cap(
@@ -342,9 +343,9 @@ pub struct TransactionGossiper {
     /// Monotonic tick counter for gossip resend pacing.
     gossip_tick: u64,
     /// Deferred gossip hashes bucketed by resend tick.
-    gossip_deferred: Vec<Vec<HashOf<SignedTransaction>>>,
-    /// Recently-sent transaction hashes tracked per peer to suppress duplicate fanout.
-    peer_recently_sent: BTreeMap<PeerId, HashMap<HashOf<SignedTransaction>, u64>>,
+    gossip_deferred: Vec<Vec<HashOf<TransactionEntrypoint>>>,
+    /// Recently-sent entrypoint hashes tracked per peer to suppress duplicate fanout.
+    peer_recently_sent: BTreeMap<PeerId, HashMap<HashOf<TransactionEntrypoint>, u64>>,
     /// Expiry ring for per-peer suppression entries (tick-based TTL).
     peer_recent_ring: Vec<Vec<PeerRecentSuppressionEntry>>,
     /// Subscriber-queue drop counter at the last backpressure observation.
@@ -501,7 +502,7 @@ impl TransactionGossiper {
         }
         self.queue.requeue_gossip_hashes(hashes);
     }
-    fn defer_gossip_hashes(&mut self, hashes: impl IntoIterator<Item = HashOf<SignedTransaction>>) {
+    fn defer_gossip_hashes(&mut self, hashes: impl IntoIterator<Item = EntrypointHash>) {
         if self.gossip_deferred.is_empty() {
             return;
         }
@@ -514,7 +515,7 @@ impl TransactionGossiper {
             }
         }
     }
-    fn retry_public_broadcast_hashes(&mut self, hashes: Vec<HashOf<SignedTransaction>>) {
+    fn retry_public_broadcast_hashes(&mut self, hashes: Vec<HashOf<TransactionEntrypoint>>) {
         self.defer_gossip_hashes(hashes);
     }
     fn advance_gossip_tick(&mut self) {
@@ -542,9 +543,9 @@ impl TransactionGossiper {
         for entry in expiring {
             let peer_id = entry.peer_id.clone();
             if let Some(peer_map) = self.peer_recently_sent.get_mut(&peer_id) {
-                match peer_map.get(&entry.tx_hash).copied() {
+                match peer_map.get(&entry.entrypoint_hash).copied() {
                     Some(expiry) if expiry == entry.expires_tick && expiry <= self.gossip_tick => {
-                        peer_map.remove(&entry.tx_hash);
+                        peer_map.remove(&entry.entrypoint_hash);
                     }
                     Some(expiry) if expiry == entry.expires_tick => {
                         deferred.push(entry);
@@ -570,24 +571,24 @@ impl TransactionGossiper {
     fn peer_recently_seen_all_hashes(
         &self,
         peer_id: &PeerId,
-        tx_hashes: &[HashOf<SignedTransaction>],
+        entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
     ) -> bool {
         self.peer_recently_sent
             .get(peer_id)
-            .is_some_and(|seen| tx_hashes.iter().all(|hash| seen.contains_key(hash)))
+            .is_some_and(|seen| entrypoint_hashes.iter().all(|hash| seen.contains_key(hash)))
     }
     fn filter_targets_by_peer_recent_suppression(
         &self,
         targets: Vec<PeerId>,
-        tx_hashes: &[HashOf<SignedTransaction>],
+        entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
     ) -> (Vec<PeerId>, usize) {
-        if tx_hashes.is_empty() || targets.is_empty() {
+        if entrypoint_hashes.is_empty() || targets.is_empty() {
             return (targets, 0);
         }
         let mut filtered = Vec::with_capacity(targets.len());
         let mut suppressed = 0usize;
         for peer in &targets {
-            if self.peer_recently_seen_all_hashes(peer, tx_hashes) {
+            if self.peer_recently_seen_all_hashes(peer, entrypoint_hashes) {
                 suppressed = suppressed.saturating_add(1);
             } else {
                 filtered.push(peer.clone());
@@ -598,33 +599,33 @@ impl TransactionGossiper {
     fn filter_targets_or_replay_recent_suppressed(
         &self,
         targets: Vec<PeerId>,
-        tx_hashes: &[HashOf<SignedTransaction>],
+        entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
     ) -> (Vec<PeerId>, usize, bool) {
-        if tx_hashes.is_empty() || targets.is_empty() {
+        if entrypoint_hashes.is_empty() || targets.is_empty() {
             return (targets, 0, false);
         }
         let (targets, suppressed) =
-            self.filter_targets_by_peer_recent_suppression(targets, tx_hashes);
+            self.filter_targets_by_peer_recent_suppression(targets, entrypoint_hashes);
         (targets, suppressed, false)
     }
     fn filter_targets_for_priority(
         &self,
         targets: Vec<PeerId>,
-        tx_hashes: &[HashOf<SignedTransaction>],
+        entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
         priority: Priority,
     ) -> (Vec<PeerId>, usize, bool) {
         if matches!(priority, Priority::High) {
             (targets, 0, false)
         } else {
-            self.filter_targets_or_replay_recent_suppressed(targets, tx_hashes)
+            self.filter_targets_or_replay_recent_suppressed(targets, entrypoint_hashes)
         }
     }
     fn remember_peer_recent_sends(
         &mut self,
         targets: &[PeerId],
-        tx_hashes: &[HashOf<SignedTransaction>],
+        entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
     ) {
-        if targets.is_empty() || tx_hashes.is_empty() || self.peer_recent_ring.is_empty() {
+        if targets.is_empty() || entrypoint_hashes.is_empty() || self.peer_recent_ring.is_empty() {
             return;
         }
         let ttl_ticks =
@@ -634,11 +635,11 @@ impl TransactionGossiper {
         let slot = &mut self.peer_recent_ring[slot_idx];
         for peer_id in targets {
             let peer_map = self.peer_recently_sent.entry(peer_id.clone()).or_default();
-            for tx_hash in tx_hashes {
-                if peer_map.insert(*tx_hash, expires_tick) != Some(expires_tick) {
+            for entrypoint_hash in entrypoint_hashes {
+                if peer_map.insert(*entrypoint_hash, expires_tick) != Some(expires_tick) {
                     slot.push(PeerRecentSuppressionEntry {
                         peer_id: peer_id.clone(),
-                        tx_hash: *tx_hash,
+                        entrypoint_hash: *entrypoint_hash,
                         expires_tick,
                     });
                 }
@@ -757,7 +758,7 @@ impl TransactionGossiper {
                     dataspace = %dataspace_id,
                     "dataspace missing from lane catalog; requeueing gossip batch"
                 );
-                self.defer_gossip_hashes(entries.iter().map(|entry| entry.tx.hash()));
+                self.defer_gossip_hashes(entries.iter().map(|entry| entry.tx.hash_as_entrypoint()));
                 self.record_drop_metric(
                     GossipPlane::Restricted,
                     dataspace_id,
@@ -1429,24 +1430,24 @@ impl TransactionGossiper {
     }
     fn is_transaction_known_locally(
         &self,
-        tx_hash: HashOf<SignedTransaction>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
         committed_transactions: &impl TransactionsReadOnly,
     ) -> bool {
-        if self.queue.contains_transaction_hash(tx_hash) {
+        if self.queue.contains_entrypoint_hash(entrypoint_hash) {
             return true;
         }
-        committed_transactions.get(&tx_hash).is_some()
+        committed_transactions.get(&entrypoint_hash).is_some()
     }
     fn is_transaction_known_locally_cached(
         &self,
-        tx_hash: HashOf<SignedTransaction>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
         committed_transactions: &impl TransactionsReadOnly,
     ) -> bool {
-        if GOSSIP_KNOWN_TX_HASH_CACHE.with(|cache| cache.borrow().contains(tx_hash)) {
+        if KNOWN_ENTRYPOINT_CACHE.with(|cache| cache.borrow().contains(entrypoint_hash)) {
             return true;
         }
-        if self.is_transaction_known_locally(tx_hash, committed_transactions) {
-            GOSSIP_KNOWN_TX_HASH_CACHE.with(|cache| cache.borrow_mut().remember(tx_hash));
+        if self.is_transaction_known_locally(entrypoint_hash, committed_transactions) {
+            KNOWN_ENTRYPOINT_CACHE.with(|cache| cache.borrow_mut().remember(entrypoint_hash));
             return true;
         }
         false
@@ -1588,7 +1589,6 @@ impl TransactionGossiper {
             entrypoint_hash: HashOf<TransactionEntrypoint>,
             route: GossipRoute,
             plan: RoutingPlan,
-            tx_hash: HashOf<SignedTransaction>,
             prepared: Option<PreparedTransactionMetadata>,
             ed25519_prechecked: bool,
             precheck_rejection: Option<AcceptTransactionFail>,
@@ -1764,29 +1764,29 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            let tx_hash = tx.hash();
+            let entrypoint_hash = tx.hash();
             let has_queue_plan_certificate = tx.queue_plan_certificate().is_some();
-            if !has_queue_plan_certificate && certified_hashes.contains(&tx_hash) {
+            if !has_queue_plan_certificate && certified_hashes.contains(&entrypoint_hash) {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
-            if !batch_seen_hashes.insert(tx_hash.clone()) {
+            if !batch_seen_hashes.insert(entrypoint_hash) {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             if !has_queue_plan_certificate
-                && self.is_transaction_known_locally_cached(tx_hash, &committed_transactions)
+                && self
+                    .is_transaction_known_locally_cached(entrypoint_hash, &committed_transactions)
             {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
-            let entrypoint_hash = tx.hash_as_entrypoint();
             let (entrypoint, payload, queue_plan_certificate) =
                 match tx.into_entrypoint_with_payload() {
                     Ok(decoded) => decoded,
                     Err(err) => {
                         iroha_logger::warn!(
-                            %tx_hash,
+                            %entrypoint_hash,
                             ?err,
                             "dropping transaction gossip entry due to entrypoint decode failure"
                         );
@@ -1822,7 +1822,6 @@ impl TransactionGossiper {
                 entrypoint_hash,
                 route,
                 plan,
-                tx_hash,
                 prepared,
                 ed25519_prechecked: false,
                 precheck_rejection: None,
@@ -1956,7 +1955,7 @@ impl TransactionGossiper {
         for mut candidate in materialized {
             let route = candidate.route;
             let advertised_plan = candidate.plan;
-            let tx_hash = candidate.tx_hash;
+            let entrypoint_hash = candidate.entrypoint_hash;
             let payload = Some(Arc::clone(&candidate.payload));
             match (
                 candidate.entrypoint.admission_intent(),
@@ -1964,14 +1963,14 @@ impl TransactionGossiper {
             ) {
                 (TransactionAdmissionIntent::QueuePlanSynced, false) => {
                     iroha_logger::warn!(
-                        %tx_hash,
+                        %entrypoint_hash,
                         "dropping QueuePlan-synchronized transaction gossip without its quorum certificate"
                     );
                     continue;
                 }
                 (TransactionAdmissionIntent::Ordinary, true) => {
                     iroha_logger::warn!(
-                        %tx_hash,
+                        %entrypoint_hash,
                         "dropping ordinary transaction gossip carrying an unrelated QueuePlan certificate"
                     );
                     continue;
@@ -1988,14 +1987,14 @@ impl TransactionGossiper {
                 ) {
                     Ok((_, QueuePlanGossipCertificateDisposition::Applied)) => {
                         iroha_logger::debug!(
-                            %tx_hash,
+                            %entrypoint_hash,
                             "ignoring QueuePlan gossip after canonical transaction application"
                         );
                         continue;
                     }
                     Ok(validated) => Some(validated),
                     Err(error) => {
-                        iroha_logger::warn!(%tx_hash, %error, "dropping unauthenticated QueuePlan transaction gossip");
+                        iroha_logger::warn!(%entrypoint_hash, %error, "dropping unauthenticated QueuePlan transaction gossip");
                         continue;
                     }
                 },
@@ -2035,7 +2034,7 @@ impl TransactionGossiper {
                             Ok(plan) => plan,
                             Err(err) => {
                                 iroha_logger::warn!(
-                                    %tx_hash,
+                                    %entrypoint_hash,
                                     reason = %err,
                                     reason_label = err.as_label(),
                                     "dropping transaction gossip entry due to unresolved local route"
@@ -2059,7 +2058,7 @@ impl TransactionGossiper {
                     let local_route = local_plan.coordinator_route();
                     if local_route != advertised_route {
                         iroha_logger::warn!(
-                                %tx_hash,
+                                %entrypoint_hash,
                                 advertised_lane_id = %route.lane_id,
                                 advertised_dataspace_id = %route.dataspace_id,
                             expected_lane_id = %local_route.lane_id,
@@ -2082,7 +2081,7 @@ impl TransactionGossiper {
                     }
                     if local_plan != advertised_plan {
                         iroha_logger::warn!(
-                            %tx_hash,
+                            %entrypoint_hash,
                             advertised_digest = %advertised_plan.digest(),
                             expected_digest = %local_plan.digest(),
                             "dropping transaction gossip entry due to routing plan mismatch"
@@ -2109,7 +2108,7 @@ impl TransactionGossiper {
                             .kura()
                             .persist_pending_queue_plan_admission_certificate(certificate)
                         {
-                            iroha_logger::error!(%tx_hash, %error, "failed to persist authenticated QueuePlan gossip certificate");
+                            iroha_logger::error!(%entrypoint_hash, %error, "failed to persist authenticated QueuePlan gossip certificate");
                             continue;
                         }
                         self.queue
@@ -2128,14 +2127,14 @@ impl TransactionGossiper {
                     };
                     match push_result {
                         Ok(()) => {
-                            iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
+                            iroha_logger::debug!(%entrypoint_hash, "transaction enqueued from gossip");
                         }
                         Err(crate::queue::Failure {
                             tx,
                             err: crate::queue::Error::InBlockchain,
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.hash(),
+                                tx = %tx.hash_as_entrypoint(),
                                 "Transaction already in blockchain, ignoring..."
                             )
                         }
@@ -2144,7 +2143,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::IsInQueue,
                         }) => {
                             iroha_logger::trace!(
-                                tx = %tx.hash(),
+                                tx = %tx.hash_as_entrypoint(),
                                 "Transaction already in the queue, ignoring..."
                             )
                         }
@@ -2153,7 +2152,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::NexusFeeAdmissionRejected { code, reason },
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.hash(),
+                                tx = %tx.hash_as_entrypoint(),
                                 code = %code,
                                 reason,
                                 "Dropping gossiped transaction rejected by Nexus fee admission"
@@ -2177,7 +2176,7 @@ impl TransactionGossiper {
                                 crate::queue::Error::NexusFeeAdmissionConfigInvalid { code, reason },
                         }) => {
                             iroha_logger::warn!(
-                                tx = %tx.hash(),
+                                tx = %tx.hash_as_entrypoint(),
                                 code = %code,
                                 reason,
                                 "Dropping gossiped transaction due to invalid Nexus fee configuration"
@@ -2198,13 +2197,13 @@ impl TransactionGossiper {
                         Err(crate::queue::Failure { tx, err }) => {
                             if matches!(err, crate::queue::Error::Full) {
                                 iroha_logger::debug!(
-                                    tx = %tx.hash(),
+                                    tx = %tx.hash_as_entrypoint(),
                                     "queue rejected gossiped transaction due to backpressure"
                                 );
                             } else {
                                 iroha_logger::error!(
                                     ?err,
-                                    tx = %tx.hash(),
+                                    tx = %tx.hash_as_entrypoint(),
                                     "Failed to enqueue transaction."
                                 );
                             }
@@ -2477,13 +2476,13 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            let tx_hash = tx.hash();
+            let entrypoint_hash = tx.hash();
             let has_queue_plan_certificate = tx.queue_plan_certificate().is_some();
-            if !has_queue_plan_certificate && certified_hashes.contains(&tx_hash) {
+            if !has_queue_plan_certificate && certified_hashes.contains(&entrypoint_hash) {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
-            if !batch_seen_hashes.insert(tx_hash.clone()) {
+            if !batch_seen_hashes.insert(entrypoint_hash) {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
@@ -2491,17 +2490,17 @@ impl TransactionGossiper {
             // ordinary durable owner into its exact global-admission claim. Do not let the
             // process-local known-hash cache hide that authenticated transition.
             if !has_queue_plan_certificate
-                && self.is_transaction_known_locally_cached(tx_hash, &committed_transactions)
+                && self
+                    .is_transaction_known_locally_cached(entrypoint_hash, &committed_transactions)
             {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
-            let entrypoint_hash = tx.hash_as_entrypoint();
             let entrypoint = match tx.materialize_entrypoint() {
                 Ok(entrypoint) => (*entrypoint).clone(),
                 Err(err) => {
                     iroha_logger::warn!(
-                        %tx_hash,
+                        %entrypoint_hash,
                         ?err,
                         "dropping transaction gossip entry due to invalid entrypoint payload"
                     );
@@ -2528,14 +2527,14 @@ impl TransactionGossiper {
             ) {
                 (TransactionAdmissionIntent::QueuePlanSynced, false) => {
                     iroha_logger::warn!(
-                        %tx_hash,
+                        %entrypoint_hash,
                         "dropping QueuePlan-synchronized transaction gossip without its quorum certificate"
                     );
                     continue;
                 }
                 (TransactionAdmissionIntent::Ordinary, true) => {
                     iroha_logger::warn!(
-                        %tx_hash,
+                        %entrypoint_hash,
                         "dropping ordinary transaction gossip carrying an unrelated QueuePlan certificate"
                     );
                     continue;
@@ -2552,7 +2551,7 @@ impl TransactionGossiper {
                 ) {
                     Ok((_, QueuePlanGossipCertificateDisposition::Applied)) => {
                         iroha_logger::debug!(
-                            %tx_hash,
+                            %entrypoint_hash,
                             "ignoring QueuePlan gossip after canonical transaction application"
                         );
                         continue;
@@ -2560,7 +2559,7 @@ impl TransactionGossiper {
                     Ok(validated) => Some(validated),
                     Err(error) => {
                         iroha_logger::warn!(
-                            %tx_hash,
+                            %entrypoint_hash,
                             %error,
                             "dropping unauthenticated QueuePlan transaction gossip"
                         );
@@ -2599,7 +2598,7 @@ impl TransactionGossiper {
                             Ok(plan) => plan,
                             Err(err) => {
                                 iroha_logger::warn!(
-                                    %tx_hash,
+                                    %entrypoint_hash,
                                     reason = %err,
                                     reason_label = err.as_label(),
                                     "dropping transaction gossip entry due to unresolved local route"
@@ -2623,7 +2622,7 @@ impl TransactionGossiper {
                     let local_route = local_plan.coordinator_route();
                     if local_route != advertised_route {
                         iroha_logger::warn!(
-                                %tx_hash,
+                                %entrypoint_hash,
                                 advertised_lane_id = %route.lane_id,
                                 advertised_dataspace_id = %route.dataspace_id,
                             expected_lane_id = %local_route.lane_id,
@@ -2646,7 +2645,7 @@ impl TransactionGossiper {
                     }
                     if local_plan != advertised_plan {
                         iroha_logger::warn!(
-                            %tx_hash,
+                            %entrypoint_hash,
                             advertised_digest = %advertised_plan.digest(),
                             expected_digest = %local_plan.digest(),
                             "dropping transaction gossip entry due to routing plan mismatch"
@@ -2674,7 +2673,7 @@ impl TransactionGossiper {
                             .persist_pending_queue_plan_admission_certificate(certificate)
                         {
                             iroha_logger::error!(
-                                %tx_hash,
+                                %entrypoint_hash,
                                 %error,
                                 "failed to persist authenticated QueuePlan gossip certificate"
                             );
@@ -2699,14 +2698,14 @@ impl TransactionGossiper {
                     };
                     match push_result {
                         Ok(()) => {
-                            iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
+                            iroha_logger::debug!(%entrypoint_hash, "transaction enqueued from gossip");
                         }
                         Err(crate::queue::Failure {
                             tx,
                             err: crate::queue::Error::InBlockchain,
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.hash(),
+                                tx = %tx.hash_as_entrypoint(),
                                 "Transaction already in blockchain, ignoring..."
                             )
                         }
@@ -2715,7 +2714,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::IsInQueue,
                         }) => {
                             iroha_logger::trace!(
-                                tx = %tx.hash(),
+                                tx = %tx.hash_as_entrypoint(),
                                 "Transaction already in the queue, ignoring..."
                             )
                         }
@@ -2724,7 +2723,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::NexusFeeAdmissionRejected { code, reason },
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.hash(),
+                                tx = %tx.hash_as_entrypoint(),
                                 code = %code,
                                 reason,
                                 "Dropping gossiped transaction rejected by Nexus fee admission"
@@ -2748,7 +2747,7 @@ impl TransactionGossiper {
                                 crate::queue::Error::NexusFeeAdmissionConfigInvalid { code, reason },
                         }) => {
                             iroha_logger::warn!(
-                                tx = %tx.hash(),
+                                tx = %tx.hash_as_entrypoint(),
                                 code = %code,
                                 reason,
                                 "Dropping gossiped transaction due to invalid Nexus fee configuration"
@@ -2769,13 +2768,13 @@ impl TransactionGossiper {
                         Err(crate::queue::Failure { tx, err }) => {
                             if matches!(err, crate::queue::Error::Full) {
                                 iroha_logger::debug!(
-                                    tx = %tx.hash(),
+                                    tx = %tx.hash_as_entrypoint(),
                                     "queue rejected gossiped transaction due to backpressure"
                                 );
                             } else {
                                 iroha_logger::error!(
                                     ?err,
-                                    tx = %tx.hash(),
+                                    tx = %tx.hash_as_entrypoint(),
                                     "Failed to enqueue transaction."
                                 );
                             }
@@ -3059,7 +3058,7 @@ impl<'a> ncore::DecodeFromSlice<'a> for TransactionGossip {
 pub struct GossipTransaction {
     entrypoint: Arc<OnceLock<Arc<TransactionEntrypoint>>>,
     encoded: Arc<Vec<u8>>,
-    tx_hash: HashOf<SignedTransaction>,
+    entrypoint_hash: EntrypointHash,
     queue_plan_certificate: Option<Vec<u8>>,
 }
 impl Clone for GossipTransaction {
@@ -3067,14 +3066,14 @@ impl Clone for GossipTransaction {
         Self {
             entrypoint: Arc::clone(&self.entrypoint),
             encoded: Arc::clone(&self.encoded),
-            tx_hash: self.tx_hash,
+            entrypoint_hash: self.entrypoint_hash,
             queue_plan_certificate: self.queue_plan_certificate.clone(),
         }
     }
 }
 const GOSSIP_TX_DECODE_CACHE_LIMIT: usize = 2048;
 const GOSSIP_TX_DECODE_CACHE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
-const GOSSIP_KNOWN_TX_HASH_CACHE_LIMIT: usize = 8192;
+const GOSSIP_KNOWN_ENTRYPOINT_HASH_CACHE_LIMIT: usize = 8192;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct GossipTxDecodeCacheKey {
     len: u32,
@@ -3101,7 +3100,7 @@ impl GossipTxDecodeCacheKey {
 }
 struct GossipTxDecodeCacheEntry {
     encoded: Arc<Vec<u8>>,
-    tx_hash: HashOf<SignedTransaction>,
+    entrypoint_hash: EntrypointHash,
     queue_plan_certificate: Option<Vec<u8>>,
     entrypoint_consumed: usize,
     consumed: usize,
@@ -3169,24 +3168,24 @@ thread_local! {
         RefCell::new(GossipTxDecodeCache::new());
 }
 #[derive(Default)]
-struct GossipKnownTxHashCache {
-    known: HashMap<HashOf<SignedTransaction>, ()>,
+struct GossipKnownEntrypointHashCache {
+    known: HashMap<HashOf<TransactionEntrypoint>, ()>,
 }
-impl GossipKnownTxHashCache {
-    fn contains(&self, tx_hash: HashOf<SignedTransaction>) -> bool {
-        self.known.contains_key(&tx_hash)
+impl GossipKnownEntrypointHashCache {
+    fn contains(&self, entrypoint_hash: HashOf<TransactionEntrypoint>) -> bool {
+        self.known.contains_key(&entrypoint_hash)
     }
-    fn remember(&mut self, tx_hash: HashOf<SignedTransaction>) {
-        if self.known.len() >= GOSSIP_KNOWN_TX_HASH_CACHE_LIMIT {
+    fn remember(&mut self, entrypoint_hash: HashOf<TransactionEntrypoint>) {
+        if self.known.len() >= GOSSIP_KNOWN_ENTRYPOINT_HASH_CACHE_LIMIT {
             // Simple bounded cache: clear when full to keep overhead predictable.
             self.known.clear();
         }
-        self.known.insert(tx_hash, ());
+        self.known.insert(entrypoint_hash, ());
     }
 }
 thread_local! {
-    static GOSSIP_KNOWN_TX_HASH_CACHE: RefCell<GossipKnownTxHashCache> =
-        RefCell::new(GossipKnownTxHashCache::default());
+    static KNOWN_ENTRYPOINT_CACHE: RefCell<GossipKnownEntrypointHashCache> =
+        RefCell::new(GossipKnownEntrypointHashCache::default());
 }
 fn framed_payload_len(payload_len: usize, align: usize) -> Option<usize> {
     let padding = if align <= 1 {
@@ -3261,11 +3260,6 @@ fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixIn
 fn encode_transaction_entrypoint(entrypoint: &TransactionEntrypoint) -> Vec<u8> {
     norito::encode_canonical(entrypoint).expect("encode canonical transaction entrypoint")
 }
-fn signed_hash_from_entrypoint_hash(
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-) -> HashOf<SignedTransaction> {
-    HashOf::<SignedTransaction>::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash))
-}
 fn decode_framed_transaction_entrypoint(
     framed: &[u8],
 ) -> Result<TransactionEntrypoint, ncore::Error> {
@@ -3273,15 +3267,7 @@ fn decode_framed_transaction_entrypoint(
 }
 fn decode_gossip_transaction_payload(
     bytes: &[u8],
-) -> Result<
-    (
-        Arc<Vec<u8>>,
-        HashOf<SignedTransaction>,
-        Option<Vec<u8>>,
-        usize,
-    ),
-    ncore::Error,
-> {
+) -> Result<(Arc<Vec<u8>>, EntrypointHash, Option<Vec<u8>>, usize), ncore::Error> {
     let prefix = framed_prefix_info::<TransactionEntrypoint>(bytes)?;
     let (certificate_payload, consumed) = len_prefixed_field_payload(bytes, prefix.consumed)?;
     let max_certificate_vec_payload =
@@ -3320,7 +3306,7 @@ fn decode_gossip_transaction_payload(
             {
                 Some((
                     Arc::clone(&entry.encoded),
-                    entry.tx_hash,
+                    entry.entrypoint_hash,
                     entry.queue_plan_certificate.clone(),
                     entry.consumed,
                 ))
@@ -3335,30 +3321,29 @@ fn decode_gossip_transaction_payload(
         .get(..prefix.consumed)
         .ok_or(ncore::Error::LengthMismatch)?;
     let entrypoint_hash = crate::tx::entrypoint_hash_from_framed_bytes(framed)?;
-    let tx_hash = signed_hash_from_entrypoint_hash(entrypoint_hash);
     let encoded = Arc::new(framed.to_vec());
     let entry = GossipTxDecodeCacheEntry {
         encoded: encoded.clone(),
-        tx_hash,
+        entrypoint_hash,
         queue_plan_certificate: queue_plan_certificate.clone(),
         entrypoint_consumed: prefix.consumed,
         consumed,
     };
     GOSSIP_TX_DECODE_CACHE.with(|cache| cache.borrow_mut().insert(key, entry));
-    Ok((encoded, tx_hash, queue_plan_certificate, consumed))
+    Ok((encoded, entrypoint_hash, queue_plan_certificate, consumed))
 }
 impl GossipTransaction {
     /// Wrap an accepted transaction, dropping acceptance metadata for gossip.
     pub fn new(tx: AcceptedTransaction<'static>) -> Self {
         let encoded = tx.entrypoint_bytes();
-        let tx_hash = tx.hash();
+        let entrypoint_hash = tx.hash_as_entrypoint();
         let entrypoint = tx.entrypoint().clone();
         let entrypoint_cache = OnceLock::new();
         let _ = entrypoint_cache.set(Arc::new(entrypoint));
         Self {
             entrypoint: Arc::new(entrypoint_cache),
             encoded,
-            tx_hash,
+            entrypoint_hash,
             queue_plan_certificate: None,
         }
     }
@@ -3374,13 +3359,13 @@ impl GossipTransaction {
         } else {
             canonical
         };
-        let tx_hash = signed_hash_from_entrypoint_hash(entrypoint.hash());
+        let entrypoint_hash = entrypoint.hash();
         let entrypoint_cache = OnceLock::new();
         let _ = entrypoint_cache.set(Arc::new(entrypoint));
         Self {
             entrypoint: Arc::new(entrypoint_cache),
             encoded,
-            tx_hash,
+            entrypoint_hash,
             queue_plan_certificate: None,
         }
     }
@@ -3395,13 +3380,13 @@ impl GossipTransaction {
     }
     fn lazy_from_encoded(
         encoded: Arc<Vec<u8>>,
-        tx_hash: HashOf<SignedTransaction>,
+        entrypoint_hash: EntrypointHash,
         queue_plan_certificate: Option<Vec<u8>>,
     ) -> Self {
         Self {
             entrypoint: Arc::new(OnceLock::new()),
             encoded,
-            tx_hash,
+            entrypoint_hash,
             queue_plan_certificate,
         }
     }
@@ -3449,15 +3434,13 @@ impl GossipTransaction {
             }
         }
     }
-    /// Return the transaction hash without rehashing.
-    pub fn hash(&self) -> HashOf<SignedTransaction> {
-        self.tx_hash
+    /// Return the entrypoint hash without rehashing.
+    pub fn hash(&self) -> HashOf<TransactionEntrypoint> {
+        self.entrypoint_hash
     }
     /// Return the entrypoint hash without rehashing.
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
-        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(iroha_crypto::Hash::from(
-            self.tx_hash,
-        ))
+        self.entrypoint_hash
     }
     /// Consume the wrapper and return the entrypoint and cached full-frame payload.
     pub fn into_entrypoint_with_payload(
@@ -3471,14 +3454,14 @@ impl GossipTransaction {
 impl From<SignedTransaction> for GossipTransaction {
     fn from(signed: SignedTransaction) -> Self {
         let entrypoint = TransactionEntrypoint::External(signed);
-        let tx_hash = signed_hash_from_entrypoint_hash(entrypoint.hash());
+        let entrypoint_hash = entrypoint.hash();
         let encoded = Arc::new(encode_transaction_entrypoint(&entrypoint));
         let entrypoint_cache = OnceLock::new();
         let _ = entrypoint_cache.set(Arc::new(entrypoint));
         Self {
             entrypoint: Arc::new(entrypoint_cache),
             encoded,
-            tx_hash,
+            entrypoint_hash,
             queue_plan_certificate: None,
         }
     }
@@ -3511,22 +3494,22 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        let (encoded, tx_hash, queue_plan_certificate, consumed) =
+        let (encoded, entrypoint_hash, queue_plan_certificate, consumed) =
             decode_gossip_transaction_payload(bytes)?;
         ncore::note_payload_access(bytes, consumed);
         Ok(Self::lazy_from_encoded(
             encoded,
-            tx_hash,
+            entrypoint_hash,
             queue_plan_certificate,
         ))
     }
 }
 impl<'a> ncore::DecodeFromSlice<'a> for GossipTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (encoded, tx_hash, queue_plan_certificate, consumed) =
+        let (encoded, entrypoint_hash, queue_plan_certificate, consumed) =
             decode_gossip_transaction_payload(bytes)?;
         Ok((
-            Self::lazy_from_encoded(encoded, tx_hash, queue_plan_certificate),
+            Self::lazy_from_encoded(encoded, entrypoint_hash, queue_plan_certificate),
             consumed,
         ))
     }
@@ -3623,7 +3606,7 @@ pub struct GossipRoute {
 }
 struct PartitionedGossipBatch {
     message: TransactionGossip,
-    requeue: Vec<HashOf<SignedTransaction>>,
+    requeue: Vec<HashOf<TransactionEntrypoint>>,
     encoded_len: usize,
 }
 fn partition_gossip_batch(
@@ -3645,7 +3628,7 @@ fn partition_gossip_batch(
     let mut requeue = Vec::with_capacity(txs.len());
     let mut encoded_len = gossip_message_empty_len().unwrap_or(0);
     let Some(route_len) = gossip_route_encoded_len() else {
-        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash()));
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash_as_entrypoint()));
         return PartitionedGossipBatch {
             message,
             requeue,
@@ -3653,7 +3636,7 @@ fn partition_gossip_batch(
         };
     };
     let Some(route_entry_len) = ncore::len_prefix_len(route_len).checked_add(route_len) else {
-        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash()));
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash_as_entrypoint()));
         return PartitionedGossipBatch {
             message,
             requeue,
@@ -3661,7 +3644,7 @@ fn partition_gossip_batch(
         };
     };
     if frame_cap_bytes == 0 {
-        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash()));
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash_as_entrypoint()));
         return PartitionedGossipBatch {
             message,
             requeue,
@@ -3669,7 +3652,7 @@ fn partition_gossip_batch(
         };
     }
     for entry in txs {
-        let hash = entry.tx.hash();
+        let hash = entry.tx.hash_as_entrypoint();
         if message.txs.len() >= max_count {
             requeue.push(hash);
             continue;
@@ -3749,6 +3732,7 @@ mod tests {
     use super::*;
     use crate::NetworkMessage;
     use crate::{
+        governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus},
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{LaneRouter, RoutingDecision},
@@ -3774,7 +3758,7 @@ mod tests {
     };
     use iroha_data_model::{
         DataSpaceId, Level,
-        account::{AccountDetails, AccountValue},
+        account::{AccountDetails, AccountId, AccountValue},
         domain::{Domain, DomainId},
         identifier::IdentifierPolicyId,
         isi::{Instruction, InstructionBox, Log, Register, ram_lfe::RegisterRamLfeProgramPolicy},
@@ -3835,7 +3819,6 @@ mod tests {
         )
         .expect("authoritative default lane catalog");
         let mut nexus = state.nexus.write();
-        nexus.enabled = true;
         nexus.autoscale.enabled = false;
         nexus.lane_catalog = lane_catalog;
         nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
@@ -4051,7 +4034,7 @@ mod tests {
     #[test]
     fn gossip_transaction_decode_cache_is_byte_bounded() {
         let (signed, _accepted) = build_transaction("gossip-decode-cache-byte-bound");
-        let tx_hash = signed.hash();
+        let entrypoint_hash = signed.hash_as_entrypoint();
         let mut cache = GossipTxDecodeCache::with_limits(8, 10);
         let first = Arc::new(vec![1_u8; 6]);
         let first_key = GossipTxDecodeCacheKey::from_bytes(first.as_slice());
@@ -4059,7 +4042,7 @@ mod tests {
             first_key,
             GossipTxDecodeCacheEntry {
                 encoded: Arc::clone(&first),
-                tx_hash,
+                entrypoint_hash,
                 queue_plan_certificate: None,
                 entrypoint_consumed: first.len(),
                 consumed: first.len(),
@@ -4073,7 +4056,7 @@ mod tests {
             second_key,
             GossipTxDecodeCacheEntry {
                 encoded: Arc::clone(&second),
-                tx_hash,
+                entrypoint_hash,
                 queue_plan_certificate: None,
                 entrypoint_consumed: second.len(),
                 consumed: second.len(),
@@ -4090,7 +4073,7 @@ mod tests {
             second_key,
             GossipTxDecodeCacheEntry {
                 encoded: oversized,
-                tx_hash,
+                entrypoint_hash,
                 queue_plan_certificate: None,
                 entrypoint_consumed: 11,
                 consumed: 11,
@@ -4252,8 +4235,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -4290,9 +4272,82 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
     struct MismatchedQueuePlanRouter;
     impl LaneRouter for MismatchedQueuePlanRouter {
-        fn route(&self, _tx: &dyn crate::queue::TransactionRoutingView) -> RoutingDecision {
-            RoutingDecision::new(LaneId::new(9), DataSpaceId::new(9))
+        fn try_route(
+            &self,
+            _tx: &dyn crate::queue::TransactionRoutingView,
+        ) -> Result<RoutingDecision, crate::queue::RoutingResolveError> {
+            Ok(RoutingDecision::new(LaneId::new(9), DataSpaceId::new(9)))
         }
+    }
+    fn install_exact_queue_plan_lane_authority(state: &mut State, seed: u8) -> Vec<KeyPair> {
+        let validator_keys = (0_u8..4)
+            .map(|offset| {
+                KeyPair::try_from_seed(vec![seed.wrapping_add(offset); 32], Algorithm::BlsNormal)
+                    .expect("derive exact QueuePlan lane validator")
+            })
+            .collect::<Vec<_>>();
+        let validator_peers = validator_keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let validator_accounts = validator_keys
+            .iter()
+            .map(|key| AccountId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        {
+            let mut world_block = state.world.block();
+            {
+                let mut peers = world_block.peers_mut_for_testing().transaction();
+                peers.clear();
+                peers.extend(validator_peers.iter().cloned());
+                peers.apply();
+            }
+            world_block.commit();
+        }
+        for validator_key in &validator_keys {
+            let validator_pop = iroha_crypto::bls_normal_pop_prove(validator_key.private_key())
+                .expect("derive exact QueuePlan lane validator PoP");
+            state.world.register_validator_pop_for_testing(
+                validator_key.public_key().clone(),
+                validator_pop,
+            );
+        }
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.extend(validator_peers);
+            topology.commit();
+        }
+        let statuses = state
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                (
+                    lane.id,
+                    LaneManifestStatus {
+                        lane: lane.id,
+                        alias: lane.alias.clone(),
+                        dataspace: lane.dataspace_id,
+                        visibility: lane.visibility.clone(),
+                        storage: lane.storage.clone(),
+                        governance: None,
+                        manifest_path: Some(std::path::PathBuf::from(format!(
+                            "/test/gossiper-lane-{}.json",
+                            lane.id.as_u32()
+                        ))),
+                        governance_rules: Some(GovernanceRules {
+                            validators: validator_accounts.clone(),
+                            ..GovernanceRules::default()
+                        }),
+                        privacy_commitments: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        validator_keys
     }
     fn exact_pending_queue_plan_gossip_fixture(
         label: &str,
@@ -4304,21 +4359,13 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         TempDir,
     ) {
         let journal_dir = tempdir().expect("QueuePlan gossip journal directory");
-        let state = Arc::new(State::new_for_testing(
+        let mut state = State::new_for_testing(
             world_with_alice(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-        ));
-        {
-            let mut nexus = state.nexus.write();
-            nexus.enabled = false;
-        }
-        {
-            let mut topology = state.commit_topology.block();
-            topology.clear();
-            topology.push(PeerId::new(ALICE_KEYPAIR.public_key().clone()));
-            topology.commit();
-        }
+        );
+        let validator_keys = install_exact_queue_plan_lane_authority(&mut state, 0xB4);
+        let state = Arc::new(state);
         let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue_config = QueueConfig::default();
         let transaction_time_to_live = queue_config.transaction_time_to_live;
@@ -4356,20 +4403,50 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             queue.queue_plan_admission_timestamp_ms(),
         )
         .expect("build exact QueuePlan gossip binding");
-        let preimage = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(
-            binding.canonical_hash(),
-            0,
-        )
-        .expect("encode exact QueuePlan gossip attestation");
+        let binding_hash = binding.canonical_hash();
+        let coordinator = binding
+            .admission_context
+            .route_incarnations
+            .first()
+            .expect("single-route QueuePlan binding has a coordinator");
+        assert_eq!(
+            coordinator.validator_set.len(),
+            4,
+            "the f=1 QueuePlan lane must carry its exact 3f+1 authority"
+        );
+        let attestations = coordinator
+            .validator_set
+            .iter()
+            .take(usize::from(coordinator.durability_threshold))
+            .enumerate()
+            .map(|(index, validator)| {
+                let validator_index =
+                    u16::try_from(index).expect("QueuePlan validator index fits u16");
+                let validator_key = validator_keys
+                    .iter()
+                    .find(|key| key.public_key() == validator.public_key())
+                    .expect("exact QueuePlan authority key is available");
+                let preimage =
+                    crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(
+                        binding_hash,
+                        validator_index,
+                    )
+                    .expect("encode exact QueuePlan gossip attestation");
+                crate::torii_proxy::QueuePlanAdmissionAttestationV2 {
+                    version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+                    validator_index,
+                    signature: iroha_crypto::Signature::try_new(
+                        validator_key.private_key(),
+                        &preimage,
+                    )
+                    .expect("sign exact QueuePlan gossip attestation"),
+                }
+            })
+            .collect();
         let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV2 {
             version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
             binding: binding.clone(),
-            attestations: vec![crate::torii_proxy::QueuePlanAdmissionAttestationV2 {
-                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
-                validator_index: 0,
-                signature: iroha_crypto::Signature::try_new(ALICE_KEYPAIR.private_key(), &preimage)
-                    .expect("sign exact QueuePlan gossip attestation"),
-            }],
+            attestations,
         };
         let certificate = norito::encode_canonical(&certificate)
             .expect("encode exact QueuePlan gossip certificate");
@@ -4525,8 +4602,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -4576,8 +4652,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -4598,7 +4673,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             .expect("queue accepts tx");
         let batch = queue.gossip_batch(1, &state.view());
         assert_eq!(batch.len(), 1);
-        let hash = batch[0].tx.hash();
+        let hash = batch[0].tx.hash_as_entrypoint();
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let now = Instant::now();
         let mut gossiper = TransactionGossiper {
@@ -4635,7 +4710,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let mut gossiper = closed_test_gossiper(resend_ticks);
         let (_signed, accepted) = build_transaction("deferred-dedup");
-        let hash = accepted.hash();
+        let hash = accepted.hash_as_entrypoint();
         gossiper
             .queue
             .push(accepted, gossiper.state.view())
@@ -4645,7 +4720,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         assert_eq!(
             gossiper.gossip_deferred[gossiper.deferred_index()].len(),
             1,
-            "same transaction hash should be retained once per resend slot"
+            "same entrypoint hash should be retained once per resend slot"
         );
     }
     #[test]
@@ -4659,7 +4734,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             .expect("queue accepts tx");
         let first_batch = gossiper.queue.gossip_batch(1, &gossiper.state.view());
         assert_eq!(first_batch.len(), 1);
-        let hash = first_batch[0].tx.hash();
+        let hash = first_batch[0].tx.hash_as_entrypoint();
         assert!(
             gossiper
                 .queue
@@ -4689,8 +4764,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -4738,14 +4812,14 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let mut gossiper = closed_test_gossiper(resend_ticks);
         let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
         let (signed, _) = build_transaction("suppression-expiry");
-        let tx_hash = signed.hash();
+        let entrypoint_hash = signed.hash_as_entrypoint();
         gossiper.remember_peer_recent_sends(
             std::slice::from_ref(&peer),
-            std::slice::from_ref(&tx_hash),
+            std::slice::from_ref(&entrypoint_hash),
         );
         let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
             vec![peer.clone()],
-            std::slice::from_ref(&tx_hash),
+            std::slice::from_ref(&entrypoint_hash),
         );
         assert!(
             targets.is_empty(),
@@ -4759,7 +4833,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         gossiper.expire_peer_recent_suppression();
         let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
             vec![peer.clone()],
-            std::slice::from_ref(&tx_hash),
+            std::slice::from_ref(&entrypoint_hash),
         );
         assert_eq!(targets, vec![peer]);
         assert_eq!(suppressed, 0);
@@ -4770,7 +4844,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let mut gossiper = closed_test_gossiper(resend_ticks);
         let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
         let (signed, _) = build_transaction("suppression-same-tick-dedup");
-        let tx_hash = signed.hash();
+        let entrypoint_hash = signed.hash_as_entrypoint();
         let slot = gossiper.peer_recent_slot_for_tick(
             gossiper
                 .gossip_tick
@@ -4778,11 +4852,11 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
         gossiper.remember_peer_recent_sends(
             std::slice::from_ref(&peer),
-            std::slice::from_ref(&tx_hash),
+            std::slice::from_ref(&entrypoint_hash),
         );
         gossiper.remember_peer_recent_sends(
             std::slice::from_ref(&peer),
-            std::slice::from_ref(&tx_hash),
+            std::slice::from_ref(&entrypoint_hash),
         );
         assert_eq!(
             gossiper.peer_recent_ring[slot].len(),
@@ -4796,20 +4870,20 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let mut gossiper = closed_test_gossiper(resend_ticks);
         let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
         let (signed, _) = build_transaction("suppression-stale-ring-entry");
-        let tx_hash = signed.hash();
+        let entrypoint_hash = signed.hash_as_entrypoint();
         let ttl = GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS as u64;
         let first_expiry = gossiper.gossip_tick.saturating_add(ttl);
         let first_slot = gossiper.peer_recent_slot_for_tick(first_expiry);
         gossiper.remember_peer_recent_sends(
             std::slice::from_ref(&peer),
-            std::slice::from_ref(&tx_hash),
+            std::slice::from_ref(&entrypoint_hash),
         );
         gossiper.advance_gossip_tick();
         let second_expiry = gossiper.gossip_tick.saturating_add(ttl);
         let second_slot = gossiper.peer_recent_slot_for_tick(second_expiry);
         gossiper.remember_peer_recent_sends(
             std::slice::from_ref(&peer),
-            std::slice::from_ref(&tx_hash),
+            std::slice::from_ref(&entrypoint_hash),
         );
         assert_eq!(gossiper.peer_recent_ring[first_slot].len(), 1);
         assert_eq!(gossiper.peer_recent_ring[second_slot].len(), 1);
@@ -4823,7 +4897,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             gossiper
                 .peer_recently_sent
                 .get(&peer)
-                .is_some_and(|seen| seen.get(&tx_hash) == Some(&second_expiry)),
+                .is_some_and(|seen| seen.get(&entrypoint_hash) == Some(&second_expiry)),
             "newer suppression expiry should remain active"
         );
         gossiper.gossip_tick = second_expiry;
@@ -4841,10 +4915,10 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
         let (signed_a, _) = build_transaction("peer-a");
         let (signed_b, _) = build_transaction("peer-b");
-        let tx_hash_a = signed_a.hash();
-        let tx_hash_b = signed_b.hash();
-        let all_hashes = vec![tx_hash_a.clone(), tx_hash_b.clone()];
-        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_a), &[tx_hash_a]);
+        let entrypoint_hash_a = signed_a.hash_as_entrypoint();
+        let entrypoint_hash_b = signed_b.hash_as_entrypoint();
+        let all_hashes = vec![entrypoint_hash_a.clone(), entrypoint_hash_b.clone()];
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_a), &[entrypoint_hash_a]);
         gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_b), &all_hashes);
         let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
             vec![peer_a.clone(), peer_b.clone()],
@@ -4860,11 +4934,13 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let peer_a: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
         let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
         let (signed, _) = build_transaction("peer-recent-defer");
-        let tx_hash = signed.hash();
+        let entrypoint_hash = signed.hash_as_entrypoint();
         let targets = vec![peer_a.clone(), peer_b.clone()];
-        gossiper.remember_peer_recent_sends(&targets, std::slice::from_ref(&tx_hash));
-        let (targets, suppressed, replayed) = gossiper
-            .filter_targets_or_replay_recent_suppressed(targets, std::slice::from_ref(&tx_hash));
+        gossiper.remember_peer_recent_sends(&targets, std::slice::from_ref(&entrypoint_hash));
+        let (targets, suppressed, replayed) = gossiper.filter_targets_or_replay_recent_suppressed(
+            targets,
+            std::slice::from_ref(&entrypoint_hash),
+        );
         assert!(targets.is_empty());
         assert_eq!(suppressed, 2);
         assert!(!replayed);
@@ -4929,7 +5005,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             partitioned.encoded_len,
             norito::codec::Encode::encode(&partitioned.message).len()
         );
-        assert_eq!(partitioned.requeue, vec![large_signed.hash()]);
+        assert_eq!(partitioned.requeue, vec![large_signed.hash_as_entrypoint()]);
     }
     #[test]
     fn transaction_gossip_decode_accepts_canonical_sequence_limit() {
@@ -5084,6 +5160,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             decoded.txs[0].as_entrypoint(),
             TransactionEntrypoint::SealedCommitment(_)
         ));
+        assert_eq!(decoded.txs[0].hash(), expected_hash);
         assert_eq!(decoded.txs[0].as_entrypoint().hash(), expected_hash);
         assert_eq!(decoded.txs[0].encoded.as_slice(), payload.as_slice());
     }
@@ -5144,7 +5221,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let withheld =
             partition_gossip_batch(usize::MAX, usize::MAX, GossipPlane::Public, vec![awaiting]);
         assert!(withheld.message.txs.is_empty());
-        assert_eq!(withheld.requeue, vec![signed.hash()]);
+        assert_eq!(withheld.requeue, vec![signed.hash_as_entrypoint()]);
 
         let certificate = Arc::new(vec![0x5A; 257]);
         let certified = GossipBatchEntry {
@@ -5179,7 +5256,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             }],
         );
         assert!(excluded.message.txs.is_empty());
-        assert_eq!(excluded.requeue, vec![signed.hash()]);
+        assert_eq!(excluded.requeue, vec![signed.hash_as_entrypoint()]);
     }
     #[test]
     fn gossip_route_encoded_len_matches_wire() {
@@ -5406,7 +5483,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
         assert!(partitioned.message.txs.is_empty());
         assert!(partitioned.message.routes.is_empty());
-        assert_eq!(partitioned.requeue, vec![signed.hash()]);
+        assert_eq!(partitioned.requeue, vec![signed.hash_as_entrypoint()]);
     }
     #[test]
     fn partition_preserves_native_amx_full_routing_plan() {
@@ -5507,7 +5584,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             .map(|tx| tx.as_signed().hash())
             .collect();
         assert_eq!(hashes, vec![tx_a_signed.hash()]);
-        assert_eq!(partitioned.requeue, vec![tx_b_signed.hash()]);
+        assert_eq!(partitioned.requeue, vec![tx_b_signed.hash_as_entrypoint()]);
     }
     #[test]
     fn validate_route_rejects_missing_lane() {
@@ -5622,7 +5699,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        state.nexus.write().enabled = false;
+
         let nexus = state.nexus_snapshot();
         assert_eq!(
             active_gossip_lane_ids(&state, &nexus),
@@ -6063,8 +6140,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -6597,7 +6673,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         )
         .expect("future-created autoscale lane catalog");
         let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
             lane_config: LaneGeometry::from_catalog(&lane_catalog),
             lane_catalog,
             ..iroha_config::parameters::actual::Nexus::default()
@@ -6732,8 +6807,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -6801,8 +6875,11 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             dataspace: DataSpaceId,
         }
         impl LaneRouter for FixedRouter {
-            fn route(&self, _tx: &dyn crate::queue::TransactionRoutingView) -> RoutingDecision {
-                RoutingDecision::new(self.lane, self.dataspace)
+            fn try_route(
+                &self,
+                _tx: &dyn crate::queue::TransactionRoutingView,
+            ) -> Result<RoutingDecision, crate::queue::RoutingResolveError> {
+                Ok(RoutingDecision::new(self.lane, self.dataspace))
             }
         }
         let temp_dir = tempdir().expect("temp dir");
@@ -6811,8 +6888,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -6849,7 +6925,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .expect("dataspace catalog");
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = false;
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog.clone();
@@ -6912,8 +6987,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -6967,7 +7041,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .expect("dataspace catalog");
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = true;
             nexus.autoscale.enabled = false;
             nexus.fees.base_fee = Quantity::zero();
             nexus.fees.per_byte_fee = Quantity::zero();

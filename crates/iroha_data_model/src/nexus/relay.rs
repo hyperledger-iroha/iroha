@@ -44,6 +44,8 @@ const FEE_SPONSOR_VAULT_SOURCE_STATE_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.nexus.fee-sponsor-vault.source-state.v1";
 const FEE_SPONSOR_VAULT_ALLOCATION_CLAIM_DOMAIN_V1: &[u8] =
     b"iroha.nexus.fee-sponsor-vault.allocation-claim.v1";
+const FEE_SPONSOR_VAULT_POLICY_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"nexus-fee-relay:sponsor-vault-policy:v1";
 fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> Hash {
     let domain_len = u64::try_from(domain.len())
         .expect("protocol-defined digest domains fit in u64")
@@ -53,6 +55,7 @@ fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> Hash {
 /// Relay envelope broadcast by Nexus lanes for merge validation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LaneRelayEnvelope {
     /// Numeric lane identifier.
     pub lane_id: LaneId,
@@ -68,33 +71,28 @@ pub struct LaneRelayEnvelope {
     ///
     /// `None` is permitted only for pending transport/status. State resolves a
     /// present reference through Kura and verifies the proof before persistence.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub finality_authority: Option<LaneFinalityAuthorityV1>,
     /// Optional hash of the DA commitment bundle for the block payload.
-    #[norito(default)]
+    #[norito(required)]
     pub da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
     /// Optional standalone lane block descriptor hash for this relayed lane block.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub lane_block_descriptor_hash: Option<Hash>,
     /// Settlement commitment captured at the end of the lane block.
     pub settlement_commitment: LaneBlockCommitment,
     /// Norito hash of the settlement payload for quick verification.
     pub settlement_hash: HashOf<LaneBlockCommitment>,
     /// Total RBC bytes attributed to the lane in this block.
-    #[norito(default)]
     pub rbc_bytes_total: u64,
     /// Optional manifest Merkle root for the dataspace associated with the lane.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub manifest_root: Option<[u8; 32]>,
     /// Untrusted `FastPQ` proof metadata carried with the relay.
     ///
     /// This metadata is progress evidence only. Merge authority additionally requires the exact
     /// envelope to have a committed cryptographically verified relay record.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
 }
 /// Canonical post-execution effect authenticated by the global `CommitQC`.
@@ -104,6 +102,7 @@ pub struct LaneRelayEnvelope {
 /// while every merge-relevant effect remains committed by the resulting QC.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LaneFinalityStatement {
     /// Statement format version.
     pub version: u8,
@@ -118,6 +117,7 @@ pub struct LaneFinalityStatement {
     /// Hash of the global block header that carried the lane execution.
     pub block_header_hash: HashOf<BlockHeader>,
     /// Exact DA commitment advertised by that header.
+    #[norito(required)]
     pub da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
     /// Canonical standalone lane-block descriptor hash.
     pub lane_block_descriptor_hash: Hash,
@@ -198,6 +198,7 @@ impl Ord for LaneRelayEnvelope {
 /// Stable business-facing reference for a previously verified lane relay envelope.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LaneRelayEnvelopeRef {
     /// Numeric dataspace identifier.
     pub dataspace_id: DataSpaceId,
@@ -224,6 +225,7 @@ impl LaneRelayEnvelopeRef {
 /// Verified relay record persisted for restricted-source business effects.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct VerifiedLaneRelayRecord {
     /// Canonical relay reference used by business flows.
     pub relay_ref: LaneRelayEnvelopeRef,
@@ -232,7 +234,6 @@ pub struct VerifiedLaneRelayRecord {
     /// Deterministic hash of the proof payload used during registration.
     pub proof_payload_hash: Hash,
     /// `FastPQ` statement digest verified during registration.
-    #[norito(default)]
     pub fastpq_statement_digest: [u8; 32],
     /// Canonical lane-finality statement hash authenticated by the QC.
     pub lane_finality_statement_hash: Hash,
@@ -254,6 +255,7 @@ pub struct VerifiedLaneRelayRecord {
 /// Proof-backed cross-lane spend allocation for one sponsor-program vault asset.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct VerifiedFeeSponsorVaultAllocation {
     /// Exact sponsor program authorized to consume the allocation.
     pub program_id: FeeSponsorProgramId,
@@ -276,7 +278,6 @@ pub struct VerifiedFeeSponsorVaultAllocation {
     /// Deterministic hash of the proof payload used during registration.
     pub proof_payload_hash: Hash,
     /// `FastPQ` statement digest verified during registration.
-    #[norito(default)]
     pub fastpq_statement_digest: [u8; 32],
     /// Deterministic digest of the embedded `FastPQ` proof payload.
     pub fastpq_proof_digest: Hash,
@@ -290,6 +291,7 @@ pub struct VerifiedFeeSponsorVaultAllocation {
 /// `FastPQ` proof metadata attached to a lane relay envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LaneFastpqProofMaterial {
     /// Deterministic digest of the proof payload.
     pub proof_digest: Hash,
@@ -412,6 +414,25 @@ pub fn fee_sponsor_vault_allocation_claim_digest(
         &allocation.encode(),
     )
 }
+/// Commit the exact manifest policy authorized for a sponsor-vault allocation proof.
+///
+/// The framing intentionally matches the Nexus fee-relay worker transcript:
+/// domain, one NUL separator, the little-endian manifest length, then the
+/// manifest root. Producers and consensus consumers must use this helper so a
+/// proof cannot advertise an owner-selected policy commitment.
+#[must_use]
+pub fn fee_sponsor_vault_policy_commitment(manifest_root: &[u8; 32]) -> Hash {
+    let separator = [0_u8];
+    let manifest_len = u64::try_from(manifest_root.len())
+        .expect("fixed manifest root length fits in u64")
+        .to_le_bytes();
+    Hash::new_from_chunks(&[
+        FEE_SPONSOR_VAULT_POLICY_COMMITMENT_DOMAIN_V1,
+        &separator,
+        &manifest_len,
+        manifest_root,
+    ])
+}
 /// Operator evidence bundle captured when ingesting a lane relay envelope fails.
 ///
 /// This payload is intended for local persistence and troubleshooting workflows. It is not
@@ -419,13 +440,13 @@ pub fn fee_sponsor_vault_allocation_claim_digest(
 /// export when investigating invalid or conflicting relay proofs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LaneRelayEvidenceBundle {
     /// Lane relay envelope that triggered the failure.
     pub envelope: LaneRelayEnvelope,
     /// Stable error label describing why ingestion failed.
     pub error_label: String,
     /// Human-readable error detail (best-effort).
-    #[norito(default)]
     pub error_message: String,
 }
 /// Emergency validator-peer override for a lane when lane relay quorum is at risk.
@@ -433,13 +454,13 @@ pub struct LaneRelayEvidenceBundle {
 /// Application of this override is gated by `nexus.lane_relay_emergency.enabled`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct LaneRelayEmergencyValidatorSet {
     /// Live consensus peers temporarily allowed to fill missing lane-relay committee slots.
     pub peers: Vec<PeerId>,
     /// Block height (inclusive) after which the override expires.
     pub expires_at_height: u64,
     /// Optional metadata describing why the override was applied.
-    #[norito(default)]
     pub metadata: Metadata,
 }
 /// Quorum parameters used to validate [`LaneRelayEnvelope`] proofs.
@@ -872,7 +893,7 @@ impl LaneRelayEnvelope {
             }
             all_sources.insert(receipt.source_id);
         }
-        if settlement.tx_count < u64::try_from(all_sources.len()).unwrap_or(u64::MAX) {
+        if settlement.tx_count != u64::try_from(all_sources.len()).unwrap_or(u64::MAX) {
             return Err(LaneRelayError::SettlementTxCountMismatch);
         }
         Ok(())
@@ -1004,9 +1025,6 @@ pub fn compute_settlement_hash(
 /// Errors encountered while validating or deriving relay envelopes.
 #[derive(Debug, Error)]
 pub enum LaneRelayError {
-    /// Nexus lane lifecycle is disabled so relays are not accepted.
-    #[error("lane relay processing requires nexus.enabled=true")]
-    NexusDisabled,
     /// Lane identifier not present in the configured catalog.
     #[error("lane relay references unknown lane {0}")]
     UnknownLane(LaneId),
@@ -1067,8 +1085,8 @@ pub enum LaneRelayError {
     /// Settlement commitment aggregate totals do not match its receipts.
     #[error("settlement commitment totals do not match receipts")]
     SettlementTotalsMismatch,
-    /// Settlement commitment has fewer transactions than committed receipt sources.
-    #[error("settlement commitment transaction count is lower than receipt count")]
+    /// Settlement commitment transaction count differs from its unique receipt sources.
+    #[error("settlement commitment transaction count does not match receipt sources")]
     SettlementTxCountMismatch,
     /// Settlement commitment contains duplicate receipt source identifiers.
     #[error("settlement commitment contains duplicate receipt source identifiers")]
@@ -1189,8 +1207,7 @@ impl PartialEq for LaneRelayError {
     fn eq(&self, other: &Self) -> bool {
         use LaneRelayError::*;
         match (self, other) {
-            (NexusDisabled, NexusDisabled)
-            | (SettlementHashMismatch, SettlementHashMismatch)
+            (SettlementHashMismatch, SettlementHashMismatch)
             | (SettlementTotalsMismatch, SettlementTotalsMismatch)
             | (SettlementTxCountMismatch, SettlementTxCountMismatch)
             | (DuplicateSettlementSource, DuplicateSettlementSource)
@@ -1331,7 +1348,6 @@ impl LaneRelayError {
     #[must_use]
     pub fn as_label(&self) -> &'static str {
         match self {
-            LaneRelayError::NexusDisabled => "nexus_disabled",
             LaneRelayError::UnknownLane(_) => "unknown_lane",
             LaneRelayError::UnknownDataspace(_) => "unknown_dataspace",
             LaneRelayError::DataspaceMismatch { .. } => "dataspace_mismatch",
@@ -1484,6 +1500,114 @@ mod tests {
                 .clone(),
         )
     }
+    fn test_fastpq_binding(source_dsid: DataSpaceId, effect_type: &str) -> AxtFastpqBinding {
+        AxtFastpqBinding {
+            parameter: "fastpq-lane-balanced".to_owned(),
+            source_dsid: source_dsid.as_u64(),
+            source_dataspace: format!("ds-{}", source_dsid.as_u64()),
+            source_receipt_id: "relay-receipt".to_owned(),
+            source_tx_commitment: "11".repeat(32),
+            claim_type: effect_type.to_owned(),
+            claim_digest: "22".repeat(32),
+            witness_commitment: "33".repeat(32),
+            policy_commitment: "44".repeat(32),
+            verified_effect_type: effect_type.to_owned(),
+            corridor: "relay".to_owned(),
+            verifier_id: "fastpq".to_owned(),
+            verifier_version: "v1".to_owned(),
+            target_dsids: vec![source_dsid.as_u64()],
+            effect_binding: None,
+            remote_spend_intent_commitments: Vec::new(),
+        }
+    }
+    #[test]
+    fn verified_lane_relay_record_json_is_exact_and_requires_statement_digest() {
+        let envelope =
+            build_envelope(6).with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+                proof_digest: Hash::new(b"verified-relay-record-proof"),
+                verified_at_height: 6,
+            }));
+        let record = VerifiedLaneRelayRecord::new(
+            envelope,
+            Hash::new(b"verified-relay-record-payload"),
+            [0x11; 32],
+            Hash::new(b"verified-relay-record-finality"),
+            [0x22; 32],
+            [0x33; 32],
+            [0x44; 32],
+            Hash::new(b"verified-relay-record-proof-digest"),
+            6,
+            [0x42; 32],
+            test_fastpq_binding(DataSpaceId::new(2), LANE_RELAY_FASTPQ_EFFECT_TYPE),
+        );
+        let mut missing = norito::json::to_value(&record).expect("serialize verified relay record");
+        missing
+            .as_object_mut()
+            .expect("verified relay record JSON object")
+            .remove("fastpq_statement_digest");
+        assert!(
+            norito::json::from_value::<VerifiedLaneRelayRecord>(missing).is_err(),
+            "the first-release verified relay record must require its statement digest"
+        );
+
+        let mut unknown = norito::json::to_value(&record).expect("serialize verified relay record");
+        unknown
+            .as_object_mut()
+            .expect("verified relay record JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<VerifiedLaneRelayRecord>(unknown).is_err(),
+            "the first-release verified relay record must reject unknown fields"
+        );
+    }
+    #[test]
+    fn verified_fee_sponsor_allocation_json_is_exact_and_requires_statement_digest() {
+        let program_id = FeeSponsorProgramId::new(
+            checked_account_id(),
+            "retail".parse().expect("program name"),
+        );
+        let asset_definition_id = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+            .parse()
+            .expect("canonical asset definition id");
+        let record = VerifiedFeeSponsorVaultAllocation::new(
+            program_id,
+            3,
+            asset_definition_id,
+            Quantity::from(10_u32),
+            DataSpaceId::new(2),
+            40,
+            Hash::new(b"fee-sponsor-source-state"),
+            100,
+            Hash::new(b"fee-sponsor-lease"),
+            Hash::new(b"fee-sponsor-proof-payload"),
+            [0x55; 32],
+            Hash::new(b"fee-sponsor-proof-digest"),
+            41,
+            [0x66; 32],
+            test_fastpq_binding(DataSpaceId::new(2), "fee_sponsor_vault_allocation"),
+        );
+        let mut missing =
+            norito::json::to_value(&record).expect("serialize verified sponsor allocation");
+        missing
+            .as_object_mut()
+            .expect("verified sponsor allocation JSON object")
+            .remove("fastpq_statement_digest");
+        assert!(
+            norito::json::from_value::<VerifiedFeeSponsorVaultAllocation>(missing).is_err(),
+            "the first-release sponsor allocation must require its statement digest"
+        );
+
+        let mut unknown =
+            norito::json::to_value(&record).expect("serialize verified sponsor allocation");
+        unknown
+            .as_object_mut()
+            .expect("verified sponsor allocation JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<VerifiedFeeSponsorVaultAllocation>(unknown).is_err(),
+            "the first-release sponsor allocation must reject unknown fields"
+        );
+    }
     #[test]
     fn fastpq_metadata_status_distinguishes_missing_and_present_metadata() {
         let pending = build_envelope(6);
@@ -1503,6 +1627,73 @@ mod tests {
         );
         assert!(verified.has_merge_admission_material());
     }
+
+    #[test]
+    fn relay_reference_and_fastpq_metadata_json_reject_unknown_fields() {
+        let envelope = build_envelope(6);
+        let mut relay_ref =
+            norito::json::to_value(&envelope.relay_ref()).expect("serialize relay reference");
+        relay_ref
+            .as_object_mut()
+            .expect("relay reference JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<LaneRelayEnvelopeRef>(relay_ref).is_err(),
+            "the first-release relay reference must reject unknown fields"
+        );
+
+        let material = LaneFastpqProofMaterial {
+            proof_digest: Hash::new(b"strict-fastpq-proof-metadata"),
+            verified_at_height: 6,
+        };
+        let mut value = norito::json::to_value(&material).expect("serialize FastPQ proof metadata");
+        value
+            .as_object_mut()
+            .expect("FastPQ proof metadata JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<LaneFastpqProofMaterial>(value).is_err(),
+            "the first-release FastPQ proof metadata must reject unknown fields"
+        );
+    }
+
+    #[test]
+    fn relay_envelope_json_requires_explicit_nullable_slots_and_rejects_unknown_fields() {
+        let envelope = build_envelope(6);
+        for field in [
+            "finality_authority",
+            "da_commitment_hash",
+            "lane_block_descriptor_hash",
+            "manifest_root",
+            "fastpq_proof",
+        ] {
+            let mut missing =
+                norito::json::to_value(&envelope).expect("serialize lane relay envelope");
+            assert!(
+                missing
+                    .as_object_mut()
+                    .expect("lane relay envelope JSON object")
+                    .remove(field)
+                    .is_some(),
+                "fixture must contain relay field {field}"
+            );
+            assert!(
+                norito::json::from_value::<LaneRelayEnvelope>(missing).is_err(),
+                "the first-release relay envelope must require explicit field {field}"
+            );
+        }
+
+        let mut unknown = norito::json::to_value(&envelope).expect("serialize lane relay envelope");
+        unknown
+            .as_object_mut()
+            .expect("lane relay envelope JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<LaneRelayEnvelope>(unknown).is_err(),
+            "the first-release relay envelope must reject unknown fields"
+        );
+    }
+
     #[test]
     fn relay_digest_domains_are_unique_and_bind_identical_payloads() {
         let domains = [
@@ -1570,6 +1761,33 @@ mod tests {
         );
         assert_eq!(original.cmp(&original.clone()), Ordering::Equal);
     }
+
+    #[test]
+    fn lane_finality_statement_json_requires_explicit_da_commitment_slot() {
+        let statement = sample_lane_finality_statement();
+        let mut missing =
+            norito::json::to_value(&statement).expect("serialize lane finality statement");
+        missing
+            .as_object_mut()
+            .expect("lane finality statement JSON object")
+            .remove("da_commitment_hash");
+        assert!(
+            norito::json::from_value::<LaneFinalityStatement>(missing).is_err(),
+            "the first-release lane finality statement must carry an explicit nullable DA slot"
+        );
+
+        let mut unknown =
+            norito::json::to_value(&statement).expect("serialize lane finality statement");
+        unknown
+            .as_object_mut()
+            .expect("lane finality statement JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<LaneFinalityStatement>(unknown).is_err(),
+            "the first-release lane finality statement must reject unknown fields"
+        );
+    }
+
     #[test]
     fn merge_hint_root_binds_finality_artifact() {
         let envelope = with_test_authority(build_envelope(6), b"finality-artifact-a");
@@ -1732,6 +1950,32 @@ mod tests {
         envelope
             .verify()
             .expect("one transaction may produce evidence in every receipt category");
+    }
+    #[test]
+    fn settlement_tx_count_must_not_overstate_receipt_sources() {
+        let mut envelope = build_envelope(6);
+        envelope.settlement_commitment.tx_count = 2;
+        envelope.settlement_hash =
+            compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
+        assert_eq!(
+            envelope.verify(),
+            Err(LaneRelayError::SettlementTxCountMismatch),
+            "a self-consistently rehashed relay must not invent a second contributing transaction"
+        );
+
+        envelope.settlement_commitment.receipts.clear();
+        envelope.settlement_commitment.tx_count = 1;
+        envelope.settlement_commitment.total_local_amount = Quantity::zero();
+        envelope.settlement_commitment.total_xor_due = Quantity::zero();
+        envelope.settlement_commitment.total_xor_after_haircut = Quantity::zero();
+        envelope.settlement_commitment.total_xor_variance = Quantity::zero();
+        envelope.settlement_hash =
+            compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
+        assert_eq!(
+            envelope.verify(),
+            Err(LaneRelayError::SettlementTxCountMismatch),
+            "an empty settlement must commit an exact zero contributing-transaction count"
+        );
     }
     #[test]
     fn verify_accepts_native_amx_receipt_with_lane_local_height() {
@@ -1968,6 +2212,16 @@ mod tests {
         );
     }
     #[test]
+    fn fee_sponsor_vault_policy_commitment_is_pinned_and_manifest_bound() {
+        let manifest_root = [0x63; 32];
+        let commitment = fee_sponsor_vault_policy_commitment(&manifest_root);
+        assert_eq!(
+            hex::encode(commitment.as_ref()),
+            "ba7798eeac2858b268b812321a7f45acdb651b921b47eeae55ea41177f0dc85b"
+        );
+        assert_ne!(commitment, fee_sponsor_vault_policy_commitment(&[0x64; 32]));
+    }
+    #[test]
     fn fee_sponsor_vault_source_root_binds_authoritative_snapshot() {
         let program_id = FeeSponsorProgramId::new(
             checked_account_id(),
@@ -2074,5 +2328,64 @@ mod tests {
         let decoded = LaneRelayEvidenceBundle::decode(&mut &encoded[..])
             .expect("evidence bundle round-trips");
         assert_eq!(decoded, bundle);
+    }
+
+    #[test]
+    fn relay_evidence_bundle_json_requires_message_and_rejects_unknown_fields() {
+        let bundle = LaneRelayEvidenceBundle {
+            envelope: build_envelope(1),
+            error_label: "example_error".to_owned(),
+            error_message: String::new(),
+        };
+        let mut missing = norito::json::to_value(&bundle).expect("serialize relay evidence");
+        missing
+            .as_object_mut()
+            .expect("relay evidence JSON object")
+            .remove("error_message");
+        assert!(
+            norito::json::from_value::<LaneRelayEvidenceBundle>(missing).is_err(),
+            "the first-release relay evidence layout must require error_message"
+        );
+
+        let mut unknown = norito::json::to_value(&bundle).expect("serialize relay evidence");
+        unknown
+            .as_object_mut()
+            .expect("relay evidence JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<LaneRelayEvidenceBundle>(unknown).is_err(),
+            "the first-release relay evidence layout must reject unknown fields"
+        );
+    }
+
+    #[test]
+    fn emergency_validator_set_json_requires_metadata_and_rejects_unknown_fields() {
+        let key_pair = KeyPair::try_random().expect("generate emergency validator fixture key");
+        let override_set = LaneRelayEmergencyValidatorSet {
+            peers: vec![PeerId::from(key_pair.public_key().clone())],
+            expires_at_height: 10,
+            metadata: Metadata::default(),
+        };
+        let mut missing =
+            norito::json::to_value(&override_set).expect("serialize emergency validator set");
+        missing
+            .as_object_mut()
+            .expect("emergency validator JSON object")
+            .remove("metadata");
+        assert!(
+            norito::json::from_value::<LaneRelayEmergencyValidatorSet>(missing).is_err(),
+            "the first-release emergency-validator layout must require metadata"
+        );
+
+        let mut unknown =
+            norito::json::to_value(&override_set).expect("serialize emergency validator set");
+        unknown
+            .as_object_mut()
+            .expect("emergency validator JSON object")
+            .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<LaneRelayEmergencyValidatorSet>(unknown).is_err(),
+            "the first-release emergency-validator layout must reject unknown fields"
+        );
     }
 }

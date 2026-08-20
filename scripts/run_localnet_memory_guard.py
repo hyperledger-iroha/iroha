@@ -231,8 +231,6 @@ def build_deploy_cmd(args: argparse.Namespace) -> list[str]:
         str(args.peers),
         "--seed",
         args.seed,
-        "--build-line",
-        "iroha3",
         "--perf-profile",
         args.perf_profile,
         "--queue-capacity",

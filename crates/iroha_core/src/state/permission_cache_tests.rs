@@ -173,47 +173,15 @@ fn role_granted_trigger_permissions_cache_and_invalidate() {
         "revoking role should invalidate cache and revoke execution permission"
     );
 }
-fn previous_roster_evidence_for_parent(
-    parent: &SignedBlock,
-    roster: &[PeerId],
-) -> iroha_data_model::consensus::PreviousRosterEvidence {
-    let zero_state_root = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
-    let mut signers_bitmap = vec![0_u8; roster.len().div_ceil(8)];
-    if let Some(first_byte) = signers_bitmap.first_mut() {
-        *first_byte = 1;
-    }
-    iroha_data_model::consensus::PreviousRosterEvidence {
-        height: parent.header().height().get(),
-        block_hash: parent.hash(),
-        validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint::new(
-            parent.header().height().get(),
-            parent.header().view_change_index(),
-            parent.hash(),
-            zero_state_root,
-            zero_state_root,
-            roster.to_vec(),
-            signers_bitmap,
-            Vec::new(),
-            iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        ),
-        stake_snapshot: None,
-    }
-}
 fn build_test_block(
     accepted: AcceptedTransaction<'static>,
     parent: Option<&SignedBlock>,
-    topology: &crate::sumeragi::network_topology::Topology,
     signer: &iroha_crypto::PrivateKey,
 ) -> crate::block::NewBlock {
-    let mut builder = crate::block::BlockBuilder::new(vec![accepted]).chain(0, parent);
-    if let Some(parent) = parent.filter(|block| block.header().height().get() >= 2) {
-        builder = builder.with_previous_roster_evidence(Some(previous_roster_evidence_for_parent(
-            parent,
-            topology.as_ref(),
-        )));
-    }
-    builder.sign(signer).unpack(|_| {})
+    crate::block::BlockBuilder::new(vec![accepted])
+        .chain(0, parent)
+        .sign(signer)
+        .unpack(|_| {})
 }
 fn install_permission_cache_replay_parameters(state: &State) {
     let mut parameters = state.world.parameters.block();
@@ -314,10 +282,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
             iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-        block_sync_roster_retention:
-            iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention:
-            iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let lane_config = LaneConfig::default();
@@ -384,18 +349,20 @@ fn permission_cache_rebuilds_after_restart_impl() {
         .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
         .expect("genesis");
     {
-        let mut state_block = state.block(genesis_block.0.header());
         let time_source = TimeSource::new_system();
-        let valid_genesis = crate::block::ValidBlock::validate_with_events(
-            genesis_block.0.clone(),
-            &topology,
-            &genesis_id,
-            &time_source,
-            &mut state_block,
-            |_| {},
-        )
-        .unpack(|_| {})
-        .expect("valid genesis");
+        let mut voting_block = None;
+        let (valid_genesis, mut state_block) =
+            crate::block::ValidBlock::validate_signed_genesis_keep_voting_block(
+                genesis_block.0.clone(),
+                &topology,
+                &genesis_id,
+                &time_source,
+                &state,
+                &mut voting_block,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            )
+            .unpack(|_| {})
+            .expect("valid genesis");
         let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
         let _ =
             state_block.apply_without_execution(&committed_genesis, topology.as_ref().to_owned());
@@ -473,12 +440,8 @@ fn permission_cache_rebuilds_after_restart_impl() {
     .sign(owner_keypair.private_key());
     let accepted_grant = AcceptedTransaction::new_unchecked(Cow::Owned(grant_tx));
     let latest_block = state.view().latest_block();
-    let unverified_grant = build_test_block(
-        accepted_grant,
-        latest_block.as_deref(),
-        &topology,
-        &leader_private_key,
-    );
+    let unverified_grant =
+        build_test_block(accepted_grant, latest_block.as_deref(), &leader_private_key);
     {
         let mut state_block = state.block(unverified_grant.header());
         let committed_grant = unverified_grant
@@ -628,7 +591,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
     let unverified_revoke = build_test_block(
         accepted_revoke,
         latest_block.as_deref(),
-        &topology,
         &leader_private_key,
     );
     {
@@ -743,12 +705,8 @@ fn permission_cache_rebuilds_after_restart_impl() {
     .sign(owner_keypair.private_key());
     let accepted_role = AcceptedTransaction::new_unchecked(Cow::Owned(register_role_tx));
     let latest_block = state.view().latest_block();
-    let unverified_role = build_test_block(
-        accepted_role,
-        latest_block.as_deref(),
-        &topology,
-        &leader_private_key,
-    );
+    let unverified_role =
+        build_test_block(accepted_role, latest_block.as_deref(), &leader_private_key);
     {
         let mut state_block = state.block(unverified_role.header());
         let committed_role = unverified_role
@@ -849,7 +807,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
     let unverified_revoke_role = build_test_block(
         accepted_revoke_role,
         latest_block.as_deref(),
-        &topology,
         &leader_private_key,
     );
     {

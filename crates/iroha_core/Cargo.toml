@@ -281,11 +281,13 @@ harness = false
 name = "apply_blocks"
 harness = false
 path = "benches/blocks/apply_blocks_benchmark.rs"
+required-features = ["iroha-core-tests"]
 
 [[bench]]
 name = "validate_blocks"
 harness = false
 path = "benches/blocks/validate_blocks_benchmark.rs"
+required-features = ["iroha-core-tests"]
 
 [[bench]]
 name = "zk_poseidon"
@@ -318,11 +320,17 @@ harness = false
 name = "apply_blocks"
 harness = false
 path = "benches/blocks/apply_blocks_oneshot.rs"
+required-features = ["iroha-core-tests"]
 
 [[example]]
 name = "validate_blocks"
 harness = false
 path = "benches/blocks/validate_blocks_oneshot.rs"
+required-features = ["iroha-core-tests"]
+
+[[example]]
+name = "generate_parity_fixtures"
+required-features = ["iroha-core-tests"]
 
 [package.metadata.cargo-all-features]
 denylist = [
@@ -332,17 +340,8 @@ denylist = [
 skip_optional_dependencies = true
 
 [[test]]
-name = "kaigi_privacy"
-path = "tests/kaigi_privacy.rs"
-required-features = ["zk-tests"]
-
-[[test]]
 name = "swift_confidential_unshield_redeem"
 path = "tests/swift_confidential_unshield_redeem.rs"
-
-[[test]]
-name = "kagemusha_artifact_v4_streaming"
-path = "tests/kagemusha_artifact_v4_streaming.rs"
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 

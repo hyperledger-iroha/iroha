@@ -10,7 +10,7 @@ use crate::{
         Executable, SignedTransaction, TransactionEntrypoint, TransactionSubmissionReceipt,
     },
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
+use iroha_crypto::{Algorithm, HashOf, PublicKey};
 use iroha_version::codec::DecodeVersioned as _;
 use sorafs_manifest::{
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderCancelV1, OrderRequestV1,
@@ -50,8 +50,6 @@ impl SorafsOrderbookSubmissionRouteV1 {
 /// Identities Torii places in the signed receipt and response headers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SorafsOrderbookSubmissionIdentityV1 {
-    /// Transaction identity exposed by the submission endpoint.
-    pub tx_hash: HashOf<SignedTransaction>,
     /// Hash of the canonical transaction entrypoint.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
     /// Hash of the complete signed transaction.
@@ -61,14 +59,13 @@ fn parse_exact<T: FromStr + ToString>(literal: &str) -> Option<T> {
     let parsed = literal.parse::<T>().ok()?;
     (parsed.to_string() == literal).then_some(parsed)
 }
-/// Parse the three exact checksummed identity literals accepted from SDK boundaries.
+/// Parse the two exact checksummed identity literals accepted from SDK boundaries.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_submission_identity_v1(
-    tx_hash: &str,
     entrypoint_hash: &str,
     signed_transaction_hash: &str,
 ) -> Option<SorafsOrderbookSubmissionIdentityV1> {
-    Some(SorafsOrderbookSubmissionIdentityV1 { tx_hash: parse_exact(tx_hash)?, entrypoint_hash: parse_exact(entrypoint_hash)?, signed_transaction_hash: parse_exact(signed_transaction_hash)? })
+    Some(SorafsOrderbookSubmissionIdentityV1 { entrypoint_hash: parse_exact(entrypoint_hash)?, signed_transaction_hash: parse_exact(signed_transaction_hash)? })
 }
 /// Parse one exact checksummed receipt signer literal accepted from SDK boundaries.
 pub fn parse_sorafs_orderbook_receipt_signer_v1(literal: &str) -> Option<PublicKey> {
@@ -239,26 +236,10 @@ pub enum SorafsOrderbookSubmissionValidationError {
     #[error("transaction submission receipt signature is invalid")] InvalidReceiptSignature,
     /// The receipt signer differs from the expected trust anchor.
     #[error("transaction submission receipt signer does not match the expected signer")] ReceiptSignerMismatch,
-    /// The receipt's transaction hash differs from the submitted transaction.
-    #[error("transaction submission receipt tx_hash does not match the submitted transaction")] ReceiptTransactionHashMismatch,
     /// The receipt's entrypoint hash differs from the submitted transaction.
     #[error("transaction submission receipt entrypoint_hash does not match the submitted transaction")] ReceiptEntrypointHashMismatch,
     /// The receipt's signed-transaction hash differs from the submitted transaction.
     #[error("transaction submission receipt signed_transaction_hash does not match the submitted transaction")] ReceiptSignedTransactionHashMismatch,
-}
-/// Decode and validate one exact caller-signed orderbook transaction before HTTP.
-///
-/// # Errors
-///
-/// Returns [`SorafsOrderbookSubmissionValidationError`] if the transaction bytes or the decoded
-/// transaction violate a V1 size, encoding, canonicality, network, signature, route, payload, or
-/// authority constraint.
-#[deprecated(note = "use inspect_sorafs_orderbook_submission_for_discriminant_v1")]
-#[rustfmt::skip]
-pub fn inspect_sorafs_orderbook_submission_v1(
-    bytes: &[u8], route: SorafsOrderbookSubmissionRouteV1, expected_network: &NetworkId,
-) -> Result<SorafsOrderbookSubmissionIdentityV1, SorafsOrderbookSubmissionValidationError> {
-    Ok(inspect_sorafs_orderbook_submission_for_discriminant_v1(bytes, route, expected_network, crate::account::address::chain_discriminant())?.identity)
 }
 /// Decode and validate using the deployment's explicit I105 discriminant.
 ///
@@ -384,11 +365,9 @@ pub fn validate_sorafs_orderbook_submission_transaction_v1(
         }
     };
     let entrypoint_hash = transaction.hash_as_entrypoint();
-    let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash));
     let signed_transaction_hash = transaction.hash();
     Ok(ValidatedSorafsOrderbookSubmissionV1 {
         identity: SorafsOrderbookSubmissionIdentityV1 {
-            tx_hash,
             entrypoint_hash,
             signed_transaction_hash,
         },
@@ -461,9 +440,6 @@ pub fn decode_and_verify_sorafs_orderbook_submission_receipt_v1(
         .map_err(|_| SorafsOrderbookSubmissionValidationError::InvalidReceiptSignature)?;
     if &receipt.payload.signer != expected_receipt_signer {
         return Err(SorafsOrderbookSubmissionValidationError::ReceiptSignerMismatch);
-    }
-    if receipt.payload.tx_hash != expected_identity.tx_hash {
-        return Err(SorafsOrderbookSubmissionValidationError::ReceiptTransactionHashMismatch);
     }
     if receipt.payload.entrypoint_hash != expected_identity.entrypoint_hash {
         return Err(SorafsOrderbookSubmissionValidationError::ReceiptEntrypointHashMismatch);

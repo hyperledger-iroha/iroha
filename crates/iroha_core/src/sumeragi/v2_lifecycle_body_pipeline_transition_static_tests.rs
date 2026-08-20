@@ -375,6 +375,9 @@ mod static_tests {
         combined_recovered_sign_staging_is_two_child_affine_and_inert
     );
     crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
-        transition_surface_is_ordered_borrow_bound_and_inert
+        transition_surface_is_ordered_borrow_bound_and_published
+    );
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+        ordinary_certified_body_pipeline_reserves_executes_and_publishes_ready_validate
     );
 }

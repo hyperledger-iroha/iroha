@@ -1,20 +1,7 @@
 #[test]
 fn duplicate_cross_replica_submission_reuses_one_transaction() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 1,
-    }));
-    let first = ModerationOrchestratorV1::open(
-        config(&temp, "first.norito"),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("first orchestrator");
-    let second = ModerationOrchestratorV1::open(
-        config(&temp, "second.norito"),
-        deps(reader, Arc::clone(&submitter)),
-    )
-    .expect("second orchestrator");
+    orchestrator_fixture!(first; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); => config(&temp, "first.norito"); deps(Arc::clone(&reader), Arc::clone(&submitter)); "first orchestrator");
+    open_test_orchestrator!(second = config(&temp, "second.norito"); deps(reader, Arc::clone(&submitter)); "second orchestrator");
     let authority = account(1);
     let action = policy_action(policy(1));
     let first_outcome = first
@@ -87,20 +74,7 @@ fn historical_operation_replay_precedes_rotated_finalized_authority() {
     let temp = tempfile::tempdir().expect("tempdir");
     let original_governance = account(90);
     let rotated_governance = account(91);
-    let reader = Arc::new(MockSnapshotReader::new(snapshot_with_policy(
-        1,
-        [1; 32],
-        policy(1),
-        original_governance.clone(),
-    )));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 1,
-    }));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "authority-replay.norito"),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
+    orchestrator_fixture!(orchestrator; reader = Arc::new(MockSnapshotReader::new(snapshot_with_policy(1, [1; 32], policy(1), original_governance.clone()))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); => config(&temp, "authority-replay.norito"); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
     let action =
         ModerationNativeActionV1::FinalizeSortition(FinalizeSorafsModerationSortition::new(
             "case-authority-replay".to_owned(),
@@ -127,14 +101,7 @@ fn historical_operation_replay_precedes_rotated_finalized_authority() {
 }
 #[test]
 fn same_semantic_identity_with_different_action_is_rejected() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 1,
-    }));
-    let orchestrator =
-        ModerationOrchestratorV1::open(config(&temp, "checkpoint.norito"), deps(reader, submitter))
-            .expect("orchestrator");
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); => config(&temp, "checkpoint.norito"); deps(reader, submitter); "orchestrator");
     let authority = account(1);
     orchestrator
         .submit(authority.clone(), policy_action(policy(1)), [0x11; 32])
@@ -151,16 +118,7 @@ fn same_semantic_identity_with_different_action_is_rejected() {
 }
 #[test]
 fn stale_and_equivocating_finalized_cursors_fail_closed() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(2, [2; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 2,
-    }));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "checkpoint.norito"),
-        deps(Arc::clone(&reader), submitter),
-    )
-    .expect("orchestrator");
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(2, [2; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 2 })); => config(&temp, "checkpoint.norito"); deps(Arc::clone(&reader), submitter); "orchestrator");
     orchestrator.reconcile().expect("initial reconcile");
     reader.replace(empty_snapshot(1, [1; 32]));
     assert!(matches!(
@@ -184,31 +142,7 @@ fn every_external_collaborator_is_reentrant_without_holding_the_state_mutex() {
     let publication = Arc::new(MockHandoffSink::default());
     let probe = Arc::new(ReentrantLockProbe::default());
     let orchestrator = Arc::new(
-        ModerationOrchestratorV1::open(
-            config(&temp, "reentrant-collaborators.norito"),
-            ModerationOrchestratorDepsV1 {
-                checkpoint_store: Arc::new(MockCheckpointStore::default()),
-                submitter: Arc::new(ProbedSubmitter {
-                    inner: Arc::clone(&submitter),
-                    probe: Arc::clone(&probe),
-                }),
-                snapshot_reader: Arc::new(ProbedSnapshotReader {
-                    inner: Arc::clone(&reader),
-                    probe: Arc::clone(&probe),
-                }),
-                settlement_sink: Arc::new(ProbedHandoffSink {
-                    inner: Arc::clone(&settlement),
-                    probe: Arc::clone(&probe),
-                }),
-                publication_sink: Arc::new(ProbedHandoffSink {
-                    inner: Arc::clone(&publication),
-                    probe: Arc::clone(&probe),
-                }),
-                panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
-                panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
-            },
-        )
-        .expect("orchestrator"),
+        open_test_orchestrator!(config(&temp, "reentrant-collaborators.norito"); test_runtime_deps!(Arc::new(MockCheckpointStore::default()); Arc::new(ProbedSubmitter { inner: Arc::clone(&submitter), probe: Arc::clone(&probe) }); Arc::new(ProbedSnapshotReader { inner: Arc::clone(&reader), probe: Arc::clone(&probe) }); Arc::new(ProbedHandoffSink { inner: Arc::clone(&settlement), probe: Arc::clone(&probe) }); Arc::new(ProbedHandoffSink { inner: Arc::clone(&publication), probe: Arc::clone(&probe) }); Arc::new(MockPanelNotificationSink::default()); Arc::new(MockPanelNotificationArchive::default())); "orchestrator"),
     );
     probe.attach(&orchestrator);
     orchestrator
@@ -235,26 +169,9 @@ fn blocking_signer_claim_allows_concurrent_duplicate_worker_to_exit() {
     let (entered_tx, entered_rx) = mpsc::channel();
     let blocking = Arc::new(BlockingSignSubmitter::new(Arc::clone(&inner), entered_tx));
     let orchestrator = Arc::new(
-        ModerationOrchestratorV1::open(
-            config(&temp, "blocking-duplicate-workers.norito"),
-            ModerationOrchestratorDepsV1 {
-                checkpoint_store: Arc::new(MockCheckpointStore::default()),
-                submitter: blocking.clone(),
-                snapshot_reader: reader,
-                settlement_sink: Arc::new(MockHandoffSink::default()),
-                publication_sink: Arc::new(MockHandoffSink::default()),
-                panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
-                panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
-            },
-        )
-        .expect("orchestrator"),
+        open_test_orchestrator!(config(&temp, "blocking-duplicate-workers.norito"); test_runtime_deps!(Arc::new(MockCheckpointStore::default()); blocking.clone(); reader; Arc::new(MockHandoffSink::default()); Arc::new(MockHandoffSink::default()); Arc::new(MockPanelNotificationSink::default()); Arc::new(MockPanelNotificationArchive::default())); "orchestrator"),
     );
-    seed_ready_operation_without_delivery(
-        &orchestrator,
-        account(1),
-        policy_action(policy(1)),
-        [0x46; 32],
-    );
+    seed_default_operation!(orchestrator; [0x46; 32]);
     let first = {
         let orchestrator = Arc::clone(&orchestrator);
         thread::spawn(move || orchestrator.drive_external_work())
@@ -415,16 +332,7 @@ fn generic_signed_envelope_contract_rejects_network_ttl_nonce_metadata_and_actio
 }
 #[test]
 fn expired_finalized_not_found_renews_one_generation_and_preserves_history() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 1,
-    }));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "renew-expired.norito"),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); => config(&temp, "renew-expired.norito"); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
     orchestrator
         .submit(account(1), policy_action(policy(1)), [0x81; 32])
         .expect("initial submission");
@@ -457,10 +365,7 @@ fn expired_finalized_not_found_renews_one_generation_and_preserves_history() {
     );
     assert_eq!(submitter.sign_calls(), 2);
     assert_eq!(submitter.calls(), 2);
-    let state = orchestrator.state.lock().expect("orchestrator state");
-    let [entry] = state.outbox.as_slice() else {
-        panic!("one renewed outbox entry");
-    };
+    single_outbox_entry!(state, entry = orchestrator; "orchestrator state"; "one renewed outbox entry");
     let [retired] = entry.retired_envelopes.as_slice() else {
         panic!("one retired envelope");
     };
@@ -510,14 +415,7 @@ fn expired_envelope_does_not_renew_for_positive_unknown_rejected_or_stale_absenc
         ),
     ];
     for (index, (label, lookup)) in scenarios.into_iter().enumerate() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-        let orchestrator = ModerationOrchestratorV1::open(
-            config(&temp, &format!("no-renew-{label}.norito")),
-            deps(Arc::clone(&reader), Arc::clone(&submitter)),
-        )
-        .expect("orchestrator");
+        orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)); => config(&temp, &format!("no-renew-{label}.norito")); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
         orchestrator
             .submit(
                 account(1),
@@ -578,11 +476,7 @@ fn ambiguous_submission_never_renews_without_exact_finalized_absence() {
     let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
     let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
     submitter.set_failure(Some(ModerationSubmissionFailureV1::Ambiguous));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "ambiguous-no-renew.norito"),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
+    open_test_orchestrator!(orchestrator = config(&temp, "ambiguous-no-renew.norito"); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
     orchestrator
         .submit(account(1), policy_action(policy(1)), [0x82; 32])
         .expect("ambiguous submission retained");
@@ -606,15 +500,7 @@ fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality()
     let temp = tempfile::tempdir().expect("tempdir");
     let authority = account(1);
     let active_policy = policy(1);
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 1,
-    }));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "late-old-envelope.norito"),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
+    orchestrator_fixture!(orchestrator; reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); => config(&temp, "late-old-envelope.norito"); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
     orchestrator
         .submit(authority.clone(), policy_action(active_policy), [0x83; 32])
         .expect("initial submission");
@@ -657,10 +543,7 @@ fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality()
         .reconcile()
         .expect("late old pending result fences replacement");
     {
-        let state = orchestrator.state.lock().expect("orchestrator state");
-        let [entry] = state.outbox.as_slice() else {
-            panic!("fenced renewed entry");
-        };
+        single_outbox_entry!(state, entry = orchestrator; "orchestrator state"; "fenced renewed entry");
         assert_eq!(entry.envelope_generation, 2);
         assert_eq!(
             entry.retired_envelopes[0].disposition,
@@ -737,17 +620,7 @@ fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality()
 }
 #[test]
 fn restart_recovers_retired_generation_after_signer_outage() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 1,
-    }));
-    let checkpoint = config(&temp, "retired-before-resign.norito");
-    let orchestrator = ModerationOrchestratorV1::open(
-        checkpoint.clone(),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); checkpoint = config(&temp, "retired-before-resign.norito"); => checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
     orchestrator
         .submit(account(1), policy_action(policy(1)), [0x84; 32])
         .expect("initial submission");
@@ -769,10 +642,7 @@ fn restart_recovers_retired_generation_after_signer_outage() {
         .reconcile()
         .expect("persist retired generation despite signer outage");
     {
-        let state = orchestrator.state.lock().expect("orchestrator state");
-        let [entry] = state.outbox.as_slice() else {
-            panic!("one retired ready entry");
-        };
+        single_outbox_entry!(state, entry = orchestrator; "orchestrator state"; "one retired ready entry");
         assert_eq!(entry.envelope_generation, 2);
         assert_eq!(entry.state, StoredOutboxStateV1::Ready);
         assert_eq!(entry.retired_envelopes.len(), 1);
@@ -780,9 +650,7 @@ fn restart_recovers_retired_generation_after_signer_outage() {
     }
     drop(orchestrator);
     submitter.set_sign_failure(None);
-    let restarted =
-        ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
-            .expect("restart from retired ready generation");
+    open_test_orchestrator!(restarted = checkpoint; deps(reader, Arc::clone(&submitter)); "restart from retired ready generation");
     restarted
         .reconcile()
         .expect("sign and submit the next generation after restart");
@@ -794,17 +662,7 @@ fn restart_recovers_retired_generation_after_signer_outage() {
 }
 #[test]
 fn renewed_envelope_restart_replays_byte_identical_bytes_without_resigning() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 1,
-    }));
-    let checkpoint = config(&temp, "renewed-byte-identical.norito");
-    let orchestrator = ModerationOrchestratorV1::open(
-        checkpoint.clone(),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); checkpoint = config(&temp, "renewed-byte-identical.norito"); => checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
     orchestrator
         .submit(account(1), policy_action(policy(1)), [0x85; 32])
         .expect("initial submission");
@@ -831,9 +689,7 @@ fn renewed_envelope_restart_replays_byte_identical_bytes_without_resigning() {
     assert_eq!(submitter.sign_calls(), 2);
     drop(orchestrator);
     submitter.set_failure(None);
-    let restarted =
-        ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
-            .expect("restart with renewed retained bytes");
+    open_test_orchestrator!(restarted = checkpoint; deps(reader, Arc::clone(&submitter)); "restart with renewed retained bytes");
     restarted
         .reconcile()
         .expect("replay exact renewed envelope");
@@ -845,17 +701,7 @@ fn renewed_envelope_restart_replays_byte_identical_bytes_without_resigning() {
 }
 #[test]
 fn tampered_retired_envelope_history_fails_closed_on_restart() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 1,
-    }));
-    let checkpoint = config(&temp, "tampered-retired-history.norito");
-    let orchestrator = ModerationOrchestratorV1::open(
-        checkpoint.clone(),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); checkpoint = config(&temp, "tampered-retired-history.norito"); => checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
     orchestrator
         .submit(account(1), policy_action(policy(1)), [0x86; 32])
         .expect("initial submission");
@@ -896,7 +742,7 @@ fn tampered_retired_envelope_history_fails_closed_on_restart() {
         assert!(matches!(
             ModerationOrchestratorV1::open(
                 checkpoint.clone(),
-                deps(Arc::clone(&reader), Arc::clone(&submitter)),
+                deps(Arc::clone(&reader), Arc::clone(&submitter))
             ),
             Err(ModerationOrchestratorError::CheckpointCorrupt(_))
         ));
@@ -910,131 +756,62 @@ fn envelope_generation_increment_fails_closed_on_overflow() {
         Err(ModerationOrchestratorError::GenerationOverflow)
     );
 }
-#[test]
-fn restart_reconciles_crash_before_ingress_without_replacing_signed_bytes() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 2,
-    }));
-    let checkpoint = config(&temp, "crash-before-ingress.norito");
-    let orchestrator = ModerationOrchestratorV1::open(
-        checkpoint.clone(),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
-    let operation_id = seed_ready_operation_without_delivery(
-        &orchestrator,
-        account(1),
-        policy_action(policy(1)),
-        [0x47; 32],
-    );
-    execute_one_prepared_sign(&orchestrator, operation_id);
-    let interrupted = prepare_one_submit(&orchestrator, operation_id);
-    let retained = match &interrupted {
-        PreparedExternalWorkV1::Submit { signed, .. } => signed.clone(),
-        _ => unreachable!("submit claim"),
-    };
-    drop(interrupted);
-    drop(orchestrator);
-    let mut after_lease = empty_snapshot(2, [2; 32]);
-    after_lease.finalized_at_unix_ms = MODERATION_EXTERNAL_WORK_LEASE_MS_V1 + 2;
-    reader.replace(after_lease);
-    let restarted =
-        ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
-            .expect("restart");
-    restarted
-        .reconcile()
-        .expect("lookup proves no ingress before exact retry");
-    let state = restarted.state.lock().expect("restarted state");
-    let entry = state
-        .outbox
-        .iter()
-        .find(|entry| entry.operation_id == operation_id)
-        .expect("submitted entry");
-    assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
-    assert_eq!(
-        moderation_signed_transaction(entry).expect("retained exact envelope"),
-        retained
-    );
-    assert_eq!(submitter.sign_calls(), 1);
-    assert_eq!(submitter.calls(), 1);
-}
-#[test]
-fn restart_reconciles_crash_after_ingress_effect_without_duplicate_submit() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 2,
-    }));
-    let checkpoint = config(&temp, "crash-after-ingress.norito");
-    let orchestrator = ModerationOrchestratorV1::open(
-        checkpoint.clone(),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
-    let operation_id = seed_ready_operation_without_delivery(
-        &orchestrator,
-        account(1),
-        policy_action(policy(1)),
-        [0x48; 32],
-    );
-    execute_one_prepared_sign(&orchestrator, operation_id);
-    let interrupted = prepare_one_submit(&orchestrator, operation_id);
-    let retained = match &interrupted {
-        PreparedExternalWorkV1::Submit {
-            request, signed, ..
-        } => {
-            submitter
-                .submit_signed(request, signed)
-                .expect("ingress effect before crash");
-            signed.clone()
+macro_rules! ingress_crash_recovery_tests {
+    ($( $name:ident: $checkpoint_name:literal, $nonce:expr, $effect:ident, $reconcile:literal; )+) => {$(
+        #[test]
+        fn $name() {
+            orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 2 })); checkpoint = config(&temp, $checkpoint_name); => checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
+            let operation_id = seed_default_operation!(orchestrator; $nonce);
+            execute_one_prepared_sign(&orchestrator, operation_id);
+            let interrupted = prepare_one_submit(&orchestrator, operation_id);
+            let retained = ingress_crash_recovery_tests!(@retained $effect, interrupted, submitter);
+            drop(interrupted);
+            drop(orchestrator);
+            let mut after_lease = empty_snapshot(2, [2; 32]);
+            after_lease.finalized_at_unix_ms = MODERATION_EXTERNAL_WORK_LEASE_MS_V1 + 2;
+            reader.replace(after_lease);
+            open_test_orchestrator!(restarted = checkpoint; deps(reader, Arc::clone(&submitter)); "restart");
+            restarted.reconcile().expect($reconcile);
+            find_outbox_entry!(state, entry = restarted, operation_id; "restarted state"; "submitted entry");
+            assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
+            assert_eq!(
+                moderation_signed_transaction(entry).expect("retained exact envelope"),
+                retained
+            );
+            assert_eq!(submitter.sign_calls(), 1);
+            assert_eq!(submitter.calls(), 1);
         }
-        _ => unreachable!("submit claim"),
+    )+};
+    (@retained before, $interrupted:ident, $submitter:ident) => {
+        match &$interrupted {
+            PreparedExternalWorkV1::Submit { signed, .. } => signed.clone(),
+            _ => unreachable!("submit claim"),
+        }
     };
-    drop(interrupted);
-    drop(orchestrator);
-    let mut after_lease = empty_snapshot(2, [2; 32]);
-    after_lease.finalized_at_unix_ms = MODERATION_EXTERNAL_WORK_LEASE_MS_V1 + 2;
-    reader.replace(after_lease);
-    let restarted =
-        ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
-            .expect("restart");
-    restarted
-        .reconcile()
-        .expect("lookup finds the pre-crash ingress effect");
-    let state = restarted.state.lock().expect("restarted state");
-    let entry = state
-        .outbox
-        .iter()
-        .find(|entry| entry.operation_id == operation_id)
-        .expect("submitted entry");
-    assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
-    assert_eq!(
-        moderation_signed_transaction(entry).expect("retained exact envelope"),
-        retained
-    );
-    assert_eq!(submitter.sign_calls(), 1);
-    assert_eq!(submitter.calls(), 1);
+    (@retained after, $interrupted:ident, $submitter:ident) => {
+        match &$interrupted {
+            PreparedExternalWorkV1::Submit { request, signed, .. } => {
+                $submitter
+                    .submit_signed(request, signed)
+                    .expect("ingress effect before crash");
+                signed.clone()
+            }
+            _ => unreachable!("submit claim"),
+        }
+    };
+}
+ingress_crash_recovery_tests! {
+    restart_reconciles_crash_before_ingress_without_replacing_signed_bytes:
+        "crash-before-ingress.norito", [0x47; 32], before,
+        "lookup proves no ingress before exact retry";
+    restart_reconciles_crash_after_ingress_effect_without_duplicate_submit:
+        "crash-after-ingress.norito", [0x48; 32], after,
+        "lookup finds the pre-crash ingress effect";
 }
 #[test]
 fn expired_work_lease_rejects_stale_signer_completion() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 1,
-    }));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "stale-signer-lease.norito"),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
-    let operation_id = seed_ready_operation_without_delivery(
-        &orchestrator,
-        account(1),
-        policy_action(policy(1)),
-        [0x49; 32],
-    );
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); => config(&temp, "stale-signer-lease.norito"); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
+    let operation_id = seed_default_operation!(orchestrator; [0x49; 32]);
     let stale = {
         let mut state = orchestrator.state.lock().expect("orchestrator state");
         orchestrator
@@ -1065,34 +842,15 @@ fn expired_work_lease_rejects_stale_signer_completion() {
     assert_eq!(before_stale_completion, after_stale_completion);
     assert_eq!(submitter.sign_calls(), 2);
     assert_eq!(submitter.calls(), 1);
-    let state = orchestrator.state.lock().expect("orchestrator state");
-    let entry = state
-        .outbox
-        .iter()
-        .find(|entry| entry.operation_id == operation_id)
-        .expect("submitted entry");
+    find_outbox_entry!(state, entry = orchestrator, operation_id; "orchestrator state"; "submitted entry");
     assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
     assert!(entry.work_generation >= 3);
     assert!(entry.work_claim.is_none());
 }
 #[test]
 fn expired_ingress_lease_fences_stale_receipt_and_duplicate_effect() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 2,
-    }));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "stale-ingress-lease.norito"),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
-    let operation_id = seed_ready_operation_without_delivery(
-        &orchestrator,
-        account(1),
-        policy_action(policy(1)),
-        [0x4B; 32],
-    );
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 2 })); => config(&temp, "stale-ingress-lease.norito"); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
+    let operation_id = seed_default_operation!(orchestrator; [0x4B; 32]);
     execute_one_prepared_sign(&orchestrator, operation_id);
     let stale = prepare_one_submit(&orchestrator, operation_id);
     assert!(matches!(
@@ -1118,33 +876,15 @@ fn expired_ingress_lease_fences_stale_receipt_and_duplicate_effect() {
     assert_eq!(before_stale_completion, after_stale_completion);
     assert_eq!(submitter.sign_calls(), 1);
     assert_eq!(submitter.calls(), 1);
-    let state = orchestrator.state.lock().expect("orchestrator state");
-    let entry = state
-        .outbox
-        .iter()
-        .find(|entry| entry.operation_id == operation_id)
-        .expect("submitted entry");
+    find_outbox_entry!(state, entry = orchestrator, operation_id; "orchestrator state"; "submitted entry");
     assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
     assert_eq!(entry.attempts, 2);
     assert!(entry.work_claim.is_none());
 }
 #[test]
 fn tampered_external_work_claim_fails_closed_on_restart() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-    let checkpoint = config(&temp, "tampered-external-claim.norito");
-    let orchestrator = ModerationOrchestratorV1::open(
-        checkpoint.clone(),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
-    let operation_id = seed_ready_operation_without_delivery(
-        &orchestrator,
-        account(1),
-        policy_action(policy(1)),
-        [0x4A; 32],
-    );
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)); checkpoint = config(&temp, "tampered-external-claim.norito"); => checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
+    let operation_id = seed_default_operation!(orchestrator; [0x4A; 32]);
     let claimed = {
         let mut state = orchestrator.state.lock().expect("orchestrator state");
         orchestrator
@@ -1179,31 +919,11 @@ fn tampered_external_work_claim_fails_closed_on_restart() {
 }
 #[test]
 fn restart_submits_the_exact_envelope_persisted_before_ingress() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 1,
-    }));
-    let checkpoint = config(&temp, "signed-before-ingress.norito");
-    let orchestrator = ModerationOrchestratorV1::open(
-        checkpoint.clone(),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
-    let operation_id = seed_ready_operation_without_delivery(
-        &orchestrator,
-        account(1),
-        policy_action(policy(1)),
-        [0x51; 32],
-    );
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); checkpoint = config(&temp, "signed-before-ingress.norito"); => checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
+    let operation_id = seed_default_operation!(orchestrator; [0x51; 32]);
     execute_one_prepared_sign(&orchestrator, operation_id);
     let (retained_id, retained_digest, retained_bytes) = {
-        let state = orchestrator.state.lock().expect("orchestrator state");
-        let entry = state
-            .outbox
-            .iter()
-            .find(|entry| entry.operation_id == operation_id)
-            .expect("signed entry");
+        find_outbox_entry!(state, entry = orchestrator, operation_id; "orchestrator state"; "signed entry");
         assert_eq!(entry.state, StoredOutboxStateV1::Signed);
         (
             entry.transaction_id.expect("transaction id"),
@@ -1217,18 +937,11 @@ fn restart_submits_the_exact_envelope_persisted_before_ingress() {
     assert_eq!(submitter.sign_calls(), 1);
     assert_eq!(submitter.calls(), 0);
     drop(orchestrator);
-    let restarted =
-        ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
-            .expect("restart from signed checkpoint");
+    open_test_orchestrator!(restarted = checkpoint; deps(reader, Arc::clone(&submitter)); "restart from signed checkpoint");
     restarted
         .reconcile()
         .expect("submit retained envelope after restart");
-    let state = restarted.state.lock().expect("restarted state");
-    let entry = state
-        .outbox
-        .iter()
-        .find(|entry| entry.operation_id == operation_id)
-        .expect("submitted entry");
+    find_outbox_entry!(state, entry = restarted, operation_id; "restarted state"; "submitted entry");
     assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
     assert_eq!(entry.transaction_id, Some(retained_id));
     assert_eq!(entry.signed_transaction_digest, Some(retained_digest));
@@ -1241,21 +954,8 @@ fn restart_submits_the_exact_envelope_persisted_before_ingress() {
 }
 #[test]
 fn restart_preserves_unexpired_signing_claim_without_overlap() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-    let checkpoint = config(&temp, "interrupted-signing.norito");
-    let orchestrator = ModerationOrchestratorV1::open(
-        checkpoint.clone(),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
-    let operation_id = seed_ready_operation_without_delivery(
-        &orchestrator,
-        account(1),
-        policy_action(policy(1)),
-        [0x52; 32],
-    );
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)); checkpoint = config(&temp, "interrupted-signing.norito"); => checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
+    let operation_id = seed_default_operation!(orchestrator; [0x52; 32]);
     let interrupted = {
         let mut state = orchestrator.state.lock().expect("orchestrator state");
         orchestrator
@@ -1269,14 +969,8 @@ fn restart_preserves_unexpired_signing_claim_without_overlap() {
             if identity.identity == operation_id
     ));
     drop(orchestrator);
-    let restarted = ModerationOrchestratorV1::open(checkpoint, deps(reader, submitter))
-        .expect("retain signer-only crash state");
-    let state = restarted.state.lock().expect("restarted state");
-    let entry = state
-        .outbox
-        .iter()
-        .find(|entry| entry.operation_id == operation_id)
-        .expect("recovered entry");
+    open_test_orchestrator!(restarted = checkpoint; deps(reader, submitter); "retain signer-only crash state");
+    find_outbox_entry!(state, entry = restarted, operation_id; "restarted state"; "recovered entry");
     assert_eq!(entry.state, StoredOutboxStateV1::Signing);
     assert_eq!(entry.baseline_finalized_height, 1);
     assert_eq!(entry.baseline_finalized_block_hash, [1; 32]);
@@ -1291,21 +985,8 @@ fn restart_preserves_unexpired_signing_claim_without_overlap() {
 }
 #[test]
 fn tampered_retained_transaction_bytes_digest_and_hash_fail_closed() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-    let checkpoint = config(&temp, "tampered-signed.norito");
-    let orchestrator = ModerationOrchestratorV1::open(
-        checkpoint.clone(),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
-    let operation_id = seed_ready_operation_without_delivery(
-        &orchestrator,
-        account(1),
-        policy_action(policy(1)),
-        [0x53; 32],
-    );
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)); checkpoint = config(&temp, "tampered-signed.norito"); => checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
+    let operation_id = seed_default_operation!(orchestrator; [0x53; 32]);
     execute_one_prepared_sign(&orchestrator, operation_id);
     drop(orchestrator);
     let original = fs::read(&checkpoint.checkpoint_path).expect("read canonical signed checkpoint");
@@ -1347,7 +1028,7 @@ fn tampered_retained_transaction_bytes_digest_and_hash_fail_closed() {
         assert!(matches!(
             ModerationOrchestratorV1::open(
                 checkpoint.clone(),
-                deps(Arc::clone(&reader), Arc::clone(&submitter)),
+                deps(Arc::clone(&reader), Arc::clone(&submitter))
             ),
             Err(ModerationOrchestratorError::CheckpointCorrupt(_))
         ));
@@ -1362,19 +1043,12 @@ fn definitely_not_submitted_reuses_retained_envelope_without_resigning() {
         observed_finalized_height: 1,
     }));
     submitter.set_failure(Some(ModerationSubmissionFailureV1::NotSubmittedUnavailable));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "not-submitted.norito"),
-        deps(reader, Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
+    open_test_orchestrator!(orchestrator = config(&temp, "not-submitted.norito"); deps(reader, Arc::clone(&submitter)); "orchestrator");
     orchestrator
         .submit(account(1), policy_action(policy(1)), [0x54; 32])
         .expect("retain exact envelope after pre-ingress failure");
     let retained = {
-        let state = orchestrator.state.lock().expect("orchestrator state");
-        let [entry] = state.outbox.as_slice() else {
-            panic!("one retained outbox entry");
-        };
+        single_outbox_entry!(state, entry = orchestrator; "orchestrator state"; "one retained outbox entry");
         assert_eq!(entry.state, StoredOutboxStateV1::Signed);
         moderation_signed_transaction(entry).expect("retained envelope")
     };
@@ -1384,10 +1058,7 @@ fn definitely_not_submitted_reuses_retained_envelope_without_resigning() {
     orchestrator
         .reconcile()
         .expect("retry the exact retained envelope");
-    let state = orchestrator.state.lock().expect("orchestrator state");
-    let [entry] = state.outbox.as_slice() else {
-        panic!("one submitted outbox entry");
-    };
+    single_outbox_entry!(state, entry = orchestrator; "orchestrator state"; "one submitted outbox entry");
     assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
     assert_eq!(
         moderation_signed_transaction(entry).expect("submitted retained envelope"),
@@ -1411,18 +1082,11 @@ fn ambiguous_submission_is_reconciled_after_restart_without_resubmit() {
     let retained_transaction_id;
     let retained_transaction_digest;
     {
-        let orchestrator = ModerationOrchestratorV1::open(
-            checkpoint.clone(),
-            deps(Arc::clone(&reader), Arc::clone(&submitter)),
-        )
-        .expect("orchestrator");
+        open_test_orchestrator!(orchestrator = checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "orchestrator");
         orchestrator
             .submit(authority.clone(), policy_action(active_policy), [0x11; 32])
             .expect("ambiguous submit remains pending");
-        let state = orchestrator.state.lock().expect("orchestrator state");
-        let [entry] = state.outbox.as_slice() else {
-            panic!("one ambiguous outbox entry must remain");
-        };
+        single_outbox_entry!(state, entry = orchestrator; "orchestrator state"; "one ambiguous outbox entry must remain");
         assert_eq!(entry.state, StoredOutboxStateV1::Ambiguous);
         retained_transaction_id = entry.transaction_id.expect("retained transaction id");
         retained_transaction_digest = entry
@@ -1438,19 +1102,12 @@ fn ambiguous_submission_is_reconciled_after_restart_without_resubmit() {
         );
     }
     reader.replace(empty_snapshot(2, [2; 32]));
-    let restarted = ModerationOrchestratorV1::open(
-        checkpoint.clone(),
-        deps(Arc::clone(&reader), Arc::clone(&submitter)),
-    )
-    .expect("restart with retained exact transaction");
+    open_test_orchestrator!(restarted = checkpoint.clone(); deps(Arc::clone(&reader), Arc::clone(&submitter)); "restart with retained exact transaction");
     restarted
         .reconcile()
         .expect("exact transaction lookup after restart");
     {
-        let state = restarted.state.lock().expect("restarted state");
-        let [entry] = state.outbox.as_slice() else {
-            panic!("one submitted outbox entry must remain");
-        };
+        single_outbox_entry!(state, entry = restarted; "restarted state"; "one submitted outbox entry must remain");
         assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
         assert_eq!(entry.transaction_id, Some(retained_transaction_id));
         assert_eq!(
@@ -1499,17 +1156,8 @@ fn terminal_handoff_crash_after_effect_retries_same_id_after_restart() {
     let settlement = Arc::new(MockHandoffSink::default());
     let publication = Arc::new(MockHandoffSink::default());
     let checkpoint = config(&temp, "handoff-crash-after-effect.norito");
-    let runtime_deps = || ModerationOrchestratorDepsV1 {
-        checkpoint_store: reader.checkpoint_store.clone(),
-        submitter: submitter.clone(),
-        snapshot_reader: reader.clone(),
-        settlement_sink: settlement.clone(),
-        publication_sink: publication.clone(),
-        panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
-        panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
-    };
-    let orchestrator =
-        ModerationOrchestratorV1::open(checkpoint.clone(), runtime_deps()).expect("orchestrator");
+    let runtime_deps = || test_runtime_deps!(reader.checkpoint_store.clone(); submitter.clone(); reader.clone(); settlement.clone(); publication.clone(); Arc::new(MockPanelNotificationSink::default()); Arc::new(MockPanelNotificationArchive::default()));
+    open_test_orchestrator!(orchestrator = checkpoint.clone(); runtime_deps(); "orchestrator");
     let (snapshot, digest) = orchestrator
         .read_validated_finalized_snapshot()
         .expect("read finalized snapshot");
@@ -1536,7 +1184,7 @@ fn terminal_handoff_crash_after_effect_retries_same_id_after_restart() {
         .expect("sink effect before checkpoint finalization");
     drop(interrupted);
     drop(orchestrator);
-    let restarted = ModerationOrchestratorV1::open(checkpoint, runtime_deps()).expect("restart");
+    open_test_orchestrator!(restarted = checkpoint; runtime_deps(); "restart");
     restarted
         .reconcile()
         .expect("preserve the unexpired terminal-handoff claim after restart");
@@ -1576,25 +1224,15 @@ fn terminal_finalization_converges_after_restart_and_split_peer_replay() {
     }));
     let settlement_sink = Arc::new(MockHandoffSink::default());
     let publication_sink = Arc::new(MockHandoffSink::default());
-    let runtime_deps = || ModerationOrchestratorDepsV1 {
-        checkpoint_store: reader.checkpoint_store.clone(),
-        submitter: submitter.clone(),
-        snapshot_reader: reader.clone(),
-        settlement_sink: settlement_sink.clone(),
-        publication_sink: publication_sink.clone(),
-        panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
-        panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
-    };
+    let runtime_deps = || test_runtime_deps!(reader.checkpoint_store.clone(); submitter.clone(); reader.clone(); settlement_sink.clone(); publication_sink.clone(); Arc::new(MockPanelNotificationSink::default()); Arc::new(MockPanelNotificationArchive::default()));
     let first_checkpoint = config(&temp, "terminal-first.norito");
     let second_checkpoint = config(&temp, "terminal-second.norito");
     let action = ModerationNativeActionV1::FinalizeCase(FinalizeSorafsModerationCase::new(
         "case-failover".to_owned(),
         "round-1".to_owned(),
     ));
-    let first = ModerationOrchestratorV1::open(first_checkpoint.clone(), runtime_deps())
-        .expect("first orchestrator");
-    let second = ModerationOrchestratorV1::open(second_checkpoint, runtime_deps())
-        .expect("second orchestrator");
+    open_test_orchestrator!(first = first_checkpoint.clone(); runtime_deps(); "first orchestrator");
+    open_test_orchestrator!(second = second_checkpoint; runtime_deps(); "second orchestrator");
     let first_submit = first
         .submit(governance.clone(), action.clone(), [0x11; 32])
         .expect("first terminal submit");
@@ -1614,8 +1252,7 @@ fn terminal_finalization_converges_after_restart_and_split_peer_replay() {
     assert_eq!(submitter.calls(), 1);
     drop(first);
     reader.replace(finalized_snapshot);
-    let restarted = ModerationOrchestratorV1::open(first_checkpoint, runtime_deps())
-        .expect("restarted orchestrator");
+    open_test_orchestrator!(restarted = first_checkpoint; runtime_deps(); "restarted orchestrator");
     restarted
         .reconcile()
         .expect("restart reconciles finalized case");
@@ -1664,8 +1301,7 @@ fn outbox_capacity_exhaustion_is_fail_closed() {
     let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
     let mut bounds = config(&temp, "checkpoint.norito");
     bounds.max_outbox_entries = 1;
-    let orchestrator =
-        ModerationOrchestratorV1::open(bounds, deps(reader, submitter)).expect("orchestrator");
+    open_test_orchestrator!(orchestrator = bounds; deps(reader, submitter); "orchestrator");
     let authority = account(1);
     orchestrator
         .submit(authority.clone(), policy_action(policy(1)), [0x11; 32])
@@ -1687,15 +1323,7 @@ fn no_show_failover_uses_one_stable_native_activation() {
     let governance = account(99);
     let (snapshot, expected_sortition_digest) =
         awaiting_acceptance_snapshot(2, [2; 32], governance.clone());
-    let reader = Arc::new(MockSnapshotReader::new(snapshot));
-    let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
-        observed_finalized_height: 2,
-    }));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "checkpoint.norito"),
-        deps(reader, Arc::clone(&submitter)),
-    )
-    .expect("orchestrator");
+    orchestrator_fixture!(orchestrator; reader = Arc::new(MockSnapshotReader::new(snapshot)); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 2 })); => config(&temp, "checkpoint.norito"); deps(reader, Arc::clone(&submitter)); "orchestrator");
     let first = orchestrator
         .run_maintenance(governance.clone(), 1)
         .expect("first failover scan");
@@ -1726,22 +1354,8 @@ fn same_finalized_tip_produces_byte_identical_maintenance_actions_across_replica
     let second_submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
         observed_finalized_height: 2,
     }));
-    let first = ModerationOrchestratorV1::open(
-        config(&temp, "replica-a.norito"),
-        deps(
-            Arc::new(MockSnapshotReader::new(snapshot.clone())),
-            Arc::clone(&first_submitter),
-        ),
-    )
-    .expect("first replica");
-    let second = ModerationOrchestratorV1::open(
-        config(&temp, "replica-b.norito"),
-        deps(
-            Arc::new(MockSnapshotReader::new(snapshot)),
-            Arc::clone(&second_submitter),
-        ),
-    )
-    .expect("second replica");
+    open_test_orchestrator!(first = config(&temp, "replica-a.norito"); deps(Arc::new(MockSnapshotReader::new(snapshot.clone())), Arc::clone(&first_submitter)); "first replica");
+    open_test_orchestrator!(second = config(&temp, "replica-b.norito"); deps(Arc::new(MockSnapshotReader::new(snapshot)), Arc::clone(&second_submitter)); "second replica");
     let first_outcomes = first
         .run_maintenance(governance.clone(), 1)
         .expect("first replica maintenance");
@@ -1784,22 +1398,8 @@ fn finalized_panel_notifications_are_operation_bound_payload_free_and_byte_ident
         ))
         .operation_id(&test_network_id(), &governance)
         .expect("source operation");
-    let first = ModerationOrchestratorV1::open(
-        config(&temp, "panel-replica-a.norito"),
-        deps(
-            Arc::new(MockSnapshotReader::new(snapshot.clone())),
-            Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
-        ),
-    )
-    .expect("first orchestrator");
-    let second = ModerationOrchestratorV1::open(
-        config(&temp, "panel-replica-b.norito"),
-        deps(
-            Arc::new(MockSnapshotReader::new(snapshot)),
-            Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
-        ),
-    )
-    .expect("second orchestrator");
+    let first = isolated_orchestrator!(config(&temp, "panel-replica-a.norito"); snapshot.clone(); MockSubmitter::new(ModerationSubmissionLookupV1::Unknown); "first orchestrator");
+    let second = isolated_orchestrator!(config(&temp, "panel-replica-b.norito"); snapshot; MockSubmitter::new(ModerationSubmissionLookupV1::Unknown); "second orchestrator");
     first.reconcile().expect("first reconciliation");
     second.reconcile().expect("second reconciliation");
     let first_entries = first
@@ -1869,19 +1469,7 @@ fn qualified_notification_sink_delivers_and_checkpoints_the_due_batch() {
     let governance = account(99);
     let (snapshot, _) = awaiting_acceptance_snapshot(2, [0x26; 32], governance);
     let sink = Arc::new(MockPanelNotificationSink::default());
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "panel-qualified-sink.norito"),
-        ModerationOrchestratorDepsV1 {
-            checkpoint_store: Arc::new(MockCheckpointStore::default()),
-            submitter: Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
-            snapshot_reader: Arc::new(MockSnapshotReader::new(snapshot)),
-            settlement_sink: Arc::new(MockHandoffSink::default()),
-            publication_sink: Arc::new(MockHandoffSink::default()),
-            panel_notification_sink: sink.clone(),
-            panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
-        },
-    )
-    .expect("orchestrator");
+    open_test_orchestrator!(orchestrator = config(&temp, "panel-qualified-sink.norito"); test_runtime_deps!(Arc::new(MockCheckpointStore::default()); Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)); Arc::new(MockSnapshotReader::new(snapshot)); Arc::new(MockHandoffSink::default()); Arc::new(MockHandoffSink::default()); sink.clone(); Arc::new(MockPanelNotificationArchive::default())); "orchestrator");
     orchestrator.reconcile().expect("queue notifications");
     assert_eq!(
         orchestrator
@@ -1932,14 +1520,7 @@ fn finalized_activation_notifies_only_the_authoritative_ballot_roster() {
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "panel-activation.norito"),
-        deps(
-            Arc::new(MockSnapshotReader::new(snapshot)),
-            Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
-        ),
-    )
-    .expect("orchestrator");
+    let orchestrator = isolated_orchestrator!(config(&temp, "panel-activation.norito"); snapshot; MockSubmitter::new(ModerationSubmissionLookupV1::Unknown); "orchestrator");
     orchestrator.reconcile().expect("queue activation notices");
     let state = orchestrator.state.lock().expect("state");
     let actual_recipients = state
@@ -1957,22 +1538,8 @@ fn finalized_activation_notifies_only_the_authoritative_ballot_roster() {
 }
 #[test]
 fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-    let orchestrator = ModerationOrchestratorV1::open(
-        config(&temp, "native-dead-letter-resolution.norito"),
-        deps(
-            Arc::clone(&reader),
-            Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
-        ),
-    )
-    .expect("orchestrator");
-    let operation_id = seed_ready_operation_without_delivery(
-        &orchestrator,
-        account(1),
-        policy_action(policy(1)),
-        [0xD1; 32],
-    );
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)); => config(&temp, "native-dead-letter-resolution.norito"); deps(Arc::clone(&reader), submitter); "orchestrator");
+    let operation_id = seed_default_operation!(orchestrator; [0xD1; 32]);
     {
         let mut state = orchestrator.state.lock().expect("orchestrator state");
         orchestrator
@@ -2118,14 +1685,7 @@ fn signed_panel_and_terminal_resolutions_apply_exact_dispositions() {
     let panel_temp = tempfile::tempdir().expect("panel tempdir");
     let governance = account(99);
     let (panel_snapshot, _) = awaiting_acceptance_snapshot(2, [0x31; 32], governance.clone());
-    let panel = ModerationOrchestratorV1::open(
-        config(&panel_temp, "panel-dead-letter-resolution.norito"),
-        deps(
-            Arc::new(MockSnapshotReader::new(panel_snapshot)),
-            Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
-        ),
-    )
-    .expect("panel orchestrator");
+    let panel = isolated_orchestrator!(config(&panel_temp, "panel-dead-letter-resolution.norito"); panel_snapshot; MockSubmitter::new(ModerationSubmissionLookupV1::Unknown); "panel orchestrator");
     panel.reconcile().expect("queue panel notifications");
     let claim = panel
         .claim_panel_notifications([0xD2; 32], 30, 1)
@@ -2180,14 +1740,7 @@ fn signed_panel_and_terminal_resolutions_apply_exact_dispositions() {
         [3; 32],
         governance,
     );
-    let terminal = ModerationOrchestratorV1::open(
-        config(&terminal_temp, "terminal-dead-letter-resolution.norito"),
-        deps(
-            Arc::new(MockSnapshotReader::new(finalized)),
-            Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
-        ),
-    )
-    .expect("terminal orchestrator");
+    let terminal = isolated_orchestrator!(config(&terminal_temp, "terminal-dead-letter-resolution.norito"); finalized; MockSubmitter::new(ModerationSubmissionLookupV1::Unknown); "terminal orchestrator");
     let (snapshot, digest) = terminal
         .read_validated_finalized_snapshot()
         .expect("read terminal finalized snapshot");

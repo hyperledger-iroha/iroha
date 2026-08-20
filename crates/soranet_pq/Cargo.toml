@@ -1,5 +1,6 @@
 [package]
 name = "soranet_pq"
+autotests = false
 build = false
 
 edition.workspace = true
@@ -42,3 +43,7 @@ pqcrypto-mlkem = { version = "0.1.1", optional = true }
 hex = { workspace = true }
 once_cell = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
+
+[[test]]
+name = "kat_vectors"
+path = "tests/kat_vectors.rs"

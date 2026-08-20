@@ -87,12 +87,6 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         &[200],
     ),
     (
-        "validator_sets",
-        RouteCheckMethod::Get,
-        "/v1/sumeragi/validator-sets",
-        &[401],
-    ),
-    (
         "public_lane_validators",
         RouteCheckMethod::Get,
         "/v1/nexus/public-lanes/0/validators",

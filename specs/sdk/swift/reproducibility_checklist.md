@@ -8,7 +8,7 @@ summary: Evidence bundle and command checklist for deterministically rebuilding 
 This checklist gates every Swift SDK release candidate, GA, and hotfix. It satisfies
 the IOS8 “publish reproducible builds” requirement by spelling out the artefacts,
 commands, and evidence that auditors need to replay the build. Use it alongside the
-dual-track release runbook (`specs/release_dual_track_runbook.md`) and archive the
+Iroha 3 release runbook (`specs/release_runbook.md`) and archive the
 outputs under `artifacts/releases/<version>/swift/`.
 
 ## Scope & Deliverables

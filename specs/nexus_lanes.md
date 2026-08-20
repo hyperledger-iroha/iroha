@@ -74,6 +74,10 @@ LaneConfigEntry {
     visibility: LaneVisibility,// public vs restricted lanes
     storage_profile: LaneStorageProfile,
     proof_scheme: DaProofScheme,// DA proof policy (merkle_sha256 default)
+    manifest_policy: DaManifestPolicy,
+    confidential_compute: Option<ConfidentialComputePolicy>,
+    scheduler: Option<LaneSchedulerPolicy>,
+    settlement_buffer: Option<LaneSettlementBufferPolicy>,
 }
 ```
 
@@ -81,6 +85,13 @@ LaneConfigEntry {
 - Aliases are sanitised into lowercase slugs; consecutive non-alphanumeric characters collapse into `_`. If the alias yields an empty slug we fall back to `lane{id}`.
 - Key prefixes ensure the WSV keeps per-lane key ranges disjoint even when the same backend is shared.
 - `shard_id` is a typed lane-catalog field. When absent it canonically resolves to `lane_id`; an explicit value selects the persisted DA cursor/storage shard used across restarts and resharding.
+- Manifest availability and confidential-compute settings are typed catalog fields. The latter
+  carries an exact mechanism, positive key version, and canonical audience set and is only valid
+  with `commitment_only` or `split_replica` storage. Retired functional metadata spellings are
+  rejected rather than interpreted.
+- Scheduler overrides and settlement buffers are typed catalog fields. Scheduler values are
+  positive `u64` values; a settlement buffer binds an exact canonical universal account, asset
+  definition, and positive XOR quantity. Raw scheduler and settlement-buffer metadata is rejected.
 - Kura segment names are deterministic across hosts; auditors can cross-check segment directories and manifests without bespoke tooling.
 - Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and global state commitments for that lane.
 - When governance renames a lane alias, nodes automatically relabel the corresponding `blocks/lane_{id:03}_{slug}` directories (and tiered snapshots) so auditors always see the canonical slug without manual cleanup. If the target Kura segment already exists, the config/lifecycle transition fails before catalog or tiered-state changes are committed.
@@ -230,20 +241,20 @@ LaneConfigEntry {
   or public validator listings.
   The configured default lane itself must stay outside the autoscale-owned
   elastic id range so it remains a stable base anchor. Live-state routing also
-  requires `nexus.enabled = true` and `autoscale.enabled = true` and filters
+  requires `autoscale.enabled = true` and filters
   managed elastic candidates to the configured
-  `autoscale.min_lanes..autoscale.max_lanes` id range, so disabled Nexus,
-  disabled autoscale, or corrupted out-of-range managed lanes cannot receive
+  `autoscale.min_lanes..autoscale.max_lanes` id range, so disabled autoscale
+  or corrupted out-of-range managed lanes cannot receive
   default traffic. If that active elastic range contains a manual lane,
   malformed autoscale-managed lane, or managed lane outside the default
   dataspace, live routing fails closed to the configured base default lane
   until the catalog is repaired. The integration router harness pins the same
-  behavior at the public `ConfigLaneRouter::route_with_view` boundary, so
+  behavior at the fallible `LaneRouter::try_route_with_view` boundary, so
   in-range catalog corruption falls back to the base lane, stale managed lanes
-  left in the catalog are ignored when either gate is disabled, and enabled
+  left in the catalog are ignored when autoscale is disabled, and enabled
   autoscale still shards over valid elastic lanes.
-  Block autoscale application also requires both enabled Nexus and enabled
-  autoscale, so corrupted actual state with either gate disabled cannot create
+  Block autoscale application also requires enabled autoscale, so actual state
+  with that subordinate gate disabled cannot create
   or retire elastic lanes. Autoscale catalog changes are staged inside the
   `StateBlock` and published to committed Nexus state and lane storage geometry
   only during `StateBlock::commit()` after transaction-height validation, so a
@@ -333,8 +344,8 @@ LaneConfigEntry {
   even when the claim is malformed, so elastic capacity cannot become the
   canonical lane for a dataspace. A dataspace with only autoscale-owned lanes
   fails closed with `no_lane_for_dataspace`.
-  Disabled Nexus, corrupted runtime autoscale bounds, or a default lane at or
-  above `autoscale.min_lanes` disable elastic sharding for routing and keep
+  Corrupted runtime autoscale bounds or a default lane at or above
+  `autoscale.min_lanes` disable elastic sharding for routing and keep
   no-target default traffic on the configured default lane.
   Scale-out also requires a free id in the configured
   `autoscale.min_lanes..autoscale.max_lanes` elastic range; hot windows fail
@@ -377,11 +388,14 @@ LaneConfigEntry {
   lanes cannot retire an elastic lane. The `autoscale.min_lanes` and
   `autoscale.max_lanes` values bound the autoscaler-owned elastic id range;
   they do not count unrelated public-profile base lanes as default-route
-  capacity. Despite their legacy names, these fields are not minimum and
+  capacity. Despite their compact names, these fields are not minimum and
   maximum active-lane counts: `min_lanes` is the inclusive lane-id lower bound
   and `max_lanes` is the exclusive upper bound. The range may contain vacant
   ids, and it may start at the next id above the initial catalog namespace;
-  lifecycle creation expands that namespace deterministically. Live
+  lifecycle creation expands that namespace deterministically. The catalog's
+  exclusive lane-id bound never shrinks when a lane is retired, so sparse lane
+  identities and retained incarnation lineage cannot be silently recycled.
+  Live
   default-route capacity is the configured base anchor plus valid managed
   elastic entries that currently exist inside the half-open range.
 - WSV snapshots persist a versioned `nexus_runtime` section containing the
@@ -397,12 +411,14 @@ LaneConfigEntry {
   rollback storage. It never fabricates an empty segment for a missing dynamic
   lane: the exact lane/incarnation/activation marker and both block and merge
   paths must be recoverable, otherwise startup fails closed.
-  Legacy snapshots without `nexus_runtime` retain the historical
-  configuration-sourced startup behavior.
+  Snapshot payloads without `nexus_runtime` are rejected. A genuinely fresh
+  state (with no snapshot lineage) derives its initial geometry from the
+  configured catalog.
 - Autoscale utilization samples count committed fragments, not just external
   transaction envelopes. Current-block decisions use the in-flight execution
   counter, and historical window samples read the persisted committed-fragment
-  total from block results, with external transactions kept as a legacy floor.
+  total from block results, with external transactions kept as a conservative
+  lower bound.
   Block validation rejects non-zero committed-fragment totals that do not match
   re-execution, so peers cannot forge autoscale load history. Latency ratios
   and utilization are computed with widened deterministic integer intermediates
@@ -475,7 +491,7 @@ LaneConfigEntry {
   by that ingress node.
 - SDKs surface lane selectors and map user-friendly aliases to `LaneId` using the lane catalog.
 - Routing rules operate on the validated catalog and may pick both lane and dataspace. `LaneConfig` provides telemetry-friendly aliases for dashboards and logs.
-- Enabled Nexus config swaps and lane lifecycle plans are validated before
+- Nexus config swaps and lane lifecycle plans are validated before
   mutation: the configured default route and explicit rule targets must resolve
   against the candidate lane/dataspace catalogs. A rule that omits `dataspace`
   is validated against `nexus.routing_policy.default_dataspace`, and explicit
@@ -507,9 +523,8 @@ LaneConfigEntry {
   Config swaps also cannot disable `autoscale.enabled` while owned elastic lanes
   exist; valid owned lanes must remain under the autoscaler, and invalid owned
   lanes must be explicitly retired before the owner is disabled. Static TOML
-  parsing rejects `nexus.autoscale.enabled = true` unless
-  `nexus.enabled = true`; it also rejects both the reserved
-  `autoscale.managed` lane metadata key and manual lanes in the enabled
+  parsing rejects both the reserved `autoscale.managed` lane metadata key and
+  manual lanes in the enabled
   elastic id range before runtime for the same ownership boundary. The internal
   autoscale lifecycle path must create
   deterministic public elastic lanes in the configured default dataspace
@@ -532,18 +547,16 @@ LaneConfigEntry {
   repaired by an explicit lifecycle retire, while valid autoscale-owned lanes
   remain protected from manual retirement and corrupted owned lanes cannot be
   hidden behind an unrelated lifecycle plan.
-  Runtime
-  `State::set_nexus` also rejects disabled Nexus configs that carry lane,
-  dataspace, or routing overrides, enable autoscale, enable lane-relay
-  emergency overrides, or enable the relay worker,
-  matching the user-config parser's single-lane disabled profile. Relay worker
-  configs must also use lane-relay-burn fee settlement at the state boundary.
+  Runtime `State::set_nexus` validates lane, dataspace, routing, autoscale,
+  lane-relay emergency, and relay-worker configuration as one atomic Nexus
+  policy. Relay worker configs must also use lane-relay-burn fee settlement at
+  the state boundary.
   Authority-paid Nexus fees are rejected in this mode until an authenticated
   authority spend-lease protocol exists; sponsor receipts require a verified
   source allocation for the exact program revision and asset. Emergency relay
   multisig thresholds cannot exceed member count. Per-dataspace defaults name
-  one exact `fee_sponsor_program_id` and require enabled Nexus plus dataspace
-  keys present in the active catalog; there is no sponsorship toggle or account
+  one exact `fee_sponsor_program_id` and require dataspace keys present in the
+  active catalog; there is no sponsorship toggle or account
   fallback. Runtime config swaps also enforce the parser's fee-shape contract:
   the fee asset selector must be the canonical XOR asset definition id or
   `xor#universal`/`xor#universal.universal` after genesis binds the alias to a
@@ -571,17 +584,14 @@ LaneConfigEntry {
   full Native AMX routing plans for pending transactions through both state-
   and view-backed reconfiguration entry points, so participant legs cannot
   remain stale behind an unchanged coordinator route.
-  Block requeue discards a stale process-global routing-ledger plan after a
-  failed ledger-sourced reinsertion, so the next recovery pass recomputes
-  Native AMX participant legs from current committed state instead of replaying
-  the same stale hint. Commit event production consumes the full routing plan
-  before any legacy coordinator-only hint, so partial ledger cleanup or a stale
-  single-route shadow cannot override the digest-checked plan metadata.
+  Block requeue carries the full plan owned by the returned queue guard; a
+  failed reinsertion leaves no process-global shadow to replay on the next
+  recovery pass. Commit event production consumes the block's committed full
+  routing plan and derives its coordinator route from that plan.
   Queue-side expiry and unresolved-route rejection events apply the same
-  full-plan-first cleanup before terminal events are emitted, so stale
-  coordinator-only shadows cannot mislabel removed transactions. Shared
-  routing-ledger plan discard also clears same-hash legacy shadows once the
-  expected full plan is removed.
+  exact-plan cleanup before terminal events are emitted. The queue instance is
+  the sole owner of full plans, keyed by canonical entrypoint identity, with
+  durable claims serving only as that instance's recovery authority.
   Lane TEU deferral also returns the full routing plan for consensus requeue, so
   deferred Native AMX transactions keep participant legs instead of requeueing
   as coordinator-only work.
@@ -611,7 +621,7 @@ LaneConfigEntry {
   routing plans for removed transactions too, so overflow requeue keeps Native
   AMX participant metadata. Pending queue reconfiguration uses the same
   height-aware autoscale range, so queued default-route transactions and local
-  routing-ledger hints stay on the active default route until an elastic lane's
+  queue-owned plan hints stay on the active default route until an elastic lane's
   creation height is committed. Proposal lookahead is enabled only when the
   committed Nexus snapshot has more than one policy-reachable active lane at the
   candidate block height. Valid default-route autoscale candidates, canonical
@@ -623,18 +633,19 @@ LaneConfigEntry {
   when recomputing execution-context routing and per-lane transaction
   summaries. Validators therefore accept matching elastic execution contexts
   and reject stale base-lane contexts for transactions that the committed Nexus
-  state routes to an elastic default lane. If Nexus is disabled, or if the
-  active elastic range contains a manual, malformed managed, or off-default
-  managed lane, validators likewise reject stale elastic execution contexts
+  state routes to an elastic default lane. If the active elastic range contains
+  a manual, malformed managed, or off-default managed lane, validators likewise
+  reject stale elastic execution contexts
   because live routing falls back to the base default lane. Native AMX execution
   contexts also compare every committed coordinator and participant leg with the
   recomputed full plan, so a stale participant route cannot survive merely
   because the
   coordinator and plan digest still look current. Per-lane committed TEU
   telemetry is attributed from the same validated block routing vector, not from
-  the process-global routing hint ledger, so stale cached hints cannot move slot
+  the queue-owned routing plan index, so stale hints cannot move slot
   load metrics onto the wrong lane.
-- Global Torii pipeline-status reads treat routing-plan hints as probes only.
+- Global Torii pipeline-status reads treat the owning queue instance's
+  routing-plan hints as probes only.
   A hinted route may short-circuit the fanout path only after returning a
   terminal status (`Applied`, `Rejected`, or `Expired`); non-terminal hinted
   successes (`Queued`, `Approved`, or `Committed`) and malformed hinted success
@@ -663,6 +674,9 @@ LaneConfigEntry {
   pending transaction unrouteable, the queue rejects it and clears stale routing
   caches plus TEU backlog accounting instead of proposing it with retired-lane
   metadata.
+- The V1 lifecycle-plan JSON object is closed and always carries both
+  `additions` and `retire`, including explicit empty arrays. Omitted, duplicate,
+  or unknown fields are invalid; there is no shortened pre-release plan shape.
 - Merge-candidate synthesis requires the exact cached envelope to have a
   committed, revalidated FastPQ effect record and also rechecks it against the
   active Nexus lane catalog. Structural gossip metadata alone is progress data,
@@ -716,7 +730,13 @@ LaneConfigEntry {
   validator or peer weight. Protected governance admission and transaction
   state validation canonicalize the same duplicate-free validator set before
   authority or quorum checks, so duplicate validator rows fail closed instead
-  of being silently collapsed at one boundary. Governance quorum metadata
+  of being silently collapsed at one boundary. A manifest that declares a
+  quorum without an explicit validator set is contradictory and rejects.
+  First-release manifest, validator-binding, governance-overlay, and overlay
+  module objects are closed: unknown fields reject, as do unknown hook names
+  and unknown fields inside the sole supported `runtime_upgrade` hook. A typo
+  therefore cannot silently preserve the hook's permissive defaults.
+  Governance quorum metadata
   (`gov_manifest_approvers`) is duplicate-free as well; duplicate approver
   claims reject the transaction instead of being collapsed into one approval.
   Manifest loading likewise rejects duplicate protected namespaces and duplicate
@@ -813,7 +833,18 @@ LaneConfigEntry {
 - `LaneCatalog`, `LaneConfig`, and `DataSpaceCatalog` live in `iroha_data_model::nexus` and provide Norito-format structures for manifests and SDKs.
 - `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived automatically from the catalog; it does not require Norito encoding because it is an internal runtime helper.
 - The user-facing configuration (`iroha_config::parameters::user::Nexus`) continues to accept declarative lane and dataspace descriptors; parsing now derives the geometry and rejects invalid aliases or duplicate lane ids.
-- `DataSpaceMetadata.fault_tolerance` controls lane-relay committee sizing; committee membership is sampled deterministically per epoch from the dataspace validator pool using the VRF epoch seed bound with `(dataspace_id, lane_id)`.
+- `DataSpaceMetadata.fault_tolerance` controls every lane-consensus committee,
+  not only relay fanout. The only valid first-release geometry is an exact
+  `3f+1` committee with `f >= 1`. Authority resolution takes the exact
+  `(lane_id, dataspace_id, height)` route, rejects inactive/rebound routes and
+  pools smaller than `3f+1`, and samples exactly `3f+1` distinct peers from the
+  canonical manifest or stake pool. Membership uses the consensus epoch seed
+  bound with `(dataspace_id, lane_id)` and the resulting validator set is put in
+  canonical peer order. An oversized pool never becomes an oversized voting
+  committee. Autoscale incarnations instead use their immutable creation pin,
+  which must itself contain exactly the dataspace's `3f+1` validators. New pins
+  are selected from the same canonical manifest/stake authority inputs; commit
+  topology is transport state and is never an authority fallback.
 
 ## Outstanding Work
 

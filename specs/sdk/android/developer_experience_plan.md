@@ -52,7 +52,7 @@ Implementation notes:
        --password "$MAVEN_TOKEN"
      ```
 
-   - `deploy/android/publish_ga.sh` wraps the publish script during the go/no-go window, copying the Maven repo + SBOM bundle into `artifacts/releases/android/<version>/` and producing the README that Release Engineering drops into the compliance packet. The dual-track release pipeline now accepts `--publish-android-sdk [--android-sdk-repo-url …]` to run the same flow automatically when `scripts/run_release_pipeline.py` is used.
+   - `deploy/android/publish_ga.sh` wraps the publish script during the go/no-go window, copying the Maven repo + SBOM bundle into `artifacts/releases/android/<version>/` and producing the README that Release Engineering drops into the compliance packet. The Iroha 3 release pipeline accepts `--publish-android-sdk [--android-sdk-repo-url …]` to run the same flow automatically when `scripts/run_release_pipeline.py` is used.
    - `scripts/check_android_maven_repo.py` replays the hash/metadata validation described in `specs/sdk/android/maven_staging_plan.md`, ensuring `publish_summary.json`, `checksums.txt`, and `maven-metadata.xml` stay in sync before a staging drop is announced. Emit both the JSON and Markdown reports (`--json-out … --markdown-out …`) so AND5 evidence bundles have a machine-readable artefact and a governance-ready summary side-by-side.
    - `scripts/check_android_samples.sh` builds the SDK module plus both sample apps; wire it into CI once Gradle is available on runners.
 3. **CI Hooks**

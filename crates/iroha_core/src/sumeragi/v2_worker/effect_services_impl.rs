@@ -435,23 +435,6 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(())
     }
-    #[cfg(test)]
-    fn complete_certified_body_fetch(
-        &mut self,
-        task: &BodyFetchTask,
-    ) -> Result<CertifiedBodyFetchCompletionDisposition, Self::Error> {
-        // Complete every fallible ownership check before arming the fail-stop
-        // boundary. The guarded tail is then one infallible removal, so every
-        // returned error leaves the exact service owner byte-for-byte intact.
-        let output_guard = Arc::clone(&self.output_guard);
-        let prepared = self.prepare_certified_body_fetch_owner_removal(task)?;
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        let disposition = prepared.commit(operation.permit());
-        operation.complete();
-        Ok(disposition)
-    }
     fn accept_authenticated_chunk(
         &mut self,
         task: &BodyFetchTask,

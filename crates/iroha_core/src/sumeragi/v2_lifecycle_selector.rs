@@ -27,7 +27,8 @@ use super::{
 use crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding;
 use crate::sumeragi::{
     FairV2Ingress, FairV2IngressClass, FairV2IngressDequeueDisposition,
-    FairV2IngressQueueGateVerdict, FairV2IngressSourceClass, InboundBlockMessage,
+    FairV2IngressOwnershipEvidence, FairV2IngressQueueGateVerdict, FairV2IngressSourceClass,
+    InboundBlockMessage,
     message::BlockMessage,
     v2_body_store::{
         DurableCertifiedFetchBodyReceipt, RecoveredDecisionFetchStoreBodyAuthorityV1, V2BodyStore,
@@ -625,6 +626,8 @@ pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {
     Retry(CertifiedFetchBodyPersistenceRetryError),
     /// Ledger publication was invoked; output is closed and retry is forbidden.
     RestartRequired(CertifiedFetchBodyPersistenceRestartError),
+    /// Every volatile owner committed, but the exact durable ingress terminal failed.
+    RestartRequiredAfterCommit(String),
 }
 /// Typed reason an authenticated selected response could not wake its exact
 /// existing certified-Fetch record.
@@ -773,7 +776,7 @@ impl PreparedClaimedResponseFamily {
         else {
             return None;
         };
-        Some((response, self.inbound.sender()?))
+        Some((response, self.inbound.sender()))
     }
 }
 /// Sealed semantic authority derived only from one selected family winner.
@@ -1971,7 +1974,7 @@ impl LifecycleCoordinator {
                     );
                 }
             };
-        let selected_response_matches = {
+        let (selected_response_matches, runtime_receipt) = {
             let family = match selector.persisted_family(id, &authenticated) {
                 Ok(family) => family,
                 Err(error) => {
@@ -1979,10 +1982,25 @@ impl LifecycleCoordinator {
                     retry!(error, receipt);
                 }
             };
-            durable_registry.matches_selected_response(
-                family.ingress_identity,
-                family.inbound.as_ref(),
-                selector.queue_witness.selected_disposition(),
+            let Some(runtime_receipt) = family
+                .inbound
+                .ingress_ownership()
+                .and_then(FairV2IngressOwnershipEvidence::leader_wire_runtime_receipt)
+                .cloned()
+            else {
+                let receipt = durable_registry.abort_before_dequeue();
+                retry!(
+                    CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity,
+                    receipt
+                );
+            };
+            (
+                durable_registry.matches_selected_response(
+                    family.ingress_identity,
+                    family.inbound.as_ref(),
+                    selector.queue_witness.selected_disposition(),
+                ),
+                runtime_receipt,
             )
         };
         if !selected_response_matches {
@@ -2052,14 +2070,29 @@ impl LifecycleCoordinator {
                 );
             }
         };
+        assert!(
+            dequeued
+                .inbound()
+                .ingress_ownership()
+                .and_then(FairV2IngressOwnershipEvidence::leader_wire_runtime_receipt)
+                .is_some_and(|receipt| receipt == &runtime_receipt)
+        );
+        let durable_body = durable_registry.durable_body_receipt().clone();
         durable_registry.commit_after_exact_dequeue(dequeued);
         match ready {
             PreparedCertifiedFetchReadyTransition::Mutation(ready) => ready.commit(),
             PreparedCertifiedFetchReadyTransition::Stutter(_) => {}
         }
         executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated);
-        let _disposition = service_prepared.commit(operation.permit());
+        service_prepared.commit(operation.permit());
         work_ack.commit();
+        if let Err(error) =
+            ingress.mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)
+        {
+            return Err(
+                CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(error),
+            );
+        }
         operation.complete();
         Ok(())
     }
@@ -2699,9 +2732,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             if response.request_hash != selected_request_hash {
                 continue;
             }
-            let Some(responder) = inbound.sender() else {
-                continue;
-            };
+            let responder = inbound.sender();
             let candidate = match self.probe_certified_response_priority(response, responder) {
                 Ok(CertifiedResponsePriorityProbe::DefinitelyNonPriority(_)) => continue,
                 Ok(CertifiedResponsePriorityProbe::PreflightRequired(candidate)) => {
@@ -2753,9 +2784,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             else {
                 return Err(LifecycleIngressSelectorError::InvalidOccurrenceIdentity { ordinal });
             };
-            let responder = inbound
-                .sender()
-                .ok_or(LifecycleIngressSelectorError::InvalidOccurrenceIdentity { ordinal })?;
+            let responder = inbound.sender();
             let exact = match &candidate {
                 PreparedCertifiedResponseCandidate::Ordinary(candidate) => self
                     .revalidate_certified_response_priority_candidate(
@@ -2951,8 +2980,8 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                         && message.validate_version().is_ok()
                         && let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) =
                             &message.payload
-                        && let Some(responder) = inbound.sender()
                     {
+                        let responder = inbound.sender();
                         match self.probe_certified_response_priority(response, responder) {
                             Ok(CertifiedResponsePriorityProbe::DefinitelyNonPriority(_)) => {
                                 if request_fenced_completion {
@@ -3159,7 +3188,8 @@ const fn lifecycle_ingress_resource_is_untrusted(
     source_class: FairV2IngressSourceClass,
     certified_response: bool,
 ) -> bool {
-    certified_response || matches!(source_class, FairV2IngressSourceClass::Anonymous)
+    let _ = source_class;
+    certified_response
 }
 fn lifecycle_context_from_wire(context: &wire::HeightContext) -> LifecycleContext {
     let mut digest = [0_u8; 32];
@@ -3919,10 +3949,6 @@ mod tests {
         assert!(lifecycle_ingress_resource_is_untrusted(
             FairV2IngressSourceClass::Authenticated,
             true,
-        ));
-        assert!(lifecycle_ingress_resource_is_untrusted(
-            FairV2IngressSourceClass::Anonymous,
-            false,
         ));
         assert!(!lifecycle_ingress_resource_is_untrusted(
             FairV2IngressSourceClass::Validator,

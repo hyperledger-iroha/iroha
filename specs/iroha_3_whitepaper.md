@@ -1,31 +1,28 @@
-# Iroha v3.0 (Nexus Preview)
+# Iroha 3 (Nexus)
 
-This document captures the forward-looking Hyperledger Iroha v3 architecture, focusing on the multi-lane
-pipeline, Nexus data spaces, and the Asset Exchange Toolkit (AXT). It complements the Iroha v2 whitepaper by
-describing upcoming capabilities that are actively under development.
+This document describes the Hyperledger Iroha 3 architecture, focusing on the
+multi-lane pipeline, Nexus data spaces, and the Asset Exchange Toolkit (AXT).
 
 ---
 
 ## 1. Overview
 
-Iroha v3 extends the deterministic foundation of v2 with horizontal scalability and richer cross-domain
-workflows. The release, codenamed **Nexus**, introduces:
+Iroha 3 provides horizontal scalability and cross-domain workflows through the
+mandatory **Nexus** runtime:
 
 - A single, globally shared network called **SORA Nexus**. All Iroha v3 peers participate in this universal
   ledger rather than operating isolated deployments. Organisations join by registering their own data spaces,
   which remain isolated for policy and privacy while anchoring into the common ledger.
-- A shared codebase: the same repository builds both Iroha v2 (self-hosted networks) and Iroha v3 (SORA Nexus).
-  Configuration selects the target mode so operators can adopt Nexus features without switching software
-  stacks. The Iroha Virtual Machine (IVM) is identical across both releases, so Kotodama contracts and bytecode
-  artefacts run seamlessly on self-hosted networks and the global Nexus ledger.
+- A single product implementation: every deployment uses Nexus, including
+  deployments configured with one lane. Kotodama contracts and IVM bytecode use
+  the same execution environment throughout the product.
 - Multi-lane block production to process independent workloads in parallel.
 - Data spaces (DS) that isolate execution environments while remaining composable through on-chain anchors.
 - The Asset Exchange Toolkit (AXT) for atomic, cross-space value transfers and contract-controlled swaps.
 - Enhanced reliability through Reliable Broadcast Commit (RBC) lanes, deterministic deadlines, and proof
   sampling budgets.
 
-These features remain under active development; APIs and layouts may evolve before the v3 general
-availability milestone. Refer to `nexus.md`, `nexus_transition_notes.md`, and `new_pipeline.md` for
+Refer to `nexus.md`, `nexus_transition_notes.md`, and `new_pipeline.md` for
 engineering-level detail.
 
 ## 2. Multi-lane architecture
@@ -84,12 +81,12 @@ engineering-level detail.
 
 ## 6. Operations and migration
 
-- **Transition plan:** `nexus_transition_notes.md` outlines phased migration from single-lane (Iroha v2) to
-  multi-lane (Iroha v3), including telemetry staging, config gating, and genesis updates.
+- **Operational invariants:** `nexus_transition_notes.md` records mandatory
+  Nexus configuration for one-lane and multi-lane deployments.
 - **Universal network:** SORA Nexus peers run a common genesis and governance stack. New operators onboard by
   creating a data space (DS) and satisfying Nexus admission policies instead of launching standalone networks.
-- **Configuration:** New config knobs cover lane budgets, proof deadlines, AXT quotas, and data-space metadata.
-  Defaults remain conservative until operators opt into Nexus mode.
+- **Configuration:** Config knobs cover lane budgets, proof deadlines, AXT quotas,
+  and data-space metadata. Nexus mode is mandatory.
 - **Testing:** Golden tests capture AXT descriptors, lane manifests, and syscall lists. Integration tests
   (`integration_tests/tests/repo.rs`, `crates/ivm/tests/axt_host_flow.rs`) exercise end-to-end flows.
 - **Tooling:** `kagami` gains Nexus-aware genesis generation, and dashboard scripts validate lane throughput,

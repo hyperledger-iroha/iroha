@@ -24,6 +24,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--production-policy", required=True, help="Canonical production iOS policy JSON.")
     parser.add_argument("--trusted-key-id", required=True, help="Exact trusted lab signer key id.")
     parser.add_argument("--trusted-public-key", required=True, help="Trusted Ed25519 public PEM.")
+    parser.add_argument(
+        "--freshness-receipt",
+        required=True,
+        help="Canonical signed online freshness/consumption receipt JSON.",
+    )
+    parser.add_argument(
+        "--trusted-freshness-key-id",
+        required=True,
+        help="Exact independent online-authority signer key id.",
+    )
+    parser.add_argument(
+        "--trusted-freshness-public-key",
+        required=True,
+        help="Trusted independent online-authority Ed25519 public PEM.",
+    )
     args = parser.parse_args(argv)
     errors = production_evidence.validate_production_signed_evidence(
         Path(args.evidence),
@@ -32,6 +47,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         Path(args.trusted_public_key),
         Path(args.production_policy),
         candidate_evidence,
+        freshness_receipt_path=Path(args.freshness_receipt),
+        trusted_freshness_key_id=args.trusted_freshness_key_id,
+        trusted_freshness_public_key_path=Path(
+            args.trusted_freshness_public_key
+        ),
     )
     if errors:
         for error in errors:

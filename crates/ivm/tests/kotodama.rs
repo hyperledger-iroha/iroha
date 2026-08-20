@@ -84,12 +84,6 @@ fn create_compiler() {
     let _c = Compiler::new();
 }
 #[test]
-fn compile_stub() {
-    let compiler = Compiler::new();
-    let result = compiler.compile_source("ADD 1, 2");
-    assert!(result.is_err(), "compiler should reject invalid source");
-}
-#[test]
 fn lex_simple_function() {
     let src = "fn add(int a, int b) { let c = a + b; }";
     let tokens = lex(src).expect("lex failed");
@@ -167,135 +161,488 @@ fn bytes_type_is_accepted_and_roundtrips_through_semantics() {
     let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
     assert_eq!(f.ret_ty, Some(Type::Bytes));
 }
-#[test]
-fn string_equality_compiles() {
-    let src = "seiyaku StringEquality { view fn f() { let _x = \"hi\" == \"hi\"; } }";
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("string equality should compile");
-    assert!(!code.is_empty());
+#[derive(Clone, Copy)]
+enum CaseSource {
+    Exact(&'static str),
+    Fixture(&'static str),
 }
-#[test]
-fn irohaswap_sample_compiles() {
-    let src = include_str!("../../kotodama_lang/src/samples/irohaswap.ko");
-    let code = test_compiler()
-        .compile_source(src)
-        .expect("irohaswap sample should compile");
-    assert!(!code.is_empty());
-}
-#[test]
-fn prediction_market_demo_compiles() {
-    let src = include_str!("../../../demo/prediction_market.ko");
-    let code = test_compiler()
-        .compile_source(src)
-        .expect("prediction market demo should compile");
-    assert!(!code.is_empty());
-}
-#[test]
-fn tuple_destructure_and_field_access() {
-    // Destructure a tuple literal into (a,b) and sum; also exercise direct field access `(1,2).1`
-    let src = "seiyaku TupleDestructure { view fn sum() -> int { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; } }";
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("compile tuple destructure");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm, &code, "sum");
-    match vm.run() {
-        Ok(_) => {
-            eprintln!("tuple_destructure_and_field_access r10={}", vm.register(10));
-            assert_eq!(common::decode_i64_register(&vm, 10), 3 + 4 + 2);
-        }
-        Err(e) => {
-            panic!("vm run error: {e:?}");
+
+impl CaseSource {
+    fn text(self, id: &str) -> &'static str {
+        match self {
+            Self::Exact(source) => source,
+            Self::Fixture(source) => source
+                .strip_suffix('\n')
+                .unwrap_or_else(|| panic!("{id}: fixture sentinel newline")),
         }
     }
 }
-#[test]
-fn tuple_var_member_access() {
-    // Bind a tuple to a name and use member access on it.
-    let src = "seiyaku TupleMember { view fn f() -> int { let t = (5,6); return t.0 + t.1; } }";
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("compile tuple var member");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm, &code, "f");
-    match vm.run() {
-        Ok(_) => {
-            eprintln!("tuple_var_member_access r10={}", vm.register(10));
-            assert_eq!(common::decode_i64_register(&vm, 10), 11);
+
+#[derive(Clone, Copy)]
+enum CaseCompiler {
+    Production,
+    Test,
+}
+
+impl CaseCompiler {
+    fn build(self) -> Compiler {
+        match self {
+            Self::Production => Compiler::new(),
+            Self::Test => test_compiler(),
         }
-        Err(e) => panic!("vm run error: {e:?}"),
     }
 }
-#[test]
-fn call_function_with_tuple_return() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/001.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("compile tuple-returning call");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).expect("load program");
-    common::select_kotodama_entrypoint(&mut vm, &code, "main");
-    vm.run().expect("run tuple call");
-    assert_eq!(common::decode_i64_register(&vm, 10), 56);
+
+struct CompileCase {
+    id: &'static str,
+    source: CaseSource,
+    compiler: CaseCompiler,
 }
-#[test]
-fn quantity_arithmetic_compiles_without_implicit_conversion() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/002.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    Compiler::new()
-        .compile_source(src)
-        .expect("compile quantity arithmetic");
+struct CompileRejectionCase {
+    id: &'static str,
+    source: CaseSource,
+    compiler: CaseCompiler,
+    required: &'static [&'static str],
+    alternatives: &'static [&'static str],
 }
-#[test]
-fn negative_quantity_conversion_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/003.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = Compiler::new()
-        .compile_source(src)
-        .expect_err("negative quantity literal should fail");
-    assert!(err.to_string().contains("E_NEGATIVE_QUANTITY"), "{err}");
+struct SemanticRejectionCase {
+    id: &'static str,
+    source: CaseSource,
+    code: Option<&'static str>,
+    message: &'static str,
 }
-#[test]
-fn fractional_quantity_literal_is_accepted_contextually() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/004.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    Compiler::new()
-        .compile_source(src)
-        .expect("fractional quantity literal should compile in quantity context");
+struct VmResultCase {
+    id: &'static str,
+    source: CaseSource,
+    entrypoint: &'static str,
+    expected: i64,
 }
-#[test]
-fn decimal_literal_rejects_int_annotation() {
-    let prog = parse(
-        include_str!("../fixtures/koto_v1/kotodama/005.ko")
-            .strip_suffix('\n')
-            .expect("fixture sentinel newline"),
-    )
-    .expect("parse decimal literal");
-    let err = analyze(&prog).expect_err("expected decimal literal type error");
-    assert_eq!(err.code(), "E_TYPE_ANNOTATION_MISMATCH");
-    assert!(
-        err.message().contains("expected int, got decimal"),
-        "unexpected error message: {}",
-        err.message()
-    );
+struct ParseRejectionCase {
+    id: &'static str,
+    source: CaseSource,
+    required: &'static [&'static str],
 }
+struct SemanticSuccessCase {
+    id: &'static str,
+    source: CaseSource,
+    require_nonempty_first_function: bool,
+}
+
+macro_rules! compile_cases {
+    ($($id:literal, $compiler:ident, $source:expr;)+) => {
+        const COMPILE_CASES: &[CompileCase] = &[$(
+            CompileCase { id: $id, source: $source, compiler: CaseCompiler::$compiler }
+        ),+];
+    };
+}
+macro_rules! compile_rejection_cases {
+    ($($id:literal, $compiler:ident, $source:expr, $required:expr, $alternatives:expr;)+) => {
+        const COMPILE_REJECTION_CASES: &[CompileRejectionCase] = &[$(
+            CompileRejectionCase {
+                id: $id, source: $source, compiler: CaseCompiler::$compiler,
+                required: $required, alternatives: $alternatives,
+            }
+        ),+];
+    };
+}
+macro_rules! semantic_rejection_cases {
+    ($($id:literal, $source:expr, $code:expr, $message:expr;)+) => {
+        const SEMANTIC_REJECTION_CASES: &[SemanticRejectionCase] = &[$(
+            SemanticRejectionCase { id: $id, source: $source, code: $code, message: $message }
+        ),+];
+    };
+}
+macro_rules! vm_result_cases {
+    ($($id:literal, $source:expr, $entrypoint:literal, $expected:literal;)+) => {
+        const VM_RESULT_CASES: &[VmResultCase] = &[$(
+            VmResultCase { id: $id, source: $source, entrypoint: $entrypoint, expected: $expected }
+        ),+];
+    };
+}
+macro_rules! parse_rejection_cases {
+    ($($id:literal, $source:expr, $required:expr;)+) => {
+        const PARSE_REJECTION_CASES: &[ParseRejectionCase] = &[$(
+            ParseRejectionCase { id: $id, source: $source, required: $required }
+        ),+];
+    };
+}
+macro_rules! semantic_success_cases {
+    ($($id:literal, $source:expr, $nonempty:literal;)+) => {
+        const SEMANTIC_SUCCESS_CASES: &[SemanticSuccessCase] = &[$(
+            SemanticSuccessCase {
+                id: $id, source: $source, require_nonempty_first_function: $nonempty,
+            }
+        ),+];
+    };
+}
+
+compile_cases! {
+    "string_equality_compiles", Production,
+        CaseSource::Exact("seiyaku StringEquality { view fn f() { let _x = \"hi\" == \"hi\"; } }");
+    "irohaswap_sample_compiles", Test,
+        CaseSource::Exact(include_str!("../../kotodama_lang/src/samples/irohaswap.ko"));
+    "prediction_market_demo_compiles", Test,
+        CaseSource::Exact(include_str!("../../../demo/prediction_market.ko"));
+    "quantity_arithmetic_compiles_without_implicit_conversion", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/002.ko"));
+    "fractional_quantity_literal_is_accepted_contextually", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/004.ko"));
+    "pointer_constructors_compile", Test,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/007.ko"));
+    "public_function_with_permission_is_allowed", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/012.ko"));
+    "compile_unary_ops", Production,
+        CaseSource::Exact("seiyaku UnaryOps { view fn f(int a, bool b) { let c = -a; let d = !b; } }");
+}
+
+compile_rejection_cases! {
+    "compile_stub", Production,
+        CaseSource::Exact("ADD 1, 2"),
+        &[], &[];
+    "negative_quantity_conversion_is_rejected", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/003.ko")),
+        &["E_NEGATIVE_QUANTITY"], &[];
+    "implicit_quantity_to_int_conversion_is_rejected", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/006.ko")),
+        &["expected int, got quantity"], &[];
+    "public_function_without_authorization_rejected", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/008.ko")),
+        &["authorize"], &[];
+    "register_peer_requires_permission", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/009.ko")),
+        &["authorize"], &[];
+    "register_account_requires_permission", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/010.ko")),
+        &["authorize"], &[];
+    "trigger_management_requires_permission", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/011.ko")),
+        &["authorize"], &[];
+    "removed_in_memory_map_type_is_rejected", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/013.ko")),
+        &[], &["Map", "unknown type"];
+    "raw_query_and_authority_sysvar_helpers_are_not_source_apis/query", Test,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/024.ko")),
+        &["query_execute_norito"], &[];
+    "raw_query_and_authority_sysvar_helpers_are_not_source_apis/authority", Test,
+        CaseSource::Exact(
+            r#"seiyaku RawAuthority { view fn caller() -> AccountId { return sysvar_authority(); } }"#,
+        ),
+        &["sysvar_authority"], &[];
+    "dynamic_state_map_take_is_rejected", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/046.ko")),
+        &["E_UNBOUNDED_ITERATION", "literal"], &[];
+    "dynamic_state_map_range_is_rejected", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/047.ko")),
+        &["E_UNBOUNDED_ITERATION", "literal"], &[];
+    "indirect_sensitive_calls_require_permission", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/055.ko")),
+        &["authorize"], &[];
+    "while_loops_are_rejected_in_v1", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/056.ko")),
+        &["while"], &[];
+    "compile_pubkgen_and_valcom", Production,
+        CaseSource::Exact("seiyaku Commitments { view fn main() -> (int, int) { let p = crypto::pubkgen(9); let c = crypto::valcom(left: 9, right: 4); return (p, c); } }"),
+        &["crypto::pubkgen"], &[];
+    "raw_json_codec_aliases_are_rejected", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/059.ko")),
+        &[], &["decode_json", "unknown"];
+    "compile_and_run_poseidon_register_forms", Production,
+        CaseSource::Exact(include_str!("../fixtures/koto_v1/kotodama/060.ko")),
+        &[], &["crypto::poseidon2", "crypto::poseidon6"];
+    "unbounded_state_map_iteration_is_rejected", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/061.ko")),
+        &["StateMap iteration requires `.take(N)` or `.range(start, end)`"], &[];
+    "unbounded_state_map_iteration_cannot_infer_a_limit", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/062.ko")),
+        &["StateMap iteration requires `.take(N)` or `.range(start, end)`"], &[];
+    "map_new_is_rejected_in_v1", Production,
+        CaseSource::Exact("module RemovedMap { fn make() -> int { return Map::new(); } }"),
+        &["Map"], &[];
+    "raw_pointer_codec_alias_is_rejected", Production,
+        CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/072.ko")),
+        &[], &["pointer_to_norito", "unknown"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/account_id_bytes", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f(bytes value) { let _x = AccountId::parse(value); } }"#),
+        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/json_bytes", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f(bytes value) { let _x = Json::parse(value); } }"#),
+        &[], &["expects string", "E_JSON_LITERAL_REQUIRED", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/name_bytes", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f(bytes value) { let _x = Name::parse(value); } }"#),
+        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/name_name", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f(Name value) { let _x = Name::parse(value); } }"#),
+        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/account_method", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f(string value) { let _x = value.account_id(); } }"#),
+        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/name_method", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f(string value) { let _x = value.name(); } }"#),
+        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/json_method", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f(string value) { let _x = value.json(); } }"#),
+        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/blob_method", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f(bytes value) { let _x = value.blob(); } }"#),
+        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/norito_method", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f(bytes value) { let _x = value.norito_bytes(); } }"#),
+        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/blob_builtin", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f() { let _x = blob("raw"); } }"#),
+        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+    "pointer_constructors_reject_implicit_conversions_and_method_aliases/norito_builtin", Production,
+        CaseSource::Exact(r#"seiyaku C { fn f() { let _x = norito_bytes("raw"); } }"#),
+        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+}
+
+semantic_rejection_cases! {
+    "decimal_literal_rejects_int_annotation", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/005.ko")),
+        Some("E_TYPE_ANNOTATION_MISMATCH"), "expected int, got decimal";
+    "semantic_rejects_extended_sysvar_helper_args", CaseSource::Exact(r#"module InvalidContext { fn f() { let _chain = context::chain_id(1); } }"#),
+        None, "chain_id expects no arguments";
+    "semantic_rejects_extended_query_and_authority_sysvar_helper_args/query", CaseSource::Exact(r#"module InvalidQuery { fn f() { let _response = query_execute_norito(1); } }"#),
+        None, "query_execute_norito";
+    "semantic_rejects_extended_query_and_authority_sysvar_helper_args/authority", CaseSource::Exact(r#"module InvalidAuthority { fn f() { let _caller = sysvar_authority(1); } }"#),
+        None, "sysvar_authority";
+    "semantic_rejects_typed_query_get_helper_args/account", CaseSource::Exact(r#"module InvalidQuery { fn f() { let _account = ledger::query::account(1); } }"#),
+        None, "ledger::query::account";
+    "semantic_rejects_typed_query_get_helper_args/instance", CaseSource::Exact(r#"module InvalidQuery { fn f() { let _instance = ledger::query::seiyaku_instance(1); } }"#),
+        None, "ledger::query::seiyaku_instance";
+    "semantic_rejects_zk_vrf_read_helper_args", CaseSource::Exact(r#"module InvalidVrfRequest { fn f() { let _seed = crypto::vrf::epoch_seed(1); } }"#),
+        None, "crypto::vrf::epoch_seed expects (bytes) pointer to NoritoBytes VrfEpochSeedRequest";
+    "semantic_rejects_state_introspection_helper_args", CaseSource::Exact(r#"seiyaku C { fn f() { let prefix = Name::parse("Orders").path(0); let _keys = state::keys(path: prefix, offset: 0, limit: b"bad"); } }"#),
+        None, "state::keys expects (bytes StatePath, int offset, int limit)";
+    "semantic_rejects_legacy_name_state_path_carriers", CaseSource::Exact(r#"seiyaku C { fn f() { let _keys = state::keys(path: Name::parse("Orders"), offset: 0, limit: 1); } }"#),
+        Some("K2003"), "state::keys expects (bytes StatePath, int offset, int limit)";
+    "semantic_rejects_extended_hash_non_bytes_arg", CaseSource::Exact(r#"module InvalidHash { fn f() { let digest = crypto::keccak256(1); } }"#),
+        None, "crypto::keccak256 expects (bytes)";
+    "for_each_map_mutation_is_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/030.ko")),
+        Some("E_ITER_MUTATION"), "";
+    "semantic_type_error", CaseSource::Exact("module InvalidArithmetic { fn bad() { let a = 1 + \"hi\"; } }"),
+        None, "operator Add is not defined for int and string";
+    "invalid_numeric_on_struct_reports_error", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/035.ko")),
+        None, "unknown field '0' on struct A";
+    "invalid_named_on_tuple_reports_error", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/036.ko")),
+        None, "unknown field 'a' on tuple";
+    "invalid_numeric_tuple_index_reports_error", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/037.ko")),
+        None, "tuple index 3 out of bounds";
+    "tuple_index_on_non_tuple_reports_type", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/038.ko")),
+        None, "tuple index on non-tuple type struct A";
+    "tuple_index_on_non_tuple_int_reports_type", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/039.ko")),
+        None, "tuple index on non-tuple type int";
+    "unknown_field_on_struct_reports_available_fields", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/040.ko")),
+        None, "unknown field 'z' on struct A (available: x, y)";
+    "invalid_named_on_non_struct_reports_error", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/041.ko")),
+        None, "unknown field 'foo' on type int";
+    "invalid_indexing_on_non_map_reports_error", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/042.ko")),
+        None, "indexing not supported on this type";
+    "range_end_less_than_start_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/044.ko")),
+        None, "end >= start";
+    "range_non_integer_args_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/045.ko")),
+        None, "range(start, end)";
+    "parse_register_asset_rejects_bare_name_literal", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/065.ko")),
+        None, "AssetDefinitionId";
+    "in_memory_map_methods_are_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/066.ko")),
+        None, "Map";
+    "ephemeral_keys_take2_helper_is_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/068.ko")),
+        None, "Map";
+    "ephemeral_keys_values_take2_helper_is_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/069.ko")),
+        None, "Map";
+    "semantic_return_value_without_declared_type_is_rejected", CaseSource::Exact("module ReturnMismatch { fn f() { return 1; } }"),
+        Some("K2003"), "declared return type";
+}
+
+vm_result_cases! {
+    "tuple_destructure_and_field_access", CaseSource::Exact("seiyaku TupleDestructure { view fn sum() -> int { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; } }"),
+        "sum", 9;
+    "tuple_var_member_access", CaseSource::Exact("seiyaku TupleMember { view fn f() -> int { let t = (5,6); return t.0 + t.1; } }"),
+        "f", 11;
+    "call_function_with_tuple_return", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/001.ko")),
+        "main", 56;
+    "state_allocations_do_not_clobber_params", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/031.ko")),
+        "main", 42;
+    "triple_nested_struct_field_access", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/033.ko")),
+        "f", 5;
+    "triple_nested_struct_field_mixed_named_numeric_access", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/034.ko")),
+        "f", 7;
+    "method_call_sugar_receiver_and_arg", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/043.ko")),
+        "main", 12;
+    "compile_and_run_modulo", CaseSource::Exact("seiyaku Modulo { view fn main() -> int { return 17 % 5; } }"),
+        "main", 2;
+}
+
+parse_rejection_cases! {
+    "parse_for_each_map_and_builtins", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/014.ko")),
+        &["StateMap iteration requires `.take(N)` or `.range(start, end)`"];
+    "c_style_for_loop_is_rejected", CaseSource::Exact("module Loops { fn f() { for var i = 0; i < 3; i = i + 1 { let x = i; } } }"),
+        &[];
+    "removed_bounded_attribute_is_rejected", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/016.ko")),
+        &[];
+    "parse_error", CaseSource::Exact("module Broken { fn bad("),
+        &["identifier", "module Broken { fn bad("];
+    "statement_call_sugar_is_rejected/helper", CaseSource::Exact("seiyaku C { fn f() { call helper(); } fn helper() {} }"),
+        &["call"];
+    "statement_call_sugar_is_rejected/expression", CaseSource::Exact("seiyaku C { fn f() { call 1; } }"),
+        &["call"];
+}
+
+semantic_success_cases! {
+    "literal_range_for_loop_is_bounded", CaseSource::Exact("module Loops { fn f() { for x in range(6) { let y = x; } } }"),
+        false;
+    "state_map_take_two_is_bounded", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/015.ko")),
+        false;
+    "parse_and_type_bounded_map_take_one_ok", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/017.ko")),
+        true;
+    "semantic_typed_pointers_and_authority", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/022.ko")),
+        false;
+    "parse_and_type_bounded_map_take_one", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/029.ko")),
+        true;
+    "lexer_block_comments_and_number_literals", CaseSource::Fixture(include_str!("../fixtures/koto_v1/kotodama/053.ko")),
+        false;
+    "compound_assignments_typecheck", CaseSource::Exact(r#"module Compound { fn f() { var x = 1; x += 2; x *= 3; x /= 2; x %= 2; } }"#),
+        false;
+}
+
+fn run_compile_cases(cases: &[CompileCase]) {
+    for case in cases {
+        let code = case
+            .compiler
+            .build()
+            .compile_source(case.source.text(case.id))
+            .unwrap_or_else(|error| panic!("{} should compile: {error}", case.id));
+        assert!(!code.is_empty(), "{} produced an empty artifact", case.id);
+    }
+}
+
+fn run_compile_rejection_cases(cases: &[CompileRejectionCase]) {
+    for case in cases {
+        let error = match case
+            .compiler
+            .build()
+            .compile_source(case.source.text(case.id))
+        {
+            Ok(_) => panic!("{} should be rejected", case.id),
+            Err(error) => error,
+        };
+        for expected in case.required {
+            assert!(
+                error.contains(expected),
+                "{}: expected `{expected}`, got {error}",
+                case.id
+            );
+        }
+        assert!(
+            case.alternatives.is_empty()
+                || case
+                    .alternatives
+                    .iter()
+                    .any(|expected| error.contains(expected)),
+            "{}: expected one of {:?}, got {error}",
+            case.id,
+            case.alternatives,
+        );
+    }
+}
+
+fn run_semantic_rejection_cases(cases: &[SemanticRejectionCase]) {
+    for case in cases {
+        let program = parse(case.source.text(case.id))
+            .unwrap_or_else(|error| panic!("{} should parse: {error}", case.id));
+        let error = match analyze(&program) {
+            Ok(_) => panic!("{} should be rejected", case.id),
+            Err(error) => error,
+        };
+        if let Some(code) = case.code {
+            assert_eq!(error.code(), code, "{} diagnostic code", case.id);
+        }
+        assert!(
+            error.message().contains(case.message),
+            "{}: expected `{}`, got {}",
+            case.id,
+            case.message,
+            error.message(),
+        );
+    }
+}
+
+fn run_vm_result_cases(cases: &[VmResultCase]) {
+    for case in cases {
+        let code = Compiler::new()
+            .compile_source(case.source.text(case.id))
+            .unwrap_or_else(|error| panic!("{} should compile: {error}", case.id));
+        let mut vm = ivm::IVM::new(u64::MAX);
+        vm.load_program(&code)
+            .unwrap_or_else(|error| panic!("{} should load: {error:?}", case.id));
+        common::select_kotodama_entrypoint(&mut vm, &code, case.entrypoint);
+        vm.run()
+            .unwrap_or_else(|error| panic!("{} should execute: {error:?}", case.id));
+        assert_eq!(
+            common::decode_i64_register(&vm, 10),
+            case.expected,
+            "{} result",
+            case.id,
+        );
+    }
+}
+
+fn run_parse_rejection_cases(cases: &[ParseRejectionCase]) {
+    for case in cases {
+        let error = match parse(case.source.text(case.id)) {
+            Ok(_) => panic!("{} unexpectedly parsed", case.id),
+            Err(error) => error,
+        };
+        for expected in case.required {
+            assert!(
+                error.contains(expected),
+                "{}: expected `{expected}`, got {error}",
+                case.id
+            );
+        }
+    }
+}
+
+fn run_semantic_success_cases(cases: &[SemanticSuccessCase]) {
+    for case in cases {
+        let program = parse(case.source.text(case.id))
+            .unwrap_or_else(|error| panic!("{} should parse: {error}", case.id));
+        let typed = analyze(&program)
+            .unwrap_or_else(|error| panic!("{} should type-check: {error}", case.id));
+        if case.require_nonempty_first_function {
+            let ivm::kotodama::semantic::TypedItem::Function(function) = &typed.items[0];
+            assert!(!function.body.statements.is_empty(), "{} body", case.id);
+        }
+    }
+}
+
 #[test]
-fn implicit_quantity_to_int_conversion_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/006.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let error = Compiler::new()
-        .compile_source(src)
-        .expect_err("implicit quantity-to-int conversion must fail");
-    assert!(error.contains("expected int, got quantity"), "{error}");
+fn compile_case_registry() {
+    run_compile_cases(COMPILE_CASES);
+}
+
+#[test]
+fn compile_rejection_case_registry() {
+    run_compile_rejection_cases(COMPILE_REJECTION_CASES);
+}
+
+#[test]
+fn semantic_rejection_case_registry() {
+    run_semantic_rejection_cases(SEMANTIC_REJECTION_CASES);
+}
+
+#[test]
+fn vm_result_case_registry() {
+    run_vm_result_cases(VM_RESULT_CASES);
+}
+
+#[test]
+fn parse_rejection_case_registry() {
+    run_parse_rejection_cases(PARSE_REJECTION_CASES);
+}
+
+#[test]
+fn semantic_success_case_registry() {
+    run_semantic_success_cases(SEMANTIC_SUCCESS_CASES);
 }
 #[test]
 fn assert_builtin_obeys_truthiness() {
@@ -335,136 +682,6 @@ fn many_string_literals_load_under_wide_guard() {
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code)
         .expect("wide guard must accept Kotodama output");
-}
-#[test]
-fn pointer_constructors_compile() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/007.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    test_compiler()
-        .compile_source(src)
-        .expect("compile typed pointer constructors");
-}
-#[test]
-fn public_function_without_authorization_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/008.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = Compiler::new()
-        .compile_source(src)
-        .expect_err("missing permission should be rejected");
-    assert!(
-        err.contains("authorize"),
-        "error should mention missing authorization: {err}"
-    );
-}
-#[test]
-fn register_peer_requires_permission() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/009.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = Compiler::new()
-        .compile_source(src)
-        .expect_err("missing permission should be rejected");
-    assert!(
-        err.contains("authorize"),
-        "error should mention missing authorization for peer registration: {err}"
-    );
-}
-#[test]
-fn register_account_requires_permission() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/010.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = Compiler::new()
-        .compile_source(src)
-        .expect_err("missing permission should be rejected");
-    assert!(
-        err.contains("authorize"),
-        "error should mention missing authorization for account registration: {err}"
-    );
-}
-#[test]
-fn trigger_management_requires_permission() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/011.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = Compiler::new()
-        .compile_source(src)
-        .expect_err("missing permission should be rejected");
-    assert!(
-        err.contains("authorize"),
-        "error should mention missing authorization for trigger operations: {err}"
-    );
-}
-#[test]
-fn public_function_with_permission_is_allowed() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/012.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    Compiler::new()
-        .compile_source(src)
-        .expect("permission attribute should allow privileged call");
-}
-#[test]
-fn removed_in_memory_map_type_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/013.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = Compiler::new()
-        .compile_source(src)
-        .expect_err("in-memory Map must be rejected");
-    assert!(
-        err.contains("Map") || err.contains("unknown type"),
-        "unexpected error: {err}"
-    );
-}
-#[test]
-fn parse_for_each_map_and_builtins() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/014.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = parse(src).expect_err("bare StateMap iteration must be rejected");
-    assert!(
-        err.contains("StateMap iteration requires `.take(N)` or `.range(start, end)`"),
-        "error hint should mention the canonical bounded helpers: {err}"
-    );
-}
-#[test]
-fn c_style_for_loop_is_rejected() {
-    let src = "module Loops { fn f() { for var i = 0; i < 3; i = i + 1 { let x = i; } } }";
-    parse(src).expect_err("V1 only accepts compiler-proven bounded iterator loops");
-}
-#[test]
-fn literal_range_for_loop_is_bounded() {
-    let src = "module Loops { fn f() { for x in range(6) { let y = x; } } }";
-    let prog = parse(src).expect("parse should succeed");
-    analyze(&prog).expect("a literal range within the V1 bound must type-check");
-}
-#[test]
-fn state_map_take_two_is_bounded() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/015.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse");
-    analyze(&prog).expect("StateMap take(2) is compiler-bounded");
-}
-#[test]
-fn removed_bounded_attribute_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/016.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    parse(src).expect_err("legacy bounded attributes are not V1 syntax");
-}
-#[test]
-fn parse_and_type_bounded_map_take_one_ok() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/017.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse");
-    let typed = analyze(&prog).expect("analyze");
-    let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
-    assert!(!func.body.statements.is_empty());
 }
 #[test]
 fn compile_domain_literal_emits_tlv_domainid() {
@@ -519,18 +736,6 @@ fn compile_blob_literal_emits_tlv_blob() {
     assert!(
         bytes.windows(2).any(|w| w == [0x00, 0x06]),
         "expected bytes TLV type (0x0006) in compiled artifact"
-    );
-}
-#[test]
-fn semantic_typed_pointers_and_authority() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/022.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse");
-    let res = analyze(&prog);
-    assert!(
-        res.is_ok(),
-        "semantics should accept typed pointers + authority"
     );
 }
 #[test]
@@ -601,54 +806,6 @@ fn compile_emits_extended_sysvar_helpers() {
             "{name} syscall not found"
         );
     }
-}
-#[test]
-fn semantic_rejects_extended_sysvar_helper_args() {
-    let prog = parse(r#"module InvalidContext { fn f() { let _chain = context::chain_id(1); } }"#)
-        .unwrap();
-    let err = analyze(&prog).expect_err("expected sysvar arity error");
-    assert!(
-        err.message().contains("chain_id expects no arguments"),
-        "unexpected error: {}",
-        err.message()
-    );
-}
-#[test]
-fn raw_query_and_authority_sysvar_helpers_are_not_source_apis() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/024.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let error = test_compiler()
-        .compile_source(src)
-        .expect_err("raw query bridge must be rejected");
-    assert!(error.contains("query_execute_norito"));
-    let raw_authority =
-        r#"seiyaku RawAuthority { view fn caller() -> AccountId { return sysvar_authority(); } }"#;
-    let error = test_compiler()
-        .compile_source(raw_authority)
-        .expect_err("direct sysvar helper must be rejected");
-    assert!(error.contains("sysvar_authority"));
-}
-#[test]
-fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
-    let prog =
-        parse(r#"module InvalidQuery { fn f() { let _response = query_execute_norito(1); } }"#)
-            .unwrap();
-    let err = analyze(&prog).expect_err("expected query payload type error");
-    assert!(
-        err.message().contains("query_execute_norito"),
-        "unexpected error: {}",
-        err.message()
-    );
-    let prog =
-        parse(r#"module InvalidAuthority { fn f() { let _caller = sysvar_authority(1); } }"#)
-            .unwrap();
-    let err = analyze(&prog).expect_err("expected sysvar arity error");
-    assert!(
-        err.message().contains("sysvar_authority"),
-        "unexpected error: {}",
-        err.message()
-    );
 }
 #[test]
 fn compile_emits_core_query_get_helpers() {
@@ -739,28 +896,6 @@ fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
     assert!(!read.read_keys.contains(&"*".to_string()));
 }
 #[test]
-fn semantic_rejects_typed_query_get_helper_args() {
-    let prog =
-        parse(r#"module InvalidQuery { fn f() { let _account = ledger::query::account(1); } }"#)
-            .unwrap();
-    let err = analyze(&prog).expect_err("expected account query key type error");
-    assert!(
-        err.message().contains("ledger::query::account"),
-        "unexpected error: {}",
-        err.message()
-    );
-    let prog = parse(
-        r#"module InvalidQuery { fn f() { let _instance = ledger::query::seiyaku_instance(1); } }"#,
-    )
-    .unwrap();
-    let err = analyze(&prog).expect_err("expected contract instance query key type error");
-    assert!(
-        err.message().contains("ledger::query::seiyaku_instance"),
-        "unexpected error: {}",
-        err.message()
-    );
-}
-#[test]
 fn compile_emits_zk_vrf_read_helpers() {
     let src = include_str!("../fixtures/koto_v1/kotodama/026.ko")
         .strip_suffix('\n')
@@ -838,20 +973,6 @@ fn manifest_includes_exact_access_hints_for_static_zk_read_requests() {
     assert!(!read.read_keys.contains(&"*".to_string()));
 }
 #[test]
-fn semantic_rejects_zk_vrf_read_helper_args() {
-    let prog =
-        parse(r#"module InvalidVrfRequest { fn f() { let _seed = crypto::vrf::epoch_seed(1); } }"#)
-            .unwrap();
-    let err = analyze(&prog).expect_err("expected vrf seed payload type error");
-    assert!(
-        err.message().contains(
-            "crypto::vrf::epoch_seed expects (bytes) pointer to NoritoBytes VrfEpochSeedRequest"
-        ),
-        "unexpected error: {}",
-        err.message()
-    );
-}
-#[test]
 fn compile_emits_state_introspection_helpers() {
     let src = include_str!("../fixtures/koto_v1/kotodama/027.ko")
         .strip_suffix('\n')
@@ -871,38 +992,6 @@ fn compile_emits_state_introspection_helpers() {
             "{name} syscall not found"
         );
     }
-}
-#[test]
-fn semantic_rejects_state_introspection_helper_args() {
-    let prog = parse(
-        r#"seiyaku C { fn f() { let prefix = Name::parse("Orders").path(0); let _keys = state::keys(path: prefix, offset: 0, limit: b"bad"); } }"#,
-    )
-    .unwrap();
-    let err = analyze(&prog).expect_err("expected state_keys type error");
-    assert!(
-        err.message()
-            .contains("state::keys expects (bytes StatePath, int offset, int limit)"),
-        "unexpected error: {}",
-        err.message()
-    );
-}
-#[test]
-fn semantic_rejects_legacy_name_state_path_carriers() {
-    // `Name` is retained here only as an explicit negative ABI fixture. V1
-    // durable-state calls require `bytes` containing canonical Norito
-    // `StatePath`, even though ordinary business identifiers remain `Name`.
-    let prog = parse(
-        r#"seiyaku C { fn f() { let _keys = state::keys(path: Name::parse("Orders"), offset: 0, limit: 1); } }"#,
-    )
-    .unwrap();
-    let err = analyze(&prog).expect_err("legacy Name state path must be rejected");
-    assert_eq!(err.code(), "K2003");
-    assert!(
-        err.message()
-            .contains("state::keys expects (bytes StatePath, int offset, int limit)"),
-        "unexpected error: {}",
-        err.message()
-    );
 }
 #[test]
 fn compile_emits_extended_hash_syscalls() {
@@ -928,17 +1017,6 @@ fn compile_emits_extended_hash_syscalls() {
     }
 }
 #[test]
-fn semantic_rejects_extended_hash_non_bytes_arg() {
-    let prog =
-        parse(r#"module InvalidHash { fn f() { let digest = crypto::keccak256(1); } }"#).unwrap();
-    let err = analyze(&prog).expect_err("expected type error");
-    assert!(
-        err.message().contains("crypto::keccak256 expects (bytes)"),
-        "unexpected error: {}",
-        err.message()
-    );
-}
-#[test]
 fn compile_emits_resolve_account_alias_syscall() {
     let src = r#"seiyaku ResolveAlias { view fn f() { let a = ledger::account::resolve_alias("banking@centralbank"); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
@@ -957,33 +1035,6 @@ fn compile_emits_resolve_account_alias_syscall() {
     );
 }
 #[test]
-fn parse_and_type_bounded_map_take_one() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/029.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse");
-    let typed = analyze(&prog).expect("analyze");
-    let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
-    assert!(!func.body.statements.is_empty());
-}
-#[test]
-fn for_each_map_mutation_is_rejected() {
-    // Mutation of the iterated map inside the loop must be rejected.
-    let src = include_str!("../fixtures/koto_v1/kotodama/030.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse");
-    let err = analyze(&prog).expect_err("should reject mutation during iteration");
-    assert_eq!(err.code(), "E_ITER_MUTATION");
-}
-#[test]
-fn parse_error() {
-    let src = "module Broken { fn bad("; // incomplete
-    let err = parse(src).unwrap_err();
-    assert!(err.contains("identifier"));
-    assert!(err.contains("module Broken { fn bad("));
-}
-#[test]
 fn semantic_simple_add() {
     let src = "module Arithmetic { fn add(int a, int b) { let c = a + b; } }";
     let prog = parse(src).expect("parse failed");
@@ -995,18 +1046,6 @@ fn semantic_simple_add() {
     } else {
         panic!("expected let statement");
     }
-}
-#[test]
-fn semantic_type_error() {
-    let src = "module InvalidArithmetic { fn bad() { let a = 1 + \"hi\"; } }";
-    let prog = parse(src).expect("parse failed");
-    let err = analyze(&prog).unwrap_err();
-    assert!(
-        err.message()
-            .contains("operator Add is not defined for int and string"),
-        "{}",
-        err.message()
-    );
 }
 #[test]
 fn encode_helpers() {
@@ -1036,18 +1075,6 @@ fn compile_and_run_add() {
     assert_eq!(common::decode_i64_register(&vm, 10), 11);
 }
 #[test]
-fn state_allocations_do_not_clobber_params() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/031.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let code = Compiler::new().compile_source(src).expect("compile failed");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm, &code, "main");
-    vm.run().expect("execution failed");
-    assert_eq!(common::decode_i64_register(&vm, 10), 42);
-}
-#[test]
 fn compile_builtin_create_nfts_and_set_detail() {
     let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
     let code = test_compiler().compile_source(src).expect("compile failed");
@@ -1066,16 +1093,6 @@ fn compile_builtin_create_nfts_and_set_detail() {
     let pat = |imm: u8| [imm, 0x00, 0x00, instruction::wide::system::SCALL];
     let has = |imm: u8| code_bytes.windows(4).any(|w| w == pat(imm));
     assert!(has(imm_create) && has(imm_detail));
-}
-#[test]
-fn statement_call_sugar_is_rejected() {
-    for src in [
-        "seiyaku C { fn f() { call helper(); } fn helper() {} }",
-        "seiyaku C { fn f() { call 1; } }",
-    ] {
-        let err = parse(src).expect_err("statement-level call sugar must be rejected");
-        assert!(err.contains("call"), "unexpected parse error: {err}");
-    }
 }
 #[test]
 fn non_json_pointer_constructors_accept_string_variables() {
@@ -1102,160 +1119,6 @@ fn non_json_pointer_constructors_accept_string_variables() {
     );
 }
 #[test]
-fn pointer_constructors_reject_implicit_conversions_and_method_aliases() {
-    for source in [
-        r#"seiyaku C { fn f(bytes value) { let _x = AccountId::parse(value); } }"#,
-        r#"seiyaku C { fn f(bytes value) { let _x = Json::parse(value); } }"#,
-        r#"seiyaku C { fn f(bytes value) { let _x = Name::parse(value); } }"#,
-        r#"seiyaku C { fn f(Name value) { let _x = Name::parse(value); } }"#,
-        r#"seiyaku C { fn f(string value) { let _x = value.account_id(); } }"#,
-        r#"seiyaku C { fn f(string value) { let _x = value.name(); } }"#,
-        r#"seiyaku C { fn f(string value) { let _x = value.json(); } }"#,
-        r#"seiyaku C { fn f(bytes value) { let _x = value.blob(); } }"#,
-        r#"seiyaku C { fn f(bytes value) { let _x = value.norito_bytes(); } }"#,
-        r#"seiyaku C { fn f() { let _x = blob("raw"); } }"#,
-        r#"seiyaku C { fn f() { let _x = norito_bytes("raw"); } }"#,
-    ] {
-        let error = Compiler::new()
-            .compile_source(source)
-            .expect_err("non-canonical pointer conversion must be rejected");
-        assert!(
-            error.contains("expects string")
-                || error.contains("E_JSON_LITERAL_REQUIRED")
-                || error.contains("method aliases were removed")
-                || error.contains("compiler-internal")
-                || error.contains("unknown function or builtin"),
-            "unexpected error: {error}"
-        );
-    }
-}
-#[test]
-fn triple_nested_struct_field_access() {
-    // Deeply nested struct fields: d.c.b.a.x
-    let src = include_str!("../fixtures/koto_v1/kotodama/033.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile triple nested access");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm, &code, "f");
-    vm.run().expect("execute");
-    assert_eq!(common::decode_i64_register(&vm, 10), 5);
-}
-#[test]
-fn triple_nested_struct_field_mixed_named_numeric_access() {
-    // Mixed access: d.c.0.a.x where D { (B, int) c }
-    let src = include_str!("../fixtures/koto_v1/kotodama/034.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile mixed named/numeric access");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm, &code, "f");
-    vm.run().expect("execute");
-    assert_eq!(common::decode_i64_register(&vm, 10), 7);
-}
-#[test]
-fn invalid_numeric_on_struct_reports_error() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/035.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message().contains("unknown field '0' on struct A"));
-}
-#[test]
-fn invalid_named_on_tuple_reports_error() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/036.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message().contains("unknown field 'a' on tuple"));
-}
-#[test]
-fn invalid_numeric_tuple_index_reports_error() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/037.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message().contains("tuple index 3 out of bounds"));
-}
-#[test]
-fn tuple_index_on_non_tuple_reports_type() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/038.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected error");
-    assert!(
-        err.message()
-            .contains("tuple index on non-tuple type struct A")
-    );
-}
-#[test]
-fn tuple_index_on_non_tuple_int_reports_type() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/039.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message().contains("tuple index on non-tuple type int"));
-}
-#[test]
-fn unknown_field_on_struct_reports_available_fields() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/040.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected error");
-    assert!(
-        err.message()
-            .contains("unknown field 'z' on struct A (available: x, y)")
-    );
-}
-#[test]
-fn invalid_named_on_non_struct_reports_error() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/041.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message().contains("unknown field 'foo' on type int"));
-}
-#[test]
-fn invalid_indexing_on_non_map_reports_error() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/042.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected error");
-    assert!(
-        err.message()
-            .contains("indexing not supported on this type")
-    );
-}
-#[test]
-fn method_call_sugar_receiver_and_arg() {
-    // a.method(b) sugar: receiver prepended as first arg
-    let src = include_str!("../fixtures/koto_v1/kotodama/043.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile method sugar");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm, &code, "main");
-    vm.run().expect("execute");
-    assert_eq!(common::decode_i64_register(&vm, 10), 12);
-}
-#[test]
 fn semantic_type_enforcement_for_typed_syscalls() {
     use ivm::kotodama::parser::parse;
     // Wrong types should fail
@@ -1266,50 +1129,6 @@ fn semantic_type_enforcement_for_typed_syscalls() {
     assert!(analyze(&bad).is_err());
     let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_detail(account: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), key: Json::parse(\"1\"), value: Name::parse(\"k\")); } }").unwrap();
     assert!(analyze(&bad2).is_err());
-}
-#[test]
-fn range_end_less_than_start_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/044.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse");
-    let err = analyze(&prog).expect_err("expected end<start rejection");
-    assert!(err.message().contains("end >= start"));
-}
-#[test]
-fn range_non_integer_args_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/045.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse");
-    let err = analyze(&prog).expect_err("expected non-integer rejection");
-    assert!(err.message().contains("range(start, end)"));
-}
-#[test]
-fn dynamic_state_map_take_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/046.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect_err("dynamic state-map bounds must be rejected");
-    assert!(
-        err.contains("E_UNBOUNDED_ITERATION") && err.contains("literal"),
-        "unexpected error: {err}"
-    );
-}
-#[test]
-fn dynamic_state_map_range_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/047.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect_err("dynamic state-map bounds must be rejected");
-    assert!(
-        err.contains("E_UNBOUNDED_ITERATION") && err.contains("literal"),
-        "unexpected error: {err}"
-    );
 }
 #[test]
 fn compile_typed_nft_syscalls() {
@@ -1323,17 +1142,6 @@ fn compile_typed_nft_syscalls() {
     let has = |imm: u8| code_bytes.windows(4).any(|w| w == pat(imm));
     assert!(has(syscalls::SYSCALL_NFT_MINT_ASSET as u8));
     assert!(has(syscalls::SYSCALL_NFT_TRANSFER_ASSET as u8));
-}
-#[test]
-fn compile_and_run_modulo() {
-    // Return a % b
-    let src = "seiyaku Modulo { view fn main() -> int { return 17 % 5; } }";
-    let code = Compiler::new().compile_source(src).expect("compile modulo");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm, &code, "main");
-    vm.run().expect("execute");
-    assert_eq!(common::decode_i64_register(&vm, 10), 17 % 5);
 }
 #[test]
 fn compiler_owns_first_release_abi_metadata() {
@@ -1571,22 +1379,6 @@ fn source_localization_blocks_are_rejected() {
     }
 }
 #[test]
-fn lexer_block_comments_and_number_literals() {
-    // Block comments and hex/binary/underscored numbers
-    let src = include_str!("../fixtures/koto_v1/kotodama/053.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse with comments and literals");
-    let _typed = analyze(&prog).expect("analyze literals");
-}
-#[test]
-fn compound_assignments_typecheck() {
-    // x +=, -=, *=, /=, %= should typecheck and rebind SSA name
-    let src = r#"module Compound { fn f() { var x = 1; x += 2; x *= 3; x /= 2; x %= 2; } }"#;
-    let prog = parse(src).expect("parse compound assigns");
-    let _typed = analyze(&prog).expect("analyze compound assigns");
-}
-#[test]
 fn canonical_host_calls_typecheck_and_removed_map_does_not() {
     let src = include_str!("../fixtures/koto_v1/kotodama/054.ko")
         .strip_suffix('\n')
@@ -1596,27 +1388,6 @@ fn canonical_host_calls_typecheck_and_removed_map_does_not() {
     let src2 = "module RemovedMap { fn make() -> int { return std::map::new(); } }";
     let prog2 = parse(src2).expect("parse std::map::new");
     analyze(&prog2).expect_err("in-memory map constructors are removed from V1");
-}
-#[test]
-fn indirect_sensitive_calls_require_permission() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/055.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = Compiler::new().compile_source(src).unwrap_err();
-    assert!(
-        err.contains("authorize"),
-        "expected authorization error, got {err}"
-    );
-}
-#[test]
-fn while_loops_are_rejected_in_v1() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/056.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let error = Compiler::new()
-        .compile_source(src)
-        .expect_err("while loops must be rejected");
-    assert!(error.contains("while"), "unexpected error: {error}");
 }
 #[test]
 fn ternary_parses_and_types() {
@@ -1746,14 +1517,6 @@ fn compile_poseidon2_and_assert_eq() {
     assert!(matches!(res, Err(ivm::VMError::AssertionFailed)));
 }
 #[test]
-fn compile_pubkgen_and_valcom() {
-    let src = "seiyaku Commitments { view fn main() -> (int, int) { let p = crypto::pubkgen(9); let c = crypto::valcom(left: 9, right: 4); return (p, c); } }";
-    let error = Compiler::new()
-        .compile_source(src)
-        .expect_err("toy public-key and public scalar commitment APIs must fail closed");
-    assert!(error.contains("crypto::pubkgen"));
-}
-#[test]
 fn public_scalar_valcom_is_rejected_even_without_pubkgen() {
     let src = "module Commitment { fn main(int a, int b) -> int { return crypto::valcom(left: a, right: b); } }";
     let error = Compiler::new_with_options(CompilerOptions {
@@ -1822,57 +1585,6 @@ fn typed_json_access_spills_are_handled() {
         .expect("spawn typed Json spill test")
         .join()
         .expect("typed Json spill test thread");
-}
-#[test]
-fn raw_json_codec_aliases_are_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/059.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let error = Compiler::new()
-        .compile_source(src)
-        .expect_err("raw JSON codec aliases are not part of Kotodama V1");
-    assert!(
-        error.contains("decode_json") || error.contains("unknown"),
-        "unexpected error: {error}"
-    );
-}
-#[test]
-fn compile_and_run_poseidon_register_forms() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/060.ko");
-    let error = Compiler::new()
-        .compile_source(src)
-        .expect_err("truncated Poseidon register forms must remain VM-internal");
-    assert!(error.contains("crypto::poseidon2") || error.contains("crypto::poseidon6"));
-}
-#[test]
-fn unbounded_state_map_iteration_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/061.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = Compiler::new().compile_source(src).unwrap_err();
-    assert!(
-        err.contains("StateMap iteration requires `.take(N)` or `.range(start, end)`"),
-        "{err}"
-    );
-}
-#[test]
-fn unbounded_state_map_iteration_cannot_infer_a_limit() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/062.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let err = Compiler::new().compile_source(src).unwrap_err();
-    assert!(
-        err.contains("StateMap iteration requires `.take(N)` or `.range(start, end)`"),
-        "{err}"
-    );
-}
-#[test]
-fn map_new_is_rejected_in_v1() {
-    let src = "module RemovedMap { fn make() -> int { return Map::new(); } }";
-    let error = Compiler::new()
-        .compile_source(src)
-        .expect_err("in-memory Map allocation must not compile in V1");
-    assert!(error.contains("Map"), "unexpected error: {error}");
 }
 #[test]
 fn compile_from_file() {
@@ -2086,18 +1798,6 @@ fn parse_create_new_asset_builtin() {
     );
 }
 #[test]
-fn parse_register_asset_rejects_bare_name_literal() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/065.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse failed");
-    let err = analyze(&prog).expect_err("bare asset names should be rejected");
-    assert!(
-        err.message().contains("AssetDefinitionId"),
-        "unexpected semantic error: {err:?}"
-    );
-}
-#[test]
 fn parse_mfc_example() {
     use ivm::kotodama::ir::{Instr, Terminator};
     use std::path::Path;
@@ -2151,25 +1851,6 @@ fn compile_kotodama_samples_supported() {
     }
 }
 #[test]
-fn compile_unary_ops() {
-    let src = "seiyaku UnaryOps { view fn f(int a, bool b) { let c = -a; let d = !b; } }";
-    Compiler::new()
-        .compile_source(src)
-        .expect("compile unary ops");
-}
-#[test]
-fn in_memory_map_methods_are_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/066.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse map methods");
-    let error = analyze(&prog).expect_err("in-memory Map methods must be rejected");
-    assert!(
-        error.message().contains("Map"),
-        "unexpected error: {error:?}"
-    );
-}
-#[test]
 fn ir_lower_contains_method_state_map() {
     use ivm::kotodama::ir::Instr;
     let src = include_str!("../fixtures/koto_v1/kotodama/067.ko")
@@ -2193,30 +1874,6 @@ fn ir_lower_contains_method_state_map() {
         }
     }
     assert!(saw_state_get && saw_ne);
-}
-#[test]
-fn ephemeral_keys_take2_helper_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/068.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse keys_take2");
-    let error = analyze(&prog).expect_err("ephemeral map helpers must be rejected");
-    assert!(
-        error.message().contains("Map"),
-        "unexpected error: {error:?}"
-    );
-}
-#[test]
-fn ephemeral_keys_values_take2_helper_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/069.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let prog = parse(src).expect("parse keys_values_take2");
-    let error = analyze(&prog).expect_err("ephemeral map helpers must be rejected");
-    assert!(
-        error.message().contains("Map"),
-        "unexpected error: {error:?}"
-    );
 }
 #[test]
 fn ir_tuple_pack_and_get_general() {
@@ -2274,19 +1931,6 @@ fn typed_vrf_syscalls_are_present() {
     };
     assert!(has(syscalls::SYSCALL_VRF_VERIFY as u8));
     assert!(has(syscalls::SYSCALL_VRF_VERIFY_BATCH as u8));
-}
-#[test]
-fn raw_pointer_codec_alias_is_rejected() {
-    let src = include_str!("../fixtures/koto_v1/kotodama/072.ko")
-        .strip_suffix('\n')
-        .expect("fixture sentinel newline");
-    let error = Compiler::new()
-        .compile_source(src)
-        .expect_err("raw pointer codec aliases are not part of Kotodama V1");
-    assert!(
-        error.contains("pointer_to_norito") || error.contains("unknown"),
-        "unexpected error: {error}"
-    );
 }
 #[test]
 fn raw_axt_intrinsics_are_rejected() {
@@ -2358,12 +2002,4 @@ fn raw_axt_intrinsics_are_rejected() {
             || error.contains("unknown"),
         "unexpected error: {error}"
     );
-}
-#[test]
-fn semantic_return_value_without_declared_type_is_rejected() {
-    let src = "module ReturnMismatch { fn f() { return 1; } }";
-    let prog = parse(src).expect("parse");
-    let err = analyze(&prog).unwrap_err();
-    assert_eq!(err.code(), "K2003");
-    assert!(err.message().contains("declared return type"));
 }

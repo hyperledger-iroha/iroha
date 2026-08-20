@@ -433,9 +433,20 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelConsensusEvidencePenalty {
 #[cfg(test)]
 mod slice_tests {
     use super::*;
-    use crate::block::consensus::{EvidenceKind, EvidencePayload};
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
-    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use crate::{
+        NetworkId,
+        block::{
+            Header as BlockHeader,
+            consensus::SumeragiV2EquivocationEvidence,
+            consensus_v2::{
+                ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum, HeightContext,
+                PROTOCOL_VERSION, PayloadEncoding, SumeragiV2Equivocation, TimeoutVote,
+                ValidatorPower,
+            },
+        },
+    };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::Decode;
     use norito::core::{DecodeFlagsGuard, DecodeFromSlice, header_flags, read_len_dyn_slice};
@@ -467,23 +478,64 @@ mod slice_tests {
         PeerId::new(key_pair.public_key().clone())
     }
     fn sample_evidence() -> Evidence {
-        let key_pair = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
-            .expect("derive checked staking evidence fixture keypair");
-        let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
-        let payload = crate::transaction::TransactionSubmissionReceiptPayload {
-            tx_hash,
-            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xBB; 32])),
-            signed_transaction_hash: None,
-            submitted_at_ms: 10,
-            submitted_at_height: 2,
-            signer: key_pair.public_key().clone(),
+        let mut peers = (0xE1_u8..=0xE4).map(peer).collect::<Vec<_>>();
+        peers.sort();
+        let roster = peers
+            .into_iter()
+            .map(|validator| ValidatorPower {
+                validator,
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let context = HeightContext {
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
+            ),
+            protocol_version: PROTOCOL_VERSION,
+            height: 1,
+            epoch: 0,
+            epoch_end_height: 1,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"staking evidence nexus context"),
+            execution_policy_hash: Hash::new(b"staking evidence execution policy"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 4,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 1024,
+                max_chunk_count: 512,
+            },
+            leader_seed: [0xA5; 32],
         };
-        let receipt = crate::transaction::TransactionSubmissionReceipt::sign(payload, &key_pair);
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
         Evidence {
-            kind: EvidenceKind::Censorship,
-            payload: EvidencePayload::Censorship {
-                tx_hash,
-                receipts: vec![receipt],
+            equivocation: SumeragiV2EquivocationEvidence {
+                context,
+                proofs_of_possession: vec![vec![0xC1; 96]; 4],
+                conflict: SumeragiV2Equivocation::TimeoutVote {
+                    first: TimeoutVote {
+                        round,
+                        highest_prepare_qc: None,
+                        signer: 0,
+                        signature: vec![0xD1; 96],
+                    },
+                    second: TimeoutVote {
+                        round,
+                        highest_prepare_qc: None,
+                        signer: 0,
+                        signature: vec![0xD2; 96],
+                    },
+                },
             },
         }
     }

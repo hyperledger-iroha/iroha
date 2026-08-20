@@ -1,6 +1,5 @@
 //! `IntoSchema` derive tests for generic bounds.
-mod common;
-use common::{assert_schema, entry};
+use crate::common::{assert_schema, entry};
 #[derive(iroha_schema::IntoSchema)]
 struct Foo<V> {
     _value: Option<V>,

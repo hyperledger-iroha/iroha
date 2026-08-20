@@ -47,7 +47,7 @@ fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    state.nexus.write().enabled = true;
+
     let plan = iroha_data_model::nexus::LaneLifecyclePlan {
         additions: vec![LaneConfigModel {
             id: LaneId::new(1),
@@ -101,7 +101,7 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    state.nexus.write().enabled = true;
+
     let plan = iroha_data_model::nexus::LaneLifecyclePlan {
         additions: vec![LaneConfigModel {
             id: LaneId::new(1),
@@ -181,7 +181,7 @@ fn transaction_uses_prebuilt_block_nexus_snapshot_after_shared_catalog_update() 
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
-    state.nexus.write().enabled = true;
+
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let block_catalog = block.nexus.lane_catalog.clone();
@@ -543,7 +543,7 @@ fn lane_lifecycle_waits_for_inflight_state_commit_lock() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    state.nexus.write().enabled = true;
+
     let plan = iroha_data_model::nexus::LaneLifecyclePlan {
         additions: vec![LaneConfigModel {
             id: LaneId::new(1),

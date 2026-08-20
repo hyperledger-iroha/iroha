@@ -178,7 +178,6 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
         .with_consensus_message_control()
         .with_config_layer(|layer| {
             layer
-                .write(["nexus", "enabled"], true)
                 .write(["nexus", "autoscale", "enabled"], true)
                 .write(["nexus", "autoscale", "min_lanes"], 1_i64)
                 .write(["nexus", "autoscale", "max_lanes"], 2_i64)
@@ -209,7 +208,6 @@ fn autoscale_public_profile_localnet_builder() -> NetworkBuilder {
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
                 .write(["nexus", "lane_catalog"], public_profile_lane_catalog())
                 .write(["nexus", "autoscale", "enabled"], true)
@@ -5030,8 +5028,7 @@ fn offline_kura_config(store_dir: PathBuf, blocks_in_memory: NonZeroUsize) -> Ku
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
-        block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }

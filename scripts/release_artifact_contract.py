@@ -24,13 +24,13 @@ RELEASE_MANIFEST_SCHEMA_VERSION = 1
 MAX_SOURCE_DATE_EPOCH = 4_294_967_295
 MAX_RELEASE_MANIFEST_SIZE = 16 * 1024 * 1024
 MAX_RELATIVE_PATH_BYTES = 512
-ALLOWED_PROFILES = frozenset({"iroha2", "iroha3", "shared"})
+ALLOWED_PROFILES = frozenset({"iroha3", "shared"})
 ALLOWED_KIND_FORMATS: Mapping[str, frozenset[str]] = {
     "bundle": frozenset({"tar.zst"}),
     "checksum": frozenset({"sha256"}),
     "builder-manifest": frozenset({"json"}),
     "image": frozenset({"docker-archive", "oci-archive"}),
-    "profile-matrix": frozenset({"json"}),
+    "bundle-inventory": frozenset({"json"}),
     "changelog": frozenset({"markdown"}),
     "sbom": frozenset({"json", "spdx-json", "cyclonedx-json"}),
     "provenance": frozenset({"json", "intoto-jsonl", "sigstore"}),

@@ -222,3 +222,43 @@ fn ordinary_enum_fields_use_verified_exact_length_streaming() {
     assert!(expansion.matches("write_len_prefixed_exact(").count() >= 2);
     assert!(!expansion.contains("write_len_prefixed("));
 }
+#[test]
+fn enum_byte_array_lengths_use_the_raw_wire_width() {
+    let input: DeriveInput = syn::parse_quote! {
+        enum Envelope {
+            Tuple([u8; 32]),
+            Named { digest: [u8; 32] },
+        }
+    };
+    let Data::Enum(data) = &input.data else {
+        unreachable!();
+    };
+    let expansion = compact(derive_enum_serialize(
+        &input.ident,
+        &input.generics,
+        data,
+        &input.attrs,
+        None,
+    ));
+    assert_eq!(
+        expansion.matches("core::mem::size_of_val(field0)").count(),
+        3,
+        "tuple byte arrays must use their raw width in serialization and both length oracles"
+    );
+    assert_eq!(
+        expansion.matches("core::mem::size_of_val(digest)").count(),
+        3,
+        "named byte arrays must use their raw width in serialization and both length oracles"
+    );
+    for incorrect in [
+        "encoded_len_hint(field0)",
+        "encoded_len_exact(field0)",
+        "encoded_len_hint(digest)",
+        "encoded_len_exact(digest)",
+    ] {
+        assert!(
+            !expansion.contains(incorrect),
+            "byte-array length oracle delegated to the generic array codec: {incorrect}"
+        );
+    }
+}

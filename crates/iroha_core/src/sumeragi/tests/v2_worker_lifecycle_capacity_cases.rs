@@ -304,16 +304,7 @@ fn recovered_decision_apply_completion_accounting_is_stable_by_exact_key() {
         None,
         None,
     );
-    admission.retain_completion(
-        Instant::now(),
-        false,
-        Some(8),
-        None,
-        None,
-        None,
-        None,
-        None,
-    );
+    admission.retain_completion(Instant::now(), false, Some(8), None, None, None, None, None);
     assert!(admission.recovered_decision_apply_completion_is_exact(key));
     assert!(
         !admission.recovered_decision_apply_completion_is_exact(same_ordinal_foreign),

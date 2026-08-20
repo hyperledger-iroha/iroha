@@ -65,7 +65,7 @@ async fn sumeragi_tel_subrouter_exposes_endpoints() {
         telemetry_handle,
     );
     let app = torii.api_router_for_tests();
-    for uri in ["/v1/sumeragi/pacemaker", "/v1/sumeragi/phases"] {
+    for uri in ["/v1/sumeragi/pacemaker"] {
         let resp = app
             .clone()
             .oneshot(signed_loopback_get(&cfg, uri))
@@ -78,6 +78,8 @@ async fn sumeragi_tel_subrouter_exposes_endpoints() {
     }
     for retired in [
         "/v1/sumeragi/rbc",
+        "/v1/sumeragi/phases",
+        "/v1/sumeragi/telemetry",
         "/v1/sumeragi/rbc/delivered/0/0",
         "/v1/sumeragi/rbc/sessions",
         "/v1/sumeragi/rbc/sample",

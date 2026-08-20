@@ -46,7 +46,6 @@ identity_private_key = "8026207C00B35F39248C9DE5E727EFB97C0A66AF981802F5B0A9A41F
 
 
 [nexus]
-enabled = true
 lane_count = 3
 
 

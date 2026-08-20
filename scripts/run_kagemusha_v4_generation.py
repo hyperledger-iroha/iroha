@@ -42,6 +42,29 @@ STAGING_ID_OPTION = "--staging-id"
 STAGING_NAME_OPTION = "--staging-name"
 OUTPUT_PARENT_FD_OPTION = "--output-parent-fd"
 MEMORY_LIMIT_OPTION = "--memory-limit-bytes"
+GENERATOR_BINARY_SHA256_OPTION = "--generator-binary-sha256"
+SEALED_BUILD_REPORT_SHA256_OPTION = "--sealed-candidate-build-report-sha256"
+SEALED_BUILD_REPORT_SCHEMA = "iroha.kagemusha.sealed_candidate_double_build_report.v1"
+NATIVE_SEALED_BUILD_REPORT_SCHEMA = (
+    "iroha.kagemusha.native_sealed_candidate_double_build_report.v2"
+)
+NATIVE_SEALED_BUILDER_LAUNCH_CONTRACT = (
+    "iroha.kagemusha.native-sealed-builder-launch.v1"
+)
+NATIVE_SEALED_BUILDER_ARGUMENT_CONTRACT = (
+    "iroha.kagemusha.sealed-builder-exact-arguments.v1"
+)
+NATIVE_SEALED_BUILDER_ENVIRONMENT_CONTRACT = (
+    "iroha.kagemusha.sealed-builder-exact-environment.v1"
+)
+NATIVE_SEALED_BUILDER_OS_TCB_CONTRACT = "iroha.kagemusha.macos-os-library-tcb.v1"
+NATIVE_SEALED_BUILDER_REPORT_PUBLICATION_CONTRACT = (
+    "iroha.kagemusha.native-no-replace-report-publication.v1"
+)
+NATIVE_SEALED_BUILDER_RUNTIME_DEPENDENCY_CONTRACT = (
+    "iroha.kagemusha.symlink-free-macho-runtime-closure.v1"
+)
+MAX_SEALED_BUILD_REPORT_BYTES = 1024 * 1024
 MEMORY_ENFORCEMENT_PROFILE = "self-physical-footprint-v1"
 MEMORY_CAPACITY_OPERATION = "memory-capacity-v1"
 MEMORY_CAPACITY_SCHEMA = "iroha.kagemusha.memory-capacity.v1"
@@ -219,6 +242,82 @@ class ExecutableSnapshot:
                 if descriptor >= 0:
                     os.close(descriptor)
                     setattr(self.execution_copy, descriptor_name, -1)
+
+
+@dataclass
+class PinnedSealedBuildReport:
+    """Descriptor-pinned canonical report authenticating two sealed builds."""
+
+    path: Path
+    descriptor: int
+    device: int
+    inode: int
+    mode: int
+    owner_uid: int
+    size_bytes: int
+    modified_ns: int
+    changed_ns: int
+    sha256: str
+    generator_sha256: str
+    generator_size_bytes: int
+
+    def validate(self) -> None:
+        """Rehash the pinned bytes and reject pathname or metadata drift."""
+
+        before = os.fstat(self.descriptor)
+        current = os.stat(self.path, follow_symlinks=False)
+        expected = (
+            self.device,
+            self.inode,
+            self.mode,
+            self.owner_uid,
+            self.size_bytes,
+            self.modified_ns,
+            self.changed_ns,
+        )
+        observed = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        pathname = (
+            current.st_dev,
+            current.st_ino,
+            current.st_mode,
+            current.st_uid,
+            current.st_size,
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+        )
+        if observed != expected or pathname != expected:
+            raise resource_guard.GuardError("sealed build report identity changed")
+        os.lseek(self.descriptor, 0, os.SEEK_SET)
+        payload = bytearray()
+        while len(payload) <= MAX_SEALED_BUILD_REPORT_BYTES:
+            chunk = os.read(
+                self.descriptor,
+                min(64 * 1024, MAX_SEALED_BUILD_REPORT_BYTES + 1 - len(payload)),
+            )
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if (
+            len(payload) != self.size_bytes
+            or hashlib.sha256(payload).hexdigest() != self.sha256
+            or os.fstat(self.descriptor).st_mtime_ns != self.modified_ns
+            or os.fstat(self.descriptor).st_ctime_ns != self.changed_ns
+        ):
+            raise resource_guard.GuardError("sealed build report bytes changed")
+
+    def close(self) -> None:
+        """Close the report descriptor retained across generation."""
+
+        resource_guard._close_descriptor(self.descriptor)
+        self.descriptor = -1
 
 
 @dataclass
@@ -553,6 +652,325 @@ def _snapshot_executable(path_text: str, expected_name: str) -> ExecutableSnapsh
         changed_ns=metadata.st_ctime_ns,
         descriptor=descriptor,
     )
+
+
+def _strict_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject duplicate JSON object members at every nesting level."""
+
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise resource_guard.GuardError("sealed build report has duplicate JSON members")
+        result[key] = value
+    return result
+
+
+def _report_hex(value: object, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or not value.isascii()
+        or any(character not in "0123456789abcdef" for character in value)
+        or value == "0" * 64
+    ):
+        raise resource_guard.GuardError(f"sealed build report {label} is invalid")
+    return value
+
+
+def _unwrap_native_sealed_build_report(
+    envelope: object,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Reject direct Python reports and unwrap one exact native V2 envelope."""
+
+    if not isinstance(envelope, dict) or set(envelope) != {
+        "builder_report_hex",
+        "builder_report_sha256",
+        "builder_report_size_bytes",
+        "native_launch",
+        "schema",
+    }:
+        raise resource_guard.GuardError(
+            "sealed build report lacks its exact native-launch envelope"
+        )
+    if envelope.get("schema") != NATIVE_SEALED_BUILD_REPORT_SCHEMA:
+        raise resource_guard.GuardError(
+            "sealed build report was not published by the native launcher"
+        )
+    inner_hex = envelope.get("builder_report_hex")
+    inner_size = envelope.get("builder_report_size_bytes")
+    if (
+        not isinstance(inner_hex, str)
+        or not inner_hex
+        or len(inner_hex) % 2
+        or len(inner_hex) > 2 * MAX_SEALED_BUILD_REPORT_BYTES
+        or any(character not in "0123456789abcdef" for character in inner_hex)
+        or not isinstance(inner_size, int)
+        or isinstance(inner_size, bool)
+        or not 1 <= inner_size <= MAX_SEALED_BUILD_REPORT_BYTES
+    ):
+        raise resource_guard.GuardError(
+            "native sealed-builder payload encoding is malformed"
+        )
+    inner = bytes.fromhex(inner_hex)
+    if (
+        len(inner) != inner_size
+        or hashlib.sha256(inner).hexdigest()
+        != _report_hex(envelope.get("builder_report_sha256"), "inner payload digest")
+    ):
+        raise resource_guard.GuardError(
+            "native sealed-builder payload differs from its envelope binding"
+        )
+    launch = envelope.get("native_launch")
+    exact_launch_fields = {
+        "argument_contract",
+        "argument_sha256",
+        "builder_entrypoint_sha256",
+        "contract",
+        "controller_sha256",
+        "environment_contract",
+        "environment_sha256",
+        "macos_build",
+        "os_tcb_contract",
+        "os_tcb_sha256",
+        "python_interpreter_sha256",
+        "python_runtime_tree_sha256",
+        "report_publication_contract",
+        "runtime_dependency_contract",
+    }
+    if (
+        not isinstance(launch, dict)
+        or set(launch) != exact_launch_fields
+        or launch.get("contract") != NATIVE_SEALED_BUILDER_LAUNCH_CONTRACT
+        or launch.get("argument_contract")
+        != NATIVE_SEALED_BUILDER_ARGUMENT_CONTRACT
+        or launch.get("environment_contract")
+        != NATIVE_SEALED_BUILDER_ENVIRONMENT_CONTRACT
+        or launch.get("os_tcb_contract") != NATIVE_SEALED_BUILDER_OS_TCB_CONTRACT
+        or launch.get("report_publication_contract")
+        != NATIVE_SEALED_BUILDER_REPORT_PUBLICATION_CONTRACT
+        or launch.get("runtime_dependency_contract")
+        != NATIVE_SEALED_BUILDER_RUNTIME_DEPENDENCY_CONTRACT
+        or not isinstance(launch.get("macos_build"), str)
+        or not launch["macos_build"]
+        or len(launch["macos_build"]) > 64
+    ):
+        raise resource_guard.GuardError(
+            "native sealed-builder launch contract is not exact"
+        )
+    for field in (
+        "argument_sha256",
+        "builder_entrypoint_sha256",
+        "controller_sha256",
+        "environment_sha256",
+        "os_tcb_sha256",
+        "python_interpreter_sha256",
+        "python_runtime_tree_sha256",
+    ):
+        _report_hex(launch.get(field), f"native launch {field}")
+    try:
+        report = json.loads(
+            inner,
+            object_pairs_hook=_strict_json_object,
+            parse_constant=lambda _value: (_ for _ in ()).throw(
+                resource_guard.GuardError(
+                    "sealed build report contains a non-finite number"
+                )
+            ),
+        )
+    except resource_guard.GuardError:
+        raise
+    except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise resource_guard.GuardError(
+            "native sealed-builder payload is not strict JSON"
+        ) from error
+    if not isinstance(report, dict) or resource_guard._canonical_json(report) != inner:
+        raise resource_guard.GuardError(
+            "native sealed-builder payload is not canonical JSON"
+        )
+    return report, launch
+
+
+def _open_sealed_build_report(
+    path: Path, expected_sha256: str
+) -> PinnedSealedBuildReport:
+    """Pin and validate the canonical report for both sealed generator builds."""
+
+    expected_sha256 = _report_hex(expected_sha256, "digest")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+        metadata = os.fstat(descriptor)
+        current = os.stat(path, follow_symlinks=False)
+    except OSError as error:
+        if "descriptor" in locals():
+            os.close(descriptor)
+        raise resource_guard.GuardError(
+            f"sealed build report cannot be pinned: {error}"
+        ) from error
+    try:
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid not in {0, os.geteuid()}
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+            or not 1 <= metadata.st_size <= MAX_SEALED_BUILD_REPORT_BYTES
+            or (metadata.st_dev, metadata.st_ino)
+            != (current.st_dev, current.st_ino)
+        ):
+            raise resource_guard.GuardError("sealed build report metadata is unsafe")
+        payload = bytearray()
+        while len(payload) <= MAX_SEALED_BUILD_REPORT_BYTES:
+            chunk = os.read(
+                descriptor,
+                min(64 * 1024, MAX_SEALED_BUILD_REPORT_BYTES + 1 - len(payload)),
+            )
+            if not chunk:
+                break
+            payload.extend(chunk)
+        digest = hashlib.sha256(payload).hexdigest()
+        if len(payload) != metadata.st_size or digest != expected_sha256:
+            raise resource_guard.GuardError("sealed build report digest differs")
+        try:
+            report = json.loads(
+                payload,
+                object_pairs_hook=_strict_json_object,
+                parse_constant=lambda _value: (_ for _ in ()).throw(
+                    resource_guard.GuardError(
+                        "sealed build report contains a non-finite number"
+                    )
+                ),
+            )
+        except resource_guard.GuardError:
+            raise
+        except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+            raise resource_guard.GuardError(
+                "sealed build report is not strict JSON"
+            ) from error
+        if not isinstance(report, dict) or resource_guard._canonical_json(report) != payload:
+            raise resource_guard.GuardError("sealed build report is not canonical JSON")
+        report, _native_launch = _unwrap_native_sealed_build_report(report)
+        expected_top = {
+            "authenticated_source_seal_projection_sha256",
+            "binary_path",
+            "binary_sha256",
+            "binary_size_bytes",
+            "build_profile",
+            "builds",
+            "byte_equality",
+            "candidate_generator",
+            "minimum_build_physical_memory_bytes",
+            "physical_memory_bytes_at_admission",
+            "reproducible_build_count",
+            "reviewed_cargo_binary_sha256",
+            "reviewed_rustc_binary_sha256",
+            "reviewed_source_closure",
+            "reviewed_source_closure_descriptor_sha256",
+            "schema",
+            "source_commit",
+            "source_date_epoch",
+            "source_repo_dirty",
+            "source_tree_sha256",
+            "target_dir",
+            "unit_graph_preflight",
+            "verification_binary_path",
+        }
+        if set(report) != expected_top:
+            raise resource_guard.GuardError("sealed build report fields are not exact")
+        builds = report["builds"]
+        if (
+            report["schema"] != SEALED_BUILD_REPORT_SCHEMA
+            or report["build_profile"] != "release"
+            or report["reproducible_build_count"] != 2
+            or report["source_repo_dirty"] is not False
+            or not isinstance(builds, list)
+            or len(builds) != 2
+        ):
+            raise resource_guard.GuardError("sealed build report policy is not exact")
+        common_keys = {
+            "authenticated_source_seal_projection_sha256",
+            "build_inputs_sha256",
+            "cargo_binary_sha256",
+            "cargo_semantic_argv",
+            "execution_policy_sha256",
+            "normalized_unit_graph_sha256",
+            "reviewed_source_closure_sha256",
+            "runtime_gid",
+            "runtime_uid",
+            "rustc_binary_sha256",
+            "source_commit",
+            "source_date_epoch",
+            "source_tree_sha256",
+            "target",
+        }
+        outputs: list[tuple[str, int, str]] = []
+        for index, raw_build in enumerate(builds, 1):
+            if not isinstance(raw_build, dict) or set(raw_build) != {
+                "identity",
+                "identity_sha256",
+                "output",
+            }:
+                raise resource_guard.GuardError("sealed build entry fields are not exact")
+            identity = raw_build["identity"]
+            output = raw_build["output"]
+            if (
+                not isinstance(identity, dict)
+                or set(identity)
+                != common_keys | {"ordinal", "source_snapshot_role", "target_role"}
+                or identity["ordinal"] != index
+                or not isinstance(output, dict)
+                or set(output) != {"binary_path", "sha256", "size_bytes"}
+                or not isinstance(output["binary_path"], str)
+                or not isinstance(output["size_bytes"], int)
+                or isinstance(output["size_bytes"], bool)
+                or output["size_bytes"] <= 0
+                or hashlib.sha256(resource_guard._canonical_json(identity)).hexdigest()
+                != _report_hex(raw_build["identity_sha256"], "build identity digest")
+            ):
+                raise resource_guard.GuardError("sealed build identity is invalid")
+            output_sha256 = _report_hex(output["sha256"], "build output digest")
+            outputs.append((output_sha256, output["size_bytes"], output["binary_path"]))
+        if outputs[0][:2] != outputs[1][:2] or outputs[0][2] == outputs[1][2]:
+            raise resource_guard.GuardError("sealed builds are not independent and equal")
+        equality = report["byte_equality"]
+        generator = report["candidate_generator"]
+        if (
+            not isinstance(equality, dict)
+            or set(equality) != {"algorithm", "equal", "sha256", "size_bytes"}
+            or equality["algorithm"]
+            != "sha256-size-and-final-descriptor-rehash-v1"
+            or equality["equal"] is not True
+            or (equality["sha256"], equality["size_bytes"]) != outputs[0][:2]
+            or not isinstance(generator, dict)
+            or set(generator) != {"selected_build_ordinal", "sha256", "size_bytes"}
+            or generator["selected_build_ordinal"] != 1
+            or (generator["sha256"], generator["size_bytes"]) != outputs[0][:2]
+            or (report["binary_sha256"], report["binary_size_bytes"]) != outputs[0][:2]
+            or report["binary_path"] != outputs[0][2]
+            or report["verification_binary_path"] != outputs[1][2]
+        ):
+            raise resource_guard.GuardError("sealed build equality binding is invalid")
+        pinned = PinnedSealedBuildReport(
+            path=path.resolve(strict=True),
+            descriptor=descriptor,
+            device=metadata.st_dev,
+            inode=metadata.st_ino,
+            mode=metadata.st_mode,
+            owner_uid=metadata.st_uid,
+            size_bytes=metadata.st_size,
+            modified_ns=metadata.st_mtime_ns,
+            changed_ns=metadata.st_ctime_ns,
+            sha256=digest,
+            generator_sha256=_report_hex(generator["sha256"], "generator digest"),
+            generator_size_bytes=generator["size_bytes"],
+        )
+        pinned.validate()
+        return pinned
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def _validate_execution_copy(snapshot: ExecutableSnapshot) -> None:
@@ -1109,6 +1527,8 @@ def _validate_generation_command(command: Sequence[str]) -> None:
             STAGING_NAME_OPTION,
             OUTPUT_PARENT_FD_OPTION,
             MEMORY_LIMIT_OPTION,
+            GENERATOR_BINARY_SHA256_OPTION,
+            SEALED_BUILD_REPORT_SHA256_OPTION,
         )
     ):
         raise resource_guard.GuardError(
@@ -1357,6 +1777,7 @@ def _prepare_guarded_command(
 def _validate_guarded_generation_command(
     command: Sequence[str],
     executable_snapshot: ExecutableSnapshot,
+    sealed_build_report: PinnedSealedBuildReport,
     parent: PinnedOutputParent,
     contract: CandidatePublicationContract,
     memory_limit_bytes: int,
@@ -1377,6 +1798,10 @@ def _validate_guarded_generation_command(
         or _required_option(command, "--source-tree-sha256")
         != contract.source_tree_sha256
         or _required_option(command, MEMORY_LIMIT_OPTION) != str(memory_limit_bytes)
+        or _required_option(command, GENERATOR_BINARY_SHA256_OPTION)
+        != executable_snapshot.sha256
+        or _required_option(command, SEALED_BUILD_REPORT_SHA256_OPTION)
+        != sealed_build_report.sha256
     ):
         raise resource_guard.GuardError(
             "Kagemusha guarded generation command changed before publication"
@@ -2410,6 +2835,7 @@ def _validate_publication_outcome(
 def _validate_staged_child_result(
     guarded_command: Sequence[str],
     executable_snapshot: ExecutableSnapshot,
+    sealed_build_report: PinnedSealedBuildReport,
     output_parent: PinnedOutputParent,
     contract: CandidatePublicationContract,
     staging: PinnedStagingDirectory,
@@ -2421,6 +2847,7 @@ def _validate_staged_child_result(
     _validate_guarded_generation_command(
         guarded_command,
         executable_snapshot,
+        sealed_build_report,
         output_parent,
         contract,
         memory_limit_bytes,
@@ -2532,6 +2959,8 @@ def _parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--resource-report", required=True, type=Path)
+    parser.add_argument("--sealed-build-report", required=True, type=Path)
+    parser.add_argument("--sealed-build-report-sha256", required=True)
     parser.add_argument(
         "--max-memory-gib",
         type=float,
@@ -2553,10 +2982,30 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
         return 2
     output_parent: PinnedOutputParent | None = None
     executable_snapshot: ExecutableSnapshot | None = None
+    sealed_build_report: PinnedSealedBuildReport | None = None
     staging: PinnedStagingDirectory | None = None
     try:
         _validate_generation_command(command)
         executable_snapshot = _snapshot_executable(command[0], BUNDLE_EXECUTABLE)
+        sealed_build_report = _open_sealed_build_report(
+            args.sealed_build_report, args.sealed_build_report_sha256
+        )
+        if (
+            executable_snapshot.sha256 != sealed_build_report.generator_sha256
+            or executable_snapshot.size_bytes
+            != sealed_build_report.generator_size_bytes
+        ):
+            raise resource_guard.GuardError(
+                "admitted generator differs from the sealed double-build report"
+            )
+        command.extend(
+            (
+                GENERATOR_BINARY_SHA256_OPTION,
+                executable_snapshot.sha256,
+                SEALED_BUILD_REPORT_SHA256_OPTION,
+                sealed_build_report.sha256,
+            )
+        )
         command[0] = str(executable_snapshot.path)
         guarded_command, output_parent, contract = _prepare_guarded_command(command)
         with resource_guard._host_lock(
@@ -2602,6 +3051,7 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
                             raise resource_guard.GuardError(
                                 "Kagemusha staging identity is unavailable"
                             )
+                        sealed_build_report.validate()
                         result = _publish_staged_candidate(
                             contract,
                             staging,
@@ -2618,9 +3068,11 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
                             raise resource_guard.GuardError(
                                 "Kagemusha staging identity is unavailable"
                             )
+                        sealed_build_report.validate()
                         _validate_staged_child_result(
                             guarded_command,
                             executable_snapshot,
+                            sealed_build_report,
                             output_parent,
                             contract,
                             staging,
@@ -2667,6 +3119,12 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
                                 memory_capacity.report_context()
                             ),
                             "generation_memory_limit_bytes": memory_limit,
+                            "sealed_candidate_build_report": {
+                                "generator_sha256": sealed_build_report.generator_sha256,
+                                "generator_size_bytes": sealed_build_report.generator_size_bytes,
+                                "sha256": sealed_build_report.sha256,
+                                "size_bytes": sealed_build_report.size_bytes,
+                            },
                             "staging_id": contract.staging_id,
                         },
                         child_environment=_candidate_child_environment(
@@ -2690,6 +3148,8 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
             output_parent.close()
         if executable_snapshot is not None:
             executable_snapshot.close()
+        if sealed_build_report is not None:
+            sealed_build_report.close()
 
 
 def main(argv: Sequence[str] | None = None) -> int:

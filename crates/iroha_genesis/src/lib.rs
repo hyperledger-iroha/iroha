@@ -397,14 +397,15 @@ fn validate_signed_manifest_binding(
     }
     Ok(())
 }
-/// Genesis block, represented as a thin wrapper around the signed block emitted by the builder.
+/// Genesis block, represented as a thin wrapper around a signed block.
 ///
-/// If an executor upgrade is specified (see [`RawGenesisTransaction::executor`]), the first
-/// transaction must contain a single [`Upgrade`] instruction to set the executor. Otherwise, the
-/// executor upgrade is omitted and the first transaction may be parameters or other instructions.
-/// Subsequent transactions can contain parameter settings, instructions, topology change, and IVM
-/// triggers. Callers can access the wrapped [`SignedBlock`] via tuple struct syntax
-/// (`GenesisBlock.0`).
+/// If an executor upgrade is specified (see [`RawGenesisTransaction::executor`]), the first transaction
+/// must contain a single [`Upgrade`] instruction; otherwise it may contain parameters or other instructions.
+/// Subsequent transactions can contain parameter settings, instructions, topology change, and IVM triggers.
+/// Callers can access the wrapped [`SignedBlock`] via tuple struct syntax (`GenesisBlock.0`).
+///
+/// Raw manifest builders produce a canonical resultless proposal. A deployment signer such as `kagami genesis sign`
+/// must execute it under the selected runtime configuration and publish the resulting result-bearing block.
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct GenesisBlock(pub SignedBlock);
@@ -3518,7 +3519,7 @@ impl RawGenesisTransaction {
             sumeragi_v2: self.sumeragi_v2,
         }
     }
-    /// Build and sign genesis block.
+    /// Build and sign a resultless genesis proposal.
     ///
     /// # Errors
     ///
@@ -3527,7 +3528,7 @@ impl RawGenesisTransaction {
     pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
         self.build_and_sign_with_da_proof_policies(genesis_key_pair, None)
     }
-    /// Build and sign genesis block with an explicit confidential policy hash.
+    /// Build and sign a resultless genesis proposal with an explicit confidential policy hash.
     ///
     /// This does not derive the hash from the manifest. Callers that know the
     /// runtime confidential policy must compute it before signing, so the signed genesis
@@ -3547,7 +3548,7 @@ impl RawGenesisTransaction {
             confidential_policy_hash,
         )
     }
-    /// Build and sign genesis block, overriding the embedded DA proof policies.
+    /// Build and sign a resultless genesis proposal, overriding the embedded DA proof policies.
     ///
     /// # Errors
     ///
@@ -3563,7 +3564,7 @@ impl RawGenesisTransaction {
             None,
         )
     }
-    /// Build and sign genesis block, overriding DA proof policies and the confidential policy hash.
+    /// Build and sign a resultless genesis proposal, overriding DA proof policies and the confidential policy hash.
     ///
     /// # Errors
     ///
@@ -3587,8 +3588,7 @@ impl RawGenesisTransaction {
             genesis_creation_base_ms,
         )
     }
-    /// Build and sign genesis with explicit DA/confidential policy commitments
-    /// and a deterministic transaction creation-time base.
+    /// Build and sign a resultless genesis proposal with explicit DA/confidential policy commitments and a deterministic transaction creation-time base.
     ///
     /// Transaction `i` receives `creation_time_base_ms + i`; the genesis block
     /// timestamp remains one millisecond after the final transaction.
@@ -3652,13 +3652,14 @@ impl RawGenesisTransaction {
             Some(RULES_VERSION),
             Some(confidential_policy_hash.unwrap_or(DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH)),
         );
-        let block = SignedBlock::genesis_with_da_proof_policies(
+        let block = SignedBlock::try_genesis_with_da_proof_policies(
             transactions,
             genesis_key_pair.private_key(),
             Some(confidential_digest),
             None,
             da_proof_policies,
-        );
+        )
+        .wrap_err("failed to sign genesis block")?;
         Ok(GenesisBlock(block))
     }
     /// Parse [`RawGenesisTransaction`] to the list of source instructions of the genesis transactions
@@ -4165,7 +4166,7 @@ impl GenesisBuilder {
         self.transactions.push(GenesisTxBuilder::default());
         self
     }
-    /// Finish building, sign, and produce a [`GenesisBlock`].
+    /// Finish building, sign, and produce a resultless [`GenesisBlock`] proposal.
     ///
     /// # Errors
     ///
@@ -4175,7 +4176,7 @@ impl GenesisBuilder {
         self.build_raw()
             .build_and_sign_with_da_proof_policies(genesis_key_pair, da_proof_policies)
     }
-    /// Finish building, sign, and produce a [`GenesisBlock`] with a confidential policy hash.
+    /// Finish building, sign, and produce a resultless [`GenesisBlock`] proposal with a confidential policy hash.
     ///
     /// # Errors
     ///

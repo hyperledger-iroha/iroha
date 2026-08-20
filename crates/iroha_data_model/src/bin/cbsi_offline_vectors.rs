@@ -3,7 +3,7 @@
 //! The app-packaged JSON shape is retained, but every canonical archive is built
 //! from the current Kagemusha V2/V4 types. No retired note compatibility model
 //! participates in this producer. Every account literal is encoded for
-//! Taira discriminant 369 and every balance is the exact `sbd#cbsi` definition.
+//! Taira discriminant 369 and every balance is the exact `ds#boi.is` definition.
 //!
 //! Run:
 //!
@@ -65,8 +65,8 @@ const FIXTURE_PATH: &str = concat!(
 );
 const NETWORK_ID_SEED: &[u8] = b"taira-cbsi-offline-fixture-genesis";
 const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
-const CBSI_SBD_ASSET_ALIAS: &str = "sbd#cbsi";
-const CBSI_SBD_ASSET_DEFINITION_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+const CBSI_DS_ASSET_ALIAS: &str = "ds#boi.is";
+const CBSI_DS_ASSET_DEFINITION_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 const INVOICE_ID: &str = "invoice-fixture-1";
 const SENDER_KEY_ID: &str = "sender-key-offline-1";
 const RECIPIENT_KEY_ID: &str = "recipient-key-offline-1";
@@ -131,11 +131,11 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
     let recipient = AccountId::new(recipient_account_key.public_key().clone());
     let sender_literal = taira_account_literal(&sender)?;
     let recipient_literal = taira_account_literal(&recipient)?;
-    let asset_definition = AssetDefinitionId::parse_address_literal(CBSI_SBD_ASSET_DEFINITION_ID)?;
+    let asset_definition = AssetDefinitionId::parse_address_literal(CBSI_DS_ASSET_DEFINITION_ID)?;
     let asset_definition_literal = asset_definition.canonical_address();
-    if asset_definition_literal != CBSI_SBD_ASSET_DEFINITION_ID {
+    if asset_definition_literal != CBSI_DS_ASSET_DEFINITION_ID {
         return Err(format!(
-            "{CBSI_SBD_ASSET_ALIAS} derived {asset_definition_literal}, expected {CBSI_SBD_ASSET_DEFINITION_ID}"
+            "{CBSI_DS_ASSET_ALIAS} derived {asset_definition_literal}, expected {CBSI_DS_ASSET_DEFINITION_ID}"
         )
         .into());
     }
@@ -440,7 +440,7 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
                     "account_chain_discriminant",
                     Value::from(u64::from(TAIRA_CHAIN_DISCRIMINANT)),
                 ),
-                ("asset_alias", Value::from(CBSI_SBD_ASSET_ALIAS)),
+                ("asset_alias", Value::from(CBSI_DS_ASSET_ALIAS)),
                 (
                     "asset_definition_id",
                     Value::from(asset_definition_literal.clone()),
@@ -954,13 +954,13 @@ fn taira_account_literal(account_id: &AccountId) -> Result<String, Box<dyn Error
 }
 fn taira_asset_literal(asset_id: &AssetId) -> Result<String, Box<dyn Error>> {
     if asset_id.scope() != &AssetBalanceScope::Global
-        || asset_id.definition().canonical_address() != CBSI_SBD_ASSET_DEFINITION_ID
+        || asset_id.definition().canonical_address() != CBSI_DS_ASSET_DEFINITION_ID
     {
-        return Err("CBSI fixture asset must be exact globally scoped sbd#cbsi".into());
+        return Err("CBSI fixture asset must be exact globally scoped ds#boi.is".into());
     }
     Ok(format!(
         "{}#{}",
-        CBSI_SBD_ASSET_DEFINITION_ID,
+        CBSI_DS_ASSET_DEFINITION_ID,
         taira_account_literal(asset_id.account())?
     ))
 }
@@ -1085,14 +1085,14 @@ mod tests {
                 *account_literals += 1;
             }
             Value::String(literal) if field_name == Some("asset_definition_id") => {
-                assert_eq!(literal, CBSI_SBD_ASSET_DEFINITION_ID);
+                assert_eq!(literal, CBSI_DS_ASSET_DEFINITION_ID);
                 *asset_literals += 1;
             }
             Value::String(literal) if field_name == Some("asset_id") => {
                 let (definition, account) = literal
                     .split_once('#')
                     .expect("fixture asset balance must include an account");
-                assert_eq!(definition, CBSI_SBD_ASSET_DEFINITION_ID);
+                assert_eq!(definition, CBSI_DS_ASSET_DEFINITION_ID);
                 assert_eq!(
                     AccountAddress::i105_discriminant(account)
                         .expect("fixture asset account must be canonical I105"),
@@ -1146,7 +1146,7 @@ mod tests {
         assert_eq!(decoded, parts.payment_bundle);
     }
     #[test]
-    fn fixture_is_exact_taira_sbd_and_current_kagemusha() {
+    fn fixture_is_exact_taira_ds_and_current_kagemusha() {
         let parts = build_fixture().expect("build fixture");
         let binding = field(&parts.fixture, "cbsi_binding");
         assert_eq!(string(field(binding, "network")), "taira");
@@ -1154,10 +1154,10 @@ mod tests {
             number(field(binding, "account_chain_discriminant")),
             u64::from(TAIRA_CHAIN_DISCRIMINANT)
         );
-        assert_eq!(string(field(binding, "asset_alias")), CBSI_SBD_ASSET_ALIAS);
+        assert_eq!(string(field(binding, "asset_alias")), CBSI_DS_ASSET_ALIAS);
         assert_eq!(
             string(field(binding, "asset_definition_id")),
-            CBSI_SBD_ASSET_DEFINITION_ID
+            CBSI_DS_ASSET_DEFINITION_ID
         );
         let mut accounts = 0;
         let mut assets = 0;

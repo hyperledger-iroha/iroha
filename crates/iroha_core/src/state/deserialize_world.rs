@@ -1290,7 +1290,6 @@ fn parse_world(
     let proofs = take_optional_default(&mut map, "proofs")?;
     let proof_tags = take_optional_default(&mut map, "proof_tags")?;
     let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
-    let commit_qcs = take_optional_default(&mut map, "commit_qcs")?;
     let contract_manifests = take_optional_default(&mut map, "contract_manifests")?;
     let contract_code = take_optional_default(&mut map, "contract_code")?;
     let contract_code_uploads = take_required(&mut map, "contract_code_uploads")?;
@@ -1536,7 +1535,6 @@ fn parse_world(
         proofs_by_status: Storage::default(),
         proof_tags,
         proofs_by_tag,
-        commit_qcs,
         contract_manifests,
         contract_code,
         contract_code_uploads,
@@ -1830,7 +1828,6 @@ fn build_state(
     let streaming_storage_paths = StreamingStoragePaths::default();
     let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
     let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
-    let commit_roster_journal = kura.commit_roster_journal_handle();
     let canonical_query_index_status = {
         let indexed_height = u64::try_from(block_hashes.committed_height()).unwrap_or(u64::MAX);
         (indexed_height > 0).then(|| QueryIndexStatus {
@@ -1887,8 +1884,6 @@ fn build_state(
         da_receipt_cursors,
         da_shard_cursors,
         da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
-        commit_roster_journal,
-        commit_roster_journal_persistence_lock: parking_lot::Mutex::new(()),
         query_index_journal: parking_lot::RwLock::new(query_index_journal),
         query_index_journal_persistence_lock: parking_lot::Mutex::new(()),
         query_projection_checkpoint_journal: parking_lot::RwLock::new(
@@ -1901,6 +1896,7 @@ fn build_state(
         lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
         lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
         lane_compliance: parking_lot::RwLock::new(None),
+        da_index_hydration_fence: parking_lot::Mutex::new(()),
         da_indexes_hydrated: parking_lot::RwLock::new(None),
         ivm,
         kura,
@@ -2243,6 +2239,7 @@ fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::
 }
 #[cfg(test)]
 mod decode_tests {
+    use super::*;
     use iroha_crypto::SignatureOf;
     use iroha_data_model::musubi::{
         MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiAliasHistoryActionV1,
@@ -2264,7 +2261,6 @@ mod decode_tests {
         ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionSignerPolicyV1,
         ProviderIngestFinalizedAnchorV1,
     };
-    use super::*;
     fn musubi_account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive deterministic Musubi snapshot account");

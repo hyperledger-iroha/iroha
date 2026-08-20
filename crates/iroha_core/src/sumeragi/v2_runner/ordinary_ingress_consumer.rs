@@ -71,16 +71,7 @@ pub(in crate::sumeragi) fn prepare_current_certified_serve_pre_admission(
             "current certified-body ingress changed its selected height".to_owned(),
         );
     }
-    let Some(sender) = inbound.sender() else {
-        return CurrentCertifiedServePreAdmissionV1::Service(
-            "current certified-body ingress lost its authenticated sender".to_owned(),
-        );
-    };
-    if inbound.via().is_none() {
-        return CurrentCertifiedServePreAdmissionV1::Service(
-            "current certified-body ingress lost its authenticated source".to_owned(),
-        );
-    }
+    let sender = inbound.sender();
     let Some(reply_routes) = inbound.reply_routes() else {
         return CurrentCertifiedServePreAdmissionV1::Service(
             "current certified-body ingress lost its reply capability".to_owned(),
@@ -94,7 +85,7 @@ pub(in crate::sumeragi) fn prepare_current_certified_serve_pre_admission(
     if reply_routes.semantic_target() != sender
         || !ownership.validate_exact()
         || !ownership.matches_message(inbound.message())
-        || !ownership.matches_semantic_origin(Some(sender))
+        || !ownership.matches_semantic_origin(sender)
         || !ownership.matches_reply_routes(Some(reply_routes))
     {
         return CurrentCertifiedServePreAdmissionV1::Service(
@@ -124,7 +115,7 @@ pub(in crate::sumeragi) enum ProductionPreparedCertifiedServeV1 {
     Rejected(String),
 }
 
-/// Closed batch-control result of consuming one already-dequeued row.
+/// Closed result of consuming one already-dequeued row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "the outer ingress cursor must observe the exact tail result"]
 pub(in crate::sumeragi) enum ProductionPreparedOrdinaryIngressConsumptionV1 {
@@ -406,7 +397,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     match message.payload {
         wire::ConsensusMessageV2Payload::VrfCommit(commit) => {
             drop(ingress_ownership);
-            let outcome = npos_vrf.accept_commit(commit, sender.as_ref());
+            let outcome = npos_vrf.accept_commit(commit, Some(&sender));
             if matches!(
                 outcome,
                 super::super::v2_npos::V2VrfIngressOutcome::Rejected(_)
@@ -416,7 +407,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
         }
         wire::ConsensusMessageV2Payload::VrfReveal(reveal) => {
             drop(ingress_ownership);
-            let outcome = npos_vrf.accept_reveal(reveal, sender.as_ref());
+            let outcome = npos_vrf.accept_reveal(reveal, Some(&sender));
             if matches!(
                 outcome,
                 super::super::v2_npos::V2VrfIngressOutcome::Rejected(_)
@@ -499,10 +490,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
             mark_leader_wire_volatile(receiver, &ingress_ownership)?;
         }
         wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {
-            let Some(sender) = sender else {
-                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-            };
             if terminal_decision
                 && services
                     .fetch_work_for_manifest(chunk.manifest_hash)
@@ -519,10 +506,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 .map_err(V2RunnerError::Service)?;
         }
         wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
-            let Some(sender) = sender else {
-                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-            };
             let Some(reply_routes) = reply_routes else {
                 iroha_logger::debug!(
                     %sender,
@@ -591,6 +574,10 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
             }
         }
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => {
+            // This arm is reachable only for one authenticated response occurrence that
+            // lifecycle selection classified as non-selected or stale. Consume its exact
+            // move-only ingress owner once and terminate it without retaining a response
+            // carrier; a selected fetch response must instead complete through lifecycle.
             iroha_logger::debug!(
                 request_hash = %response.request_hash,
                 active_height = executor.context().height,
@@ -599,10 +586,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
             mark_leader_wire_volatile(receiver, &ingress_ownership)?;
         }
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) => {
-            let Some(sender) = sender else {
-                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-            };
             let Some(reply_routes) = reply_routes else {
                 iroha_logger::debug!(
                     %sender,
@@ -655,10 +638,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                 finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
             }
-            let Some(sender) = sender else {
-                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-            };
             let discovered = match block_sync.authenticate_response(response, &sender) {
                 Ok(discovered) => discovered,
                 Err(error) => {

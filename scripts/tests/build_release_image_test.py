@@ -106,7 +106,6 @@ def _run(
     buildx_digest: str,
     log: Path,
     *,
-    config: str = "single",
     epoch: str = str(EPOCH),
     builder_base: str = BUILDER_BASE,
     runtime_base: str = RUNTIME_BASE,
@@ -134,10 +133,6 @@ def _run(
         [
             "bash",
             str(SCRIPT),
-            "--profile",
-            "iroha2",
-            "--config",
-            config,
             "--source-commit",
             commit,
             "--source-date-epoch",
@@ -175,33 +170,12 @@ def _run(
     )
 
 
-def test_image_rejects_taira_before_tools_or_artifacts(tmp_path: Path) -> None:
-    binaries, docker, docker_digest, buildx, buildx_digest, log = _fixture(
-        tmp_path
-    )
-    output = tmp_path / "out"
-    result = _run(
-        output,
-        binaries,
-        docker,
-        docker_digest,
-        buildx,
-        buildx_digest,
-        log,
-        config="taira",
-    )
-    assert result.returncode != 0
-    assert "Unsupported config value: taira" in result.stderr
-    assert not log.exists()
-    assert list(output.iterdir()) == []
-
-
 def _outputs(root: Path) -> dict[str, Path]:
-    stem = f"iroha2-{VERSION}-linux-amd64-image.oci.tar"
+    stem = f"iroha3-{VERSION}-linux-amd64-image.oci.tar"
     return {
         "archive": root / stem,
         "checksum": root / f"{stem}.sha256",
-        "manifest": root / f"iroha2-{VERSION}-linux-amd64-image.json",
+        "manifest": root / f"iroha3-{VERSION}-linux-amd64-image.json",
     }
 
 
@@ -250,6 +224,8 @@ def test_image_replay_is_byte_identical_and_oci_archive_is_normalized(
         assert all(member.mode in {0o644, 0o755} for member in members)
 
     manifest = json.loads(outputs["manifest"].read_text(encoding="utf-8"))
+    assert manifest["profile"] == "iroha3"
+    assert manifest["config"] == "nexus"
     assert len(manifest["commit"]) == 40
     assert manifest["source_date_epoch"] == EPOCH
     assert manifest["built_at"] == "2009-02-13T23:31:30Z"

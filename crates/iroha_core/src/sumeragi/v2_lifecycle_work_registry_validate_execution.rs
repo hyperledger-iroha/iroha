@@ -600,6 +600,10 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
     pub(super) const fn ready_projection(&self) -> &DurableCertifiedFetchReplayProjectionV1 {
         &self.ready_projection
     }
+    /// Borrow the exact durable body authority retained for terminal publication.
+    pub(super) const fn durable_body_receipt(&self) -> &DurableBodyReceipt {
+        self.durable_receipt.durable_body()
+    }
     /// Revalidate the selector-retained exact response before LedgerV1 fsync.
     ///
     /// The later checked dequeue can then mint only an ownership carrier; its
@@ -782,7 +786,7 @@ fn exact_selected_response_matches(
     let Some(response) = selected_certified_response(inbound) else {
         return false;
     };
-    inbound.sender() == Some(authenticated_responder)
+    inbound.sender() == authenticated_responder
         && ingress_identity_matches_round(ingress_identity, response.manifest.round)
         && response.request_hash == request_hash
         && HashOf::new(response) == response_hash

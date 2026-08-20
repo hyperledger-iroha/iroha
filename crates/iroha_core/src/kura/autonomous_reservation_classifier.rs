@@ -434,17 +434,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                     format!("certified reservation evidence index is malformed: {reason}"),
                 )
             })?;
-        // Legacy layout detection reads its first entry before the complete
-        // entry walk below rereads it. Charge that actual additional read to
-        // the one batch-wide budget.
-        if !layout.is_based() && index_len >= PIPELINE_INDEX_ENTRY_SIZE_U64 {
-            *decoded_bytes = decoded_bytes
-                .checked_add(PIPELINE_INDEX_ENTRY_SIZE_U64)
-                .ok_or(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded)?;
-            if *decoded_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
-                return Err(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded);
-            }
-        }
         if layout.aligned_len != index_len
             || usize::try_from(layout.entry_count).unwrap_or(usize::MAX)
                 > MAX_AUTONOMOUS_RESERVATION_CERTIFIED_INDEX_ENTRIES

@@ -6,14 +6,12 @@ export interface SorafsOrderbookTransactionSubmitOptions {
 export type SorafsOrderbookSignedTransaction = ArrayBuffer | ArrayBufferView;
 
 export interface SorafsOrderbookSubmissionIdentity {
-  readonly txHash: string;
   readonly entrypointHash: string;
   readonly signedTransactionHash: string;
 }
 
 export interface SorafsOrderbookSubmissionReceipt {
   readonly payload: {
-    readonly tx_hash: string;
     readonly entrypoint_hash: string;
     readonly signed_transaction_hash: string;
     readonly submitted_at_ms: number | bigint;

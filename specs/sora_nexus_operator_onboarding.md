@@ -1,6 +1,11 @@
 # Sora Nexus Data-Space Operator Onboarding
 
-This guide captures the end-to-end flow Sora Nexus data-space operators must follow once a release is announced. It complements the dual-track runbook (`specs/release_dual_track_runbook.md`) and the artefact selection note (`specs/release_artifact_selection.md`) by describing how to align downloaded bundles/images, manifests, and configuration templates with the global lane expectations before bringing a node online.
+This guide captures the end-to-end flow Sora Nexus data-space operators must
+follow once a release is announced. It complements the Iroha 3 release runbook
+(`specs/release_runbook.md`) and the artefact selection note
+(`specs/release_artifact_selection.md`) by describing how to align downloaded
+bundles/images, manifests, and configuration templates with the global lane
+expectations before bringing a node online.
 
 ## Audience & prerequisites
 - You have been approved by the Nexus Program and received your data-space assignment (lane index, data-space ID/alias, and routing policy requirements).
@@ -16,15 +21,19 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
 - You have generated or received production key material for your validator/observer role (Ed25519 node identity; BLS consensus key + PoP for validators; plus any confidential feature toggles).
 - You can reach the existing Sora Nexus peers that will bootstrap your node.
 
-## Step 1 — Confirm the release profile
+## Step 1 — Confirm the release identity
 1. Identify the network alias or chain ID you were given.
-2. Run `scripts/select_release_profile.py --network <alias>` (or `--chain-id <id>`) on a checkout of this repository. The helper consults `release/network_profiles.toml` and prints the profile to deploy. For Sora Nexus the response must be `iroha3`. For any other value, stop and contact Release Engineering.
-3. Note the version tag the release announcement referenced (e.g. `iroha3-v3.2.0`); you will use it to fetch artefacts and manifests.
+2. Confirm that the release announcement identifies the canonical `iroha3`
+   product. Iroha 3 exposes no product-profile selector; all release artifacts
+   carry mandatory Nexus configuration.
+3. Note the version tag the release announcement referenced (e.g.
+   `iroha3-v3.2.0`); you will use it to fetch artefacts and manifests.
 
 ## Step 2 — Retrieve and validate artefacts
-1. Download the `iroha3` bundle (`<profile>-<version>-<os>.tar.zst`) and its
-   companion `.sha256` and `<profile>-<version>-manifest.json` files. Download
-   `<profile>-<version>-image.json` as well when deploying a container. Also
+1. Download the `iroha3` bundle
+   (`iroha3-<version>-<os>-<arch>.tar.zst`) and its companion `.sha256` and
+   `iroha3-<version>-<os>-<arch>-manifest.json` files. Download
+   `iroha3-<version>-linux-<arch>-image.json` as well when deploying a container. Also
    download `release_manifest.json`, `release_manifest.json.sig`, and
    `release_manifest.json.pub`.
 2. Verify the final aggregate inventory before trusting any path or hash it
@@ -91,7 +100,9 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
    - Every entry in `[[nexus.lane_catalog]]` must contain a unique `index` and the agreed alias. Every non-universal `[[nexus.dataspace_catalog]]` entry must include the council-provided 32-byte `manifest_hash`; an explicit `id` is allowed only when it matches the manifest-derived ID. Do not delete the existing global entries; add your delegated aliases if the council assigned additional data-spaces.
 2. Update `[[nexus.routing_policy.rules]]` to capture the policy you were given. The default template routes governance instructions to lane `1` and contract deployments to lane `2`; append or modify rules so traffic destined for your data-space is forwarded to the correct lane and alias. Coordinate with Release Engineering before changing rule order.
 3. Review `[nexus.da]`, `[nexus.da.audit]`, and `[nexus.da.recovery]` thresholds. Operators are expected to keep the council-approved values; only adjust them if an updated policy was ratified.
-4. Record the final configuration in your operations tracker. The dual-track release runbook requires attaching the effective `config.toml` (with secrets redacted) to the onboarding ticket.
+4. Record the final configuration in your operations tracker. The Iroha 3
+   release runbook requires attaching the effective `config.toml` (with secrets
+   redacted) to the onboarding ticket.
 
 ## Step 5 — Pre-flight validation
 1. Run the built-in configuration validator before joining the network:

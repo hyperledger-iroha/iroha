@@ -1,6 +1,8 @@
-use std::{
-    sync::{Arc, atomic::Ordering},
-    time::{Duration, Instant},
+use super::{
+    BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, LaneRelayMessage,
+    authenticated_peer_for_test, fair_v2_ingress_is_certified_body_request,
+    fair_v2_ingress_same_control_slot, test_sumeragi_handle,
+    test_sumeragi_handle_with_source_geometry,
 };
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -21,12 +23,11 @@ use iroha_data_model::{
 };
 use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture};
 use norito::codec::Encode as _;
-use tempfile::TempDir;
-use super::{
-    BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, LaneRelayMessage,
-    fair_v2_ingress_is_certified_body_request, fair_v2_ingress_same_control_slot,
-    test_sumeragi_handle, test_sumeragi_handle_with_source_geometry,
+use std::{
+    sync::{Arc, atomic::Ordering},
+    time::{Duration, Instant},
 };
+use tempfile::TempDir;
 fn v2_message_with_bytes(index: u32, byte_len: usize) -> BlockMessage {
     BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {

@@ -15,8 +15,8 @@ it, and unwind it safely. It complements the router spec in
   - `id`, `limit_xor`, `collateral_haircut_bps`, `fee_rate_bps`,
     `collateral_kind`, `uses_fee_schedule` (see
     `crates/settlement_router/src/swapline.rs`).
-- Lane metadata publishes buffer account/asset and capacity so buffer gauges
-  resolve (`settlement.buffer_*` keys).
+- The typed lane `settlement_buffer` policy binds the exact reserve account,
+  asset definition, and positive capacity used by buffer gauges.
 - Telemetry and dashboards are live for:
   - `iroha_settlement_buffer_xor`, `iroha_settlement_buffer_capacity_xor`,
     `iroha_settlement_buffer_status`

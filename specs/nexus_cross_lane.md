@@ -128,8 +128,8 @@ currently active, valid `autoscale.managed` elastic lanes. A managed lane must:
 - have a committed, never-reused incarnation; and
 - have reached its first eligible proposal height.
 
-Malformed ownership markers, manual occupants of reserved IDs, disabled Nexus
-or autoscale state, future creation heights, off-default dataspaces, or catalog
+Malformed ownership markers, manual occupants of reserved IDs, disabled
+autoscale state, future creation heights, off-default dataspaces, or catalog
 drift fail closed.
 
 ## Automatic lane creation and retirement
@@ -255,6 +255,12 @@ height, lane-local height/view and predecessor, exact accepted queue indices and
 transaction hashes, payload ownership/RBC identities, ordered validator set,
 canonical quorum, and proposal hash.
 
+The V1 proposal, ownership, descriptor, vote, availability-QC, lane-QC, and
+certificate JSON layouts are closed and exact. Nullable predecessor, carrier,
+and availability-QC slots are always present as either their canonical value or
+an explicit `null`; omitting a slot or adding an unknown field is a malformed
+first-release message, not an older layout to infer.
+
 Prepare votes require payload availability. A certified source contains:
 
 - the producer-authenticated origin payload and current proposal;
@@ -278,6 +284,12 @@ hydrates only fully revalidated current-incarnation artifacts.
 
 `LaneBlockCommitment` records the lane coordinates, ordered settlement receipts,
 Nexus fee receipts, Native AMX receipts, totals, and optional swap evidence.
+Its settlement collections and aggregate fields are required even when empty or
+zero, and its optional swap slot is encoded explicitly as a value or `null`.
+The aggregate quantities equal the exact sums of the ordinary receipts, and
+`tx_count` equals (rather than merely bounds) the union of source IDs across
+ordinary, Nexus-fee, and Native-AMX receipts. Consequently, an empty receipt
+union requires zero aggregate quantities and `tx_count = 0`.
 Each ordinary receipt contains an exact-width `source_id`, exact canonical
 decimal `local_amount`, `xor_due`, `xor_after_haircut`, and `xor_variance`
 quantities, plus `timestamp_ms`. Commitment totals use the corresponding
@@ -290,6 +302,9 @@ participant prepare/commit leg.
 header, lane QC, DA commitment, RBC byte count, manifest root, and FastPQ proof
 metadata. The lane QC authenticates the header and finality roots; it does not
 by itself authenticate the settlement, descriptor, or FastPQ metadata.
+The V1 envelope JSON layout is closed: every nullable proof/commitment slot is
+present explicitly as a value or `null`, and unknown or omitted fields are
+rejected instead of being interpreted as a pre-release layout.
 The header height is the global proposal and authority context used for
 lifecycle, committee, key-history, and policy checks. The envelope and
 settlement `block_height` is the incarnation-scoped lane-local coordinate used
@@ -346,6 +361,11 @@ context, while each leg retains its lane-local height. Validation checks chain,
 source ID, typed entrypoint hash, routing-plan digest, lane/dataspace roles,
 authority height, participant committees, QCs, grouped bounds, and duplicate
 sources before state execution.
+The participant `LaneBlockProposalV1` keeps its canonical proposal-level
+`payload_block_hint` key in Torii JSON. Because Native AMX legs are control-only,
+that required key is always the explicit value `null`; a missing key, a non-null
+hint, or any unknown proposal field is malformed. OpenAPI and every maintained
+SDK decoder enforce the same closed shape.
 
 All entrypoints in one merge batch execute in canonical order on one revertible
 overlay. Any divergence in results, settlement evidence, write-set roots, or
@@ -398,7 +418,7 @@ future-uncommitted storage is truncated or rejected according to the crash
 boundary; incomplete network assemblies are never persisted.
 
 Chain truncation publishes a fsynced prune intent before lowering the durable
-block marker. Carrier/log, commit-roster, WSV-checkpoint, commit-manifest,
+block marker. Carrier/log, WSV-checkpoint, commit-manifest,
 pipeline-recovery, and roster-metadata sidecar suffixes are removed
 forward-only, and the live block/query indexes remain on the old prefix until
 all durable stages complete. Startup finishes an interrupted intent before

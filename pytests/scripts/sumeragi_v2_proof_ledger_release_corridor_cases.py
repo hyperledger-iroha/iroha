@@ -19,10 +19,10 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 530
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 531
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 522
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 523
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474"
+        "e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea"
     )
     assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
         "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
@@ -200,7 +200,7 @@ def test_release_inventory_constants_match_current_source_seal(
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
     assert receipt_module._PRODUCTION_TEST_COUNT == 864
-    assert receipt_module._G_UNIT_TEST_COUNT == 530
+    assert receipt_module._G_UNIT_TEST_COUNT == 522
     assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 864
     receipt_module_counts = {
         module_name: count
@@ -220,7 +220,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 530
+        == 522
     )
 
 @pytest.mark.parametrize(
@@ -3926,7 +3926,7 @@ def test_workspace_excluded_harness_names_every_required_fast_simulation() -> No
         "leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum",
         "corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmission",
         "crash_after_proposal_wal_before_signature_replays_exact_intent",
-        "taira_divergent_views_converge_and_commit_within_one_rotation",
+        "divergent_views_converge_and_commit_within_one_rotation",
         "accelerated_chain_chaos_smoke_preserves_prefix",
     }
 

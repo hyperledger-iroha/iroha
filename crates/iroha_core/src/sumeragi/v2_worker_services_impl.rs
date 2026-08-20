@@ -1774,7 +1774,7 @@ impl ProductionV2Services {
         ));
         if !ingress_ownership.validate_exact()
             || !ingress_ownership.matches_message(&chunk_message)
-            || !ingress_ownership.matches_semantic_origin(Some(&sender))
+            || !ingress_ownership.matches_semantic_origin(&sender)
         {
             return Err("payload chunk carried altered fair-ingress ownership".to_owned());
         }

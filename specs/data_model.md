@@ -188,10 +188,28 @@ a node advertising any other data-model version before submission.
 
 - `SignedBlock` (versioned) encapsulates:
   - `signatures: BTreeSet<BlockSignature>` (from validators),
-  - `payload: BlockPayload { header: BlockHeader, transactions: Vec<SignedTransaction> }`,
-  - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, `committed_fragment_count`, and `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
+  - `payload: BlockPayload` with the header, the sole canonical
+    `external_entrypoints: Vec<TransactionEntrypoint>` sequence, and the required
+    V1 DA, NPoS, and execution-context option fields,
+  - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, `committed_fragment_count`, `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`, AXT and trigger records, the AXT policy snapshot, and lane-finality statements.
 - Utilities: `presigned`, fallible `set_transaction_results(...)` and `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
-- Legacy payload transaction caches decoded from wire entrypoints must be hydrated explicitly with `BlockPayload::hydrate_legacy_transaction_cache_from_entrypoints()`.
+- Every `BlockPayload` and `BlockResult` V1 field is present on wire, including
+  empty vectors and `None` options. Pre-release layouts that omitted empty
+  entrypoints or trailing fields are rejected instead of being hydrated or
+  defaulted. Block-local roster evidence is not part of V1: reconfiguration
+  authority comes solely from the authenticated Sumeragi v2 height context and
+  its parent CommitQC, and the longer pre-release roster-bearing block layouts
+  are rejected.
+- `BlockHeader` JSON likewise carries every nullable commitment as an explicit
+  value or `null`. Consensus signatures use one versioned V1 header projection
+  that always includes the nullable NPoS- and execution-context commitments;
+  field presence never selects an alternate historical hash layout. The result
+  Merkle root remains outside that pre-execution signature projection and is
+  validated after deterministic execution.
+- Nested execution contexts use the same exact rule: Native-AMX receipts,
+  merge references, and every nullable certified-execution binding must appear
+  explicitly, while unknown JSON fields and shortened pre-release Norito
+  layouts fail closed.
 - Merkle commitments bind each application-tree root to its exact non-zero leaf count. Raw typed leaf hashes and internal nodes are separated by the stable `iroha:merkle:leaf:v1\0` and `iroha:merkle:internal:v1\0` domains; the result root is placed into the block header.
 - Serialized Merkle trees carry only a V1 hash-scheme discriminant and at most 65,536 canonical leaf-node hashes. Internal nodes and roots are derived caches: decoders rebuild them deterministically and do not accept the retired full-node-vector layout.
 - Block inclusion proofs (`BlockProofs`) expose block identity, the authenticated executed-block wire hash, exact entry/result root-and-count commitments, both proofs, and the `fastpq_transcripts` map. The entry commitment covers the full executed-entrypoint order (including scheduled entrypoints), so entry and result proof indices and leaf counts must match. `TrustedBlockProofAnchor::from_untrusted_finality_artifact` verifies the complete Sumeragi-v2 finality artifact and its exact header association before deriving an anchor from the `CommitQC` execution commitment. Verifiers must compare the requested entry hash and index, every commitment value, and the exact FASTPQ transcript projection with that target-specific anchor; values copied from the proof response are not a trust anchor.

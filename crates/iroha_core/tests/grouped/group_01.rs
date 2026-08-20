@@ -1,15 +1,9 @@
 //! Grouped Iroha Core integration tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#[path = "../admission_batching.rs"]
-mod admission_batching;
-#[path = "../adversarial_block_rejections.rs"]
-mod adversarial_block_rejections;
 #[path = "../asset_total_amount.rs"]
 mod asset_total_amount;
 #[path = "../bench_repro.rs"]
 mod bench_repro;
-#[path = "../bls_batch_pop.rs"]
-mod bls_batch_pop;
 #[path = "../bridge_finality_proof.rs"]
 mod bridge_finality_proof;
 #[path = "../bridge_proofs.rs"]
@@ -34,10 +28,6 @@ mod contract_manifest_triggers;
 mod default_domain_independence;
 #[path = "../deterministic_tie_break.rs"]
 mod deterministic_tie_break;
-#[path = "../event_ordering.rs"]
-mod event_ordering;
-#[path = "../execute_trigger_events.rs"]
-mod execute_trigger_events;
 #[path = "../executor_migration_introspect.rs"]
 mod executor_migration_introspect;
 #[path = "../fastpq_transfer_batch.rs"]

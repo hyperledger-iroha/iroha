@@ -222,13 +222,188 @@ def _prepare_guarded_command(
     )
 
 
+def _sealed_build_report(tmp_path: Path, executable: Path) -> tuple[Path, str]:
+    """Write one canonical two-build report authenticating the test generator."""
+
+    generator_bytes = executable.read_bytes()
+    generator_sha256 = hashlib.sha256(generator_bytes).hexdigest()
+    generator_size = len(generator_bytes)
+    common = {
+        "authenticated_source_seal_projection_sha256": "1" * 64,
+        "build_inputs_sha256": "2" * 64,
+        "cargo_binary_sha256": "3" * 64,
+        "cargo_semantic_argv": [
+            "build", "--release", "--locked", "--offline", "--target",
+            "aarch64-apple-darwin", "--target-dir", "<EXTERNAL_TARGET_DIR>",
+            "-p", "iroha_core", "--features",
+            "iroha_core/dev-tools,iroha_core/kagemusha-candidate-source-seal,iroha_core/kagemusha-candidate-evidence-lab",
+            "--bin", MODULE.BUNDLE_EXECUTABLE, "--jobs", "1",
+            "--message-format=json-render-diagnostics",
+        ],
+        "execution_policy_sha256": "4" * 64,
+        "normalized_unit_graph_sha256": "5" * 64,
+        "reviewed_source_closure_sha256": "6" * 64,
+        "runtime_gid": os.getgid(),
+        "runtime_uid": os.getuid(),
+        "rustc_binary_sha256": "7" * 64,
+        "source_commit": "8" * 40,
+        "source_date_epoch": 1_786_749_504,
+        "source_tree_sha256": "9" * 64,
+        "target": "aarch64-apple-darwin",
+    }
+    builds = []
+    for ordinal, source_role, target_role, binary_path in (
+        (1, "authenticated-primary-source-snapshot-v1", "fresh-primary-target-v1", str(executable)),
+        (2, "authenticated-independent-source-snapshot-v1", "fresh-verification-target-v1", str(executable) + ".verification"),
+    ):
+        identity = {
+            **common,
+            "ordinal": ordinal,
+            "source_snapshot_role": source_role,
+            "target_role": target_role,
+        }
+        builds.append({
+            "identity": identity,
+            "identity_sha256": hashlib.sha256(
+                MODULE.resource_guard._canonical_json(identity)
+            ).hexdigest(),
+            "output": {
+                "binary_path": binary_path,
+                "sha256": generator_sha256,
+                "size_bytes": generator_size,
+            },
+        })
+    report = {
+        "authenticated_source_seal_projection_sha256": "1" * 64,
+        "binary_path": str(executable),
+        "binary_sha256": generator_sha256,
+        "binary_size_bytes": generator_size,
+        "build_profile": "release",
+        "builds": builds,
+        "byte_equality": {
+            "algorithm": "sha256-size-and-final-descriptor-rehash-v1",
+            "equal": True,
+            "sha256": generator_sha256,
+            "size_bytes": generator_size,
+        },
+        "candidate_generator": {
+            "selected_build_ordinal": 1,
+            "sha256": generator_sha256,
+            "size_bytes": generator_size,
+        },
+        "minimum_build_physical_memory_bytes": 1,
+        "physical_memory_bytes_at_admission": 2,
+        "reproducible_build_count": 2,
+        "reviewed_cargo_binary_sha256": "3" * 64,
+        "reviewed_rustc_binary_sha256": "7" * 64,
+        "reviewed_source_closure": {},
+        "reviewed_source_closure_descriptor_sha256": "6" * 64,
+        "schema": MODULE.SEALED_BUILD_REPORT_SCHEMA,
+        "source_commit": "8" * 40,
+        "source_date_epoch": 1_786_749_504,
+        "source_repo_dirty": False,
+        "source_tree_sha256": "9" * 64,
+        "target_dir": str(tmp_path / "target"),
+        "unit_graph_preflight": {},
+        "verification_binary_path": str(executable) + ".verification",
+    }
+    inner_payload = MODULE.resource_guard._canonical_json(report)
+    native_launch = {
+        "argument_contract": MODULE.NATIVE_SEALED_BUILDER_ARGUMENT_CONTRACT,
+        "argument_sha256": "a" * 64,
+        "builder_entrypoint_sha256": "b" * 64,
+        "contract": MODULE.NATIVE_SEALED_BUILDER_LAUNCH_CONTRACT,
+        "controller_sha256": "c" * 64,
+        "environment_contract": MODULE.NATIVE_SEALED_BUILDER_ENVIRONMENT_CONTRACT,
+        "environment_sha256": "d" * 64,
+        "macos_build": "25A1",
+        "os_tcb_contract": MODULE.NATIVE_SEALED_BUILDER_OS_TCB_CONTRACT,
+        "os_tcb_sha256": "e" * 64,
+        "python_interpreter_sha256": "f" * 64,
+        "python_runtime_tree_sha256": "1" * 64,
+        "report_publication_contract": (
+            MODULE.NATIVE_SEALED_BUILDER_REPORT_PUBLICATION_CONTRACT
+        ),
+        "runtime_dependency_contract": (
+            MODULE.NATIVE_SEALED_BUILDER_RUNTIME_DEPENDENCY_CONTRACT
+        ),
+    }
+    envelope = {
+        "builder_report_hex": inner_payload.hex(),
+        "builder_report_sha256": hashlib.sha256(inner_payload).hexdigest(),
+        "builder_report_size_bytes": len(inner_payload),
+        "native_launch": native_launch,
+        "schema": MODULE.NATIVE_SEALED_BUILD_REPORT_SCHEMA,
+    }
+    payload = MODULE.resource_guard._canonical_json(envelope)
+    path = tmp_path / "sealed-build-report.json"
+    path.write_bytes(payload)
+    path.chmod(0o600)
+    return path, hashlib.sha256(payload).hexdigest()
+
+
 def _guarded_args(tmp_path: Path, executable: Path) -> list[str]:
+    build_report, build_report_sha256 = _sealed_build_report(tmp_path, executable)
     return [
         "--resource-report",
         str(tmp_path / "resource-report"),
+        "--sealed-build-report",
+        str(build_report),
+        "--sealed-build-report-sha256",
+        build_report_sha256,
         "--",
         *_generation_command(executable, tmp_path / "candidate"),
     ]
+
+
+def test_sealed_build_report_rejects_second_build_substitution(tmp_path: Path) -> None:
+    executable = _fake_prebuilt_generator(tmp_path)
+    report_path, _digest = _sealed_build_report(tmp_path, executable)
+    envelope = json.loads(report_path.read_text(encoding="utf-8"))
+    report = json.loads(bytes.fromhex(envelope["builder_report_hex"]))
+    report["builds"][1]["output"]["sha256"] = "a" * 64
+    inner_payload = MODULE.resource_guard._canonical_json(report)
+    envelope["builder_report_hex"] = inner_payload.hex()
+    envelope["builder_report_sha256"] = hashlib.sha256(inner_payload).hexdigest()
+    envelope["builder_report_size_bytes"] = len(inner_payload)
+    payload = MODULE.resource_guard._canonical_json(envelope)
+    report_path.write_bytes(payload)
+
+    with pytest.raises(
+        MODULE.resource_guard.GuardError, match="independent and equal"
+    ):
+        MODULE._open_sealed_build_report(
+            report_path, hashlib.sha256(payload).hexdigest()
+        )
+
+
+def test_direct_python_v1_build_report_is_not_promotion_admissible(tmp_path: Path) -> None:
+    executable = _fake_prebuilt_generator(tmp_path)
+    report_path, _digest = _sealed_build_report(tmp_path, executable)
+    envelope = json.loads(report_path.read_text(encoding="utf-8"))
+    direct_payload = bytes.fromhex(envelope["builder_report_hex"])
+    report_path.write_bytes(direct_payload)
+
+    with pytest.raises(
+        MODULE.resource_guard.GuardError, match="native-launch envelope"
+    ):
+        MODULE._open_sealed_build_report(
+            report_path, hashlib.sha256(direct_payload).hexdigest()
+        )
+
+
+def test_launcher_rejects_generator_not_named_by_sealed_report(tmp_path: Path) -> None:
+    executable = _fake_prebuilt_generator(tmp_path)
+    report_path, report_sha256 = _sealed_build_report(tmp_path, executable)
+    executable.write_bytes(executable.read_bytes() + b"\n")
+    executable.chmod(0o700)
+
+    assert MODULE.main([
+        "--resource-report", str(tmp_path / "resource-report"),
+        "--sealed-build-report", str(report_path),
+        "--sealed-build-report-sha256", report_sha256,
+        "--", *_generation_command(executable, tmp_path / "candidate"),
+    ]) == 1
 
 
 def test_effective_limit_is_half_physical_and_cannot_be_raised(monkeypatch) -> None:
@@ -543,6 +718,10 @@ def test_candidate_parser_accepts_one_remainder_command() -> None:
     arguments = [
         "--resource-report",
         "resource-report",
+        "--sealed-build-report",
+        "sealed-build-report.json",
+        "--sealed-build-report-sha256",
+        "1" * 64,
         "--",
         MODULE.BUNDLE_EXECUTABLE,
         "generate-candidate",
@@ -575,17 +754,22 @@ def test_runner_refuses_retired_rss_only_report_mode(
 
 def test_runner_requires_prebuilt_generator_and_exact_subcommand(tmp_path: Path) -> None:
     report = tmp_path / "resource-report"
+    fake = _fake_prebuilt_generator(tmp_path)
+    build_report, build_report_sha256 = _sealed_build_report(tmp_path, fake)
+    prefix = [
+        "--resource-report", str(report),
+        "--sealed-build-report", str(build_report),
+        "--sealed-build-report-sha256", build_report_sha256,
+        "--",
+    ]
     assert MODULE.main(
-        ["--resource-report", str(report), "--", "cargo", "run"]
+        [*prefix, "cargo", "run"]
     ) == 1
     assert not report.exists()
 
-    executable = _fake_prebuilt_generator(tmp_path)
+    executable = fake
     assert MODULE.main(
-        [
-            "--resource-report",
-            str(report),
-            "--",
+        [*prefix,
             str(executable),
             "--help",
             "--out-dir",

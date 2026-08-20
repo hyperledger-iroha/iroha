@@ -52,6 +52,7 @@ class NativeAmxV2GroupedFixtureTest {
             "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
             firstLeg.participantProposal.proposalHash.value,
         )
+        assertEquals(null, firstLeg.participantProposal.payloadBlockHint)
         assertEquals(
             "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
             firstLeg.participantSettlementHash.value,
@@ -114,6 +115,34 @@ class NativeAmxV2GroupedFixtureTest {
             "Native AMX V2 receipt must be valid UTF-8",
             invalidReceiptUtf8.message,
         )
+    }
+
+    @Test
+    fun `participant proposal requires an explicit null payload hint`() {
+        val group = fixture()
+            .objectValue("golden")
+            .objectValue("receipt_group")
+        val proposalPath = listOf(
+            "native_amx_receipts",
+            "0",
+            "legs",
+            "0",
+            "participant_proposal",
+        )
+        val proposal = resolve(group, proposalPath).jsonObject
+        val wireNull = proposal.getValue("payload_block_hint")
+        val invalidProposals = listOf(
+            JsonObject(proposal - "payload_block_hint"),
+            JsonObject(proposal + ("payload_block_hint" to proposal.getValue("descriptor"))),
+            JsonObject(proposal + ("future_proposal_field" to wireNull)),
+        )
+
+        invalidProposals.forEach { invalidProposal ->
+            val mutated = assign(group, proposalPath, invalidProposal)
+            assertFailsWith<IllegalArgumentException> {
+                NativeAmxV2.parseReceiptGroup(mutated.toString())
+            }
+        }
     }
 
     @Test

@@ -101,6 +101,44 @@ pub mod multisig {
             }
             out.push('}');
         }
+
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            out.begin_container()?;
+            out.push('{')?;
+            match self {
+                Self::Register(value) => {
+                    json::write_json_string_to("Register", out)?;
+                    out.push(':')?;
+                    value.json_serialize_to(out)?;
+                }
+                Self::Propose(value) => {
+                    json::write_json_string_to("Propose", out)?;
+                    out.push(':')?;
+                    value.json_serialize_to(out)?;
+                }
+                Self::Approve(value) => {
+                    json::write_json_string_to("Approve", out)?;
+                    out.push(':')?;
+                    value.json_serialize_to(out)?;
+                }
+                Self::Cancel(value) => {
+                    json::write_json_string_to("Cancel", out)?;
+                    out.push(':')?;
+                    value.json_serialize_to(out)?;
+                }
+                Self::InvalidateOutstanding(value) => {
+                    json::write_json_string_to("InvalidateOutstanding", out)?;
+                    out.push(':')?;
+                    value.json_serialize_to(out)?;
+                }
+            }
+            out.push('}')?;
+            out.end_container();
+            Ok(())
+        }
     }
     impl JsonDeserialize for MultisigInstructionBox {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -843,6 +881,11 @@ pub mod multisig {
             }
             let json = norito::json::to_json(&decoded)
                 .expect("encode multisig invalidation instruction JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(&decoded, json.len())
+                    .expect("encode bounded multisig invalidation instruction JSON"),
+                json
+            );
             assert!(json.contains("\"InvalidateOutstanding\""));
             let decoded_json = norito::json::from_str::<MultisigInstructionBox>(&json)
                 .expect("decode multisig invalidation instruction JSON");

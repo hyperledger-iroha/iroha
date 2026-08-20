@@ -152,7 +152,7 @@ case "$1" in
       leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum
       corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmission
       crash_after_proposal_wal_before_signature_replays_exact_intent
-      taira_divergent_views_converge_and_commit_within_one_rotation
+      divergent_views_converge_and_commit_within_one_rotation
       accelerated_chain_chaos_smoke_preserves_prefix
     )
     ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"

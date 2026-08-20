@@ -38,10 +38,9 @@ fn historical_capacity_payload_for_kura(
     proposal.proposal_hash = proposal.computed_proposal_hash();
     let routing_plan =
         RoutingPlan::single(crate::queue::RoutingDecision::new(lane_id, dataspace_id));
-    let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+
     let reservation = LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: accepted.hash(),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
             b"iroha:kura:test:historical-capacity-admission:v1\0",

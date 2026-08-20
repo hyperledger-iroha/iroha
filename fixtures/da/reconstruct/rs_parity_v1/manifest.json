@@ -160,6 +160,7 @@
   "erasure_profile": {
     "data_shards": 2,
     "parity_shards": 2,
+    "row_parity_stripes": 0,
     "chunk_alignment": 2,
     "fec_scheme": {
       "scheme": "Rs12_10",

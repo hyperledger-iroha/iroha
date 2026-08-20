@@ -7,7 +7,7 @@ use iroha_config::parameters::actual::{
 };
 use iroha_core::{
     gas,
-    queue::{ConfigLaneRouter, LaneRouter, Queue, QueueLimits, SingleLaneRouter},
+    queue::{ConfigLaneRouter, LaneRouter, Queue, QueueLimits},
     state::{State, World},
     telemetry::StateTelemetry,
     tx::AcceptedTransaction,
@@ -21,7 +21,7 @@ use iroha_data_model::{
     metadata::Metadata,
     nexus::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
-        LaneVisibility,
+        LaneSchedulerPolicy, LaneVisibility,
     },
     prelude::*,
 };
@@ -30,8 +30,8 @@ use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
+    collections::BTreeSet,
+    num::{NonZeroU64, NonZeroUsize},
     sync::Arc,
     time::Duration,
 };
@@ -107,6 +107,11 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
     let mut nexus = Nexus::default();
     nexus.fusion.exit_teu = 12_345;
     let queue_limits = QueueLimits::from_nexus(&nexus);
+    let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
+        nexus.routing_policy.clone(),
+        nexus.dataspace_catalog.clone(),
+        nexus.lane_catalog.clone(),
+    ));
     let mut state_inner = State::with_telemetry(world, kura, query_store, telemetry);
     state_inner
         .set_nexus(nexus)
@@ -115,7 +120,6 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
     let network_id = *state.network_id_ref();
     let (events_sender, _) = broadcast::channel(16);
     let queue_cfg = QueueConfig::default();
-    let router: Arc<dyn LaneRouter> = Arc::new(SingleLaneRouter::new());
     let queue = Arc::new(Queue::from_config_with_router_and_limits(
         queue_cfg,
         events_sender,
@@ -217,12 +221,6 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     let metrics = Arc::new(Metrics::default());
     let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
     // Nexus catalog with two lanes and distinct dataspace assignments.
-    let mut lane0_metadata = BTreeMap::new();
-    lane0_metadata.insert("scheduler.teu_capacity".to_string(), "900".to_string());
-    lane0_metadata.insert(
-        "scheduler.starvation_bound_slots".to_string(),
-        "4".to_string(),
-    );
     let lane0 = LaneConfig {
         id: LaneId::new(0),
         dataspace_id: DataSpaceId::UNIVERSAL,
@@ -232,15 +230,12 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         lane_type: Some("core".to_string()),
         governance: None,
         settlement: Some("xor".to_string()),
-        metadata: lane0_metadata,
+        scheduler: Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(900).expect("positive capacity")),
+            Some(NonZeroU64::new(4).expect("positive starvation bound")),
+        )),
         ..LaneConfig::default()
     };
-    let mut lane1_metadata = BTreeMap::new();
-    lane1_metadata.insert("scheduler.teu_capacity".to_string(), "1500".to_string());
-    lane1_metadata.insert(
-        "scheduler.starvation_bound_slots".to_string(),
-        "6".to_string(),
-    );
     let lane1 = LaneConfig {
         id: LaneId::new(1),
         dataspace_id: DataSpaceId::new(1),
@@ -250,7 +245,10 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         lane_type: Some("privacy".to_string()),
         governance: None,
         settlement: Some("xor".to_string()),
-        metadata: lane1_metadata,
+        scheduler: Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(1500).expect("positive capacity")),
+            Some(NonZeroU64::new(6).expect("positive starvation bound")),
+        )),
         ..LaneConfig::default()
     };
     let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
@@ -278,7 +276,6 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         }],
     };
     let nexus = Nexus {
-        enabled: true,
         lane_catalog: lane_catalog.clone(),
         dataspace_catalog: dataspace_catalog.clone(),
         routing_policy: routing_policy.clone(),
@@ -427,12 +424,6 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     let metrics = Arc::new(Metrics::default());
     let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
     // Lane 0 has a dedicated dataspace and explicit routing rule, lane 1 acts as the default.
-    let mut lane0_metadata = BTreeMap::new();
-    lane0_metadata.insert("scheduler.teu_capacity".to_string(), "1200".to_string());
-    lane0_metadata.insert(
-        "scheduler.starvation_bound_slots".to_string(),
-        "5".to_string(),
-    );
     let lane0 = LaneConfig {
         id: LaneId::new(0),
         dataspace_id: DataSpaceId::UNIVERSAL,
@@ -442,15 +433,12 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         lane_type: Some("governance".to_string()),
         governance: None,
         settlement: Some("xor".to_string()),
-        metadata: lane0_metadata,
+        scheduler: Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(1200).expect("positive capacity")),
+            Some(NonZeroU64::new(5).expect("positive starvation bound")),
+        )),
         ..LaneConfig::default()
     };
-    let mut lane1_metadata = BTreeMap::new();
-    lane1_metadata.insert("scheduler.teu_capacity".to_string(), "900".to_string());
-    lane1_metadata.insert(
-        "scheduler.starvation_bound_slots".to_string(),
-        "4".to_string(),
-    );
     let lane1 = LaneConfig {
         id: LaneId::new(1),
         dataspace_id: DataSpaceId::new(1),
@@ -460,7 +448,10 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         lane_type: Some("core".to_string()),
         governance: None,
         settlement: Some("xor".to_string()),
-        metadata: lane1_metadata,
+        scheduler: Some(LaneSchedulerPolicy::new(
+            Some(NonZeroU64::new(900).expect("positive capacity")),
+            Some(NonZeroU64::new(4).expect("positive starvation bound")),
+        )),
         ..LaneConfig::default()
     };
     let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
@@ -488,7 +479,6 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         }],
     };
     let nexus = Nexus {
-        enabled: true,
         lane_catalog: lane_catalog.clone(),
         dataspace_catalog: dataspace_catalog.clone(),
         routing_policy: routing_policy.clone(),

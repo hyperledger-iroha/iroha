@@ -320,7 +320,7 @@ wait on a hung provider call. The worker retains the checkpoint writer lease
 until that call exits, so repeated reopen attempts fail busy instead of
 accumulating detached workers.
 
-The outbox checkpoint defaults to 160 MiB and the canonical signed-completion
+The outbox checkpoint defaults to 192 MiB and the canonical signed-completion
 limit must remain within 64 KiB..=64 MiB. Capacity admission counts both copies
 that an active row may retain—the unsigned `expected_payload` and the complete
 `signed_transaction`—plus conservative canonical active/terminal structural

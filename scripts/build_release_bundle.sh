@@ -3,11 +3,11 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: build_release_bundle.sh --profile <iroha2|iroha3> --config <single|nexus|path> \
-  --target <triple> --source-commit <hex> --source-date-epoch <epoch> [options]
+Usage: build_release_bundle.sh --target <triple> --source-commit <hex> \
+  --source-date-epoch <epoch> [options]
 
 Options:
-  --features <list>              Cargo features (default is profile-specific).
+  --features <list>              Cargo features for the canonical build.
   --target <triple>              Required reviewed Cargo target triple.
   --source-commit <hex>          Required reviewed full source commit.
   --source-date-epoch <epoch>    Required canonical release SOURCE_DATE_EPOCH.
@@ -24,7 +24,7 @@ EOF
 }
 
 log() {
-  printf '[dual-build] %s\n' "$*" >&2
+  printf '[release-build] %s\n' "$*" >&2
 }
 
 require_value() {
@@ -45,8 +45,8 @@ safe_token() {
   fi
 }
 
-profile=""
-config=""
+profile="iroha3"
+config="nexus"
 features=""
 target=""
 source_commit=""
@@ -59,16 +59,6 @@ zstd_path=""
 
 while (($#)); do
   case "$1" in
-    --profile)
-      require_value "$1" "${2-}"
-      profile="$2"
-      shift 2
-      ;;
-    --config)
-      require_value "$1" "${2-}"
-      config="$2"
-      shift 2
-      ;;
     --features)
       require_value "$1" "${2-}"
       features="$2"
@@ -126,17 +116,6 @@ while (($#)); do
   esac
 done
 
-if [[ -z "$profile" || -z "$config" ]]; then
-  usage >&2
-  exit 1
-fi
-case "$profile" in
-  iroha2|iroha3) ;;
-  *)
-    printf 'Unsupported profile value: %s (expected iroha2 or iroha3)\n' "$profile" >&2
-    exit 1
-    ;;
-esac
 if [[ -z "$target" || -z "$source_commit" || -z "$source_date_epoch_arg" ||
       -z "$zstd_path" ]]; then
   usage >&2
@@ -209,7 +188,7 @@ if [[ -z "$prebuilt_bin_dir" ]]; then
   if [[ -n "$features" ]]; then
     cargo_command+=(--features "$features")
   fi
-  log "Building binaries (profile=${profile}, config=${config}, target=${target})"
+  log "Building canonical binaries (config=${config}, target=${target})"
   "${cargo_command[@]}"
   binary_root="$repo_root/target/$target/deploy"
 else
@@ -394,48 +373,13 @@ else
 fi
 
 tree_inventory='[]'
-case "$config" in
-  single)
-    python3 "$repo_root/scripts/copy_release_file.py" \
-      --source "$repo_root/defaults/genesis.json" \
-      --output "$stage_root/config/genesis.json" \
-      --mode 0644
-    python3 "$repo_root/scripts/copy_release_file.py" \
-      --source "$repo_root/defaults/client.toml" \
-      --output "$stage_root/config/client.toml" \
-      --mode 0644
-    fixed_files+=("config/client.toml" "config/genesis.json")
-    if [[ -d "$repo_root/defaults/config.d" ]]; then
-      tree_inventory="$(
-        python3 "$repo_root/scripts/copy_release_tree.py" \
-          --source-root "$repo_root/defaults/config.d" \
-          --output-root "$stage_root" \
-          --destination-prefix "config/config.d"
-      )"
-    fi
-    ;;
-  nexus)
-    for name in genesis.json client.toml config.toml; do
-      python3 "$repo_root/scripts/copy_release_file.py" \
-        --source "$repo_root/defaults/nexus/$name" \
-        --output "$stage_root/config/$name" \
-        --mode 0644
-      fixed_files+=("config/$name")
-    done
-    ;;
-  *)
-    if [[ ! -d "$config" || -L "$config" ]]; then
-      printf 'Unsupported config value: %s\n' "$config" >&2
-      exit 1
-    fi
-    tree_inventory="$(
-      python3 "$repo_root/scripts/copy_release_tree.py" \
-        --source-root "$config" \
-        --output-root "$stage_root" \
-        --destination-prefix "config"
-    )"
-    ;;
-esac
+for name in genesis.json client.toml config.toml; do
+  python3 "$repo_root/scripts/copy_release_file.py" \
+    --source "$repo_root/defaults/nexus/$name" \
+    --output "$stage_root/config/$name" \
+    --mode 0644
+  fixed_files+=("config/$name")
+done
 
 python3 - \
   "$repo_root/scripts" \

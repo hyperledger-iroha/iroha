@@ -998,6 +998,18 @@ impl LaunchedProductionLifecycleV1 {
                 drop(error);
                 ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired
             }
+            Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
+                error,
+            )) => {
+                iroha_logger::error!(
+                    %error,
+                    "ordinary certified-Fetch durable ingress terminal requires cold restart"
+                );
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired
+            }
         }
     }
 
@@ -1924,7 +1936,7 @@ mod ordinary_ingress_token_tests {
         ingress.open().expect("open exact ordinary-token ingress");
         let message = crate::sumeragi::v2_worker::tests::lane_commit_qc_block_message(peer.clone());
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(message, Some(peer))),
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, peer)),
             Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
         ));
         let cut = ingress

@@ -48,7 +48,6 @@ fn block_event(height: NonZeroU64, status: BlockStatus) -> EventBox {
         da_proof_policies_hash: None,
         da_commitments_hash: None,
         da_pin_intents_hash: None,
-        prev_roster_evidence_hash: None,
         npos_effects_hash: None,
         sccp_commitment_root: None,
         execution_context_hash: None,

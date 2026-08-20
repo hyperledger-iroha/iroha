@@ -38,6 +38,17 @@ struct NamedByteArrays {
 }
 #[derive(NoritoSerialize)]
 struct TupleByteArrays(u8, [u8; 32], [u8; 7]);
+#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
+enum EnumByteArrays {
+    Tuple([u8; 32], u16),
+    Named { digest: [u8; 32], suffix: [u8; 7] },
+}
+#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
+struct NestedEnumByteArrays {
+    prefix: u8,
+    value: EnumByteArrays,
+    suffix: u8,
+}
 fn assert_lengths_match_payload_for_supported_layouts<T: NoritoSerialize>(
     value: &T,
     emits_field_bitset: bool,
@@ -109,6 +120,27 @@ fn derive_tuple_byte_array_lengths_match_every_supported_layout() {
         &TupleByteArrays(9, [0xA5; 32], [0x5A; 7]),
         true,
     );
+}
+#[test]
+fn derive_enum_byte_array_lengths_and_nested_roundtrip_match_every_supported_layout() {
+    for value in [
+        EnumByteArrays::Tuple([0xA5; 32], 17),
+        EnumByteArrays::Named {
+            digest: [0x5A; 32],
+            suffix: [0x3C; 7],
+        },
+    ] {
+        assert_lengths_match_payload_for_supported_layouts(&value, false);
+        let nested = NestedEnumByteArrays {
+            prefix: 9,
+            value,
+            suffix: 11,
+        };
+        let bytes = to_bytes(&nested).expect("encode nested enum byte arrays");
+        let decoded: NestedEnumByteArrays =
+            norito::decode_from_bytes(&bytes).expect("decode nested enum byte arrays");
+        assert_eq!(decoded, nested);
+    }
 }
 #[test]
 fn nested_builtin_tuple_lengths_match_every_supported_layout() {

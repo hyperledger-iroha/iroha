@@ -126,6 +126,19 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
     }
 
+    func testRejectedOperationErrorDetailsDecodeEntrypointBeforeTransactionHash() throws {
+        let status = try KagemushaOperationCodec.decodeStatus(
+            try rejectedStatusWithHashDetailsArchive(),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        guard case .rejected(let rejected) = status else {
+            return XCTFail("expected rejected operation status")
+        }
+        let details = try XCTUnwrap(rejected.error.details)
+        XCTAssertEqual(details.entrypointHash, Self.entrypointHash)
+        XCTAssertEqual(details.transactionHash, Self.transactionHash)
+    }
+
     func testAppliedRedeemStatusMatchesRustNoritoGoldenVector() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustAppliedRedeemStatusArchiveHex))
 
@@ -541,12 +554,19 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 .invalidField("error.message")
             )
         }
-        XCTAssertNoThrow(try KagemushaOperationErrorDetails(
+        let details = try KagemushaOperationErrorDetails(
             rejectCode: "TX_QUEUE_FULL",
+            entrypointHash: Self.entrypointHash,
+            transactionHash: Self.transactionHash
+        )
+        XCTAssertEqual(details.entrypointHash, Self.entrypointHash)
+        XCTAssertEqual(details.transactionHash, Self.transactionHash)
+        XCTAssertThrowsError(try KagemushaOperationErrorDetails(
+            rejectCode: " TX_QUEUE_FULL",
             transactionHash: Self.transactionHash
         ))
         XCTAssertThrowsError(try KagemushaOperationErrorDetails(
-            rejectCode: " TX_QUEUE_FULL",
+            entrypointHash: String(repeating: "A", count: 64),
             transactionHash: Self.transactionHash
         ))
         XCTAssertThrowsError(try KagemushaOperationErrorDetails(
@@ -794,6 +814,52 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
     }
 
+    private func rejectedStatusWithHashDetailsArchive() throws -> Data {
+        func optionalString(_ value: String?) throws -> Data {
+            try CompactNorito.encodeOption(value, encode: CompactNorito.encodeString)
+        }
+
+        let none = Data([0])
+        var details = CompactNoritoWriter()
+        details.writeField(try optionalString(nil)) // layer
+        details.writeField(try optionalString(nil)) // reject_code
+        details.writeField(none) // queue
+        details.writeField(none) // retry_after_seconds
+        details.writeField(try optionalString(nil)) // endpoint
+        details.writeField(try optionalString(nil)) // field
+        details.writeField(try optionalString(nil)) // expected
+        details.writeField(try optionalString(nil)) // actual
+        details.writeField(try optionalString(nil)) // profile
+        details.writeField(none) // chain_discriminant
+        details.writeField(try optionalString(Self.entrypointHash))
+        details.writeField(try optionalString(Self.transactionHash))
+        details.writeField(try optionalString(nil)) // last_status
+        details.writeField(try optionalString(nil)) // hint
+        details.writeField(none) // axt
+
+        var detailsOption = CompactNoritoWriter()
+        detailsOption.writeUInt8(1)
+        detailsOption.writeField(details.data)
+
+        var error = CompactNoritoWriter()
+        error.writeField(CompactNorito.encodeString("offline_operation_rejected"))
+        error.writeField(CompactNorito.encodeString("rejected"))
+        error.writeField(detailsOption.data)
+
+        var status = CompactNoritoWriter()
+        status.writeUInt32LE(2)
+        status.writeField(CompactNorito.encodeString(Self.operationId))
+        status.writeField(CompactNorito.encodeUInt32(1))
+        status.writeField(CompactNorito.encodeString(Self.transactionHash))
+        status.writeField(error.data)
+        return noritoEncode(
+            typeName: "iroha_torii_shared::offline_api::OfflineOperationStatus",
+            payload: status.data,
+            flags: NoritoHeader.compactLen,
+            payloadAlignment: 16
+        )
+    }
+
     private func assertExactRequestBodyCeiling(
         schema: String,
         fieldCount: Int,
@@ -976,6 +1042,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     }
 
     private static let operationId = String(repeating: "11", count: 32)
+    private static let entrypointHash = String(repeating: "33", count: 32)
     private static let transactionHash = String(repeating: "22", count: 32)
     private static let rustOperationReferenceArchiveHex =
         "4e5254300000e8e2244e45e4be2a975e34957141128b00f0000000000000001f5b5402d6dc2092024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323258572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff"

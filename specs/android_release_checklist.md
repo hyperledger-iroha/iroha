@@ -17,7 +17,7 @@ Use this document together with:
 - `specs/android_runbook.md` — day‑to‑day operational runbooks.
 - `specs/compliance/android/and6_compliance_checklist.md` — regulator
   artefact inventory.
-- `specs/release_dual_track_runbook.md` — dual-track release governance.
+- `specs/release_runbook.md` — Iroha 3 release governance.
 
 ## 1. Stage Gates at a Glance
 

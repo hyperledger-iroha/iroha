@@ -1,7 +1,6 @@
 #[test]
 fn cache_block_body_rejects_same_header_equal_length_wire_substitution_before_write() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
+    let (temp_dir, config) = unwrapped_kura_storage_fixture(nonzero!(1_usize));
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
@@ -84,9 +83,7 @@ fn cache_block_body_rejects_same_header_equal_length_wire_substitution_before_wr
 }
 #[test]
 fn live_evicted_read_rejects_same_header_equal_length_da_substitution() {
-    let temp_dir = TempDir::new().expect("create Kura root");
-    let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
     let canonical = Arc::clone(&blocks[1]);
@@ -261,9 +258,7 @@ fn store_existing_block_rejects_same_header_wire_substitution_without_index_effe
 #[cfg(unix)]
 #[test]
 fn evicted_existing_block_rejects_correlated_retained_wire_substitution_without_effects() {
-    let temp_dir = TempDir::new().expect("create Kura root");
-    let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let canonical = Arc::clone(&blocks[1]);
     let height = nonzero!(2_usize);
@@ -354,9 +349,7 @@ fn evicted_existing_block_rejects_correlated_retained_wire_substitution_without_
 #[cfg(unix)]
 #[test]
 fn evicted_existing_exact_block_requires_finality_without_effects() {
-    let temp_dir = TempDir::new().expect("create Kura root");
-    let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let canonical = Arc::clone(&blocks[1]);
     let height = nonzero!(2_usize);
@@ -421,9 +414,7 @@ fn evicted_existing_exact_block_requires_finality_without_effects() {
 #[cfg(unix)]
 #[test]
 fn hash_only_existing_block_rejects_correlated_unsigned_retained_wire_without_effects() {
-    let temp_dir = TempDir::new().expect("create Kura root");
-    let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
     let canonical = store_dummy_block_arcs(&kura, 1)
         .pop()
         .expect("canonical block");
@@ -635,8 +626,7 @@ fn cache_block_body_rejects_length_mismatch() {
 }
 #[test]
 fn evicted_remote_body_rehydrates_after_restart_and_new_adverts() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block, block_hash) = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -726,8 +716,7 @@ fn fast_init_preserves_remote_only_metadata_after_restart() {
 }
 #[test]
 fn strict_init_prunes_remote_only_tail_without_hash_metadata() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let block_hash = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -785,8 +774,7 @@ fn strict_init_prunes_remote_only_tail_without_hash_metadata() {
 }
 #[test]
 fn malformed_sidecar_status_is_missing_without_fresh_adverts() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block_hash, da_path) = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -827,8 +815,7 @@ fn malformed_sidecar_status_is_missing_without_fresh_adverts() {
 }
 #[test]
 fn strict_init_removes_malformed_sidecar_with_matching_length() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block_hash, da_path) = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -886,8 +873,7 @@ fn strict_init_removes_malformed_sidecar_with_matching_length() {
 }
 #[test]
 fn strict_init_rejects_conflicting_sidecar_hash_without_rewriting_chain() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (canonical_hash, conflicting_hash, da_path) = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -945,23 +931,9 @@ fn strict_init_rejects_conflicting_sidecar_hash_without_rewriting_chain() {
 fn block_payload_available_by_hash_requires_local_body_after_eviction() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
-    let (kura, _) = Kura::new(
-        &KuraConfig {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: FsyncMode::Batched,
-            fsync_interval: FSYNC_INTERVAL,
-            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .expect("kura init");
+    let config =
+        kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let height = nonzero!(2_usize);
     let block = kura
         .get_block(height)
@@ -998,19 +970,10 @@ fn block_payload_available_by_hash_requires_local_body_after_eviction() {
 fn evicted_blocks_survive_restart() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
-    let config = KuraConfig {
-        init_mode: InitMode::Strict,
-        store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-        blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
-        debug_output_new_blocks: false,
-        merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: FsyncMode::Batched,
-        fsync_interval: FSYNC_INTERVAL,
-        block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-    };
+    let config = kura_config_for_dir(
+        &temp_dir,
+        NonZeroUsize::new(1).expect("non-zero"),
+    );
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let height = NonZeroUsize::new(2).expect("non-zero");
     let block = kura
@@ -1047,28 +1010,8 @@ fn deep_history_get_block_uses_cached_bytes() {
         store.append_block_to_chain(block.as_ref()).unwrap();
     }
     drop(store);
-    let (kura, _) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(
-                temp_dir.path().to_str().unwrap().into(),
-            ),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: nonzero!(16_usize),
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, nonzero!(16_usize));
+    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let heights: Vec<_> = (1..=BLOCK_COUNT)
         .map(|height| NonZeroUsize::new(height).expect("nonzero height"))
         .collect();
@@ -1101,28 +1044,9 @@ fn deep_history_get_block_uses_cached_bytes() {
 fn debug_output_new_blocks_writes_jsonl() {
     let temp_dir = TempDir::new().expect("temp dir");
     let rt = tokio::runtime::Runtime::new().expect("runtime");
-    let (kura, _) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(
-                temp_dir.path().to_str().unwrap().into(),
-            ),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: true,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.debug_output_new_blocks = true;
+    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     kura.bind_local_peer_id(checked_peer_id())
         .expect("bind local peer before Kura start");
     let _handle = {
@@ -1167,28 +1091,8 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
         let _rt_guard = rt.enter();
         LiveQueryStore::start_test()
     };
-    let (kura, block_count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(
-                temp_dir.path().to_str().unwrap().into(),
-            ),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, block_count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     assert_eq!(block_count.0, 0);
     let state = State::new(
         World::with([domain, genesis_domain], [account, genesis_account], []),
@@ -1223,20 +1127,21 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
         .build_and_sign(&genesis_key_pair)
         .expect("genesis block should be built");
     {
-        let mut state_block = state.block(genesis.0.header());
         let time_source = TimeSource::new_system();
-        let block_genesis = ValidBlock::validate_with_events(
-            genesis.0.clone(),
-            &topology,
-            &genesis_id,
-            &time_source,
-            &mut state_block,
-            |_| {},
-        )
-        .unpack(|_| {})
-        .unwrap()
-        .commit_unchecked()
-        .unpack(|_| {});
+        let mut voting_block = None;
+        let (valid_genesis, mut state_block) =
+            ValidBlock::validate_signed_genesis_keep_voting_block(
+                genesis.0.clone(),
+                &topology,
+                &genesis_id,
+                &time_source,
+                &state,
+                &mut voting_block,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            )
+            .unpack(|_| {})
+            .unwrap();
+        let block_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
         let _events =
             state_block.apply_without_execution(&block_genesis, topology.as_ref().to_owned());
         state_block.commit().unwrap();
@@ -1840,6 +1745,207 @@ fn two_lane_runtime_config() -> RuntimeLaneConfig {
     let catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
     RuntimeLaneConfig::from_catalog(&catalog)
 }
+type DefaultKuraFixture = (TempDir, KuraConfig, Arc<Kura>);
+type ConfiguredKuraFixture = (TempDir, KuraConfig, RuntimeLaneConfig, Arc<Kura>);
+
+fn kura_storage_fixture(
+    temp_context: &str,
+    blocks_in_memory: NonZeroUsize,
+) -> (TempDir, KuraConfig) {
+    let temp_dir = TempDir::new().expect(temp_context);
+    let config = kura_config_for_dir(&temp_dir, blocks_in_memory);
+    (temp_dir, config)
+}
+
+fn unwrapped_kura_storage_fixture(blocks_in_memory: NonZeroUsize) -> (TempDir, KuraConfig) {
+    let temp_dir = TempDir::new().unwrap();
+    let config = kura_config_for_dir(&temp_dir, blocks_in_memory);
+    (temp_dir, config)
+}
+
+fn expect_default_kura_fixture(
+    temp_context: &str,
+    blocks_in_memory: NonZeroUsize,
+    open_context: &str,
+) -> DefaultKuraFixture {
+    let (temp_dir, config) = kura_storage_fixture(temp_context, blocks_in_memory);
+    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect(open_context);
+    (temp_dir, config, kura)
+}
+
+fn kura_root_fixture(blocks_in_memory: NonZeroUsize) -> DefaultKuraFixture {
+    expect_default_kura_fixture("create Kura root", blocks_in_memory, "open Kura")
+}
+
+fn unwrapped_kura_fixture() -> DefaultKuraFixture {
+    let (temp_dir, config) = unwrapped_kura_storage_fixture(BLOCKS_IN_MEMORY);
+    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    (temp_dir, config, kura)
+}
+
+fn unwrapped_inline_kura_fixture() -> (TempDir, Arc<Kura>) {
+    unwrapped_inline_kura_fixture_with_fsync(FsyncMode::Batched)
+}
+
+fn unwrapped_inline_kura_fixture_with_fsync(fsync_mode: FsyncMode) -> (TempDir, Arc<Kura>) {
+    let temp_dir = TempDir::new().unwrap();
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.fsync_mode = fsync_mode;
+    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    (temp_dir, kura)
+}
+
+fn expect_configured_kura_fixture(
+    temp_context: &str,
+    blocks_in_memory: NonZeroUsize,
+    open_context: &str,
+) -> ConfiguredKuraFixture {
+    let (temp_dir, config) = kura_storage_fixture(temp_context, blocks_in_memory);
+    let lane_config = RuntimeLaneConfig::default();
+    let (kura, _) = Kura::new(&config, &lane_config).expect(open_context);
+    (temp_dir, config, lane_config, kura)
+}
+
+fn temporary_kura_fixture() -> ConfiguredKuraFixture {
+    expect_configured_kura_fixture(
+        "temporary Kura directory",
+        BLOCKS_IN_MEMORY,
+        "initialize Kura",
+    )
+}
+
+fn expect_two_lane_storage_fixture(
+    temp_context: &str,
+) -> (TempDir, KuraConfig, RuntimeLaneConfig) {
+    let (temp_dir, config) = kura_storage_fixture(temp_context, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    (temp_dir, config, lane_config)
+}
+
+fn two_lane_storage_fixture() -> (TempDir, KuraConfig, RuntimeLaneConfig) {
+    expect_two_lane_storage_fixture("create temp dir")
+}
+
+fn autonomous_lane_storage_fixture() -> (TempDir, KuraConfig, RuntimeLaneConfig) {
+    expect_two_lane_storage_fixture("temp dir")
+}
+
+type MarkedLaneBlockFixtureParts<B> = (
+    (TempDir, KuraConfig, RuntimeLaneConfig),
+    (
+        LaneId,
+        iroha_config::parameters::actual::LaneConfigEntry,
+        u64,
+    ),
+    (B, SumeragiLanePayloadOwnership, LaneBlockProposalV1),
+    Arc<Kura>,
+);
+
+struct MarkedLaneBlockFixture<B>(MarkedLaneBlockFixtureParts<B>);
+
+impl<B> MarkedLaneBlockFixture<B> {
+    fn into_parts(self) -> MarkedLaneBlockFixtureParts<B> {
+        self.0
+    }
+}
+
+impl MarkedLaneBlockFixture<Arc<SignedBlock>> {
+    fn uncommitted() -> Self {
+        Self::uncommitted_at(1)
+    }
+
+    fn uncommitted_at(lane_block_height: u64) -> Self {
+        let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry").clone();
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        Self((
+            (temp_dir, config, lane_config),
+            (lane_id, lane_entry, lane_block_height),
+            (block, ownership, proposal),
+            kura,
+        ))
+    }
+}
+
+impl MarkedLaneBlockFixture<SignedBlock> {
+    fn committed() -> Self {
+        let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry").clone();
+        let lane_block_height = 1;
+        let mut block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        )
+        .as_ref()
+        .clone();
+        attach_ok_results_to_block(&mut block);
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        Self((
+            (temp_dir, config, lane_config),
+            (lane_id, lane_entry, lane_block_height),
+            (block, ownership, proposal),
+            kura,
+        ))
+    }
+}
+
+fn blank_kura_with_next_block() -> (Arc<Kura>, Arc<SignedBlock>) {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    (kura, block)
+}
+
+fn blank_kura_with_blocks() -> (Arc<Kura>, DummyBlocks) {
+    let kura = Kura::blank_kura_for_testing();
+    let blocks = DummyBlocks::new();
+    (kura, blocks)
+}
+
+fn default_pipeline_sidecar_fixture() -> (
+    TempDir,
+    KuraConfig,
+    Arc<Kura>,
+    HashOf<BlockHeader>,
+    PipelineRecoverySidecar,
+) {
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
+    let block_hash = store_dummy_blocks(&kura, 1)[0];
+    let sidecar = PipelineRecoverySidecar::new(
+        1,
+        block_hash,
+        PipelineDagSnapshot {
+            fingerprint: [0u8; 32],
+            key_count: 0,
+        },
+        Vec::new(),
+    );
+    (temp_dir, config, kura, block_hash, sidecar)
+}
+
 fn test_kura_with_default_lane_markers(
     config: &Config,
     lane_config: &RuntimeLaneConfig,
@@ -1920,14 +2026,12 @@ fn autonomous_lane_payload_for_kura(
     proposal.proposal_hash = proposal.computed_proposal_hash();
     let network_id = test_network_id(b"kura-autonomous-genesis");
     let epoch = 7;
-    let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
     let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
         proposal.descriptor.lane_id,
         proposal.descriptor.dataspace_id,
     ));
     let reservation = LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: accepted.hash(),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new(
             b"kura-autonomous-view-queue-plan-admission-binding",
@@ -2048,11 +2152,9 @@ fn rebind_autonomous_lane_payload_for_kura(
         .zip(&routing_plans)
         .enumerate()
         .map(|(index, (entrypoint, routing_plan))| {
-            let accepted =
-                AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+
             LaneQueueReservationKeyV2 {
                 version: LaneQueueReservationKeyV2::VERSION,
-                signed_transaction_hash: accepted.hash(),
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                     b"kura-autonomous-bundle-queue-plan-admission-binding",
@@ -2220,9 +2322,7 @@ fn durable_lane_payload_availability_for_kura(
 }
 #[test]
 fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let dataspace_id = lane_config.entry(lane_id).expect("lane entry").dataspace_id;
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -2320,9 +2420,7 @@ fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
 }
 #[test]
 fn lane_sidecar_writer_waits_for_geometry_transition_lock() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let dataspace_id = lane_config.entry(lane_id).expect("lane entry").dataspace_id;
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -2372,9 +2470,7 @@ fn lane_sidecar_writer_waits_for_geometry_transition_lock() {
 }
 #[test]
 fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -2513,9 +2609,7 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
 }
 #[test]
 fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);

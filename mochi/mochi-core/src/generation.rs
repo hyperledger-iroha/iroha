@@ -1628,7 +1628,13 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
+    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+    const FIXTURE_CONFIGURED_HASH: &str =
+        "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
+    const FIXTURE_GENESIS_PUBLIC_KEY: &str =
+        "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4";
     #[test]
     fn generation_file_hash_streams_across_multiple_chunks() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -1698,6 +1704,84 @@ mod tests {
             vec!["nested/a.bin", "z.bin"]
         );
     }
+    fn write_genesis_execution_config(
+        peer_dir: &Path,
+        chain_id: &ChainId,
+        chain_discriminant: u16,
+        genesis_public_key: &PublicKey,
+        expected_hash: &str,
+    ) -> PathBuf {
+        let managed_directory = peer_dir.join("managed");
+        fs::create_dir_all(&managed_directory).expect("create managed fixture directory");
+        let rans_tables_path = managed_directory.join("rans_tables.toml");
+        fs::write(
+            &rans_tables_path,
+            include_bytes!("../../../codec/rans/tables/rans_seed0.toml"),
+        )
+        .expect("write signed rANS tables fixture");
+        let rans_tables_literal = rans_tables_path.to_string_lossy().replace('\\', "\\\\");
+        let mut config =
+            include_str!("../../../crates/iroha_config/iroha_test_config.toml").to_owned();
+        config = config.replacen(
+            "chain = \"00000000-0000-0000-0000-000000000000\"",
+            &format!("chain = \"{chain_id}\"\nchain_discriminant = {chain_discriminant}"),
+            1,
+        );
+        config = config.replacen(
+            &format!("[genesis]\npublic_key = \"{FIXTURE_GENESIS_PUBLIC_KEY}\""),
+            &format!("[genesis]\npublic_key = \"{genesis_public_key}\""),
+            1,
+        );
+        config = config.replacen(
+            "file = \"./genesis.signed.nrt\"",
+            "file = \"../../genesis/genesis.signed.nrt\"\nmanifest_json = \"../../genesis/genesis.json\"",
+            1,
+        );
+        config = config.replacen(FIXTURE_CONFIGURED_HASH, expected_hash, 1);
+        config.push_str(
+            r#"
+
+[kura]
+store_dir = "managed/kura"
+
+[snapshot]
+store_dir = "managed/snapshot"
+
+[torii.da_ingest]
+replay_cache_store_dir = "managed/torii/da-replay"
+manifest_store_dir = "managed/torii/da-manifests"
+
+[sorafs.storage]
+data_dir = "managed/sorafs"
+
+[streaming.codec]
+rans_tables_path = "__RANS_TABLES_PATH__"
+
+[streaming.soranet]
+provision_spool_dir = "managed/streaming/soranet"
+
+[streaming.soravpn]
+provision_spool_dir = "managed/streaming/soravpn"
+
+[network.soranet_handshake.pow]
+revocation_store_path = "managed/soranet/revocations.norito"
+"#,
+        );
+        config = config.replacen("__RANS_TABLES_PATH__", &rans_tables_literal, 1);
+        config = config.replacen(
+            "session_store_dir = \"./storage/streaming\"",
+            "session_store_dir = \"managed/streaming\"",
+            1,
+        );
+        config = config.replacen(
+            "[torii]\naddress = \"addr:127.0.0.1:8080#8942\"",
+            "[torii]\naddress = \"addr:127.0.0.1:8080#8942\"\ndata_dir = \"managed/torii\"",
+            1,
+        );
+        let config_path = peer_dir.join("config.toml");
+        fs::write(&config_path, config).expect("write executable genesis fixture config");
+        config_path
+    }
     fn write_complete_candidate(
         root: &Path,
         chain_id: &str,
@@ -1708,29 +1792,89 @@ mod tests {
         fs::create_dir_all(&genesis_dir).expect("create fixture genesis directory");
         fs::create_dir_all(&peer_dir).expect("create fixture peer directory");
         let key_pair = KeyPair::random();
-        let manifest = iroha_genesis::GenesisBuilder::new_without_executor(
-            chain_id.parse().expect("fixture chain id is canonical"),
-            ".",
-        )
-        .build_raw()
-        .with_chain_discriminant(chain_discriminant)
-        .with_consensus_meta();
-        let block = manifest
-            .clone()
-            .build_and_sign(&key_pair)
-            .expect("sign generation fixture")
-            .0;
-        let expected_hash = block.hash();
+        let chain_id: ChainId = chain_id.parse().expect("fixture chain id is canonical");
+        let topology = (0..4)
+            .map(|_| {
+                let validator = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                    .expect("generate fixture validator key");
+                let pop = bls_normal_pop_prove(validator.private_key())
+                    .expect("generate fixture validator proof of possession");
+                GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+            })
+            .collect::<Vec<_>>();
+        let manifest = iroha_genesis::GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+            .set_topology(topology)
+            .build_raw()
+            .with_chain_discriminant(chain_discriminant)
+            .with_consensus_meta();
+        let manifest_path = genesis_dir.join("genesis.json");
         fs::write(
-            genesis_dir.join("genesis.json"),
+            &manifest_path,
             json::to_vec_pretty(&manifest).expect("encode fixture manifest"),
         )
         .expect("write fixture manifest");
-        fs::write(
-            genesis_dir.join("genesis.signed.nrt"),
-            block.encode_wire().expect("encode fixture block"),
+        let config_path = write_genesis_execution_config(
+            &peer_dir,
+            &chain_id,
+            chain_discriminant,
+            key_pair.public_key(),
+            izanami::genesis_support::UNRESOLVED_GENESIS_EXPECTED_HASH,
+        );
+        let block = crate::supervisor::sign_kagami_stub_genesis_from_config(
+            &manifest_path,
+            &config_path,
+            &key_pair,
+            Some(iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned),
         )
-        .expect("write fixture block");
+        .expect("execute and sign generation fixture against its node config");
+        assert!(block.has_results());
+        assert_eq!(block.results().len(), block.entrypoint_hashes().len());
+        assert!(block.results().all(|result| result.as_ref().is_ok()));
+        assert_eq!(
+            block.committed_fragment_count(),
+            Some(u64::try_from(block.results().len()).expect("fixture result count fits u64"))
+        );
+        block
+            .validate_entrypoint_merkle_cache()
+            .expect("generation fixture entrypoint Merkle cache");
+        block
+            .validate_result_merkle_cache()
+            .expect("generation fixture result Merkle cache");
+        assert_eq!(
+            block.header().result_merkle_root(),
+            block
+                .result_merkle_commitment()
+                .map(|commitment| *commitment.root())
+        );
+        let mut signatures = block.signatures();
+        let signature = signatures
+            .next()
+            .expect("result-bearing generation fixture signature");
+        assert_eq!(signature.index(), 0);
+        assert!(signatures.next().is_none());
+        signature
+            .signature()
+            .verify_hash(key_pair.public_key(), block.hash())
+            .expect("verify result-bearing generation fixture signature");
+        let expected_hash = block.hash();
+        let finalized_config_path = write_genesis_execution_config(
+            &peer_dir,
+            &chain_id,
+            chain_discriminant,
+            key_pair.public_key(),
+            &expected_hash.to_string(),
+        );
+        assert_eq!(finalized_config_path, config_path);
+        let wire = block.encode_wire().expect("encode fixture block");
+        izanami::genesis_support::validate_prepared_genesis_for_startup(
+            &wire,
+            &RawGenesisTransaction::from_path(&manifest_path).expect("read fixture manifest"),
+            key_pair.public_key(),
+            expected_hash,
+            &chain_id,
+        )
+        .expect("generation fixture must satisfy exact startup genesis validation");
+        fs::write(genesis_dir.join("genesis.signed.nrt"), wire).expect("write fixture block");
         fs::write(
             genesis_dir.join("genesis.public_key"),
             format!("{}\n", key_pair.public_key()),
@@ -1741,7 +1885,6 @@ mod tests {
             format!("{expected_hash}\n"),
         )
         .expect("write fixture hash");
-        fs::write(peer_dir.join("config.toml"), b"fixture config\n").expect("write fixture config");
         (key_pair, expected_hash)
     }
     fn publish_complete_generation(root: &Path, chain_id: &str) -> String {

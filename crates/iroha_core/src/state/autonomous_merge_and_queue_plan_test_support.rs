@@ -63,11 +63,9 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         payload_block_hint: None,
     };
     proposal.proposal_hash = proposal.computed_proposal_hash();
-    let accepted =
-        crate::tx::AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+
     let reservation = crate::queue::LaneQueueReservationKeyV2 {
         version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: accepted.hash(),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: binding.canonical_hash(),
         routing_plan_digest: routing_plan.digest(),
@@ -209,37 +207,14 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         .expect("fixture autonomous bundle encoding");
     crate::kura::Kura::validate_autonomous_lane_merge_bundle(&bundle, network_id, epoch)
         .expect("fixture autonomous bundle validation");
-    let (proposal_block_hash, proposal_view) =
-        crate::kura::Kura::autonomous_lane_execution_anchor(&proposal, payload.payload_hash);
-    let descriptor = &proposal.descriptor;
-    let ownership = SumeragiLanePayloadOwnership {
-        proposal_height,
-        proposal_view,
-        lane_id: descriptor.lane_id,
-        dataspace_id: descriptor.dataspace_id,
-        lane_incarnation: descriptor.lane_incarnation,
-        lane_block_height,
-        lane_block_view,
-        subject_hash: descriptor.subject_hash,
-        qc_mode_tag: descriptor.qc_mode_tag.clone(),
-        accepted_candidate_indices: descriptor.accepted_candidate_indices.clone(),
-        accepted_transaction_hashes: descriptor.accepted_transaction_hashes.clone(),
-        previous_lane_block_height: 0,
-        previous_lane_block_descriptor_hash: None,
-        lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
-        lane_block_descriptor_validator_set: descriptor.validator_set.clone(),
-        lane_block_descriptor_validator_count: descriptor.validator_count,
-        lane_block_descriptor_min_quorum: descriptor.min_quorum,
-        payload_ownership_hash: descriptor.payload_ownership_hash,
-        rbc_instance_hash: descriptor.rbc_instance_hash,
-    };
     let input =
         crate::kura::LaneBlockExecutionInputArtifact::new(crate::kura::RecoveredLaneBlockPayload {
             proposal: proposal.clone(),
-            artifact: crate::kura::LaneBlockArtifact::new(proposal_block_hash, ownership),
-            autonomous_network_id: Some(network_id),
-            autonomous_epoch: Some(epoch),
-            autonomous_payload_hash: Some(payload.payload_hash),
+            source: crate::kura::LaneBlockExecutionSourceV1::autonomous_lane(
+                network_id,
+                epoch,
+                payload.payload_hash,
+            ),
             entrypoints: vec![entrypoint],
             reservation_keys: payload.reservation_keys.clone(),
             routing_plans: payload.routing_plans.clone(),
@@ -506,7 +481,13 @@ fn autonomous_merge_commit_authorization_fixture(
         world.commit();
     }
     let expired_axt_replay_key = seed_expired_axt_replay.then(|| {
-        let key = AxtHandleReplayKey::from_parts([0xA7; 32], 1, 1, LaneId::SINGLE);
+        let key = AxtHandleReplayKey::from_parts(
+            DataSpaceId::UNIVERSAL,
+            [0xA7; 32],
+            1,
+            1,
+            LaneId::SINGLE,
+        );
         let mut replay = state.world.axt_replay_ledger.block();
         replay.insert(
             key,

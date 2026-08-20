@@ -1080,9 +1080,15 @@ fn certified_completion_retires_exact_live_or_reconstructed_owner() {
     assert!(service.local_completions.is_empty());
     assert!(!service.output_guard.restart_required());
     drop(foreign_permit);
-    service
-        .complete_certified_body_fetch(&live_task)
-        .expect("certified response retires live owner");
+    let output_guard = service.lifecycle_output_guard();
+    let prepared = service
+        .prepare_certified_body_fetch_owner_removal(&live_task)
+        .expect("certified response preflights the live owner");
+    let operation = output_guard
+        .begin_fail_stop_operation()
+        .expect("open the live-owner removal boundary");
+    prepared.commit(operation.permit());
+    operation.complete();
     assert!(service.fetches.is_empty());
     assert!(service.fetch_by_manifest.is_empty());
     let queued_ordinary = BodyFetchTask::ordinary_for_test(54, tag, payload.manifest().clone());
@@ -1104,9 +1110,15 @@ fn certified_completion_retires_exact_live_or_reconstructed_owner() {
     service
         .enqueue_body_fetch(queued_task.clone())
         .expect("queued reconstruction accepts certified upgrade");
-    service
-        .complete_certified_body_fetch(&queued_task)
-        .expect("certified response retires queued reconstruction");
+    let output_guard = service.lifecycle_output_guard();
+    let prepared = service
+        .prepare_certified_body_fetch_owner_removal(&queued_task)
+        .expect("certified response preflights queued reconstruction");
+    let operation = output_guard
+        .begin_fail_stop_operation()
+        .expect("open the queued-owner removal boundary");
+    prepared.commit(operation.permit());
+    operation.complete();
     assert!(service.local_completions.is_empty());
     assert!(!service.output_guard.restart_required());
 }
@@ -1146,9 +1158,10 @@ fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation
         proposal.subject,
     );
     let manifest_hash = HashOf::new(payload.manifest());
-    let error = service
-        .complete_certified_body_fetch(&mismatched)
-        .expect_err("a different executor task cannot retire the live service owner");
+    let error = match service.prepare_certified_body_fetch_owner_removal(&mismatched) {
+        Err(error) => error,
+        Ok(_) => panic!("a different executor task cannot retire the live service owner"),
+    };
     assert!(error.contains("differs from executor ownership"));
     assert_eq!(
         service

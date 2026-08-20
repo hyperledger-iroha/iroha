@@ -1,15 +1,4 @@
-use std::{
-    collections::VecDeque,
-    io::{ErrorKind, Read, Write},
-    net::{SocketAddr, TcpListener as StdTcpListener},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
-    thread,
-    time::{Duration, Instant},
-};
+use super::*;
 use futures::SinkExt;
 use httpmock::{
     Method::{DELETE, GET, POST},
@@ -49,8 +38,19 @@ use reqwest::{
     StatusCode,
     header::{HeaderMap, HeaderValue},
 };
+use std::{
+    collections::VecDeque,
+    io::{ErrorKind, Read, Write},
+    net::{SocketAddr, TcpListener as StdTcpListener},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
+    thread,
+    time::{Duration, Instant},
+};
 use tokio_tungstenite::tungstenite::http;
-use super::*;
 fn operator_test_client(base_url: impl AsRef<str>) -> ToriiClient {
     let network_id = test_network_id();
     let context = OperatorSigningContext::new(
@@ -184,13 +184,13 @@ fn try_start_mock_server() -> Option<MockServer> {
             None
         })
 }
-fn lifecycle_status(enabled: bool) -> LaneLifecycleStatusV1 {
+fn lifecycle_status() -> LaneLifecycleStatusV1 {
     let catalog = LaneCatalog::default();
     let incarnations = std::collections::BTreeMap::from([(
         iroha_data_model::nexus::LaneId::SINGLE,
         Hash::new(b"mochi-lifecycle-status-incarnation"),
     )]);
-    LaneLifecycleStatusV1::new(enabled, &catalog, &incarnations).expect("valid lifecycle status")
+    LaneLifecycleStatusV1::new(&catalog, &incarnations).expect("valid lifecycle status")
 }
 fn spawn_status_stub(
     responses: Vec<(u16, Vec<u8>)>,
@@ -1264,7 +1264,7 @@ const DATA_EVENT_MESSAGE_FIXTURE: &[u8] =
 fn block_stream_frame(block: &SignedBlock) -> Vec<u8> {
     norito::to_bytes(&BlockMessage(block.clone())).expect("encode block stream message")
 }
-fn sample_block() -> SignedBlock {
+fn sample_block_proposal() -> SignedBlock {
     let mut builder = TransactionBuilder::new_genesis(
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -1274,10 +1274,15 @@ fn sample_block() -> SignedBlock {
     let tx = builder.sign(ALICE_KEYPAIR.private_key());
     SignedBlock::genesis(vec![tx], PEER_KEYPAIR.private_key(), None, None)
 }
+fn sample_block() -> SignedBlock {
+    sample_block_with_result(Ok(
+        iroha_data_model::transaction::DataTriggerSequence::default(),
+    ))
+}
 fn sample_block_with_result(
     result: iroha_data_model::transaction::TransactionResultInner,
 ) -> SignedBlock {
-    let mut block = sample_block();
+    let mut block = sample_block_proposal();
     let entrypoint_hashes = block
         .external_entrypoints_cloned()
         .map(|entrypoint| entrypoint.hash())
@@ -1285,6 +1290,26 @@ fn sample_block_with_result(
     block
         .set_transaction_results(Vec::new(), &entrypoint_hashes, vec![result])
         .expect("attach aligned sample transaction result");
+    let final_signature = iroha_data_model::block::BlockSignature::new(
+        0,
+        iroha_crypto::SignatureOf::try_from_hash(PEER_KEYPAIR.private_key(), block.hash())
+            .expect("sign result-bearing sample block"),
+    );
+    block
+        .replace_signatures(std::collections::BTreeSet::from([final_signature]))
+        .expect("replace result-bearing sample-block signature");
+    {
+        let mut final_signatures = block.signatures();
+        let final_signature = final_signatures
+            .next()
+            .expect("result-bearing sample-block signature");
+        assert_eq!(final_signature.index(), 0);
+        assert!(final_signatures.next().is_none());
+        final_signature
+            .signature()
+            .verify_hash(PEER_KEYPAIR.public_key(), block.hash())
+            .expect("verify result-bearing sample-block signature");
+    }
     block
 }
 #[test]
@@ -1296,8 +1321,8 @@ fn committed_block_rejection_is_not_reported_as_smoke_success() {
     let expected_reason = format!("{rejection:?}");
     let block = sample_block_with_result(Err(rejection));
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     match smoke_transaction_result_in_block(&block, &tx_hash) {
@@ -1310,10 +1335,11 @@ fn committed_block_rejection_is_not_reported_as_smoke_success() {
 }
 #[test]
 fn block_hash_presence_without_aligned_result_is_not_smoke_success() {
-    let block = sample_block();
+    let block = sample_block_proposal();
+    assert!(block.is_resultless_proposal());
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     assert!(smoke_transaction_result_in_block(&block, &tx_hash).is_none());
@@ -1324,18 +1350,14 @@ async fn submit_and_wait_for_commit_reports_block_height() {
         iroha_data_model::transaction::DataTriggerSequence::default(),
     ));
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     let expected_height = block.header().height().get();
     let block: SignedBlock = norito::decode_from_bytes::<BlockMessage>(&block_stream_frame(&block))
         .expect("round-trip sample block through the Torii stream envelope")
         .into();
-    assert!(
-        block.transactions_vec().is_empty(),
-        "decoded blocks deliberately omit the legacy transaction cache"
-    );
     assert_eq!(block.external_transactions().len(), 1);
     let (block_tx, block_rx) = broadcast::channel(8);
     let (_event_tx, event_rx) = broadcast::channel(8);
@@ -1366,8 +1388,8 @@ async fn submit_and_wait_for_commit_reports_block_height() {
 async fn submit_and_wait_for_commit_times_out_without_events() {
     let block = sample_block();
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     let (_block_tx, block_rx) = broadcast::channel(8);
@@ -1391,8 +1413,8 @@ async fn submit_and_wait_for_commit_reports_rejected_when_expired_event_arrives(
     };
     let block = sample_block();
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     let task_tx_hash = tx_hash;
@@ -1442,8 +1464,8 @@ async fn submit_and_wait_for_commit_reports_rejected_when_pipeline_event_rejects
     };
     let block = sample_block();
     let tx_hash = block
-        .transactions_vec()
-        .first()
+        .external_transactions()
+        .next()
         .expect("sample block tx")
         .hash();
     let task_tx_hash = tx_hash;
@@ -1651,10 +1673,21 @@ async fn block_stream_decodes_block_events() {
 }
 #[test]
 fn block_canonical_wire_matches_fixture() {
-    let wire = sample_block()
-        .canonical_wire()
-        .expect("canonical wire")
-        .into_vec();
+    let block = sample_block();
+    block
+        .validate_entrypoint_merkle_cache()
+        .expect("canonical fixture entrypoint Merkle cache");
+    block
+        .validate_result_merkle_cache()
+        .expect("canonical fixture result Merkle cache");
+    assert_eq!(block.committed_fragment_count(), Some(1));
+    assert_eq!(
+        block.header().result_merkle_root(),
+        block
+            .result_merkle_commitment()
+            .map(|commitment| *commitment.root())
+    );
+    let wire = block.canonical_wire().expect("canonical wire").into_vec();
     assert_eq!(wire.as_slice(), BLOCK_WIRE_FIXTURE);
 }
 #[tokio::test(flavor = "current_thread")]

@@ -107,7 +107,6 @@ provision_window_segments = 4
 provision_queue_capacity = 256
 
 [nexus]
-enabled = true
 lane_count = 3
 
 [nexus.fees]

@@ -1,7 +1,6 @@
 //! This test checks how the JSON-serialized schema looks.
 #![allow(unexpected_cfgs)]
 #![allow(dead_code)]
-mod common;
 use iroha_schema::IntoSchema;
 macro_rules! check_schemas {
     ($($case:literal => $ty:ident / $name:ident: $item:item)*) => {{

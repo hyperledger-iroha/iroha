@@ -1,4 +1,6 @@
 //! Readiness smoke tests against the in-process mock Torii service.
+#[path = "supervisor.rs"]
+mod supervisor;
 use color_eyre::Result;
 use iroha_data_model::{
     NetworkId,

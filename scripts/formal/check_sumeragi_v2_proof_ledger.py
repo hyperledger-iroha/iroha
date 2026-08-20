@@ -14414,11 +14414,6 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
             "v2_worker_recovered_lifecycle_output_cases.rs",
             "v2_worker_nonzero_view_restart.rs",
         ),
-        "crates/iroha_core/src/sumeragi/tests/v2_worker_main_04.rs": (
-            "v2_worker_serve_unsealed_cases.rs",
-            "v2_worker_serve_decision_restart_cases.rs",
-            "v2_worker_certified_serve_budget_cases.rs",
-        ),
     }
     for owner, expected in owner_contracts.items():
         observed = _REVIEWED_RUST_INCLUDE_MANIFESTS.get(owner)
@@ -41672,9 +41667,9 @@ let post_snapshot_source = context.roster[2].validator.clone();
         (
             """
 assert!(matches!(
-    leader_wire_ingress.try_push(InboundBlockMessage::new(
+    leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
         BlockMessage::V2(message.clone()),
-        Some(post_snapshot_source),
+        post_snapshot_source,
     )),
     Ok(super::super::FairV2IngressPushDisposition::Enqueued)
 ));

@@ -50,10 +50,6 @@ OPERATOR_READS: tuple[tuple[str, Callable[[ToriiClient], object]], ...] = (
         lambda client: client.get_sumeragi_diagnostics(),
     ),
     ("/v1/sumeragi/qc", lambda client: client.get_sumeragi_qc()),
-    (
-        f"/v1/sumeragi/commit-qcs/{'ab' * 32}",
-        lambda client: client.get_sumeragi_commit_qc("ab" * 32),
-    ),
     ("/v1/sumeragi/leader", lambda client: client.get_sumeragi_leader()),
     (
         "/v1/sumeragi/evidence/count",
@@ -68,10 +64,6 @@ OPERATOR_READS: tuple[tuple[str, Callable[[ToriiClient], object]], ...] = (
         ),
     ),
     ("/v1/sumeragi/params", lambda client: client.get_sumeragi_params()),
-    (
-        "/v1/sumeragi/telemetry",
-        lambda client: client.get_sumeragi_telemetry(),
-    ),
 )
 
 

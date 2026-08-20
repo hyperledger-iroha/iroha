@@ -403,6 +403,10 @@ Protected Namespaces
 
 Runtime Upgrade Hooks
 - Lane manifests may declare `hooks.runtime_upgrade` to gate runtime upgrade instructions (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
+- The first-release manifest schema is closed. `runtime_upgrade` is the only
+  accepted hook name, its object accepts exactly the fields below, and any
+  unknown top-level, validator-binding, overlay, module, hook, or hook-field
+  key rejects the manifest.
 - Hook fields:
   - `allow` (bool, default `true`): when `false`, all runtime-upgrade instructions are rejected.
   - `require_metadata` (bool, default `false`): require the transaction metadata entry specified by `metadata_key`.
@@ -532,30 +536,19 @@ CastZkBallot Verification Path
 
 ### Slashing and Jailing Workflow
 
-Consensus emits Norito-encoded `Evidence` whenever a <i105-account-id> violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Governed `SumeragiNposParameters.reconfig.evidence_horizon_blocks` (default `7200` blocks) bounds accepted record age; `activation_lag_blocks` and `slashing_delay_blocks` in the same on-chain record delay enactment so governance can cancel penalties before they apply. These are governed chain values, not local `[sumeragi]` configuration.
+Consensus records only exact Sumeragi-v2 equivocation proofs. Each `Evidence`
+contains the immutable height context, roster-ordered BLS proofs of possession,
+and two complete signed proposals, phase votes, or timeout votes that conflict
+for one consensus slot. A node may retain a validated proof locally while it is
+pending, but it becomes penalty-eligible only after canonical admission by a
+prior committed block. Retired global-v1 offence enums and summary payloads are
+not a first-release archive format and fail decode.
 
-Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stable and enforced by the data model:
-
-```rust
-use iroha_data_model::block::consensus::EvidenceKind;
-
-let offences = [
-    EvidenceKind::DoublePrepare,
-    EvidenceKind::DoubleCommit,
-    EvidenceKind::InvalidQc,
-    EvidenceKind::InvalidProposal,
-    EvidenceKind::Censorship,
-];
-
-for (expected, kind) in offences.iter().enumerate() {
-    assert_eq!(*kind as u16, expected as u16);
-}
-```
-
-- **DoublePrepare/DoubleCommit** — the <i105-account-id> signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
-- **InvalidQc** — an aggregator gossiped a commit QC whose shape fails deterministic checks (e.g., empty signer bitmap).
-- **InvalidProposal** — a leader proposed a block that fails structural validation (e.g., breaks the locked-chain rule).
-- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
+Governed `SumeragiNposParameters.reconfig.evidence_horizon_blocks` (default
+`7200` blocks) bounds accepted record age; `activation_lag_blocks` and
+`slashing_delay_blocks` in the same on-chain record delay enactment so
+governance can cancel penalties before they apply. These are governed chain
+values, not local `[sumeragi]` configuration.
 
 VRF penalties are enforced automatically after `activation_lag_blocks` (offenders are jailed). Consensus slashing is applied only after the `slashing_delay_blocks` window unless governance cancels the penalty.
 

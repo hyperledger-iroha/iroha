@@ -507,13 +507,13 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "command",
 )
 _PRODUCTION_TEST_COUNT = 864
-_G_UNIT_TEST_COUNT = 530
+_G_UNIT_TEST_COUNT = 522
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        324,
+        316,
         "lib",
     ),
     (
@@ -766,9 +766,9 @@ _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
     ("python", 63),
     ("javascript", 61),
-    ("swift", 4),
-    ("kotlin", 6),
-    ("java", 5),
+    ("swift", 5),
+    ("kotlin", 7),
+    ("java", 6),
 )
 _SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
 _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
@@ -788,8 +788,6 @@ _SDK_SOURCE_CLOSURE_SUITES = frozenset(
         _SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE,
     }
 )
-
-
 
 
 class ReceiptError(RuntimeError):
@@ -4858,8 +4856,6 @@ def _validate_bootstrap_evidence(
         "release_approvals": release_approvals,
     }
     return authentication, bootstrap_evidence, framework_runtime_contracts
-
-
 
 
 def _execute_release_receipt_component(filename: str) -> None:

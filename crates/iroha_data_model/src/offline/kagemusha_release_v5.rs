@@ -585,6 +585,8 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || self.authenticated_source_seal_projection_sha256 == [0; 32]
             || self.reviewed_cargo_binary_sha256 == [0; 32]
             || self.reviewed_rustc_binary_sha256 == [0; 32]
+            || self.generator_binary_sha256 == [0; 32]
+            || self.sealed_candidate_build_report_sha256 == [0; 32]
             || !is_kagemusha_network_id(&self.network_id)
             || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
             || self.activation_height == 0
@@ -729,6 +731,8 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
                 .authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256: self.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: self.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: self.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: self.sealed_candidate_build_report_sha256,
             benchmark_evidence_sha256: self.benchmark_evidence_sha256,
             cryptographic_review_sha256: self.cryptographic_review_sha256,
         })
@@ -859,6 +863,10 @@ impl KagemushaRecursiveSpendCandidateV4 {
                 .authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256: self.manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: self.manifest.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: self.manifest.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: self
+                .manifest
+                .sealed_candidate_build_report_sha256,
             network_id: self.manifest.network_id,
             asset: self.manifest.asset.clone(),
             bridge_abi_version: self.manifest.bridge_abi_version,
@@ -901,6 +909,10 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
                 .authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256: candidate.manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: candidate.manifest.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: candidate.manifest.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: candidate
+                .manifest
+                .sealed_candidate_build_report_sha256,
             generation_memory_limit_bytes: candidate.manifest.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: candidate
                 .manifest
@@ -979,6 +991,9 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
                     .authenticated_source_seal_projection_sha256
             || self.reviewed_cargo_binary_sha256 != candidate.manifest.reviewed_cargo_binary_sha256
             || self.reviewed_rustc_binary_sha256 != candidate.manifest.reviewed_rustc_binary_sha256
+            || self.generator_binary_sha256 != candidate.manifest.generator_binary_sha256
+            || self.sealed_candidate_build_report_sha256
+                != candidate.manifest.sealed_candidate_build_report_sha256
             || self.generation_memory_limit_bytes
                 != candidate.manifest.generation_memory_limit_bytes
             || self.generation_memory_enforcement_profile
@@ -2098,6 +2113,8 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
             || self.authenticated_source_seal_projection_sha256 == [0; 32]
             || self.reviewed_cargo_binary_sha256 == [0; 32]
             || self.reviewed_rustc_binary_sha256 == [0; 32]
+            || self.generator_binary_sha256 == [0; 32]
+            || self.sealed_candidate_build_report_sha256 == [0; 32]
             || !digests_are_distinct_and_nonzero
             || !signers_are_canonical
             || represented_roles
@@ -2138,6 +2155,9 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
                     .authenticated_source_seal_projection_sha256
             || self.reviewed_cargo_binary_sha256 != release.manifest().reviewed_cargo_binary_sha256
             || self.reviewed_rustc_binary_sha256 != release.manifest().reviewed_rustc_binary_sha256
+            || self.generator_binary_sha256 != release.manifest().generator_binary_sha256
+            || self.sealed_candidate_build_report_sha256
+                != release.manifest().sealed_candidate_build_report_sha256
             || self.manifest_sha256 != release.manifest_sha256()
             || self.release_attestation_sha256 != release.release_attestation_sha256()
             || self.release_policy_sha256 != release.release_policy_sha256()
@@ -2186,6 +2206,10 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
                 != release.manifest().reviewed_cargo_binary_sha256
             || candidate.manifest.reviewed_rustc_binary_sha256
                 != release.manifest().reviewed_rustc_binary_sha256
+            || candidate.manifest.generator_binary_sha256
+                != release.manifest().generator_binary_sha256
+            || candidate.manifest.sealed_candidate_build_report_sha256
+                != release.manifest().sealed_candidate_build_report_sha256
             || candidate.manifest.network_id != release.manifest().network_id
             || candidate.manifest.asset != release.manifest().asset
             || candidate.manifest.asset_scale != release.manifest().asset_scale
@@ -2393,6 +2417,10 @@ impl KagemushaRecursiveSpendReleaseRecordV4 {
                 != self.manifest.reviewed_cargo_binary_sha256
             || self.promotion_record.reviewed_rustc_binary_sha256
                 != self.manifest.reviewed_rustc_binary_sha256
+            || self.promotion_record.generator_binary_sha256
+                != self.manifest.generator_binary_sha256
+            || self.promotion_record.sealed_candidate_build_report_sha256
+                != self.manifest.sealed_candidate_build_report_sha256
             || self.promotion_record.qualification_receipt_sha256
                 != self.manifest.qualification_receipt_sha256
             || self.promotion_record.qualified_candidate_sha256

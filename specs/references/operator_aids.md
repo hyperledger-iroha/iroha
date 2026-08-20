@@ -20,15 +20,13 @@ Consensus (Sumeragi)
   - Non-authoritative legacy-labeled gauge snapshot. Backoff, RTT, and jitter fields do not configure revision-4 deadlines and may remain zero.
 - GET `/v1/sumeragi/leader`
   - Leader index snapshot. In NPoS mode, includes PRF context: `{ height, view, epoch_seed }`.
-- GET `/v1/sumeragi/telemetry`
-  - Legacy-labeled aggregate transport observations. Collector/RBC-named fields are not authoritative revision-4 state and may remain zero; correlate authenticated status with consensus logs instead.
 - GET `/v1/sumeragi/params`
   - Compatibility snapshot of governed NPoS/V1 parameter records. It does not replace signed revision-4 height context or the shared configuration fingerprint.
 
 Evidence (audit; non-consensus)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - Includes basic fields (e.g., DoublePrepare/DoubleCommit, InvalidQc, InvalidProposal) for inspection.
+  - Includes the frozen context and exact signed-artifact summary for the sole `SumeragiV2Equivocation` evidence shape.
   - CLI helpers:
     - `iroha --operator-private-key-file /run/secrets/iroha/operator.key --output-format text ops sumeragi evidence list`
     - `iroha --operator-private-key-file /run/secrets/iroha/operator.key --output-format text ops sumeragi evidence count`

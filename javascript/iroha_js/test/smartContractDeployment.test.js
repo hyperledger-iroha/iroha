@@ -276,7 +276,6 @@ test("deployment instruction transactions are locally signed and verified", asyn
 
   const expectedReceiptHeaders = {
     "x-iroha-entrypoint-hash": finalized.hashHex,
-    "x-iroha-transaction-hash": finalized.hashHex,
     "x-iroha-signed-transaction-hash": finalized.hashHex,
   };
   const client = new ToriiBrowserClient("https://torii.example", {

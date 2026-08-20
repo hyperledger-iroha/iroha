@@ -948,9 +948,9 @@ fn admit_productive_orphan_runtime(
     sender: PeerId,
 ) -> FairV2IngressOwnershipEvidence {
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message),
-            Some(sender),
+            sender,
         )),
         Ok(FairV2IngressPushDisposition::Enqueued)
     ));
@@ -2121,22 +2121,22 @@ fn entered_view_advances_live_leader_wire_recovery_cut() {
     let (_, _, stale_proposal, _, stale_sender) =
         productive_chunk_at_view(&service, &keys, initial.view());
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::Proposal(stale_proposal),
             )),
-            Some(stale_sender),
+            stale_sender,
         )),
         Err(super::super::FairV2IngressPushError::Rejected(_))
     ));
     let (_, _, current_proposal, _, current_sender) =
         productive_chunk_at_view(&service, &keys, next.view());
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::Proposal(current_proposal),
             )),
-            Some(current_sender),
+            current_sender,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -2154,11 +2154,11 @@ fn durable_decision_advances_live_leader_wire_recovery_cut() {
     for view in [service.active_tag.view(), service.active_tag.view() + 1] {
         let (_, _, proposal, _, sender) = productive_chunk_at_view(&service, &keys, view);
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 BlockMessage::V2(wire::ConsensusMessageV2::new(
                     wire::ConsensusMessageV2Payload::Proposal(proposal),
                 )),
-                Some(sender),
+                sender,
             )),
             Err(super::super::FairV2IngressPushError::Rejected(_))
         ));

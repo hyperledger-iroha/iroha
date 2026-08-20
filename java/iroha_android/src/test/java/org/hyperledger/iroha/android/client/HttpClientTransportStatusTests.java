@@ -925,7 +925,7 @@ public final class HttpClientTransportStatusTests {
         final Map<String, List<String>> headers =
             submitHeaderHash == null
                 ? Map.of()
-                : Map.of("x-iroha-transaction-hash", List.of(submitHeaderHash));
+                : Map.of("x-iroha-entrypoint-hash", List.of(submitHeaderHash));
         return CompletableFuture.completedFuture(new TransportResponse(202, new byte[0], "", headers));
       }
       if ("GET".equals(request.method())) {

@@ -26,7 +26,7 @@ private final class StubPipelineClient: ToriiTransactionSubmitting {
 
 private func makeSubmitReceipt() -> ToriiSubmitTransactionResponse {
     ToriiSubmitTransactionResponse(
-        payload: .init(txHash: "abc", submittedAtMs: 1, submittedAtHeight: 2, signer: "signer"),
+        payload: .init(entrypointHash: "abc", submittedAtMs: 1, submittedAtHeight: 2, signer: "signer"),
         signature: "deadbeef"
     )
 }
@@ -156,7 +156,7 @@ private final class PipelineURLProtocol: URLProtocol {
     private static var defaultSubmitBody: Data {
         let body: [String: Any] = [
             "payload": [
-                "tx_hash": "abc",
+                "entrypoint_hash": "abc",
                 "submitted_at_ms": 1,
                 "submitted_at_height": 2,
                 "signer": "signer"

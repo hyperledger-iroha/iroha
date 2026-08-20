@@ -452,6 +452,10 @@ inodes.
 After parsing, raw ParamsIPA and bootstrap payloads are released; the catalog
 retains the parsed verifier and only the serialized verifying keys needed to
 build governed activation records. Consensus never reads the filesystem.
+The validator execution-policy identity commits to the configured policy and
+the sorted identities of every authenticated catalog release. Peers with
+different release inventories therefore cannot advertise the same execution
+policy and then disagree when an activation or spend resolves local material.
 Wallets and provers install all eight artifacts, including both proving keys.
 Generated `dist/kagemusha/v4/*`, raw parameters, keys, device logs, and signing
 inputs remain untracked runtime material.
@@ -464,6 +468,15 @@ base genesis and publish its `genesis.expected_hash`; this hash is the sole
 `NetworkId`. Only then may operators build the finality roster and recursive
 release for that exact `NetworkId`, qualify it, and use
 `prepare-activation-v4` to prepare the governed height-two activation. The
+base-genesis check replays every mint, burn, and transfer of the backing asset
+in instruction order and requires a nonzero final balance. An unsupported
+instruction that could conceal a balance change fails closed; historical mint
+activity alone is not backing liquidity. The
+preparation command requires an explicit nonzero policy-evaluation Unix time,
+uses Core's complete consensus validator for trusted X.509 CA structure,
+critical extensions, certificate validity and production app policy, and binds
+that evaluation time into its report. Validators repeat the same validation at
+the activation block's actual timestamp. The
 exact-network escrow is materialized by Core from the live `NetworkId` and
 asset definition. A recursive release, release-derived escrow account, or
 device policy must never be embedded back into genesis: doing so would change
@@ -490,6 +503,22 @@ set. Withdrawal ends new issuance and offline-change
 creation, but retained material continues to verify and fully redeem previously
 issued branches indefinitely. Later governed device-policy rotation remains a
 separate operation and invalidates prior registrations, forcing re-registration.
+Active native registrations are capped at 512 globally and 64 per account. The
+active-world-state V4 record is capped at 4 KiB and stores a validated projection
+plus the exact original registration and projection hashes instead of duplicating
+the submitted report and evidence bytes from signed transaction history. Up to
+1,024 compact records (128 per account) may be retained so one complete cohort
+can cool while its replacement admits. Expired or superseded-policy records and
+their replay markers are pruned only after the 128-block challenge window is
+permanently past; the retained cap blocks further churn until then. These bounds
+keep active snapshots within their 512-leaf, depth-9 protocol ceiling and the
+registration-state value payloads within 4 MiB, alongside at most 1,024 state
+keys and 4,096 registration replay markers.
+
+This is a hard-cut V4 world-state format. Resetting an empty first-release Taira
+deployment is compatible with it, but a nonempty chain containing V3
+`kagemusha_online_registration_` keys must not upgrade without a separately
+reviewed deterministic migration.
 
 ## Production boundary
 
@@ -536,10 +565,42 @@ Dirty closures have no compatibility admission path.
 
 The V4 candidate manifest additionally binds
 `authenticated_source_seal_projection_sha256`,
-`reviewed_cargo_binary_sha256`, and `reviewed_rustc_binary_sha256`. The sealed
-builder hashes the actual absolute `CARGO` and `RUSTC` executables before the
-build script accepts the external pins, then revalidates those executable bytes
-after compilation and while sealing the candidate. The qualification receipt,
+`reviewed_cargo_binary_sha256`, `reviewed_rustc_binary_sha256`,
+`generator_binary_sha256`, and `sealed_candidate_build_report_sha256`. The
+last digest authenticates a canonical report containing both independent build
+identities, output byte identities, and the selected generator. The launcher
+opens and holds that report, authenticates a private executable snapshot against
+its selected-generator identity, and launches the snapshot rather than reopening
+the supplied pathname. A production report is only the native controller's
+`iroha.kagemusha.native_sealed_candidate_double_build_report.v2` envelope; a
+direct Python V1 report is never promotion-admissible. The controller authenticates
+the complete symlink-free Mach-O Python runtime and pinned macOS build before
+exec, executes the reviewed builder through its held `/dev/fd/12` descriptor,
+launches with an empty, reconstructed environment, and publishes the envelope
+without replacement below its fixed root-owned report parent. Promotion binds
+that envelope back to the exact controller, Python interpreter/runtime tree,
+macOS TCB, and signed builder entrypoint used by the live readiness gate. The
+readiness controller likewise accepts one exact named promotion environment,
+rejects unknown `KAGEMUSHA_*` variables, clears the child environment, and
+injects only its descriptor and native-TCB receipts. The sealed builder hashes
+the actual absolute `CARGO` and `RUSTC` executables before the
+build script accepts the external pins. It then materializes the authenticated
+commit, dependency cache, nightly-Cargo root, stable-rustc/sysroot, and native
+helper allowlist into inode-independent root-owned snapshots, drops to a
+distinct runtime UID, and compiles twice under the signed macOS Seatbelt
+boundary. The unit-graph preflight and the two builds use three distinct
+Seatbelt profiles; each profile can read only its own authenticated source and
+can read/write only its own target and temp roots. Hostile A-to-B write and
+B-to-A read/copy probes must fail. A root-held runtime-UID lease excludes
+concurrent jobs under the dedicated nologin UID/GID. Between runs, the shared
+Cargo lock leaf must remain an empty, private, single-link file and root
+atomically replaces it with a fresh inode, closing the last mutable cross-run
+channel. The two builds also use distinct authenticated commit snapshots, so
+accidental absolute-path capture changes the candidate bytes and fails the
+equality check. Both fresh target roots must
+produce byte-identical binaries; every
+snapshot and host SDK input is revalidated between builds and while sealing the
+candidate. The qualification receipt,
 cryptographic-review subject, release-attestation subject, promotion record,
 sealed-build and candidate-validation reports, Kagami verification report,
 promotion gate, and runtime qualification seal all repeat or authenticate this
@@ -582,6 +643,15 @@ candidate:
 ```bash
 ci/check_kagemusha_production_readiness.sh candidate
 ```
+
+The gate always loads its dedicated static source-contract provider from
+bounded bytes. Candidate mode may read that checked-out provider locally;
+promotion first root-custodies and descriptor-reads it, authenticates those
+exact bytes against the reviewed source closure, and executes the held bytes
+without reopening the path. The optional `--self-test` mode then loads the
+dedicated internal negative-control harness only after that contract passes.
+Promotion applies the same exact-byte custody and authentication rule to the
+self-test helper before executing it.
 
 ### Authenticated source-seal projection controller
 
@@ -629,18 +699,24 @@ field census is production Cargo evidence.
 
 The canonical execution policy is
 `iroha.kagemusha.source_seal_projection_execution_policy.v1`, is bounded at
-64 KiB, and has exactly `schema`, `cargo`, `rustc`, and `unit_graph`.
+64 KiB, and has exactly `schema`, `build_inputs`, `cargo`, `rustc`, and
+`unit_graph`.
 `cargo` and `rustc` each have exactly `binary_sha256`, `binary_size_bytes`,
-`version_argv`, and `version_stdout_lines`. Their direct executable digests are
-nonzero, sizes are bounded at 512 MiB, version output is bounded canonical
-ASCII, the first line identifies a 1.93 tool, and the only version commands are
+`capabilities`, `version_argv`, and `version_stdout_lines`. Their direct
+executable digests are nonzero, sizes are bounded at 512 MiB, and version output
+is bounded canonical ASCII. Cargo is exactly the unit-graph-capable
+`cargo 1.93.0-nightly (6c1b61003 2025-10-28)`; rustc is exactly
+`rustc 1.93.1 (01f6ddf75 2026-02-11)`. Stock stable Cargo 1.93.1 is rejected
+because it rejects this `-Z` command. The only version commands are
 `["<DIRECT_CARGO>","-Vv"]` and
 `["<DIRECT_RUSTC>","-Vv"]` respectively. The controller must authenticate
 those direct binaries independently; the producer does not open a tool binary.
 
 `unit_graph` has exactly `capture_argv`, `capture_environment`,
-`normalization`, `raw_sha256`, `raw_size_bytes`, `normalized_sha256`, and
-`normalized_size_bytes`. The exact capture argv is:
+`capture_receipt`, `normalization`, `raw_sha256`, `raw_size_bytes`,
+`normalized_sha256`, and `normalized_size_bytes`. The receipt binds the
+successful exit status, exact Cargo/rustc/build-input/source identities, raw
+stdout digest and length, and bounded stderr identity. The exact capture argv is:
 
 ```text
 <DIRECT_CARGO> -Z unstable-options build --unit-graph
@@ -659,25 +735,72 @@ absolute Cargo-home and rustc paths with the environment placeholders below.
 Every other name and value is exact:
 
 ```json
-{"CARGO_ENCODED_RUSTFLAGS":"","CARGO_HOME":"<OWNER_CONTROLLED_CACHE_ONLY_CARGO_HOME>","CARGO_NET_OFFLINE":"true","HOME":"/var/empty","LANG":"C","LC_ALL":"C","PATH":"/usr/bin:/bin","RUSTC":"<DIRECT_RUSTC>","RUSTC_WORKSPACE_WRAPPER":"","RUSTC_WRAPPER":"","RUSTFLAGS":"","TZ":"UTC"}
+{"CARGO_ENCODED_RUSTFLAGS":"","CARGO_HOME":"<OWNER_CONTROLLED_CACHE_ONLY_CARGO_HOME>","CARGO_NET_OFFLINE":"true","DEVELOPER_DIR":"<ROOT_CUSTODIED_DEVELOPER_DIR>","HOME":"/var/empty","LANG":"C","LC_ALL":"C","PATH":"<ROOT_CUSTODIED_HOST_TOOL_BIN>","RUSTC":"<DIRECT_RUSTC>","RUSTC_WORKSPACE_WRAPPER":"","RUSTC_WRAPPER":"","RUSTFLAGS":"","SDKROOT":"<ROOT_CUSTODIED_SDKROOT>","TMPDIR":"<FRESH_WRITABLE_BUILD_TMP>","TZ":"UTC"}
 ```
+
+`build_inputs` uses `iroha.kagemusha.build_input_closure.v1`. It binds the
+bounded Cargo `git`/`registry` trees, separate complete nightly-Cargo and
+rustc/sysroot trees, canonical developer and SDK trees, an exact native-helper
+allowlist, fixed symlink-free Python interpreter/stdlib tree and preimport module
+origins, dedicated runtime UID/GID, and the qualified macOS/Xcode/Seatbelt
+identity. Full ancestry, ACL, xattr, hard-link, and tree identities are checked
+before use and rechecked across the build. Compilation uses root-owned read-only
+snapshots, a PATH containing only private helper copies, and three disjoint
+Seatbelt profiles that deny network, ambient reads/writes, sibling build roots,
+and unlisted executables. Each run has exactly one fresh Cargo target and one
+private temp directory. The exact unstable unit-graph command is rerun through
+the bounded Cargo runner (300 seconds and 16 MiB per output stream); each full
+build has a 30-minute wall bound, live 128 MiB stdout/8 MiB stderr bounds,
+`/dev/null` stdin, and unconditional private-process-group kill/reap. Both
+complete builds' candidate bytes must match.
+
+The Python tree must be provisioned without framework-layout symlinks. Every
+non-OS Mach-O/dyld dependency of that interpreter must resolve inside the sealed
+runtime tree; `/usr/lib`, `/System/Library`, and the dyld shared cache remain an
+explicit signed macOS-build TCB and require external host qualification.
+
+The workstation Xcode layout is not automatically accepted: `/Applications`
+is group-writable on the current host and its selected SDK name is a symlink.
+Production therefore requires Xcode 26.2 build `17C52` under a canonical
+root-owned, non-group-writable hierarchy, with a non-symlink SDK path and signed
+tree identities. Ambient `xcode-select`, `DEVELOPER_DIR`, and `SDKROOT` changes
+cannot select another SDK.
+
+The installed macOS 26.2 Seatbelt has not yet completed that qualification.
+With broad Mach and sysctl grants removed, even a minimal `/bin/echo` launch
+under the fixed profile exits with status 134; the unified sandbox log reports
+exact denials for `sysctl-read security.mac.lockdown_mode_state`, `sysctl-read
+kern.bootargs`, and `file-read-data /`. Those reads are build-visible inputs,
+so the builder deliberately does not grant them merely to make the probe pass.
+Production remains blocked until a reviewed profile binds the exact required
+values/read surface (and any exact Mach services discovered by the complete
+build) or a stronger build sandbox replaces Seatbelt. Qualification requires
+the real unit-graph preflight and both complete byte-identical builds; the
+hostile probe alone is never a qualification receipt.
 
 The policy binds both raw and normalized graph sizes and SHA-256 values plus
 the exact normalization identifier. Request, production, and independent
 verification each read both graph artifacts through separate external SHA-256
 pins, then require both byte lengths and digests to equal the policy. This
-authenticates the transferred bytes but does not prove that Cargo emitted the
-raw bytes or that the external controller normalized them correctly; those two
-claims remain explicit external trust requirements and cannot be described as
-an in-repository Cargo receipt. Candidate-build `--cargo-sha256` and
-`--rustc-sha256` must equal the policy tool digests; this equality is an
-authenticated launcher precondition until the candidate consumer accepts the
-policy as a separate input.
+authenticates the transferred bytes. The signed successful capture receipt and
+the candidate's same-tool sandboxed preflight establish that the pinned nightly
+Cargo really supports the required command; review of the controller's
+normalization remains an explicit external responsibility. The resulting
+projection carries the raw graph
+digest/size and the exact Cargo/rustc digest/size pairs derived from that policy.
+Candidate-build `--cargo-sha256` and `--rustc-sha256` remain independent pins,
+but the consumer and `iroha_core` build script now also require the admitted
+executables and their sizes to equal the signed policy identities. A separately
+valid build-tool pin can no longer substitute a different toolchain after graph
+capture.
 
-The reviewed controller runs
-`scripts/produce_kagemusha_v4_source_seal_projection.py` through an explicitly
-digest-pinned Python interpreter; the file is intentionally mode `100644` and
-is never PATH-executed. Its three phases are `request`, detached SSH signing in
+The reviewed controller runs the producer through
+`scripts/run_kagemusha_source_projection_snapshot.py` and an explicitly
+digest-pinned Python interpreter. Promotion authenticates every producer import
+against the signed commit, snapshots the complete package under root custody,
+and passes that package root explicitly under `python -I -S`; no worktree import or
+ambient Python path or global site initialization is used. Its three phases are
+`request`, detached SSH signing in
 namespace `iroha-kagemusha-source-seal-projection-v1`, and `produce`. A second
 controller must run `verify` over the published projection. Request,
 authorization, signature, allowed-signers policy, explicit revocation policy,
@@ -695,14 +818,34 @@ the final path rather than blindly retrying. Each raw or normalized graph is
 bounded at 16 MiB; the producer, candidate consumer, and promotion gate share
 one inclusive 16 KiB projection bound.
 
-The controller's truthful capture of Cargo's unstable unit graph remains an
-irreducible external trust requirement. The SSH signature makes that authority
-explicit and substitution-detectable; it does not make a hand-authored graph a
-real Cargo graph. The promotion gate treats the independently verified
-projection digest as an external trust anchor. A root-owned file and digest pin
-alone are insufficient: the authenticated launcher must successfully run the
-documented `verify` command in the Taira runbook immediately before passing the
-same projection path and digest to promotion.
+The controller's normalization of Cargo's unstable unit graph remains an
+explicit reviewed responsibility. The SSH signature and successful capture
+receipt make that authority substitution-detectable; a hand-authored graph
+without the exact nightly execution receipt is rejected. A root-owned
+projection and digest pin alone are insufficient.
+The protected promotion job must provide separately pinned authorization,
+controller signature and trust policies, execution policy, raw graph, and
+normalized graph. The gate snapshots every input under root custody and runs the
+producer's deterministic `verify` mode itself after re-establishing the reviewed
+source identity. It then cross-binds the reconstructed Cargo/rustc identities to
+every release manifest before any authenticated artifact verification.
+
+The protected environment therefore owns one canonical absolute path plus one
+nonzero lowercase SHA-256 variable for each reconstruction input:
+
+```text
+KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION[_SHA256]
+KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE[_SHA256]
+KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS[_SHA256]
+KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION[_SHA256]
+KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY[_SHA256]
+KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH[_SHA256]
+KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH[_SHA256]
+```
+
+The revocation file may be empty, but its empty-file SHA-256 remains mandatory.
+All seven files use distinct production-owned paths; none is checked in or
+inferred from the projection.
 
 For promotion, a separately authenticated launcher must install the reviewed
 checkout at a root-owned path whose complete path, `ci/` directory, and gate
@@ -716,9 +859,28 @@ manifest-digest directories. The authenticated source-seal projection binds
 the exact reviewed closure to the allowed-signers and revocation-policy
 digests. An explicitly pinned empty revocation file means no revoked keys; the
 revocation input is never implicit. The corridor invokes the digest-pinned
-Kagami typed verifier for every release; it authenticates the policy, manifest,
+Kagami typed verifier for every release, but never executes Kagami directly.
+A distinct digest-pinned native controller must enforce
+`iroha.authenticated-tool-os-isolation.v1`: an attested runtime identity,
+closed inherited descriptors, no-new-privileges, no filesystem reads outside
+the exact policy/release inventory and immutable OS runtime allowlist, no
+filesystem writes, network, or tool child creation, bounded output and wall
+time, and no residual job processes, with exact forwarding of the verifier
+status and byte streams.
+This OS boundary is mandatory because per-file limits, directory scans, and
+process-group signals cannot contain open-unlinked files, ambient-path writes,
+or `setsid` escapes. Its cumulative and maximum-live-root quotas must charge
+unlinked writes, not just the final visible directory size. The controlled
+verifier authenticates the policy, manifest,
 signed attestation, evidence, exact-eight artifacts, bootstrap witnesses, and
 promotion record rather than trusting filenames or JSON alone:
+
+The repository implementation and hostile qualification procedure are defined
+in `specs/authenticated_tool_os_isolation_v1.md`. The macOS Seatbelt backend is
+implemented; Linux requests deliberately fail closed until the documented
+Landlock/seccomp/cgroup backend has independent host qualification. A Linux
+promotion host therefore remains blocked and must not substitute Bubblewrap or
+an unqualified wrapper.
 
 ```bash
 KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256='<reviewed-gate-64-lowercase-hex>' \
@@ -726,6 +888,8 @@ KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
 KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami \
 KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>' \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN=/absolute/root-custodied/authenticated-tool-controller \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256='<reviewed-controller-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
@@ -750,6 +914,8 @@ KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
 KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami \
 KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>' \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN=/absolute/root-custodied/authenticated-tool-controller \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256='<reviewed-controller-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
@@ -763,16 +929,21 @@ KAGEMUSHA_V4_ARTIFACT_ROOT=/run/iroha/kagemusha/v4 \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT=/run/iroha/kagemusha/ios-device-evidence \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID="$TRUSTED_KEY_ID" \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY=/run/secrets/kagemusha-ios-evidence-ed25519.pub.pem \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY=/run/secrets/kagemusha-production-ios-policy-v1.json \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID="$FRESHNESS_AUTHORITY_KEY_ID" \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY=/run/secrets/kagemusha-ios-freshness-authority-ed25519.pub.pem \
   /absolute/root-custodied/reviewed-iroha/ci/check_kagemusha_production_readiness.sh promotion
 ```
 
 The signed JSON itself remains the release's
 `physical-device-benchmark.evidence`. The corridor verifies its exact external
-raw tree, trusted Ed25519 signature, physical-iOS invariants, and then compares
-the signed candidate-record digest with the immutable candidate reconstructed
-by Kagami from the finalized release. All three iOS environment variables are
-an all-or-none input; a simulator, XCTest summary, or raw tree for a different
-manifest digest fails closed.
+raw tree, trusted Ed25519 signature, physical-iOS invariants, the production
+policy, and the independently signed online freshness/consumption receipt at
+`<evidence-root>/<manifest-sha256>/online-freshness-consumption-receipt-v1.json`,
+then compares the signed candidate-record digest with the immutable candidate
+reconstructed by Kagami from the finalized release. All six iOS environment
+variables are an all-or-none input; a simulator, XCTest summary, missing or
+stale receipt, or raw tree for a different manifest digest fails closed.
 
 The policy path is always an explicit runtime input. No build-time environment
 variable or embedded policy selects a Kagemusha trust root.

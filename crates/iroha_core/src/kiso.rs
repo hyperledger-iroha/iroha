@@ -1232,15 +1232,13 @@ mod tests {
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: NonZeroUsize::new(10).unwrap(),
+                lane_history_retention:
+                    iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
                     iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
                 fsync_mode: iroha_config::kura::FsyncMode::Batched,
                 fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-                block_sync_roster_retention:
-                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-                roster_sidecar_retention:
-                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
                 replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             sumeragi: Sumeragi::default(),

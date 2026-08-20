@@ -1042,6 +1042,7 @@ mod tests {
             verifier_version: "v1".to_owned(),
             target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
             effect_binding: None,
+            remote_spend_intent_commitments: Vec::new(),
         };
         let mut dsid_bytes = [0_u8; 16];
         dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
@@ -1070,23 +1071,32 @@ mod tests {
             "entry_hash".to_owned(),
             source_tx_commitment.as_ref().to_vec(),
         );
-        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT lane relay batch");
+        let da_commitment = envelope
+            .da_commitment_hash
+            .map(|commitment| iroha_crypto::Hash::from(commitment).into());
+        fastpq_prover::bind_axt_batch_with_proof_metadata(
+            &mut batch,
+            &binding,
+            manifest_root,
+            da_commitment,
+            None,
+            Some(expiry_slot),
+        )
+        .expect("bind AXT lane relay batch");
         let proof = fastpq_prover::Prover::canonical_with_modes(
             fastpq_prover::AXT_DEFAULT_PARAMETER,
             fastpq_prover::ExecutionMode::Cpu,
             fastpq_prover::PoseidonExecutionMode::Cpu,
         )
         .expect("FASTPQ prover")
-        .prove(&batch)
+        .prove_axt_bound(&batch, &binding)
         .expect("FASTPQ proof");
         let fastpq_payload =
             fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
         let proof_envelope = AxtProofEnvelope {
             dsid,
             manifest_root,
-            da_commitment: envelope
-                .da_commitment_hash
-                .map(|commitment| iroha_crypto::Hash::from(commitment).into()),
+            da_commitment,
             proof: fastpq_payload,
             fastpq_binding: Some(binding),
             committed_amount: None,
@@ -1141,6 +1151,7 @@ mod tests {
                 source_amount_i64: Some(10),
                 destination_amount_i64: Some(760),
             }),
+            remote_spend_intent_commitments: Vec::new(),
         };
         let mut dsid_bytes = [0_u8; 16];
         dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
@@ -1170,14 +1181,22 @@ mod tests {
             "entry_hash".to_owned(),
             source_tx_commitment.as_ref().to_vec(),
         );
-        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT effect batch");
+        fastpq_prover::bind_axt_batch_with_proof_metadata(
+            &mut batch,
+            &binding,
+            manifest_root,
+            None,
+            None,
+            Some(expiry_slot),
+        )
+        .expect("bind AXT effect batch");
         let proof = fastpq_prover::Prover::canonical_with_modes(
             fastpq_prover::AXT_DEFAULT_PARAMETER,
             fastpq_prover::ExecutionMode::Cpu,
             fastpq_prover::PoseidonExecutionMode::Cpu,
         )
         .expect("FASTPQ prover")
-        .prove(&batch)
+        .prove_axt_bound(&batch, &binding)
         .expect("FASTPQ proof");
         let fastpq_payload =
             fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
@@ -1236,7 +1255,6 @@ mod tests {
         dsid: DataSpaceId,
         lane_id: LaneId,
     ) {
-        state_transaction.nexus.enabled = true;
         let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
             id: dsid,
             alias: format!("ds-{}", dsid.as_u64()),
@@ -1330,8 +1348,8 @@ mod tests {
             .fastpq_binding
             .clone()
             .expect("test fastpq binding");
-        let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
-            .expect("verify test fastpq proof");
+        let verified_fastpq =
+            fastpq_prover::verify_axt_proof_blob(proof_blob).expect("verify test fastpq proof");
         let lane_finality_statement_hash = envelope
             .lane_finality_statement_hash()
             .expect("test relay finality statement");
@@ -1480,7 +1498,6 @@ mod tests {
     }
     #[derive(Clone, Copy)]
     enum LaneRelayRejectionCase {
-        NexusDisabled,
         UnknownLaneId,
         StaleGeometryLaneId,
         LaneDataspaceMismatch,
@@ -1531,10 +1548,6 @@ mod tests {
             use LaneRelayRejectionErrorKind::{InvalidParameter, InvariantViolation};
 
             let (context, message_fragments): (&'static str, &'static [&'static str]) = match self {
-                Case::NexusDisabled => (
-                    "disabled nexus must reject verified lane relay registration",
-                    &["requires nexus.enabled=true"],
-                ),
                 Case::UnknownLaneId => ("unknown lane id must be rejected", &["unknown lane id 4"]),
                 Case::StaleGeometryLaneId => (
                     "stale derived geometry must not register verified relay state",
@@ -1656,7 +1669,7 @@ mod tests {
                 ),
             };
             let kind = match self {
-                Case::NexusDisabled | Case::ConflictingExistingState => InvariantViolation,
+                Case::ConflictingExistingState => InvariantViolation,
                 _ => InvalidParameter,
             };
             LaneRelayRejectionExpectation {
@@ -1670,7 +1683,6 @@ mod tests {
             use LaneRelayRejectionCase as Case;
 
             match self {
-                Case::NexusDisabled => b"register-lane-relay-nexus-disabled",
                 Case::UnknownLaneId => b"register-lane-relay-unknown-lane",
                 Case::StaleGeometryLaneId => b"register-lane-relay-stale-geometry-lane",
                 Case::LaneDataspaceMismatch => b"register-lane-relay-lane-dsid-mismatch",
@@ -1725,10 +1737,7 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
 
-        match case {
-            Case::NexusDisabled => state_transaction.nexus.enabled = false,
-            _ => configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id),
-        }
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
         if matches!(case, Case::StaleGeometryLaneId) {
             let stale_lane = LaneId::new(4);
             let stale_geometry_catalog = LaneCatalog::new(
@@ -2089,8 +2098,6 @@ mod tests {
     }
 
     register_verified_lane_relay_rejection_tests! {
-        #[test]
-        register_verified_lane_relay_rejects_when_nexus_disabled => NexusDisabled;
         #[test]
         register_verified_lane_relay_rejects_unknown_lane_id => UnknownLaneId;
         #[test]

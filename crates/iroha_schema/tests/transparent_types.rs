@@ -1,6 +1,5 @@
 //! Transparent types schema tests.
-mod common;
-use common::{assert_schema_map, entry, named_entry};
+use crate::common::{assert_schema_map, entry, named_entry};
 use iroha_schema::prelude::*;
 use norito::{Decode, Encode};
 /// This type tests transparent type inference

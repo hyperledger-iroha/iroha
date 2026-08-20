@@ -104,7 +104,7 @@ internal object FeePaymentJson {
         } else {
             commonKeys
         }
-        requireExactKeys(body, allowed, "$path.value", required = setOf("charge_limits"))
+        requireExactKeys(body, allowed, "$path.value")
         val rawLimits = body["charge_limits"] as? List<*>
             ?: throw IllegalArgumentException("$path.value.charge_limits must be an array")
         val limits = rawLimits.mapIndexed { index, raw -> parseLimit(raw, "$path.value.charge_limits[$index]") }

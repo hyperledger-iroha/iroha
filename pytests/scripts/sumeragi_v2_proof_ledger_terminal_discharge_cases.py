@@ -7,8 +7,6 @@
         "v2_worker_reply_route_cases.rs",
         "v2_worker_backpressure_cases.rs",
         "v2_worker_recovered_lifecycle_output_cases.rs",
-        "v2_worker_serve_unsealed_cases.rs",
-        "v2_worker_serve_decision_restart_cases.rs",
     ),
 )
 def test_worker_regression_include_source_seal_rejects_drift(
@@ -43,8 +41,6 @@ def test_worker_regression_include_source_seal_rejects_drift(
         "v2_worker_reply_route_cases.rs",
         "v2_worker_backpressure_cases.rs",
         "v2_worker_recovered_lifecycle_output_cases.rs",
-        "v2_worker_serve_unsealed_cases.rs",
-        "v2_worker_serve_decision_restart_cases.rs",
     ),
 )
 def test_worker_regression_include_invocation_cannot_move_or_disappear(
@@ -55,15 +51,7 @@ def test_worker_regression_include_invocation_cannot_move_or_disappear(
 
     module = load_checker()
     copy_serve_lifecycle_production_fixture(tmp_path, module)
-    owner = (
-        "v2_worker_main_01.rs"
-        if filename in {
-            "v2_worker_reply_route_cases.rs",
-            "v2_worker_backpressure_cases.rs",
-            "v2_worker_recovered_lifecycle_output_cases.rs",
-        }
-        else "v2_worker_main_04.rs"
-    )
+    owner = "v2_worker_main_01.rs"
     worker = tmp_path / "crates/iroha_core/src/sumeragi/tests" / owner
     mutate_source_once(
         worker,

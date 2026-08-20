@@ -308,7 +308,6 @@ fn latest_certified_frontier_rejects_equal_height_conflict_before_publication() 
         "certified lane block conflict fixture",
         FsyncMode::Always,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert_eq!(
         kura.latest_certified_lane_block_frontier(lane_id),
@@ -816,7 +815,6 @@ fn certified_lane_block_read_rejects_qc_signature_mismatch() {
             "certified lane block",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "tampered sidecar overwrite should be written for read rejection test"
     );
@@ -858,7 +856,6 @@ fn certified_lane_block_read_rejects_qc_body_mismatch() {
             "certified lane block",
             FsyncMode::Batched,
             None,
-            SidecarIndexOrigin::FirstWrite,
         ),
         "tampered sidecar overwrite should be written for read rejection test"
     );

@@ -26,17 +26,17 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         .exact_pending_adapter_effect_binding(&store)
         .expect("exact bound effect mints one pending binding");
     assert!(pending.exactly_binds_adapter_effect(&store));
-    let different_legacy_ordinal = bind_adapter_effect_batch_ownership(
+    let different_scheduler_ordinal = bind_adapter_effect_batch_ownership(
         &[store.clone()],
         vec![RuntimeEffectOwnership::fresh_for_test(tag, 72)],
     )
-    .expect("same effect remains bindable under a different legacy ordinal");
-    let mut different_pending = different_legacy_ordinal[0]
+    .expect("same effect remains bindable under a different scheduler ordinal");
+    let mut different_pending = different_scheduler_ordinal[0]
         .exact_pending_adapter_effect_binding(&store)
-        .expect("different legacy owner mints one pending binding");
+        .expect("different scheduler owner mints one pending binding");
     assert_eq!(
         pending, different_pending,
-        "pending admission authority deliberately excludes the legacy logical ordinal"
+        "pending admission authority deliberately excludes runtime scheduling ordinals"
     );
     let exact_effect_kind = different_pending.effect_kind;
     different_pending.effect_kind = 0;
@@ -1364,11 +1364,12 @@ fn fair_network_ownership(
     message: &wire::ConsensusMessageV2,
     sender: PeerId,
 ) -> FairV2IngressOwnershipEvidence {
-    let mut admitted =
-        super::super::fair_v2_ingress_admit_for_test(super::super::InboundBlockMessage::new(
+    let mut admitted = super::super::fair_v2_ingress_admit_for_test(
+        super::super::InboundBlockMessage::from_authenticated_peer(
             super::super::message::BlockMessage::V2(message.clone()),
-            Some(sender),
-        ));
+            sender,
+        ),
+    );
     admitted
         .take_ingress_ownership()
         .expect("real test fair ingress produces exact source ownership")
@@ -1449,9 +1450,9 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
     if push_all_before_dequeue {
         for (message, semantic_origin) in messages {
             assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                     BlockMessage::V2(message.clone()),
-                    Some(semantic_origin.clone()),
+                    semantic_origin.clone(),
                 )),
                 Ok(super::super::FairV2IngressPushDisposition::Enqueued)
             ));
@@ -1463,9 +1464,9 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
         .map(|(message_index, (message, semantic_origin))| {
             if !push_all_before_dequeue {
                 assert!(matches!(
-                    ingress.try_push(InboundBlockMessage::new(
+                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                         BlockMessage::V2(message.clone()),
-                        Some(semantic_origin.clone()),
+                        semantic_origin.clone(),
                     )),
                     Ok(super::super::FairV2IngressPushDisposition::Enqueued)
                 ));
@@ -1512,9 +1513,9 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
                 .bind_leader_wire_runtime_ownership(&mut ownership)
                 .expect("repeated preowned leader-wire bind is idempotent");
             assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                     BlockMessage::V2(message.clone()),
-                    Some(semantic_origin.clone()),
+                    semantic_origin.clone(),
                 )),
                 Ok(super::super::FairV2IngressPushDisposition::Coalesced)
             ));
@@ -1633,9 +1634,9 @@ fn leader_wire_proposal_fixture(
     .validator
     .clone();
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message.clone()),
-            Some(semantic_origin),
+            semantic_origin,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -1701,10 +1702,12 @@ fn assert_volatile_leader_wire_release(
     );
     let semantic_origin = fixture.receipt.token().identity.semantic_origin.clone();
     assert!(matches!(
-        fixture.ingress.try_push(InboundBlockMessage::new(
-            BlockMessage::V2(fixture.message.clone()),
-            Some(semantic_origin),
-        )),
+        fixture
+            .ingress
+            .try_push(InboundBlockMessage::from_authenticated_peer(
+                BlockMessage::V2(fixture.message.clone()),
+                semantic_origin,
+            )),
         Ok(super::super::FairV2IngressPushDisposition::Coalesced)
     ));
 }

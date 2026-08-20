@@ -20309,6 +20309,44 @@ mod tests {
             captured,
         ))
     }
+    fn generated_hf_config_routes(
+        resolved_commit: &str,
+        config_json: &[u8],
+    ) -> Result<BTreeMap<(String, String), HttpFixtureResponse>> {
+        let model_info = norito::json!({
+            "sha": resolved_commit,
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        Ok(BTreeMap::from([
+            (
+                (
+                    "GET".to_owned(),
+                    "/api/models/openai-community/gpt2/revision/main".to_owned(),
+                ),
+                HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+            ),
+            (
+                (
+                    "HEAD".to_owned(),
+                    "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+                ),
+                HttpFixtureResponse::head_ok(
+                    "application/json",
+                    u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+                ),
+            ),
+            (
+                (
+                    "GET".to_owned(),
+                    "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+                ),
+                HttpFixtureResponse::json(config_json.to_vec()),
+            ),
+        ]))
+    }
     const TEST_HF_CREDENTIAL_PROVIDER_HANDLE: &str = "kms://soracloud/hf-inference-fixture";
     const TEST_HF_CREDENTIAL_PROVIDER_REVISION: u64 = 7;
     const TEST_HF_CREDENTIAL_PROVIDER_POLICY_DIGEST: [u8; 32] = [0xA7; 32];
@@ -20886,6 +20924,19 @@ mod tests {
     struct RecordingRuntimeMutationSink {
         instructions: parking_lot::Mutex<Vec<InstructionBox>>,
     }
+    fn generated_hf_mutation_manager(
+        state: &Arc<State>,
+        local_peer_id: &str,
+    ) -> (SoracloudRuntimeManager, Arc<RecordingRuntimeMutationSink>) {
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+        (manager, mutation_sink)
+    }
     impl RecordingRuntimeMutationSink {
         #[allow(dead_code)]
         fn submitted_runtime_states(
@@ -21087,44 +21138,6 @@ mod tests {
             ),
             bundle.clone(),
         );
-    }
-    fn generated_hf_config_routes(
-        resolved_commit: &str,
-        config_json: &[u8],
-    ) -> Result<BTreeMap<(String, String), HttpFixtureResponse>> {
-        let model_info = norito::json!({
-            "sha": resolved_commit,
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [{"rfilename": "config.json"}]
-        });
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/api/models/openai-community/gpt2/revision/main".to_owned(),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
-            ),
-            HttpFixtureResponse::json(config_json.to_vec()),
-        );
-        Ok(routes)
     }
     fn generated_hf_infer_request(
         fixture: &GeneratedHfServiceFixture,
@@ -23660,13 +23673,7 @@ mod tests {
             &fixture,
             SoraHfPlacementHostStatusV1::Warming,
         );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
+        let (manager, mutation_sink) = generated_hf_mutation_manager(&state, local_peer_id);
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
         let request = generated_hf_infer_request(
             &fixture,

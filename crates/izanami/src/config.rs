@@ -128,7 +128,7 @@ pub struct IzanamiArgs {
         value_parser = clap::value_parser!(u8).range(0..=100),
     )]
     pub packet_loss_percent: u8,
-    /// Enable Nexus/Sora multi-lane defaults from `defaults/nexus/config.toml`.
+    /// Load the Sora multi-lane profile from `defaults/nexus/config.toml`.
     #[arg(long)]
     pub nexus: bool,
     /// Optional directory where Izanami copies test-network diagnostics before cleanup.

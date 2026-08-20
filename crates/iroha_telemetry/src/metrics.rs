@@ -2476,45 +2476,6 @@ mod tests {
             "metrics must recover the poisoned cache instead of panicking"
         );
     }
-    #[test]
-    fn status_strip_nexus_clears_lane_fields() {
-        let mut status = Status {
-            teu_lane_commit: vec![sample_lane_teu_status()],
-            teu_dataspace_backlog: vec![sample_dataspace_teu_status()],
-            dataspace_catalog: vec![NexusDataspaceCatalogStatus {
-                lane_id: 0,
-                lane_alias: "lane-x".into(),
-                dataspace_id: 0,
-                alias: "universal".into(),
-                visibility: "public".into(),
-                storage_profile: "full_replica".into(),
-                manifest_required: false,
-                manifest_ready: true,
-                sealed: false,
-                manifest_path: None,
-                protected_namespaces: Vec::new(),
-            }],
-            da_receipt_cursors: vec![DaReceiptCursorStatus {
-                lane_id: 0,
-                epoch: 1,
-                highest_sequence: 2,
-            }],
-            sumeragi: Some(SumeragiConsensusStatus {
-                lane_governance_sealed_total: 1,
-                lane_governance_sealed_aliases: vec!["lane-x".into()],
-                ..SumeragiConsensusStatus::default()
-            }),
-            ..Status::default()
-        };
-        status.strip_nexus();
-        assert!(status.teu_lane_commit.is_empty());
-        assert!(status.teu_dataspace_backlog.is_empty());
-        assert!(status.dataspace_catalog.is_empty());
-        assert!(status.da_receipt_cursors.is_empty());
-        let consensus = status.sumeragi.expect("consensus present");
-        assert_eq!(consensus.lane_governance_sealed_total, 0);
-        assert!(consensus.lane_governance_sealed_aliases.is_empty());
-    }
     #[cfg(not(feature = "otel-exporter"))]
     #[test]
     fn sorafs_node_otel_new_and_record_sample_do_not_panic_without_exporter() {
@@ -2824,30 +2785,6 @@ mod tests {
         assert!(
             (value + 42.0).abs() < 1e-6,
             "expected signed drift gauge to retain negative value, got {value}"
-        );
-    }
-    #[test]
-    fn metrics_export_strips_lane_labels_when_nexus_disabled() {
-        let metrics = Metrics::default();
-        metrics.set_lane_block_height("lane-0", "global", 7);
-        metrics.txs.with_label_values(&["committed"]).inc();
-        let enabled = metrics
-            .try_to_string_with_nexus_gate(true)
-            .expect("metrics text");
-        assert!(
-            enabled.contains("nexus_lane_block_height"),
-            "lane metrics should be present when Nexus is enabled"
-        );
-        let filtered = metrics
-            .try_to_string_with_nexus_gate(false)
-            .expect("filtered metrics");
-        assert!(
-            !filtered.contains("nexus_lane_block_height"),
-            "lane metrics should be stripped when Nexus is disabled: {filtered}"
-        );
-        assert!(
-            filtered.contains("txs{type=\"committed\"}"),
-            "non-lane metrics must remain after filtering: {filtered}"
         );
     }
     #[test]
@@ -4181,13 +4118,6 @@ pub struct SumeragiConsensusStatus {
     #[norito(default)]
     pub lane_governance_sealed_aliases: Vec<String>,
 }
-impl SumeragiConsensusStatus {
-    /// Drop lane-specific fields when Nexus lanes are disabled.
-    pub fn clear_nexus_fields(&mut self) {
-        self.lane_governance_sealed_total = 0;
-        self.lane_governance_sealed_aliases.clear();
-    }
-}
 impl norito::core::NoritoSerialize for SumeragiConsensusStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = SumeragiConsensusStatusPayload::from(self);
@@ -5269,19 +5199,6 @@ pub struct Status {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub da_receipt_cursors: Vec<DaReceiptCursorStatus>,
 }
-impl Status {
-    /// Remove Nexus lane/dataspace telemetry when Nexus mode is disabled.
-    pub fn strip_nexus(&mut self) {
-        self.teu_lane_commit.clear();
-        self.teu_dataspace_backlog.clear();
-        self.dataspace_catalog.clear();
-        self.nexus = None;
-        self.da_receipt_cursors.clear();
-        if let Some(consensus) = self.sumeragi.as_mut() {
-            consensus.clear_nexus_fields();
-        }
-    }
-}
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct StatusPayload {
     #[norito(default)]
@@ -6177,1986 +6094,2318 @@ where
         Self::from(&**value)
     }
 }
-/// Prometheus metric registry plus cached status snapshots exposed by telemetry.
-pub struct Metrics {
+macro_rules! metric_field_type {
+    (int_counter ($($args:tt)*)) => { IntCounter };
+    (int_counter_vec ($($args:tt)*)) => { IntCounterVec };
+    (int_gauge ($($args:tt)*)) => { IntGauge };
+    (int_gauge_vec ($($args:tt)*)) => { IntGaugeVec };
+    (gauge ($($args:tt)*)) => { GenericGauge<AtomicU64> };
+    (gauge_vec ($($args:tt)*)) => { GenericGaugeVec<AtomicU64> };
+    (float_counter_vec ($($args:tt)*)) => { CounterVec };
+    (float_gauge ($($args:tt)*)) => { Gauge };
+    (float_gauge_vec ($($args:tt)*)) => { GaugeVec };
+    (histogram_with_buckets ($($args:tt)*)) => { Histogram };
+    (histogram_vec ($($args:tt)*)) => { HistogramVec };
+    (histogram_vec_with_buckets ($($args:tt)*)) => { HistogramVec };
+    (view_changes_gauge ($($args:tt)*)) => { ViewChangesGauge };
+    (dropped_messages_counter ($($args:tt)*)) => { DroppedMessagesCounter };
+    (raw ($type:ty)) => { $type };
+}
+const EXPONENTIAL_LATENCY_BUCKETS_MS: [f64; 12] = [
+    1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1_024.0, 2_048.0,
+];
+const MISSING_BLOCK_DWELL_BUCKETS_MS: [f64; 10] = [
+    50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0, 20_000.0, 60_000.0,
+];
+macro_rules! new_catalog_metric {
+    ($metrics:ident, $field:ident, view_changes_gauge ()) => {
+        $metrics.gauge(stringify!($field))
+    };
+    ($metrics:ident, $field:ident, dropped_messages_counter ()) => {
+        $metrics.int_counter(stringify!($field))
+    };
+    ($metrics:ident, $field:ident, $kind:ident ()) => {
+        $metrics.$kind(stringify!($field))
+    };
+    ($metrics:ident, $field:ident, $kind:ident ($($argument:expr),+ $(,)?)) => {
+        $metrics.$kind(stringify!($field), $($argument),+)
+    };
+}
+macro_rules! initialize_metrics {
+    (@collect [$($fields:tt)*]) => { Self { $($fields)* } };
+    (@collect [$($fields:tt)*] [$($field:ident)*] $($tail:tt)*) => {
+        initialize_metrics!(@collect [$($fields)* $($field,)*] $($tail)*)
+    };
+    (@collect [$($fields:tt)*] $field:ident = $value:expr; $($tail:tt)*) => {
+        initialize_metrics!(@collect [$($fields)* $field: $value,] $($tail)*)
+    };
+    ($($input:tt)*) => { initialize_metrics!(@collect [] $($input)*) };
+}
+macro_rules! define_metrics {
+    (fields {$( $(#[$attribute:meta])* $visibility:vis $field:ident: $kind:ident ($($argument:tt)*); )*}
+     prefix ($factory:ident) {$($prefix:tt)*}
+     construct {$( [$($construct_field:ident)*] $( {$($construction_statement:tt)*} )? )*}
+     suffix {$($suffix:tt)*}
+     initialize ($result:ident) {$($initializer:tt)*} epilogue {$($epilogue:tt)*}) => {
+        /// Prometheus metric registry plus cached status snapshots exposed by telemetry.
+        pub struct Metrics { $( $(#[$attribute])* $visibility $field: metric_field_type!($kind ($($argument)*)), )* }
+        impl Default for Metrics {
+            #[allow(clippy::too_many_lines, clippy::similar_names, clippy::inconsistent_struct_constructor)]
+            fn default() -> Self {
+                $($prefix)*
+                #[allow(unused_macro_rules)]
+                macro_rules! construct_metric { $( ($field) => { new_catalog_metric!($factory, $field, $kind ($($argument)*)) }; )* }
+                $(
+                    $(let $construct_field;)*
+                    $($construct_field = construct_metric!($construct_field);)*
+                    $($($construction_statement)*)?
+                )*
+                $($suffix)*
+                let $result = initialize_metrics!($($initializer)*);
+                $($epilogue)*
+            }
+        }
+    };
+}
+define_metrics! {
+fields {
     /// Total number of transactions
-    pub txs: IntCounterVec,
+    pub txs: int_counter_vec(&["type"]);
     /// Number of committed blocks (blockchain height)
-    pub block_height: IntCounter,
+    pub block_height: int_counter();
     /// Number of committed non-empty blocks
-    pub block_height_non_empty: IntCounter,
+    pub block_height_non_empty: int_counter();
     /// Time (since block creation) it took for the latest block to reach _this_ peer
-    pub last_commit_time_ms: GenericGauge<AtomicU64>,
+    pub last_commit_time_ms: gauge();
     /// Millisecond UNIX timestamp when this peer last processed a committed block.
-    pub last_block_committed_at_ms: GenericGauge<AtomicU64>,
+    pub last_block_committed_at_ms: gauge();
     /// Millisecond UNIX timestamp when this peer last processed a committed non-empty block.
-    pub last_non_empty_block_committed_at_ms: GenericGauge<AtomicU64>,
+    pub last_non_empty_block_committed_at_ms: gauge();
     /// Block commit time trends
-    pub commit_time_ms: Histogram,
+    pub commit_time_ms: histogram_with_buckets(
+        prometheus::exponential_buckets(100.0, 4.0, 5).expect("inputs are valid"),
+    );
     /// Slot duration histogram for NX-18 1-second finality tracking (milliseconds).
-    pub slot_duration_ms: Histogram,
+    pub slot_duration_ms: histogram_with_buckets(
+        vec![
+                        250.0, 500.0, 750.0, 1_000.0, 1_250.0, 1_500.0, 2_000.0, 3_000.0,
+                    ],
+    );
     /// Latest observed slot duration in milliseconds (mirrors NX-18 gauge requirement).
-    pub slot_duration_ms_latest: GenericGauge<AtomicU64>,
+    pub slot_duration_ms_latest: gauge();
     /// Rolling data-availability quorum ratio (0–1) derived from slot outcomes.
-    pub da_quorum_ratio: Gauge,
+    pub da_quorum_ratio: float_gauge();
     /// Number of currently connected peers excluding the reporting peer
-    pub connected_peers: GenericGauge<AtomicU64>,
+    pub connected_peers: gauge();
     /// Cumulative peer churn events observed by the node (`connected` / `disconnected`).
-    pub p2p_peer_churn_total: IntCounterVec,
+    pub p2p_peer_churn_total: int_counter_vec(&["event"]);
     /// Uptime of the network, starting from commit of the genesis block
-    pub uptime_since_genesis_ms: GenericGauge<AtomicU64>,
+    pub uptime_since_genesis_ms: gauge();
     /// Number of domains.
-    pub domains: GenericGauge<AtomicU64>,
+    pub domains: gauge();
     /// Total number of users per domain
-    pub accounts: GenericGaugeVec<AtomicU64>,
+    pub accounts: gauge_vec(&["domain"]);
     /// Transaction amounts.
-    pub tx_amounts: Histogram,
+    pub tx_amounts: histogram_with_buckets(
+        // Amounts can vary wildly.
+                    // Capturing range
+                    //   from -10^10 to 10^10
+                    //   with the step of 2 decimal points (10 steps)
+                    vec![
+                        -10_00_00_00_00.0,
+                        -10_00_00_00.0,
+                        -10_00_00.0,
+                        -10_00.0,
+                        -10.0,
+                        0.0,
+                        10.0,
+                        10_00.0,
+                        10_00_00.0,
+                        10_00_00_00.0,
+                        10_00_00_00_00.0,
+                    ],
+    );
     /// Queries handled by this peer
-    pub isi: IntCounterVec,
+    pub isi: int_counter_vec(&["type", "success_status"]);
     /// Query handle time Histogram
-    pub isi_times: HistogramVec,
+    pub isi_times: histogram_vec(&["type"]);
     /// Number of view changes in the current round
-    pub view_changes: ViewChangesGauge,
+    pub view_changes: view_changes_gauge();
     /// Number of transactions tracked by the queue (queued + in-flight)
-    pub queue_size: GenericGauge<AtomicU64>,
+    pub queue_size: gauge();
     /// Number of transactions still queued for selection.
-    pub queue_queued: GenericGauge<AtomicU64>,
+    pub queue_queued: gauge();
     /// Number of transactions in-flight after selection.
-    pub queue_inflight: GenericGauge<AtomicU64>,
+    pub queue_inflight: gauge();
     /// Kura fsync policy state (1=always, 2=batched).
-    pub kura_fsync_enabled: GenericGauge<AtomicU64>,
+    pub kura_fsync_enabled: gauge();
     /// Kura fsync failures grouped by target (data/index/hashes).
-    pub kura_fsync_failures_total: IntCounterVec,
+    pub kura_fsync_failures_total: int_counter_vec(&["target"]);
     /// Kura fsync latency histogram (milliseconds) grouped by target.
-    pub kura_fsync_latency_ms: HistogramVec,
+    pub kura_fsync_latency_ms: histogram_vec_with_buckets(
+        EXPONENTIAL_LATENCY_BUCKETS_MS.to_vec(),
+                    &["target"],
+    );
     /// AMX prepare phase latency histogram (milliseconds) labelled by lane id.
-    pub amx_prepare_ms: HistogramVec,
+    pub amx_prepare_ms: histogram_vec_with_buckets(
+        EXPONENTIAL_LATENCY_BUCKETS_MS.to_vec(),
+                    &["lane"],
+    );
     /// AMX commit/merge phase latency histogram (milliseconds) labelled by lane id.
-    pub amx_commit_ms: HistogramVec,
+    pub amx_commit_ms: histogram_vec_with_buckets(
+        EXPONENTIAL_LATENCY_BUCKETS_MS.to_vec(),
+                    &["lane"],
+    );
     /// AMX abort counter grouped by lane id and abort stage.
-    pub amx_abort_total: IntCounterVec,
+    pub amx_abort_total: int_counter_vec(&["lane", "stage"]);
     /// AXT policy validation failures grouped by lane and reason.
-    pub axt_policy_reject_total: IntCounterVec,
+    pub axt_policy_reject_total: int_counter_vec(&["lane", "reason"]);
     /// Stable version hash (truncated to u64) for the active AXT policy snapshot.
-    pub axt_policy_snapshot_version: GenericGauge<AtomicU64>,
+    pub axt_policy_snapshot_version: gauge();
     /// Cache hydration events for AXT policy snapshots grouped by event label.
-    pub axt_policy_snapshot_cache_events_total: IntCounterVec,
+    pub axt_policy_snapshot_cache_events_total: int_counter_vec(&["event"]);
     /// Dataspace proof cache events grouped by event label.
-    pub axt_proof_cache_events_total: IntCounterVec,
+    pub axt_proof_cache_events_total: int_counter_vec(&["event"]);
     /// Per-dataspace proof cache state (labels: dsid, status, manifest_root_hex, verified_slot; value = expiry_slot_with_skew).
-    pub axt_proof_cache_state: IntGaugeVec,
+    pub axt_proof_cache_state: int_gauge_vec(
+        &["dsid", "status", "manifest_root_hex", "verified_slot"],
+    );
     /// IVM execution latency histogram (milliseconds) labelled by lane id.
-    pub ivm_exec_ms: HistogramVec,
+    pub ivm_exec_ms: histogram_vec_with_buckets(
+        EXPONENTIAL_LATENCY_BUCKETS_MS.to_vec(),
+                    &["lane"],
+    );
     /// SM helper syscalls observed (grouped by kind/mode).
-    pub sm_syscall_total: IntCounterVec,
+    pub sm_syscall_total: int_counter_vec(&["kind", "mode"]);
     /// SM helper syscall failures (grouped by kind/mode/reason).
-    pub sm_syscall_failures_total: IntCounterVec,
+    pub sm_syscall_failures_total: int_counter_vec(&["kind", "mode", "reason"]);
     /// Toggle state for the OpenSSL-backed SM preview helpers (0/1).
-    pub sm_openssl_preview: GenericGauge<AtomicU64>,
+    pub sm_openssl_preview: gauge();
     /// Toggle state for Halo2 verifier availability (0/1).
-    pub zk_halo2_enabled: GenericGauge<AtomicU64>,
+    pub zk_halo2_enabled: gauge();
     /// Active Halo2 curve identifier (as a numeric label).
-    pub zk_halo2_curve_id: GenericGauge<AtomicU64>,
+    pub zk_halo2_curve_id: gauge();
     /// Active Halo2 backend identifier (as a numeric label).
-    pub zk_halo2_backend_id: GenericGauge<AtomicU64>,
+    pub zk_halo2_backend_id: gauge();
     /// Maximum supported Halo2 circuit exponent (k).
-    pub zk_halo2_max_k: GenericGauge<AtomicU64>,
+    pub zk_halo2_max_k: gauge();
     /// Halo2 verifier soft budget in milliseconds.
-    pub zk_halo2_verifier_budget_ms: GenericGauge<AtomicU64>,
+    pub zk_halo2_verifier_budget_ms: gauge();
     /// Maximum proofs allowed in a Halo2 batch verification.
-    pub zk_halo2_verifier_max_batch: GenericGauge<AtomicU64>,
+    pub zk_halo2_verifier_max_batch: gauge();
     /// Number of worker threads serving ZK lane verification.
-    pub zk_halo2_verifier_worker_threads: GenericGauge<AtomicU64>,
+    pub zk_halo2_verifier_worker_threads: gauge();
     /// Effective ZK lane queue capacity.
-    pub zk_halo2_verifier_queue_cap: GenericGauge<AtomicU64>,
+    pub zk_halo2_verifier_queue_cap: gauge();
     /// Count of ZK lane admissions that required a bounded wait.
-    pub zk_lane_enqueue_wait_total: IntCounter,
+    pub zk_lane_enqueue_wait_total: int_counter();
     /// Count of ZK lane admissions that timed out under saturation.
-    pub zk_lane_enqueue_timeout_total: IntCounter,
+    pub zk_lane_enqueue_timeout_total: int_counter();
     /// ZK lane dropped-task counter labeled by terminal reason.
-    pub zk_lane_drop_total: IntCounterVec,
+    pub zk_lane_drop_total: int_counter_vec(&["reason"]);
     /// Count of important tasks enqueued into the ZK lane retry ring.
-    pub zk_lane_retry_enqueued_total: IntCounter,
+    pub zk_lane_retry_enqueued_total: int_counter();
     /// Count of tasks replayed from the ZK lane retry ring.
-    pub zk_lane_retry_replayed_total: IntCounter,
+    pub zk_lane_retry_replayed_total: int_counter();
     /// Count of tasks dropped after exhausting ZK lane retry attempts.
-    pub zk_lane_retry_exhausted_total: IntCounter,
+    pub zk_lane_retry_exhausted_total: int_counter();
     /// Current number of tasks buffered in ZK lane dispatch backlog.
-    pub zk_lane_pending_depth: GenericGauge<AtomicU64>,
+    pub zk_lane_pending_depth: gauge();
     /// Current number of tasks buffered in the ZK lane retry ring.
-    pub zk_lane_retry_ring_depth: GenericGauge<AtomicU64>,
+    pub zk_lane_retry_ring_depth: gauge();
     /// Events emitted when verifier cache hits/misses occur (labels: cache,event).
-    pub zk_verifier_cache_events_total: IntCounterVec,
+    pub zk_verifier_cache_events_total: int_counter_vec(&["cache", "event"]);
     /// Base gas charged when verifying a confidential proof.
-    pub confidential_gas_base_verify: GenericGauge<AtomicU64>,
+    pub confidential_gas_base_verify: gauge();
     /// Gas charged per public input exposed by a confidential proof.
-    pub confidential_gas_per_public_input: GenericGauge<AtomicU64>,
+    pub confidential_gas_per_public_input: gauge();
     /// Gas charged per byte of a confidential proof.
-    pub confidential_gas_per_proof_byte: GenericGauge<AtomicU64>,
+    pub confidential_gas_per_proof_byte: gauge();
     /// Gas charged per nullifier referenced by a confidential transaction.
-    pub confidential_gas_per_nullifier: GenericGauge<AtomicU64>,
+    pub confidential_gas_per_nullifier: gauge();
     /// Gas charged per commitment emitted by a confidential transaction.
-    pub confidential_gas_per_commitment: GenericGauge<AtomicU64>,
+    pub confidential_gas_per_commitment: gauge();
     /// Lower 64 bits of the canonical IVM gas schedule hash.
-    pub ivm_gas_schedule_hash_lo: GenericGauge<AtomicU64>,
+    pub ivm_gas_schedule_hash_lo: gauge();
     /// Upper 64 bits of the canonical IVM gas schedule hash.
-    pub ivm_gas_schedule_hash_hi: GenericGauge<AtomicU64>,
+    pub ivm_gas_schedule_hash_hi: gauge();
     /// Requested/applied stack sizes for scheduler/prover/guest (bytes).
-    pub ivm_stack_bytes: GenericGaugeVec<AtomicU64>,
+    pub ivm_stack_bytes: gauge_vec(&["kind", "state"]);
     /// Stack clamp flags for scheduler/prover/guest (0 = no clamp, 1 = clamped).
-    pub ivm_stack_clamped: GenericGaugeVec<AtomicU64>,
+    pub ivm_stack_clamped: gauge_vec(&["kind"]);
     /// Gas→stack multiplier currently in effect.
-    pub ivm_stack_gas_multiplier: GenericGauge<AtomicU64>,
+    pub ivm_stack_gas_multiplier: gauge();
     /// Number of times a pre-existing global Rayon pool forced a stack-size fallback.
-    pub ivm_stack_pool_fallback_total: IntCounter,
+    pub ivm_stack_pool_fallback_total: int_counter();
     /// VM constructions that hit the guest stack budget clamp.
-    pub ivm_stack_budget_hit_total: IntCounter,
+    pub ivm_stack_budget_hit_total: int_counter();
     /// Confidential Merkle-tree commitment counts per asset.
-    pub confidential_tree_commitments: GenericGaugeVec<AtomicU64>,
+    pub confidential_tree_commitments: gauge_vec(&["asset_id"]);
     /// Confidential Merkle-tree depth per asset.
-    pub confidential_tree_depth: GenericGaugeVec<AtomicU64>,
+    pub confidential_tree_depth: gauge_vec(&["asset_id"]);
     /// Confidential Merkle-tree root history entries per asset.
-    pub confidential_root_history_entries: GenericGaugeVec<AtomicU64>,
+    pub confidential_root_history_entries: gauge_vec(&["asset_id"]);
     /// Confidential frontier checkpoints per asset.
-    pub confidential_frontier_checkpoints: GenericGaugeVec<AtomicU64>,
+    pub confidential_frontier_checkpoints: gauge_vec(&["asset_id"]);
     /// Height of the latest recorded frontier checkpoint per asset.
-    pub confidential_frontier_last_height: GenericGaugeVec<AtomicU64>,
+    pub confidential_frontier_last_height: gauge_vec(&["asset_id"]);
     /// Commitment count captured at the latest frontier checkpoint per asset.
-    pub confidential_frontier_last_commitments: GenericGaugeVec<AtomicU64>,
+    pub confidential_frontier_last_commitments: gauge_vec(&["asset_id"]);
     /// Confidential root eviction counter per asset.
-    pub confidential_root_evictions_total: IntCounterVec,
+    pub confidential_root_evictions_total: int_counter_vec(&["asset_id"]);
     /// Confidential frontier eviction counter per asset.
-    pub confidential_frontier_evictions_total: IntCounterVec,
+    pub confidential_frontier_evictions_total: int_counter_vec(&["asset_id"]);
     /// Latest TWAP price exported by the oracle (local per XOR).
-    pub oracle_price_local_per_xor: Gauge,
+    pub oracle_price_local_per_xor: float_gauge();
     /// TWAP window length used by the oracle (seconds).
-    pub oracle_twap_window_seconds: GenericGauge<AtomicU64>,
+    pub oracle_twap_window_seconds: gauge();
     /// Effective haircut basis points applied by the oracle.
-    pub oracle_haircut_basis_points: GenericGauge<AtomicU64>,
+    pub oracle_haircut_basis_points: gauge();
     /// Oracle staleness (seconds) at the time of the last settlement quote.
-    pub oracle_staleness_seconds: Gauge,
+    pub oracle_staleness_seconds: float_gauge();
     /// Count of observations aggregated per feed/slot.
-    pub oracle_observations_total: IntCounterVec,
+    pub oracle_observations_total: int_counter_vec(&["feed_id"]);
     /// Aggregation wall-clock duration (milliseconds) grouped by feed.
-    pub oracle_aggregation_duration_ms: HistogramVec,
+    pub oracle_aggregation_duration_ms: histogram_vec_with_buckets(
+        vec![1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0],
+                    &["feed_id"],
+    );
     /// Total oracle rewards emitted per feed (mantissa units).
-    pub oracle_rewards_total: IntCounterVec,
+    pub oracle_rewards_total: int_counter_vec(&["feed_id"]);
     /// Total oracle penalties applied per feed (mantissa units).
-    pub oracle_penalties_total: IntCounterVec,
+    pub oracle_penalties_total: int_counter_vec(&["feed_id"]);
     /// Total feed events aggregated per feed (regardless of evidence).
-    pub oracle_feed_events_total: IntCounterVec,
+    pub oracle_feed_events_total: int_counter_vec(&["feed_id"]);
     /// Feed events that carried at least one evidence hash.
-    pub oracle_feed_events_with_evidence_total: IntCounterVec,
+    pub oracle_feed_events_with_evidence_total: int_counter_vec(&["feed_id"]);
     /// Count of evidence hashes attached to feed events per feed.
-    pub oracle_evidence_hashes_total: IntCounterVec,
+    pub oracle_evidence_hashes_total: int_counter_vec(&["feed_id"]);
     /// FASTPQ execution mode resolutions grouped by requested/resolved/backend/device labels.
-    pub fastpq_execution_mode_total: IntCounterVec,
+    pub fastpq_execution_mode_total: int_counter_vec(
+        &[
+                        "requested",
+                        "resolved",
+                        "backend",
+                        "device_class",
+                        "chip_family",
+                        "gpu_kind",
+                    ],
+    );
     /// FASTPQ Poseidon pipeline resolutions grouped by requested/resolved/path/device labels.
-    pub fastpq_poseidon_pipeline_total: IntCounterVec,
+    pub fastpq_poseidon_pipeline_total: int_counter_vec(
+        &[
+                        "requested",
+                        "resolved",
+                        "path",
+                        "device_class",
+                        "chip_family",
+                        "gpu_kind",
+                    ],
+    );
     /// FASTPQ GPU accelerator disable events grouped by accelerator/reason/device labels.
-    pub fastpq_gpu_disable_total: IntCounterVec,
+    pub fastpq_gpu_disable_total: int_counter_vec(
+        &[
+                        "accelerator",
+                        "reason",
+                        "device_class",
+                        "chip_family",
+                        "gpu_kind",
+                    ],
+    );
     /// FASTPQ sampled GPU parity failures grouped by accelerator/reason/device labels.
-    pub fastpq_gpu_parity_failure_total: IntCounterVec,
+    pub fastpq_gpu_parity_failure_total: int_counter_vec(
+        &[
+                        "accelerator",
+                        "reason",
+                        "device_class",
+                        "chip_family",
+                        "gpu_kind",
+                    ],
+    );
     /// FASTPQ proof sidecar queue depth.
-    pub fastpq_proof_sidecar_queue_depth: GenericGauge<AtomicU64>,
+    pub fastpq_proof_sidecar_queue_depth: gauge();
     /// FASTPQ proof sidecar persistence events grouped by event.
-    pub fastpq_proof_sidecar_events_total: IntCounterVec,
+    pub fastpq_proof_sidecar_events_total: int_counter_vec(&["event"]);
     /// FASTPQ Metal queue duty-cycle ratios grouped by device/queue/metric.
-    pub fastpq_metal_queue_ratio: GaugeVec,
+    pub fastpq_metal_queue_ratio: float_gauge_vec(
+        &["device_class", "chip_family", "gpu_kind", "queue", "metric"],
+    );
     /// FASTPQ Metal queue depth snapshots grouped by device/metric.
-    pub fastpq_metal_queue_depth: GaugeVec,
+    pub fastpq_metal_queue_depth: float_gauge_vec(
+        &["device_class", "chip_family", "gpu_kind", "metric"],
+    );
     /// FASTPQ host zero-fill duration samples grouped by device class (milliseconds).
-    pub fastpq_zero_fill_duration_ms: GaugeVec,
+    pub fastpq_zero_fill_duration_ms: float_gauge_vec(
+        &["device_class", "chip_family", "gpu_kind"],
+    );
     /// FASTPQ host zero-fill bandwidth grouped by device class (gigabits per second).
-    pub fastpq_zero_fill_bandwidth_gbps: GaugeVec,
+    pub fastpq_zero_fill_bandwidth_gbps: float_gauge_vec(
+        &["device_class", "chip_family", "gpu_kind"],
+    );
     /// Settlement events grouped by kind/outcome/reason.
-    pub settlement_events_total: IntCounterVec,
+    pub settlement_events_total: int_counter_vec(&["kind", "outcome", "reason"]);
     /// Settlement finality outcomes grouped by kind/outcome/state.
-    pub settlement_finality_events_total: IntCounterVec,
+    pub settlement_finality_events_total: int_counter_vec(&["kind", "outcome", "final_state"],);
     /// PvP FX window observations (milliseconds between committed legs).
-    pub settlement_fx_window_ms: HistogramVec,
+    pub settlement_fx_window_ms: histogram_vec(&["kind", "order", "atomicity"]);
     /// Per-lane/dataspace settlement buffer level recorded in micro XOR.
-    pub settlement_buffer_xor: GaugeVec,
+    pub settlement_buffer_xor: float_gauge_vec(&["lane_id", "dataspace_id"]);
     /// Configured settlement buffer capacity per lane/dataspace (micro XOR).
-    pub settlement_buffer_capacity_xor: GaugeVec,
+    pub settlement_buffer_capacity_xor: float_gauge_vec(&["lane_id", "dataspace_id"],);
     /// Encoded settlement buffer status (0 = normal, 1 = alert, 2 = throttle, 3 = XOR-only, 4 = halt).
-    pub settlement_buffer_status: GaugeVec,
+    pub settlement_buffer_status: float_gauge_vec(&["lane_id", "dataspace_id"]);
     /// Per-lane/dataspace realised haircut variance recorded in micro XOR.
-    pub settlement_pnl_xor: GaugeVec,
+    pub settlement_pnl_xor: float_gauge_vec(&["lane_id", "dataspace_id"]);
     /// Effective haircut basis points applied per lane/dataspace in the latest block.
-    pub settlement_haircut_bp: GaugeVec,
+    pub settlement_haircut_bp: float_gauge_vec(&["lane_id", "dataspace_id"]);
     /// Swap-line utilisation snapshots (micro XOR) grouped by lane/dataspace/profile.
-    pub settlement_swapline_utilisation: GaugeVec,
+    pub settlement_swapline_utilisation: float_gauge_vec(&["lane_id", "dataspace_id", "profile"],);
     /// Settlement conversion counters grouped by lane/dataspace/source token.
-    pub settlement_conversion_total: IntCounterVec,
+    pub settlement_conversion_total: int_counter_vec(&["lane_id", "dataspace_id", "source_token"],);
     /// Cumulative settlement haircut totals grouped by lane/dataspace (XOR units).
-    pub settlement_haircut_total: CounterVec,
+    pub settlement_haircut_total: float_counter_vec(&["lane_id", "dataspace_id"]);
     /// Subscription billing attempts grouped by pricing kind.
-    pub subscription_billing_attempts_total: IntCounterVec,
+    pub subscription_billing_attempts_total: int_counter_vec(&["pricing"]);
     /// Subscription billing outcomes grouped by pricing kind and result.
-    pub subscription_billing_outcomes_total: IntCounterVec,
+    pub subscription_billing_outcomes_total: int_counter_vec(&["pricing", "result"],);
     /// Viral incentive lifecycle events grouped by event kind.
-    pub social_events_total: IntCounterVec,
+    pub social_events_total: int_counter_vec(&["event"]);
     /// Latest viral reward budget spend for the active day.
-    pub social_budget_spent: Gauge,
+    pub social_budget_spent: float_gauge();
     /// Campaign spend across the full promotion window.
-    pub social_campaign_spent: Gauge,
+    pub social_campaign_spent: float_gauge();
     /// Configured campaign cap (0 = unlimited).
-    pub social_campaign_cap: Gauge,
+    pub social_campaign_cap: float_gauge();
     /// Remaining campaign budget (0 when cap is unlimited).
-    pub social_campaign_remaining: Gauge,
+    pub social_campaign_remaining: float_gauge();
     /// Whether the promotion window is active (1 = active, 0 = inactive).
-    pub social_campaign_active: Gauge,
+    pub social_campaign_active: float_gauge();
     /// Whether the viral flows are halted (1 = halted, 0 = flowing).
-    pub social_halted: Gauge,
+    pub social_halted: float_gauge();
     /// Viral incentive rejections grouped by failure reason.
-    pub social_rejections_total: IntCounterVec,
+    pub social_rejections_total: int_counter_vec(&["reason"]);
     /// Multisig direct-sign validation rejections.
-    pub multisig_direct_sign_reject_total: IntCounter,
+    pub multisig_direct_sign_reject_total: int_counter();
     /// Open viral escrows currently tracked on-ledger.
-    pub social_open_escrows: GenericGauge<AtomicU64>,
+    pub social_open_escrows: gauge();
     /// Transactions currently queued as observed by consensus.
-    pub sumeragi_tx_queue_depth: GenericGauge<AtomicU64>,
+    pub sumeragi_tx_queue_depth: gauge();
     /// Transaction queue capacity observed by consensus.
-    pub sumeragi_tx_queue_capacity: GenericGauge<AtomicU64>,
+    pub sumeragi_tx_queue_capacity: gauge();
     /// Estimated retained transaction queue bytes observed by consensus.
-    pub sumeragi_tx_queue_retained_bytes: GenericGauge<AtomicU64>,
+    pub sumeragi_tx_queue_retained_bytes: gauge();
     /// Retained transaction queue byte budget observed by consensus.
-    pub sumeragi_tx_queue_max_retained_bytes: GenericGauge<AtomicU64>,
+    pub sumeragi_tx_queue_max_retained_bytes: gauge();
     /// Queue saturation flag observed by consensus (0 = healthy, 1 = saturated).
-    pub sumeragi_tx_queue_saturated: GenericGauge<AtomicU64>,
+    pub sumeragi_tx_queue_saturated: gauge();
     /// Transaction count saturation flag observed by consensus (0 = inactive, 1 = active).
-    pub sumeragi_tx_queue_saturated_by_count: GenericGauge<AtomicU64>,
+    pub sumeragi_tx_queue_saturated_by_count: gauge();
     /// Retained-byte saturation flag observed by consensus (0 = inactive, 1 = active).
-    pub sumeragi_tx_queue_saturated_by_bytes: GenericGauge<AtomicU64>,
+    pub sumeragi_tx_queue_saturated_by_bytes: gauge();
     /// Oldest-queued-age saturation flag observed by consensus (0 = inactive, 1 = active).
-    pub sumeragi_tx_queue_saturated_by_age: GenericGauge<AtomicU64>,
+    pub sumeragi_tx_queue_saturated_by_age: gauge();
     /// Oldest queued transaction age in milliseconds observed by consensus.
-    pub sumeragi_tx_queue_oldest_queued_age_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_tx_queue_oldest_queued_age_ms: gauge();
     /// Total pending blocks tracked by consensus.
-    pub sumeragi_pending_blocks_total: GenericGauge<AtomicU64>,
+    pub sumeragi_pending_blocks_total: gauge();
     /// Pending blocks that currently gate proposals/view changes.
-    pub sumeragi_pending_blocks_blocking: GenericGauge<AtomicU64>,
+    pub sumeragi_pending_blocks_blocking: gauge();
     /// Commit inflight queue depth (inflight + queued commit work).
-    pub sumeragi_commit_inflight_queue_depth: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_inflight_queue_depth: gauge();
     /// Outstanding missing-block requests observed locally.
-    pub sumeragi_missing_block_requests: GenericGauge<AtomicU64>,
+    pub sumeragi_missing_block_requests: gauge();
     /// Age in milliseconds of the oldest missing-block request.
-    pub sumeragi_missing_block_oldest_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_missing_block_oldest_ms: gauge();
     /// Retry window for missing-block fetches in milliseconds.
-    pub sumeragi_missing_block_retry_window_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_missing_block_retry_window_ms: gauge();
     /// Dwell time from first QC arrival until payload observation (milliseconds).
-    pub sumeragi_missing_block_dwell_ms: Histogram,
+    pub sumeragi_missing_block_dwell_ms: histogram_with_buckets(
+        MISSING_BLOCK_DWELL_BUCKETS_MS.to_vec(),
+    );
     /// Epoch length in blocks for NPoS scheduling (0 when not applicable).
-    pub sumeragi_epoch_length_blocks: GenericGauge<AtomicU64>,
+    pub sumeragi_epoch_length_blocks: gauge();
     /// Commit window deadline offset from epoch start, in blocks.
-    pub sumeragi_epoch_commit_deadline_offset: GenericGauge<AtomicU64>,
+    pub sumeragi_epoch_commit_deadline_offset: gauge();
     /// Reveal window deadline offset from epoch start, in blocks.
-    pub sumeragi_epoch_reveal_deadline_offset: GenericGauge<AtomicU64>,
+    pub sumeragi_epoch_reveal_deadline_offset: gauge();
     /// Tiered state: entries retained in the hot tier after the latest snapshot.
-    pub state_tiered_hot_entries: GenericGauge<AtomicU64>,
+    pub state_tiered_hot_entries: gauge();
     /// Tiered state: bytes retained in the hot tier after the latest snapshot.
-    pub state_tiered_hot_bytes: GenericGauge<AtomicU64>,
+    pub state_tiered_hot_bytes: gauge();
     /// Tiered state: entries spilled to the cold tier after the latest snapshot.
-    pub state_tiered_cold_entries: GenericGauge<AtomicU64>,
+    pub state_tiered_cold_entries: gauge();
     /// Tiered state: total bytes written to the cold tier in the latest snapshot.
-    pub state_tiered_cold_bytes: GenericGauge<AtomicU64>,
+    pub state_tiered_cold_bytes: gauge();
     /// Tiered state: cold entries reused without re-encoding in the latest snapshot.
-    pub state_tiered_cold_reused_entries: GenericGauge<AtomicU64>,
+    pub state_tiered_cold_reused_entries: gauge();
     /// Tiered state: total bytes reused from cold payloads in the latest snapshot.
-    pub state_tiered_cold_reused_bytes: GenericGauge<AtomicU64>,
+    pub state_tiered_cold_reused_bytes: gauge();
     /// Tiered state: entries promoted into the hot tier in the latest snapshot.
-    pub state_tiered_hot_promotions: GenericGauge<AtomicU64>,
+    pub state_tiered_hot_promotions: gauge();
     /// Tiered state: entries demoted into the cold tier in the latest snapshot.
-    pub state_tiered_hot_demotions: GenericGauge<AtomicU64>,
+    pub state_tiered_hot_demotions: gauge();
     /// Tiered state: hot-tier key budget overflow caused by grace retention.
-    pub state_tiered_hot_grace_overflow_keys: GenericGauge<AtomicU64>,
+    pub state_tiered_hot_grace_overflow_keys: gauge();
     /// Tiered state: hot-tier byte budget overflow caused by grace retention.
-    pub state_tiered_hot_grace_overflow_bytes: GenericGauge<AtomicU64>,
+    pub state_tiered_hot_grace_overflow_bytes: gauge();
     /// Tiered state: last recorded snapshot index.
-    pub state_tiered_last_snapshot_index: GenericGauge<AtomicU64>,
+    pub state_tiered_last_snapshot_index: gauge();
     /// Storage budget: bytes used per component.
-    pub storage_budget_bytes_used: GenericGaugeVec<AtomicU64>,
+    pub storage_budget_bytes_used: gauge_vec(&["component"]);
     /// Storage budget: configured cap per component.
-    pub storage_budget_bytes_limit: GenericGaugeVec<AtomicU64>,
+    pub storage_budget_bytes_limit: gauge_vec(&["component"]);
     /// Storage budget: cap exceed events per component.
-    pub storage_budget_exceeded_total: IntCounterVec,
+    pub storage_budget_exceeded_total: int_counter_vec(&["component"]);
     /// DA storage: cache outcomes per component.
-    pub storage_da_cache_total: IntCounterVec,
+    pub storage_da_cache_total: int_counter_vec(&["component", "result"]);
     /// DA storage: churn bytes per component and direction.
-    pub storage_da_churn_bytes_total: IntCounterVec,
+    pub storage_da_churn_bytes_total: int_counter_vec(&["component", "direction"]);
     /// Governance: proposal counts grouped by status
-    pub governance_proposals_status: GenericGaugeVec<AtomicU64>,
+    pub governance_proposals_status: gauge_vec(&["status"]);
     /// Governance: latest council members count.
-    pub governance_council_members: GenericGauge<AtomicU64>,
+    pub governance_council_members: gauge();
     /// Governance: latest council alternates count.
-    pub governance_council_alternates: GenericGauge<AtomicU64>,
+    pub governance_council_alternates: gauge();
     /// Governance: total candidates considered in the latest draw.
-    pub governance_council_candidates: GenericGauge<AtomicU64>,
+    pub governance_council_candidates: gauge();
     /// Governance: epoch index of the latest persisted council.
-    pub governance_council_epoch: GenericGauge<AtomicU64>,
+    pub governance_council_epoch: gauge();
     /// Governance: total registered citizens.
-    pub governance_citizens_total: GenericGauge<AtomicU64>,
+    pub governance_citizens_total: gauge();
     /// Governance: citizen service discipline events (decline|no_show|misconduct).
-    pub governance_citizen_service_events_total: IntCounterVec,
+    pub governance_citizen_service_events_total: int_counter_vec(&["event"]);
     /// Governance: protected-namespace enforcement counters (outcome = allowed|rejected)
-    pub governance_protected_namespace_total: IntCounterVec,
+    pub governance_protected_namespace_total: int_counter_vec(&["outcome"]);
     /// Governance: manifest admission outcomes (result label)
-    pub governance_manifest_admission_total: IntCounterVec,
+    pub governance_manifest_admission_total: int_counter_vec(&["result"]);
     /// Governance: manifest quorum enforcement counters (outcome = satisfied|rejected)
-    pub governance_manifest_quorum_total: IntCounterVec,
+    pub governance_manifest_quorum_total: int_counter_vec(&["outcome"]);
     /// Governance: manifest hook enforcement counters (hook, outcome)
-    pub governance_manifest_hook_total: IntCounterVec,
+    pub governance_manifest_hook_total: int_counter_vec(&["hook", "outcome"]);
     /// Governance: manifest activation events (event = manifest_inserted|instance_bound)
-    pub governance_manifest_activations_total: IntCounterVec,
+    pub governance_manifest_activations_total: int_counter_vec(&["event"]);
     /// Governance: recent manifest activations kept for status snapshots
-    pub governance_manifest_recent: Arc<RwLock<VecDeque<GovernanceManifestActivation>>>,
+    pub governance_manifest_recent: raw(Arc<RwLock<VecDeque<GovernanceManifestActivation>>>);
     /// Governance: bond lifecycle events (lock_created|lock_extended|lock_unlocked).
-    pub governance_bond_events_total: IntCounterVec,
+    pub governance_bond_events_total: int_counter_vec(&["event"]);
     /// Cached Taikai ingest telemetry per (cluster, stream) for status snapshots.
-    taikai_ingest_snapshots: Arc<RwLock<BTreeMap<(String, String), TaikaiIngestSnapshotInternal>>>,
+    taikai_ingest_snapshots: raw(Arc<RwLock<BTreeMap<(String, String), TaikaiIngestSnapshotInternal>>>);
     /// Insertion order for Taikai ingest snapshots (bounded).
-    taikai_ingest_snapshot_order: Arc<RwLock<VecDeque<(String, String)>>>,
+    taikai_ingest_snapshot_order: raw(Arc<RwLock<VecDeque<(String, String)>>>);
     /// Bounded DA receipt metric state keyed only by lane.
-    da_receipt_metric_lanes: Arc<RwLock<BTreeMap<u32, DaReceiptMetricLane>>>,
+    da_receipt_metric_lanes: raw(Arc<RwLock<BTreeMap<u32, DaReceiptMetricLane>>>);
     /// Recent rejected-transaction batches retained for `/status` freshness reporting.
-    recent_rejection_events: Mutex<VecDeque<(u64, u64)>>,
+    recent_rejection_events: raw(Mutex<VecDeque<(u64, u64)>>);
     /// Millisecond UNIX timestamp when the latest rejected transaction batch was observed.
-    last_rejection_at_ms: StdAtomicU64,
-    taikai_alias_rotation_snapshots: TaikaiAliasRotationSnapshots,
+    last_rejection_at_ms: raw(StdAtomicU64);
+    taikai_alias_rotation_snapshots: raw(TaikaiAliasRotationSnapshots);
     /// Alias service usage grouped by lane and event kind.
-    pub alias_usage_total: IntCounterVec,
+    pub alias_usage_total: int_counter_vec(&["lane", "event"]);
     /// PSP fraud: accepted assessments by tenant/band/lane/subnet
-    pub fraud_psp_assessments_total: IntCounterVec,
+    pub fraud_psp_assessments_total: int_counter_vec(&["tenant", "band", "lane", "subnet"],);
     /// PSP fraud: transactions missing assessments (labeled by cause)
-    pub fraud_psp_missing_assessment_total: IntCounterVec,
+    pub fraud_psp_missing_assessment_total: int_counter_vec(
+        &["tenant", "lane", "subnet", "cause"],
+    );
     /// PSP fraud: invalid metadata fields encountered during admission
-    pub fraud_psp_invalid_metadata_total: IntCounterVec,
+    pub fraud_psp_invalid_metadata_total: int_counter_vec(&["tenant", "field", "lane", "subnet"],);
     /// PSP fraud: attestation verification outcomes (tenant/engine/lane/status)
-    pub fraud_psp_attestation_total: IntCounterVec,
+    pub fraud_psp_attestation_total: int_counter_vec(
+        &["tenant", "engine", "lane", "subnet", "status"],
+    );
     /// PSP fraud: latency histogram as reported by PSPs (milliseconds)
-    pub fraud_psp_latency_ms: HistogramVec,
+    pub fraud_psp_latency_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(5.0, 1.8, 12).expect("inputs are valid"),
+                    &["tenant", "lane", "subnet"],
+    );
     /// PSP fraud: risk score distribution (basis points)
-    pub fraud_psp_score_bps: HistogramVec,
+    pub fraud_psp_score_bps: histogram_vec_with_buckets(
+        prometheus::linear_buckets(0.0, 500.0, 21).expect("inputs are valid"),
+                    &["tenant", "band", "lane", "subnet"],
+    );
     /// PSP fraud: outcome mismatches between scoring and PSP disposition
-    pub fraud_psp_outcome_mismatch_total: IntCounterVec,
+    pub fraud_psp_outcome_mismatch_total: int_counter_vec(
+        &["tenant", "direction", "lane", "subnet"],
+    );
     /// Streaming HPKE rekeys accepted grouped by suite identifier.
-    pub streaming_hpke_rekeys_total: IntCounterVec,
+    pub streaming_hpke_rekeys_total: int_counter_vec(&["suite"]);
     /// Streaming content key rotations processed.
-    pub streaming_gck_rotations_total: IntCounter,
+    pub streaming_gck_rotations_total: int_counter();
     /// Streaming QUIC datagrams sent.
-    pub streaming_quic_datagrams_sent_total: IntCounter,
+    pub streaming_quic_datagrams_sent_total: int_counter();
     /// Streaming QUIC datagrams dropped.
-    pub streaming_quic_datagrams_dropped_total: IntCounter,
+    pub streaming_quic_datagrams_dropped_total: int_counter();
     /// Streaming FEC parity bucket occupancy.
-    pub streaming_fec_parity_current: GenericGaugeVec<AtomicU64>,
+    pub streaming_fec_parity_current: gauge_vec(&["bucket"]);
     /// Streaming feedback timeout events.
-    pub streaming_feedback_timeout_total: IntCounter,
+    pub streaming_feedback_timeout_total: int_counter();
     /// Streaming SoraNet privacy-route provisioning failures.
-    pub streaming_soranet_provision_fail_total: IntCounter,
+    pub streaming_soranet_provision_fail_total: int_counter();
     /// Streaming SoraNet provisioning queue drops grouped by reason.
-    pub streaming_soranet_provision_queue_drop_total: IntCounterVec,
+    pub streaming_soranet_provision_queue_drop_total: int_counter_vec(&["reason"]);
     /// Telemetry redaction events grouped by reason.
-    pub telemetry_redaction_total: IntCounterVec,
+    pub telemetry_redaction_total: int_counter_vec(&["reason"]);
     /// Telemetry redaction skips grouped by reason.
-    pub telemetry_redaction_skipped_total: IntCounterVec,
+    pub telemetry_redaction_skipped_total: int_counter_vec(&["reason"]);
     /// Telemetry field truncations.
-    pub telemetry_truncation_total: IntCounter,
+    pub telemetry_truncation_total: int_counter();
     /// Streaming privacy telemetry redaction failures.
-    pub streaming_privacy_redaction_fail_total: IntCounter,
+    pub streaming_privacy_redaction_fail_total: int_counter();
     /// Streaming encode latency (milliseconds).
-    pub streaming_encode_latency_ms: Histogram,
+    pub streaming_encode_latency_ms: histogram_with_buckets(
+        prometheus::exponential_buckets(1.0, 2.0, 10).expect("inputs are valid"),
+    );
     /// Streaming encode audio jitter (milliseconds).
-    pub streaming_encode_audio_jitter_ms: Histogram,
+    pub streaming_encode_audio_jitter_ms: histogram_with_buckets(
+        prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid"),
+    );
     /// Streaming encode maximum audio jitter (milliseconds).
-    pub streaming_encode_audio_max_jitter_ms: GenericGauge<AtomicU64>,
+    pub streaming_encode_audio_max_jitter_ms: gauge();
     /// ISO bridge reference-data status (-1 failed, 0 missing, 1 loaded).
-    pub iso_reference_status: IntGaugeVec,
+    pub iso_reference_status: int_gauge_vec(&["dataset"]);
     /// ISO bridge reference-data age in seconds (per dataset).
-    pub iso_reference_age_seconds: IntGaugeVec,
+    pub iso_reference_age_seconds: int_gauge_vec(&["dataset"]);
     /// ISO bridge reference-data record counts.
-    pub iso_reference_records: IntGaugeVec,
+    pub iso_reference_records: int_gauge_vec(&["dataset"]);
     /// ISO bridge reference-data refresh interval (seconds).
-    pub iso_reference_refresh_interval_secs: IntGaugeVec,
+    pub iso_reference_refresh_interval_secs: int_gauge_vec(&["dataset"]);
     /// Streaming encode dropped layers.
-    pub streaming_encode_dropped_layers_total: IntCounter,
+    pub streaming_encode_dropped_layers_total: int_counter();
     /// Streaming decode buffer size (milliseconds).
-    pub streaming_decode_buffer_ms: Histogram,
+    pub streaming_decode_buffer_ms: histogram_with_buckets(
+        prometheus::exponential_buckets(10.0, 1.8, 10).expect("inputs are valid"),
+    );
     /// Streaming decode dropped frames.
-    pub streaming_decode_dropped_frames_total: IntCounter,
+    pub streaming_decode_dropped_frames_total: int_counter();
     /// Streaming decode maximum queue depth (milliseconds).
-    pub streaming_decode_max_queue_ms: Histogram,
+    pub streaming_decode_max_queue_ms: histogram_with_buckets(
+        prometheus::exponential_buckets(10.0, 1.8, 10).expect("inputs are valid"),
+    );
     /// Streaming decode audio/video drift (milliseconds, absolute average).
-    pub streaming_decode_av_drift_ms: Histogram,
+    pub streaming_decode_av_drift_ms: histogram_with_buckets(
+        prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid"),
+    );
     /// Streaming decode maximum audio/video drift (milliseconds).
-    pub streaming_decode_max_drift_ms: GenericGauge<AtomicU64>,
+    pub streaming_decode_max_drift_ms: gauge();
     /// Viewer-reported audio jitter (milliseconds).
-    pub streaming_audio_jitter_ms: Histogram,
+    pub streaming_audio_jitter_ms: histogram_with_buckets(
+        prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid"),
+    );
     /// Viewer-reported maximum audio jitter (milliseconds).
-    pub streaming_audio_max_jitter_ms: GenericGauge<AtomicU64>,
+    pub streaming_audio_max_jitter_ms: gauge();
     /// Viewer-reported audio/video drift (milliseconds, absolute average).
-    pub streaming_av_drift_ms: Histogram,
+    pub streaming_av_drift_ms: histogram_with_buckets(
+        prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid"),
+    );
     /// Viewer-reported maximum audio/video drift (milliseconds).
-    pub streaming_av_max_drift_ms: GenericGauge<AtomicU64>,
+    pub streaming_av_max_drift_ms: gauge();
     /// Viewer-reported EWMA audio/video drift (milliseconds, signed).
-    pub streaming_av_drift_ewma_ms: IntGauge,
+    pub streaming_av_drift_ewma_ms: int_gauge();
     /// Aggregation window for viewer sync diagnostics (milliseconds).
-    pub streaming_av_sync_window_ms: GenericGauge<AtomicU64>,
+    pub streaming_av_sync_window_ms: gauge();
     /// Viewer sync violations observed (count).
-    pub streaming_av_sync_violation_total: IntCounter,
+    pub streaming_av_sync_violation_total: int_counter();
     /// Streaming network round-trip time (milliseconds).
-    pub streaming_network_rtt_ms: Histogram,
+    pub streaming_network_rtt_ms: histogram_with_buckets(
+        prometheus::exponential_buckets(1.0, 1.8, 12).expect("inputs are valid"),
+    );
     /// Streaming network packet loss percentage (basis points).
-    pub streaming_network_loss_percent_x100: Histogram,
+    pub streaming_network_loss_percent_x100: histogram_with_buckets(
+        prometheus::linear_buckets(0.0, 50.0, 21).expect("inputs are valid"),
+    );
     /// Streaming network FEC repairs performed.
-    pub streaming_network_fec_repairs_total: IntCounter,
+    pub streaming_network_fec_repairs_total: int_counter();
     /// Streaming network FEC failures encountered.
-    pub streaming_network_fec_failures_total: IntCounter,
+    pub streaming_network_fec_failures_total: int_counter();
     /// Streaming network datagram reinjects issued.
-    pub streaming_network_datagram_reinjects_total: IntCounter,
+    pub streaming_network_datagram_reinjects_total: int_counter();
     /// Streaming energy consumption at encoder (milliwatts).
-    pub streaming_energy_encoder_mw: Histogram,
+    pub streaming_energy_encoder_mw: histogram_with_buckets(
+        prometheus::exponential_buckets(10.0, 1.8, 12).expect("inputs are valid"),
+    );
     /// Streaming energy consumption at decoder (milliwatts).
-    pub streaming_energy_decoder_mw: Histogram,
+    pub streaming_energy_decoder_mw: histogram_with_buckets(
+        prometheus::exponential_buckets(10.0, 1.8, 12).expect("inputs are valid"),
+    );
     /// Routed-trace audit outcomes grouped by trace identifier and status.
-    pub nexus_audit_outcome_total: IntCounterVec,
+    pub nexus_audit_outcome_total: int_counter_vec(&["trace_id", "status"]);
     /// UNIX timestamp (seconds) of the most recent routed-trace audit outcome per trace.
-    pub nexus_audit_outcome_last_timestamp: GenericGaugeVec<AtomicU64>,
+    pub nexus_audit_outcome_last_timestamp: gauge_vec(&["trace_id"]);
     /// Space Directory manifest revisions observed per dataspace.
-    pub nexus_space_directory_revision_total: IntCounterVec,
+    pub nexus_space_directory_revision_total: int_counter_vec(&["dataspace", "dataspace_id"],);
     /// Active UAID capability manifests per dataspace/profile.
-    pub nexus_space_directory_active_manifests: GenericGaugeVec<AtomicU64>,
+    pub nexus_space_directory_active_manifests: gauge_vec(
+        &["dataspace", "dataspace_id", "profile"],
+    );
     /// Capability manifest revocations grouped by dataspace and reason.
-    pub nexus_space_directory_revocations_total: IntCounterVec,
+    pub nexus_space_directory_revocations_total: int_counter_vec(
+        &["dataspace", "dataspace_id", "reason"],
+    );
     /// Kaigi: relay registrations grouped by domain.
-    pub kaigi_relay_registered_total: IntCounterVec,
+    pub kaigi_relay_registered_total: int_counter_vec(&["domain"]);
     /// Kaigi: bandwidth class distribution for relay registrations.
-    pub kaigi_relay_registration_bandwidth: HistogramVec,
+    pub kaigi_relay_registration_bandwidth: histogram_vec_with_buckets(
+        prometheus::linear_buckets(1.0, 1.0, 8).expect("inputs are valid"),
+                    &["domain"],
+    );
     /// Kaigi: relay manifest updates grouped by domain and action.
-    pub kaigi_relay_manifest_updates_total: IntCounterVec,
+    pub kaigi_relay_manifest_updates_total: int_counter_vec(&["domain", "action"]);
     /// Kaigi: relay manifest updates grouped only by domain for bounded diagnostics.
-    pub kaigi_relay_manifest_updates_by_domain_total: IntCounterVec,
+    pub kaigi_relay_manifest_updates_by_domain_total: raw(IntCounterVec);
     /// Kaigi: relay manifest hop-count distribution per domain.
-    pub kaigi_relay_manifest_hop_count: HistogramVec,
+    pub kaigi_relay_manifest_hop_count: histogram_vec_with_buckets(
+        prometheus::linear_buckets(0.0, 1.0, 9).expect("inputs are valid"),
+                    &["domain"],
+    );
     /// Kaigi: relay failovers grouped by domain and call.
-    pub kaigi_relay_failover_total: IntCounterVec,
+    pub kaigi_relay_failover_total: int_counter_vec(&["domain", "call"]);
     /// Kaigi: relay failovers grouped only by domain for bounded diagnostics.
-    pub kaigi_relay_failovers_by_domain_total: IntCounterVec,
+    pub kaigi_relay_failovers_by_domain_total: raw(IntCounterVec);
     /// Kaigi: relay failover hop-count distribution per domain.
-    pub kaigi_relay_failover_hop_count: HistogramVec,
+    pub kaigi_relay_failover_hop_count: histogram_vec_with_buckets(
+        prometheus::linear_buckets(0.0, 1.0, 9).expect("inputs are valid"),
+                    &["domain"],
+    );
     /// Kaigi: relay health reports grouped by domain and status.
-    pub kaigi_relay_health_reports_total: IntCounterVec,
+    pub kaigi_relay_health_reports_total: int_counter_vec(&["domain", "status"]);
     /// Kaigi: relay health reports grouped only by domain for bounded diagnostics.
-    pub kaigi_relay_health_reports_by_domain_total: IntCounterVec,
+    pub kaigi_relay_health_reports_by_domain_total: raw(IntCounterVec);
     /// Kaigi: current relay health state labelled by domain and relay.
-    pub kaigi_relay_health_state: IntGaugeVec,
+    pub kaigi_relay_health_state: int_gauge_vec(&["domain", "relay"]);
     /// Number of sumeragi dropped messages
-    pub dropped_messages: DroppedMessagesCounter,
+    pub dropped_messages: dropped_messages_counter();
     /// Number of dropped Sumeragi block messages due to full channel (consensus path)
-    pub sumeragi_dropped_block_messages_total: IntCounter,
+    pub sumeragi_dropped_block_messages_total: int_counter();
     /// Number of dropped Sumeragi control messages due to full channel (control path)
-    pub sumeragi_dropped_control_messages_total: IntCounter,
+    pub sumeragi_dropped_control_messages_total: int_counter();
     /// Sumeragi: votes accepted at proxy tail (cumulative)
-    pub sumeragi_tail_votes_total: IntCounter,
+    pub sumeragi_tail_votes_total: int_counter();
     /// Sumeragi: votes sent grouped by phase (prevote, precommit, available)
-    pub sumeragi_votes_sent_total: IntCounterVec,
+    pub sumeragi_votes_sent_total: int_counter_vec(&["phase"]);
     /// Sumeragi: votes received grouped by phase (prevote, precommit, available)
-    pub sumeragi_votes_received_total: IntCounterVec,
+    pub sumeragi_votes_received_total: int_counter_vec(&["phase"]);
     /// Sumeragi: quorum certificates sent grouped by kind (prevote, precommit, available)
-    pub sumeragi_qc_sent_total: IntCounterVec,
+    pub sumeragi_qc_sent_total: int_counter_vec(&["kind"]);
     /// Sumeragi: quorum certificates received grouped by kind (prevote, precommit, available)
-    pub sumeragi_qc_received_total: IntCounterVec,
+    pub sumeragi_qc_received_total: int_counter_vec(&["kind"]);
     /// Sumeragi: QC validation errors grouped by reason.
-    pub sumeragi_qc_validation_errors_total: IntCounterVec,
+    pub sumeragi_qc_validation_errors_total: int_counter_vec(&["reason"]);
     /// Sumeragi: validation rejects before voting grouped by reason.
-    pub sumeragi_validation_reject_total: IntCounterVec,
+    pub sumeragi_validation_reject_total: int_counter_vec(&["reason"]);
     /// Sumeragi: validation gate last reject reason code (0=none, 1=stateless, 2=execution, 3=prev_hash, 4=prev_height, 5=topology).
-    pub sumeragi_validation_reject_last_reason: GenericGauge<AtomicU64>,
+    pub sumeragi_validation_reject_last_reason: gauge();
     /// Sumeragi: block height of the last validation gate reject (0 when unset).
-    pub sumeragi_validation_reject_last_height: GenericGauge<AtomicU64>,
+    pub sumeragi_validation_reject_last_height: gauge();
     /// Sumeragi: view of the last validation gate reject (0 when unset).
-    pub sumeragi_validation_reject_last_view: GenericGauge<AtomicU64>,
+    pub sumeragi_validation_reject_last_view: gauge();
     /// Sumeragi: unix timestamp (ms) of the last validation gate reject (0 when unset).
-    pub sumeragi_validation_reject_last_timestamp_ms: GenericGauge<AtomicU64>,
-    /// Sumeragi: block-sync roster selection grouped by source.
-    pub sumeragi_block_sync_roster_source_total: IntCounterVec,
-    /// Sumeragi: block-sync roster drops grouped by reason.
-    pub sumeragi_block_sync_roster_drop_total: IntCounterVec,
+    pub sumeragi_validation_reject_last_timestamp_ms: gauge();
     /// Sumeragi: block-sync ShareBlocks dropped because no request was tracked.
-    pub sumeragi_block_sync_share_blocks_unsolicited_total: IntCounter,
+    pub sumeragi_block_sync_share_blocks_unsolicited_total: int_counter();
     /// Sumeragi: consensus message drops/deferrals grouped by kind, outcome, and reason.
-    pub sumeragi_consensus_message_handling_total: IntCounterVec,
+    pub sumeragi_consensus_message_handling_total: int_counter_vec(&["kind", "outcome", "reason"],);
     /// Sumeragi: commit-conflict detections (cumulative).
-    pub sumeragi_commit_conflict_detected_total: IntCounter,
+    pub sumeragi_commit_conflict_detected_total: int_counter();
     /// Sumeragi: view-change triggers grouped by cause.
-    pub sumeragi_view_change_cause_total: IntCounterVec,
+    pub sumeragi_view_change_cause_total: int_counter_vec(&["cause"]);
     /// Sumeragi: unix timestamp (ms) of the last view-change trigger grouped by cause.
-    pub sumeragi_view_change_cause_last_timestamp_ms: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_view_change_cause_last_timestamp_ms: gauge_vec(&["cause"]);
     /// Sumeragi: QC signer tallies grouped by phase and whether the signer was counted for quorum.
-    pub sumeragi_qc_signer_counts: HistogramVec,
+    pub sumeragi_qc_signer_counts: histogram_vec_with_buckets(
+        prometheus::linear_buckets(0.0, 1.0, 64).expect("valid signer buckets"),
+                    &["phase", "kind"],
+    );
     /// Sumeragi: invalid-signature drops grouped by message kind and throttle outcome.
-    pub sumeragi_invalid_signature_total: IntCounterVec,
+    pub sumeragi_invalid_signature_total: int_counter_vec(&["kind", "outcome"]);
     /// Sumeragi: widen-before-rotate events (cumulative)
-    pub sumeragi_widen_before_rotate_total: IntCounter,
+    pub sumeragi_widen_before_rotate_total: int_counter();
     /// Sumeragi: view-change suggestions emitted (cumulative)
-    pub sumeragi_view_change_suggest_total: IntCounter,
+    pub sumeragi_view_change_suggest_total: int_counter();
     /// Sumeragi: view-change installs observed (cumulative)
-    pub sumeragi_view_change_install_total: IntCounter,
+    pub sumeragi_view_change_install_total: int_counter();
     /// Sumeragi: view-change rotations after no proposal observed before cutoff (cumulative).
-    pub sumeragi_proposal_gap_total: IntCounter,
+    pub sumeragi_proposal_gap_total: int_counter();
     /// Sumeragi: view-change proof counters grouped by outcome (accepted|stale|rejected)
-    pub sumeragi_view_change_proof_total: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_view_change_proof_total: gauge_vec(&["outcome"]);
     /// Sumeragi: Witness-availability QC assembled (cumulative)
-    pub sumeragi_wa_qc_assembled_total: IntCounter,
+    pub sumeragi_wa_qc_assembled_total: int_counter();
     /// Sumeragi: certificate size histogram (signatures per committed block)
-    pub sumeragi_cert_size: Histogram,
+    pub sumeragi_cert_size: histogram_with_buckets(
+        prometheus::exponential_buckets(1.0, 1.8, 10).expect("valid"),
+    );
     /// Sumeragi: signatures present on the block during commit validation (all roles).
-    pub sumeragi_commit_signatures_present: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_signatures_present: gauge();
     /// Sumeragi: signatures counted toward the commit quorum (leader + validators in Set A/B).
-    pub sumeragi_commit_signatures_counted: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_signatures_counted: gauge();
     /// Sumeragi: Set B validator signatures present on the block during commit validation.
-    pub sumeragi_commit_signatures_set_b: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_signatures_set_b: gauge();
     /// Sumeragi: required commit quorum size for the active topology.
-    pub sumeragi_commit_signatures_required: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_signatures_required: gauge();
     /// Sumeragi: latest commit certificate height (best-effort).
-    pub sumeragi_commit_qc_height: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_qc_height: gauge();
     /// Sumeragi: latest commit certificate view (best-effort).
-    pub sumeragi_commit_qc_view: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_qc_view: gauge();
     /// Sumeragi: latest commit certificate epoch (best-effort).
-    pub sumeragi_commit_qc_epoch: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_qc_epoch: gauge();
     /// Sumeragi: signatures attached to the latest commit certificate.
-    pub sumeragi_commit_qc_signatures_total: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_qc_signatures_total: gauge();
     /// Sumeragi: validator-set size for the latest commit certificate.
-    pub sumeragi_commit_qc_validator_set_len: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_qc_validator_set_len: gauge();
     /// Sumeragi: gossip fallback invocations (collectors exhausted).
-    pub sumeragi_gossip_fallback_total: IntCounter,
+    pub sumeragi_gossip_fallback_total: int_counter();
     /// Sumeragi: BlockCreated drops due to locked QC gate (sanity check failures).
-    pub sumeragi_block_created_dropped_by_lock_total: IntCounter,
+    pub sumeragi_block_created_dropped_by_lock_total: int_counter();
     /// Sumeragi: BlockCreated rejects due to hint mismatch (height/view/parent).
-    pub sumeragi_block_created_hint_mismatch_total: IntCounter,
+    pub sumeragi_block_created_hint_mismatch_total: int_counter();
     /// Sumeragi: BlockCreated rejects due to proposal mismatch (header/payload).
-    pub sumeragi_block_created_proposal_mismatch_total: IntCounter,
+    pub sumeragi_block_created_proposal_mismatch_total: int_counter();
     /// Nexus: lane relay envelopes rejected during validation (grouped by error kind).
-    pub lane_relay_invalid_total: IntCounterVec,
+    pub lane_relay_invalid_total: int_counter_vec(&["error"]);
     /// Nexus: emergency validator override usage for lane relay (grouped by outcome).
-    pub lane_relay_emergency_override_total: IntCounterVec,
+    pub lane_relay_emergency_override_total: int_counter_vec(&["lane", "dataspace", "outcome"],);
     /// Sumeragi: latest PRF epoch seed (hex) observed for collector selection.
-    pub sumeragi_prf_epoch_seed_hex: Arc<RwLock<Option<String>>>,
+    pub sumeragi_prf_epoch_seed_hex: raw(Arc<RwLock<Option<String>>>);
     /// Snapshot of Halo2 verifier configuration for status endpoints.
-    pub halo2_status: Arc<RwLock<Halo2Status>>,
+    pub halo2_status: raw(Arc<RwLock<Halo2Status>>);
     /// Sumeragi: height associated with the current PRF context.
-    pub sumeragi_prf_height: GenericGauge<AtomicU64>,
+    pub sumeragi_prf_height: gauge();
     /// Sumeragi: view associated with the current PRF context.
-    pub sumeragi_prf_view: GenericGauge<AtomicU64>,
+    pub sumeragi_prf_view: gauge();
     /// Sumeragi: deterministic membership view hash (truncated to u64).
-    pub sumeragi_membership_view_hash: GenericGauge<AtomicU64>,
+    pub sumeragi_membership_view_hash: gauge();
     /// Sumeragi: height associated with the membership view hash snapshot.
-    pub sumeragi_membership_height: GenericGauge<AtomicU64>,
+    pub sumeragi_membership_height: gauge();
     /// Sumeragi: view associated with the membership view hash snapshot.
-    pub sumeragi_membership_view: GenericGauge<AtomicU64>,
+    pub sumeragi_membership_view: gauge();
     /// Sumeragi: epoch associated with the membership view hash snapshot.
-    pub sumeragi_membership_epoch: GenericGauge<AtomicU64>,
+    pub sumeragi_membership_epoch: gauge();
     /// VRF: commits broadcast by this validator (cumulative)
-    pub sumeragi_vrf_commits_emitted_total: IntCounter,
+    pub sumeragi_vrf_commits_emitted_total: int_counter();
     /// VRF: reveals broadcast by this validator (cumulative)
-    pub sumeragi_vrf_reveals_emitted_total: IntCounter,
+    pub sumeragi_vrf_reveals_emitted_total: int_counter();
     /// VRF: reveals accepted after the reveal window (cumulative)
-    pub sumeragi_vrf_reveals_late_total: IntCounter,
+    pub sumeragi_vrf_reveals_late_total: int_counter();
     /// VRF: total non-reveal penalties applied in last rollover (cumulative)
-    pub sumeragi_vrf_non_reveal_penalties_total: IntCounter,
+    pub sumeragi_vrf_non_reveal_penalties_total: int_counter();
     /// VRF: non-reveal penalties by signer index (labeled by `idx`)
-    pub sumeragi_vrf_non_reveal_by_signer: IntCounterVec,
+    pub sumeragi_vrf_non_reveal_by_signer: int_counter_vec(&["idx"]);
     /// VRF: total no-participation penalties applied in last rollover (cumulative)
-    pub sumeragi_vrf_no_participation_total: IntCounter,
+    pub sumeragi_vrf_no_participation_total: int_counter();
     /// VRF: no-participation penalties by signer (labeled by `idx`)
-    pub sumeragi_vrf_no_participation_by_signer: IntCounterVec,
+    pub sumeragi_vrf_no_participation_by_signer: int_counter_vec(&["idx"]);
     /// VRF: commit/reveal rejects by reason (epoch_mismatch | out_of_window | invalid_reveal)
-    pub sumeragi_vrf_rejects_total_by_reason: IntCounterVec,
+    pub sumeragi_vrf_rejects_total_by_reason: int_counter_vec(&["reason"]);
     /// Sumeragi: current runtime mode tag.
-    pub sumeragi_mode_tag: Arc<RwLock<String>>,
+    pub sumeragi_mode_tag: raw(Arc<RwLock<String>>);
     /// Sumeragi: current leader index (gauge)
-    pub sumeragi_leader_index: GenericGauge<AtomicU64>,
+    pub sumeragi_leader_index: gauge();
     /// Sumeragi: highest QC height (gauge)
-    pub sumeragi_highest_qc_height: GenericGauge<AtomicU64>,
+    pub sumeragi_highest_qc_height: gauge();
     /// Sumeragi: locked QC height (gauge)
-    pub sumeragi_locked_qc_height: GenericGauge<AtomicU64>,
+    pub sumeragi_locked_qc_height: gauge();
     /// Sumeragi: locked QC view (gauge)
-    pub sumeragi_locked_qc_view: GenericGauge<AtomicU64>,
+    pub sumeragi_locked_qc_view: gauge();
     /// Sumeragi: NEW_VIEW receipts per (height, view)
-    pub sumeragi_new_view_receipts_by_hv: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_new_view_receipts_by_hv: gauge_vec(&["height", "view"]);
     /// Sumeragi: NEW_VIEW messages published (cumulative)
-    pub sumeragi_new_view_publish_total: IntCounter,
+    pub sumeragi_new_view_publish_total: int_counter();
     /// Sumeragi: NEW_VIEW messages received and accepted (cumulative)
-    pub sumeragi_new_view_recv_total: IntCounter,
+    pub sumeragi_new_view_recv_total: int_counter();
     /// Sumeragi: NEW_VIEW messages dropped because HighestQC is behind the locked QC
-    pub sumeragi_new_view_dropped_by_lock_total: IntCounter,
+    pub sumeragi_new_view_dropped_by_lock_total: int_counter();
     /// Sumeragi: missing-block fetch planning outcomes (labels: outcome=requested|backoff|no_targets)
-    pub sumeragi_missing_block_fetch_total: IntCounterVec,
+    pub sumeragi_missing_block_fetch_total: int_counter_vec(&["outcome"]);
     /// Sumeragi: missing-block fetch target kind (labels: target=signers|topology)
-    pub sumeragi_missing_block_fetch_target_total: IntCounterVec,
+    pub sumeragi_missing_block_fetch_target_total: int_counter_vec(&["target"]);
     /// Sumeragi: elapsed milliseconds from first-seen certificate to missing-block fetch request
-    pub sumeragi_missing_block_fetch_dwell_ms: Histogram,
+    pub sumeragi_missing_block_fetch_dwell_ms: histogram_with_buckets(
+        prometheus::exponential_buckets(10.0, 2.0, 8).expect("inputs are valid"),
+    );
     /// Sumeragi: number of peers targeted when requesting a missing block payload
-    pub sumeragi_missing_block_fetch_targets: Histogram,
+    pub sumeragi_missing_block_fetch_targets: histogram_with_buckets(
+        prometheus::exponential_buckets(1.0, 2.0, 6).expect("inputs are valid"),
+    );
     /// Block-sync QCs quarantined because local context was missing.
-    pub blocksync_qc_quarantine_total: IntCounter,
+    pub blocksync_qc_quarantine_total: int_counter();
     /// Quarantined block-sync QCs that were revalidated successfully.
-    pub blocksync_qc_revalidated_total: IntCounter,
+    pub blocksync_qc_revalidated_total: int_counter();
     /// Block-sync QCs dropped permanently after bounded revalidation.
-    pub blocksync_qc_final_drop_total: IntCounterVec,
+    pub blocksync_qc_final_drop_total: int_counter_vec(&["reason"]);
     /// QCs deferred due to missing payload.
-    pub qc_deferred_missing_payload_total: IntCounter,
+    pub qc_deferred_missing_payload_total: int_counter();
     /// Deferred QCs resolved after payload arrival.
-    pub qc_deferred_resolved_total: IntCounter,
+    pub qc_deferred_resolved_total: int_counter();
     /// Deferred QCs expired after bounded retries.
-    pub qc_deferred_expired_total: IntCounter,
+    pub qc_deferred_expired_total: int_counter();
     /// Consensus deferrals caused by empty commit topology.
-    pub consensus_empty_commit_topology_defer_total: IntCounter,
+    pub consensus_empty_commit_topology_defer_total: int_counter();
     /// Empty-topology recoveries escalated to forced view changes.
-    pub consensus_empty_commit_topology_escalation_total: IntCounter,
+    pub consensus_empty_commit_topology_escalation_total: int_counter();
     /// Recovery state-machine transitions labeled by state.
-    pub consensus_recovery_state_transitions_total: IntCounterVec,
+    pub consensus_recovery_state_transitions_total: int_counter_vec(&["state"]);
     /// Height-scoped missing-block recoveries escalated via deterministic hard cap.
-    pub consensus_missing_block_height_escalation_total: IntCounter,
+    pub consensus_missing_block_height_escalation_total: int_counter();
     /// Sidecar mismatches quarantined in fail-closed mode.
-    pub consensus_sidecar_quarantine_total: IntCounter,
+    pub consensus_sidecar_quarantine_total: int_counter();
     /// Sidecar mismatches final-dropped after retry/TTL bounds.
-    pub consensus_sidecar_final_drop_total: IntCounter,
+    pub consensus_sidecar_final_drop_total: int_counter();
     /// Range-pull escalation attempts triggered by dependency recovery.
-    pub blocksync_range_pull_escalation_total: IntCounter,
+    pub blocksync_range_pull_escalation_total: int_counter();
     /// Successful range-pull recoveries.
-    pub blocksync_range_pull_success_total: IntCounter,
+    pub blocksync_range_pull_success_total: int_counter();
     /// Range-pull recoveries that expired without progress.
-    pub blocksync_range_pull_failure_total: IntCounter,
+    pub blocksync_range_pull_failure_total: int_counter();
     /// Stuck-round duration observed while recovery waits for dependencies.
-    pub consensus_recovery_stuck_round_seconds: Histogram,
+    pub consensus_recovery_stuck_round_seconds: histogram_with_buckets(
+        prometheus::exponential_buckets(0.1, 2.0, 10).expect("inputs are valid"),
+    );
     /// Sumeragi DA availability: missing availability artifacts (labeled by reason)
-    pub sumeragi_da_gate_block_total: IntCounterVec,
+    pub sumeragi_da_gate_block_total: int_counter_vec(&["reason"]);
     /// Sumeragi DA availability: last recorded reason code (0=none,1=missing_local_data,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)
-    pub sumeragi_da_gate_last_reason: GenericGauge<AtomicU64>,
+    pub sumeragi_da_gate_last_reason: gauge();
     /// Sumeragi DA availability: last satisfaction code (0=none,1=missing_data_recovered)
-    pub sumeragi_da_gate_last_satisfied: GenericGauge<AtomicU64>,
+    pub sumeragi_da_gate_last_satisfied: gauge();
     /// Sumeragi DA availability: satisfaction transitions (labeled by gate)
-    pub sumeragi_da_gate_satisfied_total: IntCounterVec,
+    pub sumeragi_da_gate_satisfied_total: int_counter_vec(&["gate"]);
     /// Sumeragi DA manifest guard: outcomes labeled by result/reason.
-    pub sumeragi_da_manifest_guard_total: IntCounterVec,
+    pub sumeragi_da_manifest_guard_total: int_counter_vec(&["result", "reason"]);
     /// Sumeragi DA manifest cache: outcomes labeled by result.
-    pub sumeragi_da_manifest_cache_total: IntCounterVec,
+    pub sumeragi_da_manifest_cache_total: int_counter_vec(&["result"]);
     /// Sumeragi DA spool cache: outcomes labeled by kind/result.
-    pub sumeragi_da_spool_cache_total: IntCounterVec,
+    pub sumeragi_da_spool_cache_total: int_counter_vec(&["kind", "result"]);
     /// Sumeragi DA pin intent spool: outcomes labeled by result/reason.
-    pub sumeragi_da_pin_intent_spool_total: IntCounterVec,
+    pub sumeragi_da_pin_intent_spool_total: int_counter_vec(&["result", "reason"]);
     /// Sumeragi RBC: active sessions (gauge)
-    pub sumeragi_rbc_sessions_active: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_sessions_active: gauge();
     /// Sumeragi RBC: sessions pruned due to TTL (cumulative)
-    pub sumeragi_rbc_sessions_pruned_total: IntCounter,
+    pub sumeragi_rbc_sessions_pruned_total: int_counter();
     /// Sumeragi RBC: targeted INIT repair requests sent (cumulative)
-    pub sumeragi_rbc_init_requests_total: IntCounter,
+    pub sumeragi_rbc_init_requests_total: int_counter();
     /// Sumeragi RBC: targeted chunk repair requests sent (cumulative)
-    pub sumeragi_rbc_chunk_requests_total: IntCounter,
+    pub sumeragi_rbc_chunk_requests_total: int_counter();
     /// Sumeragi RBC: encoded chunk indices requested via targeted repair (cumulative)
-    pub sumeragi_rbc_requested_chunks_total: IntCounter,
+    pub sumeragi_rbc_requested_chunks_total: int_counter();
     /// Sumeragi RBC: initial chunk target outcomes by encoding and fanout policy.
-    pub sumeragi_rbc_initial_chunk_targets_total: IntCounterVec,
+    pub sumeragi_rbc_initial_chunk_targets_total: int_counter_vec(
+        &["encoding", "fanout", "outcome"],
+    );
     /// Sumeragi RBC: targeted repair windows that fell back to broad rebroadcast (kind=init|chunk)
-    pub sumeragi_rbc_repair_fallback_total: IntCounterVec,
+    pub sumeragi_rbc_repair_fallback_total: int_counter_vec(&["kind"]);
     /// Sumeragi RBC: READY broadcasts sent (cumulative)
-    pub sumeragi_rbc_ready_broadcasts_total: IntCounter,
+    pub sumeragi_rbc_ready_broadcasts_total: int_counter();
     /// Sumeragi RBC: rebroadcasts skipped (kind=payload|ready)
-    pub sumeragi_rbc_rebroadcast_skipped_total: IntCounterVec,
+    pub sumeragi_rbc_rebroadcast_skipped_total: int_counter_vec(&["kind"]);
     /// Sumeragi RBC: DELIVER broadcasts sent (cumulative)
-    pub sumeragi_rbc_deliver_broadcasts_total: IntCounter,
+    pub sumeragi_rbc_deliver_broadcasts_total: int_counter();
     /// Sumeragi RBC: total payload bytes delivered and cached (gauge)
-    pub sumeragi_rbc_payload_bytes_delivered_total: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_payload_bytes_delivered_total: gauge();
     /// Sumeragi RBC: RS16 stripes reconstructed from parity (cumulative)
-    pub sumeragi_rbc_reconstructed_stripes_total: IntCounter,
+    pub sumeragi_rbc_reconstructed_stripes_total: int_counter();
     /// Sumeragi RBC: seed/preprocessing latency histogram (milliseconds)
-    pub sumeragi_rbc_seed_latency_ms: Histogram,
+    pub sumeragi_rbc_seed_latency_ms: histogram_with_buckets(
+        vec![
+                        0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
+                    ],
+    );
     /// Pending RBC backlog aggregated per lane (tx count).
-    pub sumeragi_rbc_lane_tx_count: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_rbc_lane_tx_count: gauge_vec(&["lane_id"]);
     /// Total RBC chunks aggregated per lane.
-    pub sumeragi_rbc_lane_total_chunks: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_rbc_lane_total_chunks: gauge_vec(&["lane_id"]);
     /// Pending RBC chunks aggregated per lane.
-    pub sumeragi_rbc_lane_pending_chunks: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_rbc_lane_pending_chunks: gauge_vec(&["lane_id"]);
     /// Total RBC payload bytes aggregated per lane.
-    pub sumeragi_rbc_lane_bytes_total: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_rbc_lane_bytes_total: gauge_vec(&["lane_id"]);
     /// Pending RBC backlog aggregated per dataspace (tx count).
-    pub sumeragi_rbc_dataspace_tx_count: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_rbc_dataspace_tx_count: gauge_vec(&["lane_id", "dataspace_id"],);
     /// Total RBC chunks aggregated per dataspace.
-    pub sumeragi_rbc_dataspace_total_chunks: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_rbc_dataspace_total_chunks: gauge_vec(&["lane_id", "dataspace_id"],);
     /// Pending RBC chunks aggregated per dataspace.
-    pub sumeragi_rbc_dataspace_pending_chunks: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_rbc_dataspace_pending_chunks: gauge_vec(&["lane_id", "dataspace_id"],);
     /// Total RBC payload bytes aggregated per dataspace.
-    pub sumeragi_rbc_dataspace_bytes_total: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_rbc_dataspace_bytes_total: gauge_vec(&["lane_id", "dataspace_id"],);
     /// Sumeragi availability: votes ingested by this collector (cumulative)
-    pub sumeragi_da_votes_ingested_total: IntCounter,
+    pub sumeragi_da_votes_ingested_total: int_counter();
     /// Sumeragi QC assembly latency histogram (milliseconds) labeled by `kind`
-    pub sumeragi_qc_assembly_latency_ms: HistogramVec,
+    pub sumeragi_qc_assembly_latency_ms: histogram_vec_with_buckets(
+        vec![
+                        5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
+                    ],
+                    &["kind"],
+    );
     /// Sumeragi QC last observed latency gauge (milliseconds) labeled by `kind`
-    pub sumeragi_qc_last_latency_ms: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_qc_last_latency_ms: gauge_vec(&["kind"]);
     /// Sumeragi RBC: persisted store sessions (gauge)
-    pub sumeragi_rbc_store_sessions: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_store_sessions: gauge();
     /// Sumeragi RBC: persisted store payload bytes (gauge)
-    pub sumeragi_rbc_store_bytes: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_store_bytes: gauge();
     /// Sumeragi RBC: current store pressure level (0=normal,1=soft,2=hard)
-    pub sumeragi_rbc_store_pressure: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_store_pressure: gauge();
     /// Sumeragi RBC: session evictions due to TTL/capacity enforcement (cumulative)
-    pub sumeragi_rbc_store_evictions_total: IntCounter,
+    pub sumeragi_rbc_store_evictions_total: int_counter();
     /// Sumeragi RBC: persist requests dropped due to a full async queue (cumulative)
-    pub sumeragi_rbc_persist_drops_total: IntCounter,
+    pub sumeragi_rbc_persist_drops_total: int_counter();
     /// Sumeragi RBC status snapshot persistence unavailable due to init or fatal disk faults (0/1)
-    pub sumeragi_rbc_status_persistence_disabled: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_status_persistence_disabled: gauge();
     /// Sumeragi RBC status snapshot fatal persist failures (cumulative)
-    pub sumeragi_rbc_status_persist_failures_total: IntCounter,
+    pub sumeragi_rbc_status_persist_failures_total: int_counter();
     /// Sumeragi RBC: proposals deferred due to store back-pressure (cumulative)
-    pub sumeragi_rbc_backpressure_deferrals_total: IntCounter,
+    pub sumeragi_rbc_backpressure_deferrals_total: int_counter();
     /// Sumeragi RBC: DELIVER deferrals waiting on READY quorum (cumulative)
-    pub sumeragi_rbc_deliver_defer_ready_total: IntCounter,
+    pub sumeragi_rbc_deliver_defer_ready_total: int_counter();
     /// Sumeragi RBC: DELIVER deferrals waiting on missing chunks (cumulative)
-    pub sumeragi_rbc_deliver_defer_chunks_total: IntCounter,
+    pub sumeragi_rbc_deliver_defer_chunks_total: int_counter();
     /// Sumeragi RBC: DA deadline reschedules triggered (cumulative)
-    pub sumeragi_rbc_da_reschedule_total: IntCounter,
+    pub sumeragi_rbc_da_reschedule_total: int_counter();
     /// Sumeragi RBC: DA deadline reschedules triggered (cumulative) labeled by consensus mode
-    pub sumeragi_rbc_da_reschedule_by_mode_total: IntCounterVec,
+    pub sumeragi_rbc_da_reschedule_by_mode_total: int_counter_vec(&["mode"]);
     /// Sumeragi RBC: pending blocks aborted due to missing/mismatched/invalid RBC payload (labeled by consensus mode)
-    pub sumeragi_rbc_abort_total: IntCounterVec,
+    pub sumeragi_rbc_abort_total: int_counter_vec(&["mode"]);
     /// Sumeragi RBC: payload mismatches attributed to peers (labels: peer, kind)
-    pub sumeragi_rbc_mismatch_total: IntCounterVec,
+    pub sumeragi_rbc_mismatch_total: int_counter_vec(&["peer", "kind"]);
     /// Sumeragi: kura persistence failures grouped by outcome (retry|abort)
-    pub sumeragi_kura_store_failures_total: IntCounterVec,
+    pub sumeragi_kura_store_failures_total: int_counter_vec(&["outcome"]);
     /// Sumeragi: last recorded kura persistence retry attempt (gauge)
-    pub sumeragi_kura_store_last_retry_attempt: GenericGauge<AtomicU64>,
+    pub sumeragi_kura_store_last_retry_attempt: gauge();
     /// Sumeragi: last recorded kura persistence retry backoff in milliseconds (gauge)
-    pub sumeragi_kura_store_last_retry_backoff_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_kura_store_last_retry_backoff_ms: gauge();
     /// Sumeragi pacemaker: proposals deferred due to transaction-queue back-pressure (cumulative)
-    pub sumeragi_pacemaker_backpressure_deferrals_total: IntCounter,
+    pub sumeragi_pacemaker_backpressure_deferrals_total: int_counter();
     /// Sumeragi pacemaker: backpressure deferrals grouped by reason (cumulative)
-    pub sumeragi_pacemaker_backpressure_deferrals_by_reason_total: IntCounterVec,
+    pub sumeragi_pacemaker_backpressure_deferrals_by_reason_total: int_counter_vec(&["reason"],);
     /// Sumeragi pacemaker: backpressure deferral durations (ms) grouped by reason
-    pub sumeragi_pacemaker_backpressure_deferral_duration_ms: HistogramVec,
+    pub sumeragi_pacemaker_backpressure_deferral_duration_ms: histogram_vec_with_buckets(
+        vec![
+                            5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0,
+                            20000.0,
+                        ],
+                        &["reason"],
+    );
     /// Sumeragi pacemaker: backpressure deferral active state (0/1) grouped by reason
-    pub sumeragi_pacemaker_backpressure_deferral_active: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_pacemaker_backpressure_deferral_active: gauge_vec(&["reason"],);
     /// Sumeragi pacemaker: backpressure deferral age (ms) grouped by reason
-    pub sumeragi_pacemaker_backpressure_deferral_age_ms: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_pacemaker_backpressure_deferral_age_ms: gauge_vec(&["reason"],);
     /// Sumeragi pacemaker: evaluation duration in the tick loop (ms)
-    pub sumeragi_pacemaker_eval_ms: Histogram,
+    pub sumeragi_pacemaker_eval_ms: histogram_with_buckets(
+        vec![1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0],
+    );
     /// Sumeragi pacemaker: proposal attempt duration in the tick loop (ms)
-    pub sumeragi_pacemaker_propose_ms: Histogram,
+    pub sumeragi_pacemaker_propose_ms: histogram_with_buckets(
+        vec![1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0],
+    );
     /// Sumeragi commit pipeline stage durations (ms) labeled by stage.
-    pub sumeragi_commit_stage_ms: HistogramVec,
+    pub sumeragi_commit_stage_ms: histogram_vec_with_buckets(
+        vec![
+                        1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
+                        10000.0, 20000.0,
+                    ],
+                    &["stage"],
+    );
     /// State commit: legacy view_lock wait duration (ms) during block commit.
-    pub state_commit_view_lock_wait_ms: Histogram,
+    pub state_commit_view_lock_wait_ms: histogram_with_buckets(
+        vec![
+                        1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                        10000.0,
+                    ],
+    );
     /// State commit: legacy view_lock hold duration (ms) during block commit.
-    pub state_commit_view_lock_hold_ms: Histogram,
+    pub state_commit_view_lock_hold_ms: histogram_with_buckets(
+        vec![
+                        1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                        10000.0,
+                    ],
+    );
     /// State commit: state_write_lock wait duration (ms) during block commit.
-    pub state_commit_write_lock_wait_ms: Histogram,
+    pub state_commit_write_lock_wait_ms: histogram_with_buckets(
+        vec![
+                        1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                        10000.0,
+                    ],
+    );
     /// State commit: state_write_lock hold duration (ms) during block commit.
-    pub state_commit_write_lock_hold_ms: Histogram,
+    pub state_commit_write_lock_hold_ms: histogram_with_buckets(
+        vec![
+                        1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                        10000.0,
+                    ],
+    );
     /// Sumeragi pacemaker: commit pipeline executions triggered by timer tick (cumulative, labeled by mode/outcome)
-    pub sumeragi_commit_pipeline_tick_total: IntCounterVec,
+    pub sumeragi_commit_pipeline_tick_total: int_counter_vec(&["mode", "outcome"]);
     /// Sumeragi pacemaker: prevote-quorum timeouts (cumulative, labeled by mode)
-    pub sumeragi_prevote_timeout_total: IntCounterVec,
+    pub sumeragi_prevote_timeout_total: int_counter_vec(&["mode"]);
     /// Sumeragi RBC: total missing chunks across active sessions (gauge)
-    pub sumeragi_rbc_backlog_chunks_total: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_backlog_chunks_total: gauge();
     /// Sumeragi RBC: maximum missing chunks in a single session (gauge)
-    pub sumeragi_rbc_backlog_chunks_max: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_backlog_chunks_max: gauge();
     /// Sumeragi RBC: sessions pending delivery (gauge)
-    pub sumeragi_rbc_backlog_sessions_pending: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_backlog_sessions_pending: gauge();
     /// Sumeragi RBC: pending sessions awaiting INIT (gauge)
-    pub sumeragi_rbc_pending_sessions: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_pending_sessions: gauge();
     /// Sumeragi RBC: pending chunk frames buffered before INIT (gauge)
-    pub sumeragi_rbc_pending_chunks: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_pending_chunks: gauge();
     /// Sumeragi RBC: pending chunk/aux bytes buffered before INIT (gauge)
-    pub sumeragi_rbc_pending_bytes: GenericGauge<AtomicU64>,
+    pub sumeragi_rbc_pending_bytes: gauge();
     /// Sumeragi RBC: pending-frame drops by reason (cap/session_cap/ttl) (counter)
-    pub sumeragi_rbc_pending_drops_total: IntCounterVec,
+    pub sumeragi_rbc_pending_drops_total: int_counter_vec(&["reason"]);
     /// Sumeragi RBC: pending-byte drops by reason (counter)
-    pub sumeragi_rbc_pending_dropped_bytes_total: IntCounterVec,
+    pub sumeragi_rbc_pending_dropped_bytes_total: int_counter_vec(&["reason"]);
     /// Sumeragi RBC: pending sessions evicted due to TTL or stash limits (counter)
-    pub sumeragi_rbc_pending_evicted_total: IntCounter,
+    pub sumeragi_rbc_pending_evicted_total: int_counter();
     /// Sumeragi: membership mismatches detected (labeled by peer, height, view)
-    pub sumeragi_membership_mismatch_total: IntCounterVec,
+    pub sumeragi_membership_mismatch_total: int_counter_vec(&["peer", "height", "view"],);
     /// Sumeragi: peers currently flagged for membership mismatch (0/1 gauge)
-    pub sumeragi_membership_mismatch_active: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_membership_mismatch_active: gauge_vec(&["peer"]);
     /// Sumeragi: post attempts to peers (cumulative), labeled by peer id
-    pub sumeragi_post_to_peer_total: IntCounterVec,
+    pub sumeragi_post_to_peer_total: int_counter_vec(&["peer"]);
     /// Sumeragi: background-post enqueued tasks (cumulative), labeled by kind {Post,Broadcast}
-    pub sumeragi_bg_post_enqueued_total: IntCounterVec,
+    pub sumeragi_bg_post_enqueued_total: int_counter_vec(&["kind"]);
     /// Sumeragi: background-post queue full events (cumulative), labeled by kind
-    pub sumeragi_bg_post_overflow_total: IntCounterVec,
+    pub sumeragi_bg_post_overflow_total: int_counter_vec(&["kind"]);
     /// Sumeragi: background-post drops when the worker queue is unavailable (cumulative), labeled by kind
-    pub sumeragi_bg_post_drop_total: IntCounterVec,
+    pub sumeragi_bg_post_drop_total: int_counter_vec(&["kind"]);
     /// Sumeragi: background-post queue depth (approximate, global)
-    pub sumeragi_bg_post_queue_depth: GenericGauge<AtomicU64>,
+    pub sumeragi_bg_post_queue_depth: gauge();
     /// Sumeragi: background-post queue depth by peer (collector), labeled by peer id
-    pub sumeragi_bg_post_queue_depth_by_peer: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_bg_post_queue_depth_by_peer: gauge_vec(&["peer"]);
     /// Sumeragi: background-post age histogram (milliseconds) labeled by kind {Post,Broadcast}
-    pub sumeragi_bg_post_age_ms: HistogramVec,
+    pub sumeragi_bg_post_age_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid"),
+                    &["kind"],
+    );
     /// Sumeragi: pacemaker current backoff window (ms)
-    pub sumeragi_pacemaker_backoff_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_pacemaker_backoff_ms: gauge();
     /// Sumeragi: pacemaker RTT floor (ms)
-    pub sumeragi_pacemaker_rtt_floor_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_pacemaker_rtt_floor_ms: gauge();
     /// Sumeragi: pacemaker backoff multiplier (gauge)
-    pub sumeragi_pacemaker_backoff_multiplier: GenericGauge<AtomicU64>,
+    pub sumeragi_pacemaker_backoff_multiplier: gauge();
     /// Sumeragi: pacemaker RTT floor multiplier (gauge)
-    pub sumeragi_pacemaker_rtt_floor_multiplier: GenericGauge<AtomicU64>,
+    pub sumeragi_pacemaker_rtt_floor_multiplier: gauge();
     /// Sumeragi: pacemaker maximum backoff cap (ms)
-    pub sumeragi_pacemaker_max_backoff_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_pacemaker_max_backoff_ms: gauge();
     /// Sumeragi: pacemaker jitter band applied to window (ms, signed magnitude)
-    pub sumeragi_pacemaker_jitter_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_pacemaker_jitter_ms: gauge();
     /// Sumeragi: pacemaker jitter config as permille of window (0..=1000)
-    pub sumeragi_pacemaker_jitter_frac_permille: GenericGauge<AtomicU64>,
+    pub sumeragi_pacemaker_jitter_frac_permille: gauge();
     /// Sumeragi: elapsed time in the current round (ms)
-    pub sumeragi_pacemaker_round_elapsed_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_pacemaker_round_elapsed_ms: gauge();
     /// Sumeragi: current view timeout target window (ms)
-    pub sumeragi_pacemaker_view_timeout_target_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_pacemaker_view_timeout_target_ms: gauge();
     /// Sumeragi: remaining time until current view timeout (ms)
-    pub sumeragi_pacemaker_view_timeout_remaining_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_pacemaker_view_timeout_remaining_ms: gauge();
     /// Sumeragi: per-phase latency histogram (ms), labeled by `phase` (propose|collect|commit)
-    pub sumeragi_phase_latency_ms: HistogramVec,
+    pub sumeragi_phase_latency_ms: histogram_vec_with_buckets(
+        vec![
+                        5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
+                    ],
+                    &["phase"],
+    );
     /// Sumeragi: per-phase latency EMA (ms), labeled by `phase`
-    pub sumeragi_phase_latency_ema_ms: GenericGaugeVec<AtomicU64>,
+    pub sumeragi_phase_latency_ema_ms: gauge_vec(&["phase"]);
     /// Sumeragi: aggregate pipeline EMA latency (ms) across pacemaker-controlled phases.
-    pub sumeragi_phase_total_ema_ms: GenericGauge<AtomicU64>,
+    pub sumeragi_phase_total_ema_ms: gauge();
     /// Number of p2p dropped post messages (bounded mode)
-    pub p2p_dropped_posts: GenericGauge<AtomicU64>,
+    pub p2p_dropped_posts: gauge();
     /// Number of p2p dropped broadcast messages (bounded mode)
-    pub p2p_dropped_broadcasts: GenericGauge<AtomicU64>,
+    pub p2p_dropped_broadcasts: gauge();
     /// Number of inbound messages dropped because subscriber queues were full.
-    pub p2p_subscriber_queue_full_total: GenericGauge<AtomicU64>,
+    pub p2p_subscriber_queue_full_total: gauge();
     /// Per-topic inbound drops caused by subscriber queues being full.
-    pub p2p_subscriber_queue_full_by_topic_total: GenericGaugeVec<AtomicU64>,
+    pub p2p_subscriber_queue_full_by_topic_total: gauge_vec(&["topic"]);
     /// Number of inbound messages dropped because no subscriber matches the topic.
-    pub p2p_subscriber_unrouted_total: GenericGauge<AtomicU64>,
+    pub p2p_subscriber_unrouted_total: gauge();
     /// Per-topic inbound drops caused by no subscriber matches.
-    pub p2p_subscriber_unrouted_by_topic_total: GenericGaugeVec<AtomicU64>,
+    pub p2p_subscriber_unrouted_by_topic_total: gauge_vec(&["topic"]);
     /// Number of p2p handshake failures
-    pub p2p_handshake_failures: GenericGauge<AtomicU64>,
+    pub p2p_handshake_failures: gauge();
     /// Number of low-priority post messages throttled
-    pub p2p_low_post_throttled_total: GenericGauge<AtomicU64>,
+    pub p2p_low_post_throttled_total: gauge();
     /// Number of low-priority broadcast deliveries throttled
-    pub p2p_low_broadcast_throttled_total: GenericGauge<AtomicU64>,
+    pub p2p_low_broadcast_throttled_total: gauge();
     /// Number of per-peer post channel overflows (bounded per-topic channels)
-    pub p2p_post_overflow_total: GenericGauge<AtomicU64>,
+    pub p2p_post_overflow_total: gauge();
     /// Per-topic breakdown for post channel overflows
-    pub p2p_post_overflow_by_topic: GenericGaugeVec<AtomicU64>,
+    pub p2p_post_overflow_by_topic: gauge_vec(&["priority", "topic"]);
     /// Consensus ingress drops grouped by topic and reason.
-    pub consensus_ingress_drop_total: IntCounterVec,
+    pub consensus_ingress_drop_total: int_counter_vec(&["topic", "reason"]);
     /// Number of DNS interval-based refresh cycles performed.
-    pub p2p_dns_refresh_total: GenericGauge<AtomicU64>,
+    pub p2p_dns_refresh_total: gauge();
     /// Number of DNS TTL-based refresh cycles performed.
-    pub p2p_dns_ttl_refresh_total: GenericGauge<AtomicU64>,
+    pub p2p_dns_ttl_refresh_total: gauge();
     /// Number of DNS resolution/connection failures for hostname peers.
-    pub p2p_dns_resolution_fail_total: GenericGauge<AtomicU64>,
+    pub p2p_dns_resolution_fail_total: gauge();
     /// Number of DNS reconnect successes after refresh cycles.
-    pub p2p_dns_reconnect_success_total: GenericGauge<AtomicU64>,
+    pub p2p_dns_reconnect_success_total: gauge();
     /// Number of scheduled per-address connect backoffs
-    pub p2p_backoff_scheduled_total: GenericGauge<AtomicU64>,
+    pub p2p_backoff_scheduled_total: gauge();
     /// Number of deferred outbound frames enqueued while peer sessions were unavailable.
-    pub p2p_deferred_send_enqueued_total: GenericGauge<AtomicU64>,
+    pub p2p_deferred_send_enqueued_total: gauge();
     /// Number of deferred outbound frames dropped (expiry, overflow, stale generation).
-    pub p2p_deferred_send_dropped_total: GenericGauge<AtomicU64>,
+    pub p2p_deferred_send_dropped_total: gauge();
     /// Number of reconnect attempts triggered while deferring outbound frames.
-    pub p2p_session_reconnect_total: GenericGauge<AtomicU64>,
+    pub p2p_session_reconnect_total: gauge();
     /// Cumulative reconnect retry delay (seconds, rounded up from milliseconds).
-    pub p2p_connect_retry_seconds: GenericGauge<AtomicU64>,
+    pub p2p_connect_retry_seconds: gauge();
     /// Number of incoming connections rejected by per-IP throttle
-    pub p2p_accept_throttled_total: GenericGauge<AtomicU64>,
+    pub p2p_accept_throttled_total: gauge();
     /// Number of accept throttle bucket evictions (idle/capacity).
-    pub p2p_accept_bucket_evictions_total: GenericGauge<AtomicU64>,
+    pub p2p_accept_bucket_evictions_total: gauge();
     /// Current number of active accept throttle buckets.
-    pub p2p_accept_buckets_current: GenericGauge<AtomicU64>,
+    pub p2p_accept_buckets_current: gauge();
     /// Prefix cache hits/misses for accept throttle (label `result`).
-    pub p2p_accept_prefix_cache_total: GenericGaugeVec<AtomicU64>,
+    pub p2p_accept_prefix_cache_total: gauge_vec(&["result"]);
     /// Accept throttle decisions (label `scope` = prefix|ip, `decision` = allowed|throttled).
-    pub p2p_accept_throttle_decisions_total: GenericGaugeVec<AtomicU64>,
+    pub p2p_accept_throttle_decisions_total: gauge_vec(&["scope", "decision"],);
     /// Number of incoming connections rejected due to incoming cap
-    pub p2p_incoming_cap_reject_total: GenericGauge<AtomicU64>,
+    pub p2p_incoming_cap_reject_total: gauge();
     /// Number of incoming connections rejected due to total cap
-    pub p2p_total_cap_reject_total: GenericGauge<AtomicU64>,
+    pub p2p_total_cap_reject_total: gauge();
     /// Trust score per peer (label `peer_id`).
-    pub p2p_trust_score: IntGaugeVec,
+    pub p2p_trust_score: int_gauge_vec(&["peer_id"]);
     /// Trust penalties applied (label `reason`).
-    pub p2p_trust_penalties_total: IntCounterVec,
+    pub p2p_trust_penalties_total: int_counter_vec(&["reason"]);
     /// Trust decay ticks applied (label `peer_id`).
-    pub p2p_trust_decay_ticks_total: IntCounterVec,
+    pub p2p_trust_decay_ticks_total: int_counter_vec(&["peer_id"]);
     /// Trust gossip frames skipped grouped by direction and reason.
-    pub p2p_trust_gossip_skipped_total: IntCounterVec,
+    pub p2p_trust_gossip_skipped_total: int_counter_vec(&["direction", "reason"]);
     /// Transaction gossip batches sent (labels: plane, dataspace).
-    pub tx_gossip_sent_total: IntCounterVec,
+    pub tx_gossip_sent_total: int_counter_vec(&["plane", "dataspace"]);
     /// Transaction gossip batches dropped (labels: plane, dataspace, reason).
-    pub tx_gossip_dropped_total: IntCounterVec,
+    pub tx_gossip_dropped_total: int_counter_vec(&["plane", "dataspace", "reason"]);
     /// Latest transaction gossip target count (labels: plane, dataspace).
-    pub tx_gossip_targets: GenericGaugeVec<AtomicU64>,
+    pub tx_gossip_targets: gauge_vec(&["plane", "dataspace"]);
     /// Fallback attempts for restricted gossip (labels: plane, dataspace, surface).
-    pub tx_gossip_fallback_total: IntCounterVec,
+    pub tx_gossip_fallback_total: int_counter_vec(&["plane", "dataspace", "surface"],);
     /// Configured frame cap for transaction gossip (bytes).
-    pub tx_gossip_frame_cap_bytes: GenericGauge<AtomicU64>,
+    pub tx_gossip_frame_cap_bytes: gauge();
     /// Configured cap for public gossip targets (0 = broadcast).
-    pub tx_gossip_public_target_cap: GenericGauge<AtomicU64>,
+    pub tx_gossip_public_target_cap: gauge();
     /// Configured cap for restricted gossip targets (0 = commit topology).
-    pub tx_gossip_restricted_target_cap: GenericGauge<AtomicU64>,
+    pub tx_gossip_restricted_target_cap: gauge();
     /// Public-plane target reshuffle interval in milliseconds.
-    pub tx_gossip_public_target_reshuffle_ms: GenericGauge<AtomicU64>,
+    pub tx_gossip_public_target_reshuffle_ms: gauge();
     /// Restricted-plane target reshuffle interval in milliseconds.
-    pub tx_gossip_restricted_target_reshuffle_ms: GenericGauge<AtomicU64>,
+    pub tx_gossip_restricted_target_reshuffle_ms: gauge();
     /// Whether unknown dataspaces are dropped (1) or routed via the restricted plane (0).
-    pub tx_gossip_drop_unknown_dataspace: GenericGauge<AtomicU64>,
+    pub tx_gossip_drop_unknown_dataspace: gauge();
     /// Restricted gossip fallback policy (0 = drop, 1 = public overlay).
-    pub tx_gossip_restricted_fallback: GenericGauge<AtomicU64>,
+    pub tx_gossip_restricted_fallback: gauge();
     /// Configured policy for restricted payloads when only the public overlay is available (0 = refuse, 1 = forward).
-    pub tx_gossip_restricted_public_policy: GenericGauge<AtomicU64>,
+    pub tx_gossip_restricted_public_policy: gauge();
     /// Cached status snapshot for the latest gossip target selections.
-    pub tx_gossip_status: Arc<RwLock<Vec<TxGossipStatus>>>,
+    pub tx_gossip_status: raw(Arc<RwLock<Vec<TxGossipStatus>>>);
     /// Cached configured caps for status exports.
-    pub tx_gossip_caps: Arc<RwLock<TxGossipCaps>>,
+    pub tx_gossip_caps: raw(Arc<RwLock<TxGossipCaps>>);
     /// Accepted inbound WebSocket P2P connections
-    pub p2p_ws_inbound_total: GenericGauge<AtomicU64>,
+    pub p2p_ws_inbound_total: gauge();
     /// Successful outbound WebSocket P2P connections
-    pub p2p_ws_outbound_total: GenericGauge<AtomicU64>,
+    pub p2p_ws_outbound_total: gauge();
     /// Accepted inbound SCION P2P connections
-    pub p2p_scion_inbound_total: GenericGauge<AtomicU64>,
+    pub p2p_scion_inbound_total: gauge();
     /// Successful outbound SCION P2P connections
-    pub p2p_scion_outbound_total: GenericGauge<AtomicU64>,
+    pub p2p_scion_outbound_total: gauge();
     /// Network message queue depth by priority (High/Low).
-    pub p2p_queue_depth: GenericGaugeVec<AtomicU64>,
+    pub p2p_queue_depth: gauge_vec(&["priority"]);
     /// Bounded network message queue drops split by priority and kind
-    pub p2p_queue_dropped_total: GenericGaugeVec<AtomicU64>,
+    pub p2p_queue_dropped_total: gauge_vec(&["priority", "kind"]);
     /// Handshake latency histogram emulation (buckets by `le` in ms)
-    pub p2p_handshake_ms_bucket: GenericGaugeVec<AtomicU64>,
+    pub p2p_handshake_ms_bucket: gauge_vec(&["le"]);
     /// Sum of observed handshake latencies in milliseconds
-    pub p2p_handshake_ms_sum: GenericGauge<AtomicU64>,
+    pub p2p_handshake_ms_sum: gauge();
     /// Count of observed handshakes
-    pub p2p_handshake_ms_count: GenericGauge<AtomicU64>,
+    pub p2p_handshake_ms_count: gauge();
     /// Handshake error taxonomy
-    pub p2p_handshake_error_total: GenericGaugeVec<AtomicU64>,
+    pub p2p_handshake_error_total: gauge_vec(&["kind"]);
     /// Topic frame cap violations
-    pub p2p_frame_cap_violations_total: GenericGaugeVec<AtomicU64>,
+    pub p2p_frame_cap_violations_total: gauge_vec(&["topic"]);
     /// Runtime: upgrade lifecycle events (labeled by kind: proposed|activated|canceled)
-    pub runtime_upgrade_events_total: IntCounterVec,
+    pub runtime_upgrade_events_total: int_counter_vec(&["kind"]);
     /// Runtime: provenance rejection events (labeled by reason)
-    pub runtime_upgrade_provenance_rejections_total: IntCounterVec,
+    pub runtime_upgrade_provenance_rejections_total: int_counter_vec(&["reason"]);
     /// Runtime: ABI version accepted by this node.
-    pub runtime_abi_version: GenericGauge<AtomicU64>,
+    pub runtime_abi_version: gauge();
     /// IVM opcode pre-decode cache hits (cumulative)
-    pub ivm_cache_hits: GenericGauge<AtomicU64>,
+    pub ivm_cache_hits: gauge();
     /// IVM opcode pre-decode cache misses (cumulative)
-    pub ivm_cache_misses: GenericGauge<AtomicU64>,
+    pub ivm_cache_misses: gauge();
     /// IVM opcode pre-decode cache evictions (cumulative)
-    pub ivm_cache_evictions: GenericGauge<AtomicU64>,
+    pub ivm_cache_evictions: gauge();
     /// IVM opcode pre-decode decoded streams (cumulative)
-    pub ivm_cache_decoded_streams: GenericGauge<AtomicU64>,
+    pub ivm_cache_decoded_streams: gauge();
     /// IVM opcode pre-decode decoded operations (cumulative)
-    pub ivm_cache_decoded_ops_total: GenericGauge<AtomicU64>,
+    pub ivm_cache_decoded_ops_total: gauge();
     /// IVM opcode pre-decode decode failures (cumulative)
-    pub ivm_cache_decode_failures: GenericGauge<AtomicU64>,
+    pub ivm_cache_decode_failures: gauge();
     /// IVM opcode pre-decode total decode time in nanoseconds (cumulative)
-    pub ivm_cache_decode_time_ns_total: GenericGauge<AtomicU64>,
+    pub ivm_cache_decode_time_ns_total: gauge();
     /// IVM: histogram of highest general-purpose register index touched per execution.
-    pub ivm_register_max_index: Histogram,
+    pub ivm_register_max_index: histogram_with_buckets(
+        vec![
+                        16.0, 32.0, 48.0, 64.0, 96.0, 128.0, 160.0, 192.0, 224.0, 256.0, 320.0, 384.0,
+                        448.0, 512.0,
+                    ],
+    );
     /// IVM: histogram of unique general-purpose registers touched per execution.
-    pub ivm_register_unique_count: Histogram,
+    pub ivm_register_unique_count: histogram_with_buckets(
+        vec![
+                        8.0, 16.0, 24.0, 32.0, 64.0, 96.0, 128.0, 160.0, 192.0, 224.0, 256.0, 320.0, 384.0,
+                        448.0, 512.0,
+                    ],
+    );
     /// Merkle root computations using GPU acceleration (cumulative)
-    pub merkle_root_gpu_total: IntCounter,
+    pub merkle_root_gpu_total: int_counter();
     /// Merkle root computations using CPU (cumulative)
-    pub merkle_root_cpu_total: IntCounter,
+    pub merkle_root_cpu_total: int_counter();
     /// IVM memory commit duration (milliseconds), labelled by commit path.
-    pub ivm_memory_commit_ms: HistogramVec,
+    pub ivm_memory_commit_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.1, 2.0, 16).expect("inputs are valid"),
+                    &["path"],
+    );
     /// IVM memory commit dirty chunk count, labelled by commit path.
-    pub ivm_memory_commit_dirty_chunks: HistogramVec,
+    pub ivm_memory_commit_dirty_chunks: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(1.0, 2.0, 20).expect("inputs are valid"),
+                    &["path"],
+    );
     /// IVM Merkle cache full rebuilds.
-    pub ivm_merkle_rebuild_total: IntCounter,
+    pub ivm_merkle_rebuild_total: int_counter();
     /// IVM Merkle cache incremental leaf updates.
-    pub ivm_merkle_incremental_leaf_updates_total: IntCounter,
+    pub ivm_merkle_incremental_leaf_updates_total: int_counter();
     /// Number of DAG vertices (transactions) in the latest validated block
-    pub pipeline_dag_vertices: GenericGauge<AtomicU64>,
+    pub pipeline_dag_vertices: gauge();
     /// Number of DAG edges (conflicts) in the latest validated block
-    pub pipeline_dag_edges: GenericGauge<AtomicU64>,
+    pub pipeline_dag_edges: gauge();
     /// Conflict rate of DAG edges in basis points for the latest validated block
-    pub pipeline_conflict_rate_bps: GenericGauge<AtomicU64>,
+    pub pipeline_conflict_rate_bps: gauge();
     /// Cumulative access-set source counts used by the scheduler (labels: source)
-    pub pipeline_access_set_source_total: IntCounterVec,
+    pub pipeline_access_set_source_total: int_counter_vec(&["source"]);
     /// Number of independent components (DSF partitions) in the latest validated block
-    pub pipeline_comp_count: GenericGauge<AtomicU64>,
+    pub pipeline_comp_count: gauge();
     /// Size of the largest independent component in the latest validated block
-    pub pipeline_comp_max: GenericGauge<AtomicU64>,
+    pub pipeline_comp_max: gauge();
     /// Component-size histogram buckets labeled by `le` (component count per bucket)
-    pub pipeline_comp_hist_bucket: GenericGaugeVec<AtomicU64>,
+    pub pipeline_comp_hist_bucket: gauge_vec(&["le"]);
     /// Peak layer width (max transactions in any layer) for the latest validated block
-    pub pipeline_peak_layer_width: GenericGauge<AtomicU64>,
+    pub pipeline_peak_layer_width: gauge();
     /// Average layer width (rounded) for the latest validated block
-    pub pipeline_layer_avg_width: GenericGauge<AtomicU64>,
+    pub pipeline_layer_avg_width: gauge();
     /// Median layer width for the latest validated block
-    pub pipeline_layer_median_width: GenericGauge<AtomicU64>,
+    pub pipeline_layer_median_width: gauge();
     /// Nexus: cumulative count of config diffs applied per knob/profile.
-    pub nexus_config_diff_total: IntCounterVec,
+    pub nexus_config_diff_total: int_counter_vec(&["knob", "profile"]);
     /// Number of Nexus lane catalog entries configured on this node.
-    pub nexus_lane_configured_total: GenericGauge<AtomicU64>,
+    pub nexus_lane_configured_total: gauge();
     /// Latest Nexus lane identifier recorded for legacy lane-context gauges.
-    pub nexus_lane_id_placeholder: GenericGauge<AtomicU64>,
+    pub nexus_lane_id_placeholder: gauge();
     /// Latest Nexus dataspace identifier recorded for legacy lane-context gauges.
-    pub nexus_dataspace_id_placeholder: GenericGauge<AtomicU64>,
+    pub nexus_dataspace_id_placeholder: gauge();
     /// Nexus: per-lane governance seal status (1 = sealed, 0 = ready).
-    pub nexus_lane_governance_sealed: GenericGaugeVec<AtomicU64>,
+    pub nexus_lane_governance_sealed: gauge_vec(&["lane"]);
     /// Nexus: total number of lanes still sealed (missing manifest).
-    pub nexus_lane_governance_sealed_total: GenericGauge<AtomicU64>,
+    pub nexus_lane_governance_sealed_total: gauge();
     /// Nexus: aliases of lanes still sealed (for status snapshots).
-    pub nexus_lane_governance_sealed_aliases: Arc<RwLock<Vec<String>>>,
+    pub nexus_lane_governance_sealed_aliases: raw(Arc<RwLock<Vec<String>>>);
     /// Nexus: lifecycle plan applications grouped by outcome.
-    pub nexus_lane_lifecycle_applied_total: IntCounterVec,
+    pub nexus_lane_lifecycle_applied_total: int_counter_vec(&["result"]);
     /// Nexus: latest block height observed per lane.
-    pub nexus_lane_block_height: GenericGaugeVec<AtomicU64>,
+    pub nexus_lane_block_height: gauge_vec(&["lane", "dataspace"]);
     /// Nexus: finality lag in slots per lane (head height − lane height).
-    pub nexus_lane_finality_lag_slots: GenericGaugeVec<AtomicU64>,
+    pub nexus_lane_finality_lag_slots: gauge_vec(&["lane", "dataspace"]);
     /// Nexus: settlement backlog (XOR) per lane/dataspace pair.
-    pub nexus_lane_settlement_backlog_xor: GaugeVec,
+    pub nexus_lane_settlement_backlog_xor: float_gauge_vec(&["lane", "dataspace"]);
     /// Nexus scheduler: configured TEU capacity for the current slot per lane.
-    pub nexus_scheduler_lane_teu_capacity: GenericGaugeVec<AtomicU64>,
+    pub nexus_scheduler_lane_teu_capacity: gauge_vec(&["lane"]);
     /// Nexus scheduler: TEU committed in the current slot per lane.
-    pub nexus_scheduler_lane_teu_slot_committed: GenericGaugeVec<AtomicU64>,
+    pub nexus_scheduler_lane_teu_slot_committed: gauge_vec(&["lane"]);
     /// Nexus scheduler: active circuit-breaker trigger level (0 = normal) per lane.
-    pub nexus_scheduler_lane_trigger_level: GenericGaugeVec<AtomicU64>,
+    pub nexus_scheduler_lane_trigger_level: gauge_vec(&["lane"]);
     /// Nexus scheduler: starvation bound in slots per lane.
-    pub nexus_scheduler_starvation_bound_slots: GenericGaugeVec<AtomicU64>,
+    pub nexus_scheduler_starvation_bound_slots: gauge_vec(&["lane"]);
     /// Nexus scheduler: committed TEU bucket breakdown per lane (floor/headroom/etc.).
-    pub nexus_scheduler_lane_teu_slot_breakdown: GenericGaugeVec<AtomicU64>,
+    pub nexus_scheduler_lane_teu_slot_breakdown: gauge_vec(&["lane", "bucket"],);
     /// Nexus scheduler: cumulative TEU deferrals by reason per lane.
-    pub nexus_scheduler_lane_teu_deferral_total: IntCounterVec,
+    pub nexus_scheduler_lane_teu_deferral_total: int_counter_vec(&["lane", "reason"],);
     /// Nexus scheduler: structured headroom telemetry events per lane.
-    pub nexus_scheduler_lane_headroom_events_total: IntCounterVec,
+    pub nexus_scheduler_lane_headroom_events_total: int_counter_vec(&["lane"]);
     /// Nexus scheduler: cumulative must-serve truncations per lane.
-    pub nexus_scheduler_must_serve_truncations_total: IntCounterVec,
+    pub nexus_scheduler_must_serve_truncations_total: int_counter_vec(&["lane"]);
     /// Nexus scheduler: per-lane TEU snapshots exposed via `/status`.
-    pub nexus_scheduler_lane_teu_status: Arc<RwLock<BTreeMap<u32, NexusLaneTeuStatus>>>,
+    pub nexus_scheduler_lane_teu_status: raw(Arc<RwLock<BTreeMap<u32, NexusLaneTeuStatus>>>);
     /// Nexus scheduler: TEU backlog per dataspace (labeled by lane).
-    pub nexus_scheduler_dataspace_teu_backlog: GenericGaugeVec<AtomicU64>,
+    pub nexus_scheduler_dataspace_teu_backlog: gauge_vec(&["lane", "dataspace"],);
     /// Nexus scheduler: dataspace age (slots since service) labeled by lane.
-    pub nexus_scheduler_dataspace_age_slots: GenericGaugeVec<AtomicU64>,
+    pub nexus_scheduler_dataspace_age_slots: gauge_vec(&["lane", "dataspace"],);
     /// Nexus scheduler: dataspace SFQ virtual finish tag labeled by lane.
-    pub nexus_scheduler_dataspace_virtual_finish: GenericGaugeVec<AtomicU64>,
+    pub nexus_scheduler_dataspace_virtual_finish: gauge_vec(&["lane", "dataspace"],);
     /// Nexus scheduler: per-dataspace TEU snapshots exposed via `/status`.
-    pub nexus_scheduler_dataspace_teu_status:
-        Arc<RwLock<BTreeMap<(u32, u64), NexusDataspaceTeuStatus>>>,
+    pub nexus_scheduler_dataspace_teu_status: raw(Arc<RwLock<BTreeMap<(u32, u64), NexusDataspaceTeuStatus>>>);
     /// Nexus public-lane validator counts grouped by lifecycle status (pending, active, jailed, exiting, exited, slashed).
-    pub nexus_public_lane_validator_total: IntGaugeVec,
+    pub nexus_public_lane_validator_total: int_gauge_vec(&["lane", "status"]);
     /// Nexus public-lane validator activations grouped by lane.
-    pub nexus_public_lane_validator_activation_total: IntCounterVec,
+    pub nexus_public_lane_validator_activation_total: int_counter_vec(&["lane"]);
     /// Nexus public-lane validator registration rejects grouped by reason.
-    pub nexus_public_lane_validator_reject_total: IntCounterVec,
+    pub nexus_public_lane_validator_reject_total: int_counter_vec(&["reason"]);
     /// Nexus public-lane bonded stake per lane (Quantity rendered as float).
-    pub nexus_public_lane_stake_bonded: GaugeVec,
+    pub nexus_public_lane_stake_bonded: float_gauge_vec(&["lane"]);
     /// Nexus public-lane pending-unbond amount per lane.
-    pub nexus_public_lane_unbond_pending: GaugeVec,
+    pub nexus_public_lane_unbond_pending: float_gauge_vec(&["lane"]);
     /// Nexus public-lane cumulative rewards recorded per lane.
-    pub nexus_public_lane_reward_total: GaugeVec,
+    pub nexus_public_lane_reward_total: float_gauge_vec(&["lane"]);
     /// Nexus public-lane slash event counter per lane.
-    pub nexus_public_lane_slash_total: IntCounterVec,
+    pub nexus_public_lane_slash_total: int_counter_vec(&["lane"]);
     /// Number of scheduler layers in the latest validated block
-    pub pipeline_layer_count: GenericGauge<AtomicU64>,
+    pub pipeline_layer_count: gauge();
     /// Average parallelism utilization in percent (0..100) for the latest validated block
-    pub pipeline_scheduler_utilization_pct: GenericGauge<AtomicU64>,
+    pub pipeline_scheduler_utilization_pct: gauge();
     /// Layer-width histogram buckets labeled by `le` (layer count per bucket)
-    pub pipeline_layer_width_hist_bucket: GenericGaugeVec<AtomicU64>,
+    pub pipeline_layer_width_hist_bucket: gauge_vec(&["le"]);
     /// Number of per-transaction overlays built in the latest validated block
-    pub pipeline_overlay_count: GenericGauge<AtomicU64>,
+    pub pipeline_overlay_count: gauge();
     /// Total number of instructions across overlays in the latest validated block
-    pub pipeline_overlay_instructions: GenericGauge<AtomicU64>,
+    pub pipeline_overlay_instructions: gauge();
     /// Total Norito-encoded bytes across overlays in the latest validated block
-    pub pipeline_overlay_bytes: GenericGauge<AtomicU64>,
+    pub pipeline_overlay_bytes: gauge();
     /// Number of transactions classified into the quarantine lane in the latest validated block
-    pub pipeline_quarantine_classified: GenericGauge<AtomicU64>,
+    pub pipeline_quarantine_classified: gauge();
     /// Number of transactions rejected due to quarantine overflow in the latest validated block
-    pub pipeline_quarantine_overflow: GenericGauge<AtomicU64>,
+    pub pipeline_quarantine_overflow: gauge();
     /// Number of transactions executed in the quarantine lane in the latest validated block
-    pub pipeline_quarantine_executed: GenericGauge<AtomicU64>,
+    pub pipeline_quarantine_executed: gauge();
     /// Detached pipeline: number of txs prepared for detached execution in latest validated block
-    pub pipeline_detached_prepared: GenericGauge<AtomicU64>,
+    pub pipeline_detached_prepared: gauge();
     /// Detached pipeline: number of txs whose detached delta merged successfully
-    pub pipeline_detached_merged: GenericGauge<AtomicU64>,
+    pub pipeline_detached_merged: gauge();
     /// Detached pipeline: number of txs that fell back to direct apply
-    pub pipeline_detached_fallback: GenericGauge<AtomicU64>,
+    pub pipeline_detached_fallback: gauge();
     /// Detached pipeline: fallback count by reason for the latest validated block
-    pub pipeline_detached_fallback_reason: GenericGaugeVec<AtomicU64>,
+    pub pipeline_detached_fallback_reason: gauge_vec(&["reason"]);
     /// BLS signature micro-batches verified via aggregate (same-message) in latest block
-    pub pipeline_sig_bls_agg_same: GenericGauge<AtomicU64>,
+    pub pipeline_sig_bls_agg_same: gauge();
     /// BLS signature micro-batches verified via aggregate (multi-message) in latest block
-    pub pipeline_sig_bls_agg_multi: GenericGauge<AtomicU64>,
+    pub pipeline_sig_bls_agg_multi: gauge();
     /// BLS signature micro-batches verified via deterministic per-signature path in latest block
-    pub pipeline_sig_bls_deterministic: GenericGauge<AtomicU64>,
+    pub pipeline_sig_bls_deterministic: gauge();
     /// Cumulative same-message BLS aggregate verification attempts labeled by lane and result.
-    pub pipeline_sig_bls_agg_same_total: IntCounterVec,
+    pub pipeline_sig_bls_agg_same_total: int_counter_vec(&["lane", "result"]);
     /// Cumulative multi-message BLS aggregate verification attempts labeled by lane and result.
-    pub pipeline_sig_bls_agg_multi_total: IntCounterVec,
+    pub pipeline_sig_bls_agg_multi_total: int_counter_vec(&["lane", "result"]);
     /// Pipeline stage durations (ms) labeled by stage name
-    pub pipeline_stage_ms: HistogramVec,
+    pub pipeline_stage_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid"),
+                    &["lane", "stage"],
+    );
     /// Total gas used by the latest validated block
-    pub block_gas_used: GenericGauge<AtomicU64>,
+    pub block_gas_used: gauge();
     /// Confidential gas charged to the latest transaction.
-    pub confidential_gas_tx_used: GenericGauge<AtomicU64>,
+    pub confidential_gas_tx_used: gauge();
     /// Confidential gas charged in the current block.
-    pub confidential_gas_block_used: GenericGauge<AtomicU64>,
+    pub confidential_gas_block_used: gauge();
     /// Monotonic counter of confidential gas units consumed.
-    pub confidential_gas_total: IntCounter,
+    pub confidential_gas_total: int_counter();
     /// Total fee units charged in the latest validated block
-    pub block_fee_total_units: GenericGauge<AtomicU64>,
+    pub block_fee_total_units: gauge();
     /// Scale associated with `block_fee_total_units`
-    pub block_fee_total_scale: GenericGauge<AtomicU64>,
+    pub block_fee_total_scale: gauge();
     /// Merge ledger: total entries appended (cumulative)
-    pub merge_ledger_entries_total: IntCounter,
+    pub merge_ledger_entries_total: int_counter();
     /// Merge ledger: latest committed epoch id
-    pub merge_ledger_latest_epoch: GenericGauge<AtomicU64>,
+    pub merge_ledger_latest_epoch: gauge();
     /// Merge ledger: latest global state root hex snapshot
-    pub merge_ledger_latest_root_hex: Arc<RwLock<Option<String>>>,
+    pub merge_ledger_latest_root_hex: raw(Arc<RwLock<Option<String>>>);
     /// Torii: filter expression depth by endpoint
-    pub torii_filter_depth: HistogramVec,
+    pub torii_filter_depth: histogram_vec_with_buckets(
+        vec![1.0, 2.0, 3.0, 5.0, 8.0, 13.0],
+                    &["endpoint"],
+    );
     /// Torii: match count (items) by endpoint
-    pub torii_filter_match_count: HistogramVec,
+    pub torii_filter_match_count: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid"),
+                    &["endpoint"],
+    );
     /// Torii: scan latency (milliseconds) by endpoint
-    pub torii_scan_ms: HistogramVec,
+    pub torii_scan_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid"),
+                    &["endpoint"],
+    );
     /// Torii: stream row count (number of serialized items) by endpoint
-    pub torii_stream_rows: HistogramVec,
+    pub torii_stream_rows: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(1.0, 2.0, 16).expect("inputs are valid"),
+                    &["endpoint"],
+    );
     /// Torii: transaction admission latency (seconds) by lane and endpoint
-    pub torii_lane_admission_latency_seconds: HistogramVec,
+    pub torii_lane_admission_latency_seconds: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.001, 2.0, 16).expect("inputs are valid"),
+                    &["lane_id", "endpoint"],
+    );
     /// Torii: route-stage latency (seconds) by route kind, stage, and outcome
-    pub torii_route_stage_latency_seconds: HistogramVec,
+    pub torii_route_stage_latency_seconds: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.000_001, 2.0, 20).expect("inputs are valid"),
+                    &["route_kind", "stage", "outcome"],
+    );
     /// Torii: attachment rejects grouped by reason.
-    pub torii_attachment_reject_total: IntCounterVec,
+    pub torii_attachment_reject_total: int_counter_vec(&["reason"]);
     /// Torii: attachment sanitization latency (milliseconds).
-    pub torii_attachment_sanitize_ms: HistogramVec,
+    pub torii_attachment_sanitize_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid"),
+                    &[],
+    );
     /// Torii: background prover attachment size distribution by status/content type
-    pub torii_zk_prover_attachment_bytes: HistogramVec,
+    pub torii_zk_prover_attachment_bytes: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(256.0, 2.0, 12).expect("inputs are valid"),
+                    &["status", "content_type"],
+    );
     /// Torii: background prover processing latency by status
-    pub torii_zk_prover_latency_ms: HistogramVec,
+    pub torii_zk_prover_latency_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(5.0, 2.0, 12).expect("inputs are valid"),
+                    &["status"],
+    );
     /// Torii: background prover garbage-collection counter
-    pub torii_zk_prover_gc_total: IntCounter,
+    pub torii_zk_prover_gc_total: int_counter();
     /// Torii: background prover in-flight attachment gauge
-    pub torii_zk_prover_inflight: GenericGauge<AtomicU64>,
+    pub torii_zk_prover_inflight: gauge();
     /// Torii: background prover pending attachment gauge
-    pub torii_zk_prover_pending: GenericGauge<AtomicU64>,
+    pub torii_zk_prover_pending: gauge();
     /// Torii: IVM prove helper in-flight job gauge
-    pub torii_zk_ivm_prove_inflight: GenericGauge<AtomicU64>,
+    pub torii_zk_ivm_prove_inflight: gauge();
     /// Torii: IVM prove helper queued job gauge
-    pub torii_zk_ivm_prove_queued: GenericGauge<AtomicU64>,
+    pub torii_zk_ivm_prove_queued: gauge();
     /// Torii: background prover last-scan processed bytes gauge
-    pub torii_zk_prover_last_scan_bytes: GenericGauge<AtomicU64>,
+    pub torii_zk_prover_last_scan_bytes: gauge();
     /// Torii: background prover last-scan wall-clock duration gauge
-    pub torii_zk_prover_last_scan_ms: GenericGauge<AtomicU64>,
+    pub torii_zk_prover_last_scan_ms: gauge();
     /// Torii: background prover budget exhaustion counter (labeled by reason)
-    pub torii_zk_prover_budget_exhausted_total: IntCounterVec,
+    pub torii_zk_prover_budget_exhausted_total: int_counter_vec(&["reason"]);
     /// Torii: snapshot-lane query requests total, labeled by mode (ephemeral|stored)
-    pub torii_query_snapshot_requests: IntCounterVec,
+    pub torii_query_snapshot_requests: int_counter_vec(&["mode"]);
     /// Torii: snapshot-lane first-batch latency (ms), labeled by mode
-    pub torii_query_snapshot_first_batch_ms: HistogramVec,
+    pub torii_query_snapshot_first_batch_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid"),
+                    &["mode"],
+    );
     /// Torii: snapshot-lane gas consumed units total, labeled by mode
-    pub torii_query_snapshot_gas_consumed_units_total: IntCounterVec,
+    pub torii_query_snapshot_gas_consumed_units_total: int_counter_vec(&["mode"]);
     /// Snapshot query lane: first-batch latency (ms) by cursor mode
-    pub query_snapshot_lane_first_batch_ms: HistogramVec,
+    pub query_snapshot_lane_first_batch_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid"),
+                    &["mode"],
+    );
     /// Snapshot query lane: first-batch item counts by cursor mode
-    pub query_snapshot_lane_first_batch_items: HistogramVec,
+    pub query_snapshot_lane_first_batch_items: histogram_vec_with_buckets(
+        vec![
+                        1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
+                    ],
+                    &["mode"],
+    );
     /// Snapshot query lane: remaining items gauge by cursor mode
-    pub query_snapshot_lane_remaining_items: GenericGaugeVec<AtomicU64>,
+    pub query_snapshot_lane_remaining_items: gauge_vec(&["mode"]);
     /// Snapshot query lane: cursors emitted total by cursor mode
-    pub query_snapshot_lane_cursors_total: IntCounterVec,
+    pub query_snapshot_lane_cursors_total: int_counter_vec(&["mode"]);
     // Torii Connect (Iroha Connect) metrics
     /// Torii Connect: total WS sessions (gauge)
-    pub torii_connect_sessions_total: GenericGauge<AtomicU64>,
+    pub torii_connect_sessions_total: gauge();
     /// Torii Connect: active session objects (gauge)
-    pub torii_connect_sessions_active: GenericGauge<AtomicU64>,
+    pub torii_connect_sessions_active: gauge();
     /// Torii pre-auth: rejected connections before authentication, labeled by reason
-    pub torii_pre_auth_reject_total: IntCounterVec,
+    pub torii_pre_auth_reject_total: int_counter_vec(&["reason"]);
     /// Torii operator auth events (action, result, reason).
-    pub torii_operator_auth_total: IntCounterVec,
+    pub torii_operator_auth_total: int_counter_vec(&["action", "result", "reason"]);
     /// Torii operator auth lockouts (action, reason).
-    pub torii_operator_auth_lockout_total: IntCounterVec,
+    pub torii_operator_auth_lockout_total: int_counter_vec(&["action", "reason"]);
     /// Torii admission rejects due to exceeding signature-count limits.
-    pub torii_signature_limit_total: IntCounter,
+    pub torii_signature_limit_total: int_counter();
     /// Torii admission rejects due to signature-count limits, labeled by authority type.
-    pub torii_signature_limit_by_authority_total: IntCounterVec,
+    pub torii_signature_limit_by_authority_total: int_counter_vec(&["authority"]);
     /// Last observed signature count when enforcing Torii signature limits.
-    pub torii_signature_limit_last_count: GenericGauge<AtomicU64>,
+    pub torii_signature_limit_last_count: gauge();
     /// Configured signature cap recorded during the last signature-limit enforcement.
-    pub torii_signature_limit_max: GenericGauge<AtomicU64>,
+    pub torii_signature_limit_max: gauge();
     /// Torii admission rejects when NTS is unhealthy for time-sensitive transactions.
-    pub torii_nts_unhealthy_reject_total: IntCounter,
+    pub torii_nts_unhealthy_reject_total: int_counter();
     /// Torii admission rejects for direct multisig signing attempts.
-    pub torii_multisig_direct_sign_reject_total: IntCounter,
+    pub torii_multisig_direct_sign_reject_total: int_counter();
     /// Torii SoraFS provider admission counters (result, reason).
-    pub torii_sorafs_admission_total: IntCounterVec,
+    pub torii_sorafs_admission_total: int_counter_vec(&["result", "reason"]);
     /// Torii SoraFS capacity telemetry rejections (provider, reason).
-    pub torii_sorafs_capacity_telemetry_rejections_total: IntCounterVec,
+    pub torii_sorafs_capacity_telemetry_rejections_total: int_counter_vec(&["provider", "reason"],);
     /// Torii SoraFS declared capacity gauge (GiB) per provider.
-    pub torii_sorafs_capacity_declared_gib: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_capacity_declared_gib: gauge_vec(&["provider"]);
     /// Torii SoraFS effective capacity gauge (GiB) per provider.
-    pub torii_sorafs_capacity_effective_gib: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_capacity_effective_gib: gauge_vec(&["provider"]);
     /// Torii SoraFS utilised capacity gauge (GiB) per provider.
-    pub torii_sorafs_capacity_utilised_gib: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_capacity_utilised_gib: gauge_vec(&["provider"]);
     /// Torii SoraFS outstanding capacity gauge (GiB) per provider.
-    pub torii_sorafs_capacity_outstanding_gib: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_capacity_outstanding_gib: gauge_vec(&["provider"]);
     /// Torii SoraFS accumulated GiB·hours per provider.
-    pub torii_sorafs_capacity_gibhours_total: GaugeVec,
+    pub torii_sorafs_capacity_gibhours_total: float_gauge_vec(&["provider"]);
     /// Torii SoraFS egress byte counters per provider and source.
-    pub torii_sorafs_egress_bytes: GaugeVec,
+    pub torii_sorafs_egress_bytes: float_gauge_vec(&["provider", "source"]);
     /// Torii SoraFS egress counter drift ratio per provider and source.
-    pub torii_sorafs_egress_drift_ratio: GaugeVec,
+    pub torii_sorafs_egress_drift_ratio: float_gauge_vec(&["provider", "source"]);
     /// SoraFS Governance DAG publication attempts grouped by payload kind, result, and sink.
-    pub sorafs_governance_dag_publish_total: IntCounterVec,
+    pub sorafs_governance_dag_publish_total: int_counter_vec(&["payload_kind", "result", "sink"],);
     /// SoraFS Governance DAG published bytes grouped by payload kind and sink.
-    pub sorafs_governance_dag_published_bytes_total: IntCounterVec,
+    pub sorafs_governance_dag_published_bytes_total: int_counter_vec(&["payload_kind", "sink"],);
     /// SoraFS Governance DAG last successful publish timestamp grouped by payload kind and sink.
-    pub sorafs_governance_dag_last_publish_timestamp_seconds: GenericGaugeVec<AtomicU64>,
+    pub sorafs_governance_dag_last_publish_timestamp_seconds: gauge_vec(&["payload_kind", "sink"],);
     /// SoraFS Governance DAG publish backlog grouped by sink.
-    pub sorafs_governance_dag_backlog: GenericGaugeVec<AtomicU64>,
+    pub sorafs_governance_dag_backlog: gauge_vec(&["sink"]);
     /// SoraFS Governance DAG head age in seconds grouped by sink.
-    pub sorafs_governance_dag_head_age_seconds: GenericGaugeVec<AtomicU64>,
+    pub sorafs_governance_dag_head_age_seconds: gauge_vec(&["sink"]);
     /// Committed SoraFS orderbook transitions grouped by a closed event-kind vocabulary.
-    pub torii_sorafs_orderbook_finalized_events_total: IntCounterVec,
+    pub torii_sorafs_orderbook_finalized_events_total: int_counter_vec(&["event"]);
     /// Authoritative open order depth in GiB grouped by the closed tier/side vocabulary.
-    pub torii_sorafs_orderbook_open_depth_gib: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_orderbook_open_depth_gib: gauge_vec(&["tier", "side"]);
     /// Lag between the latest book mutation and its exhaustive bounded matcher scan.
-    pub torii_sorafs_orderbook_matcher_lag_seconds: GenericGauge<AtomicU64>,
+    pub torii_sorafs_orderbook_matcher_lag_seconds: gauge();
     /// Authoritative count of open settlement channels.
-    pub torii_sorafs_orderbook_settlement_backlog: GenericGauge<AtomicU64>,
+    pub torii_sorafs_orderbook_settlement_backlog: gauge();
     /// Age of the oldest authoritative open settlement channel.
-    pub torii_sorafs_orderbook_oldest_settlement_age_seconds: GenericGauge<AtomicU64>,
+    pub torii_sorafs_orderbook_oldest_settlement_age_seconds: gauge();
     /// Time until the earliest authoritative open settlement channel expires.
-    pub torii_sorafs_orderbook_escrow_runway_seconds: GenericGauge<AtomicU64>,
+    pub torii_sorafs_orderbook_escrow_runway_seconds: gauge();
     /// Whether a complete immutable finalized orderbook projection was published.
-    pub torii_sorafs_orderbook_finalized_projection_ready: GenericGauge<AtomicU64>,
+    pub torii_sorafs_orderbook_finalized_projection_ready: gauge();
     /// Finalized block height of the last complete orderbook projection.
-    pub torii_sorafs_orderbook_finalized_projection_height: GenericGauge<AtomicU64>,
+    pub torii_sorafs_orderbook_finalized_projection_height: gauge();
     /// Finalized block timestamp of the last complete orderbook projection.
-    pub torii_sorafs_orderbook_finalized_projection_timestamp_seconds: GenericGauge<AtomicU64>,
+    pub torii_sorafs_orderbook_finalized_projection_timestamp_seconds: gauge();
     /// Fail-closed finalized orderbook projection failures by a closed reason vocabulary.
-    pub torii_sorafs_orderbook_finalized_projection_failures_total: IntCounterVec,
+    pub torii_sorafs_orderbook_finalized_projection_failures_total: int_counter_vec(&["reason"],);
     /// Authoritative orderbook revision in the last complete projection.
-    pub torii_sorafs_orderbook_book_revision: GenericGauge<AtomicU64>,
+    pub torii_sorafs_orderbook_book_revision: gauge();
     /// Latest exhaustively scanned authoritative orderbook revision.
-    pub torii_sorafs_orderbook_matcher_scan_book_revision: GenericGauge<AtomicU64>,
+    pub torii_sorafs_orderbook_matcher_scan_book_revision: gauge();
     /// Orderbook API requests grouped by a closed route/outcome vocabulary.
-    pub torii_sorafs_orderbook_api_requests_total: IntCounterVec,
+    pub torii_sorafs_orderbook_api_requests_total: int_counter_vec(&["route", "outcome"],);
     /// Gateway compliance control requests grouped by closed operation/outcome vocabularies.
-    pub torii_sorafs_gateway_compliance_requests_total: IntCounterVec,
+    pub torii_sorafs_gateway_compliance_requests_total: int_counter_vec(&["operation", "outcome"],);
     /// Gateway compliance serving decisions grouped only by bounded policy dimensions.
-    pub torii_sorafs_gateway_compliance_serving_decisions_total: IntCounterVec,
+    pub torii_sorafs_gateway_compliance_serving_decisions_total: int_counter_vec(
+        &["subject_kind", "disposition", "source"],
+    );
     /// Gateway compliance failures grouped by closed surface/class vocabularies.
-    pub torii_sorafs_gateway_compliance_failures_total: IntCounterVec,
+    pub torii_sorafs_gateway_compliance_failures_total: int_counter_vec(&["surface", "class"],);
     /// Sequence of the catalog currently used by the serving path.
-    pub torii_sorafs_gateway_compliance_serving_catalog_sequence: GenericGauge<AtomicU64>,
+    pub torii_sorafs_gateway_compliance_serving_catalog_sequence: gauge();
     /// Expiry Unix second of the catalog currently used by the serving path.
-    pub torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds:
-        GenericGauge<AtomicU64>,
+    pub torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds: gauge();
     /// Whether the gateway has a fresh, verified catalog available to the serving path.
-    pub torii_sorafs_gateway_compliance_ready: GenericGauge<AtomicU64>,
+    pub torii_sorafs_gateway_compliance_ready: gauge();
     /// Torii SoraFS hedging XOR/USD reference price in micro-USD by cluster.
-    pub torii_sorafs_hedging_xor_usd_reference_price_micro_usd: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_hedging_xor_usd_reference_price_micro_usd: gauge_vec(&["cluster"],);
     /// Torii SoraFS hedging feed lag in seconds by cluster and source.
-    pub torii_sorafs_hedging_feed_lag_seconds: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_hedging_feed_lag_seconds: gauge_vec(&["cluster", "source"],);
     /// Torii SoraFS hedging feed divergence in basis points by cluster and source.
-    pub torii_sorafs_hedging_feed_divergence_bps: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_hedging_feed_divergence_bps: gauge_vec(&["cluster", "source"],);
     /// Torii SoraFS hedging exposure drift in basis points by cluster and asset.
-    pub torii_sorafs_hedging_exposure_drift_bps: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_hedging_exposure_drift_bps: gauge_vec(&["cluster", "asset"],);
     /// Torii SoraFS billing statement generation counters by cluster and account type.
-    pub torii_sorafs_billing_statement_generation_total: IntCounterVec,
+    pub torii_sorafs_billing_statement_generation_total: int_counter_vec(
+        &["cluster", "account_type"],
+    );
     /// Torii SoraFS billing statement failure counters by cluster and account type.
-    pub torii_sorafs_billing_statement_failure_total: IntCounterVec,
+    pub torii_sorafs_billing_statement_failure_total: int_counter_vec(
+        &["cluster", "account_type"],
+    );
     /// Torii SoraFS billing statement acknowledgement backlog by cluster.
-    pub torii_sorafs_billing_statement_ack_backlog: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_billing_statement_ack_backlog: gauge_vec(&["cluster"]);
     /// Torii SoraFS billing escrow runway in seconds by cluster and account type.
-    pub torii_sorafs_billing_escrow_runway_seconds: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_billing_escrow_runway_seconds: gauge_vec(&["cluster", "account_type"],);
     /// Torii SoraFS reserve providers grouped by lifecycle stage.
-    pub torii_sorafs_reserve_lifecycle_stage_providers: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_reserve_lifecycle_stage_providers: gauge_vec(&["stage"]);
     /// Torii SoraFS outstanding reserve credit principal in micro-XOR by lifecycle stage.
-    pub torii_sorafs_reserve_credit_draw_micro_xor: GaugeVec,
+    pub torii_sorafs_reserve_credit_draw_micro_xor: float_gauge_vec(&["stage"]);
     /// Torii SoraFS reserve credit shortfall in micro-XOR by lifecycle stage.
-    pub torii_sorafs_reserve_credit_shortfall_micro_xor: GaugeVec,
+    pub torii_sorafs_reserve_credit_shortfall_micro_xor: float_gauge_vec(&["stage"],);
     /// Torii SoraFS reserve accrued interest in micro-XOR by lifecycle stage.
-    pub torii_sorafs_reserve_accrued_interest_micro_xor: GaugeVec,
+    pub torii_sorafs_reserve_accrued_interest_micro_xor: float_gauge_vec(&["stage"],);
     /// Torii SoraFS providers currently in default.
-    pub torii_sorafs_reserve_defaulted_providers: GenericGauge<AtomicU64>,
+    pub torii_sorafs_reserve_defaulted_providers: gauge();
     /// Torii SoraFS open reserve appeals awaiting decision.
-    pub torii_sorafs_reserve_appeal_backlog: GenericGauge<AtomicU64>,
+    pub torii_sorafs_reserve_appeal_backlog: gauge();
     /// Torii SoraFS reserve movements grouped by custody status.
-    pub torii_sorafs_reserve_custody_movements: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_reserve_custody_movements: gauge_vec(&["status"]);
     /// Torii SoraFS reserve movements reconciled with terminal chain custody evidence.
-    pub torii_sorafs_reserve_chain_reconciled_movements: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_reserve_chain_reconciled_movements: gauge_vec(&["status"],);
     /// Whether the reserve telemetry projection has caught up and reconciled at one finalized view.
-    pub torii_sorafs_reserve_finalized_projection_ready: GenericGauge<AtomicU64>,
+    pub torii_sorafs_reserve_finalized_projection_ready: gauge();
     /// Finalized block height represented by the latest complete reserve telemetry projection.
-    pub torii_sorafs_reserve_finalized_projection_height: GenericGauge<AtomicU64>,
+    pub torii_sorafs_reserve_finalized_projection_height: gauge();
     /// Failed reserve finalized-projection refresh attempts.
-    pub torii_sorafs_reserve_finalized_projection_failure_total: IntCounter,
+    pub torii_sorafs_reserve_finalized_projection_failure_total: int_counter();
     /// Torii SoraFS reserve service requests grouped by route and result.
-    pub torii_sorafs_reserve_service_requests_total: IntCounterVec,
+    pub torii_sorafs_reserve_service_requests_total: int_counter_vec(&["route", "result"],);
     /// Torii SoraFS reserve service rate-limit events grouped by route and reason.
-    pub torii_sorafs_reserve_service_rate_limit_total: IntCounterVec,
+    pub torii_sorafs_reserve_service_rate_limit_total: int_counter_vec(&["route", "reason"],);
     /// SoraFS reputation ingest lag observed when a snapshot is published.
-    pub sorafs_reputation_ingest_lag_seconds: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_ingest_lag_seconds: gauge();
     /// SoraFS reputation snapshot age observed when a snapshot is published.
-    pub sorafs_reputation_snapshot_age_seconds: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_snapshot_age_seconds: gauge();
     /// SoraFS reputation snapshot generation time as a Unix timestamp.
-    pub sorafs_reputation_snapshot_generated_at_unix: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_snapshot_generated_at_unix: gauge();
     /// SoraFS reputation provider count in the latest accepted snapshot.
-    pub sorafs_reputation_provider_count: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_provider_count: gauge();
     /// SoraFS reputation providers currently below the low-score threshold.
-    pub sorafs_reputation_low_score_providers: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_low_score_providers: gauge();
     /// SoraFS reputation provider scores, bounded to the top-N providers.
-    pub sorafs_reputation_score: GaugeVec,
+    pub sorafs_reputation_score: float_gauge_vec(&["provider_id"]);
     /// SoraFS reputation threshold crossings by level.
-    pub sorafs_reputation_threshold_crossings_total: IntCounterVec,
+    pub sorafs_reputation_threshold_crossings_total: int_counter_vec(&["level"]);
     /// Whether the committed finalized-ledger reputation runtime has completed a successful poll.
-    pub sorafs_reputation_runtime_live: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_runtime_live: gauge();
     /// Whether every required committed reputation runtime path is ready.
-    pub sorafs_reputation_runtime_ready: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_runtime_ready: gauge();
     /// Whether all identity-pinned external reputation adapters are healthy.
-    pub sorafs_reputation_runtime_dependencies_ready: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_runtime_dependencies_ready: gauge();
     /// Whether the still-required native journal transaction submitter is healthy.
-    pub sorafs_reputation_journal_transaction_submitter_ready: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_journal_transaction_submitter_ready: gauge();
     /// Latest finalized block height represented by the committed projector.
-    pub sorafs_reputation_runtime_finalized_height: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_runtime_finalized_height: gauge();
     /// Consecutive failed exact-anchor reconciliation attempts.
-    pub sorafs_reputation_runtime_consecutive_failures: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_runtime_consecutive_failures: gauge();
     /// Whether the exact signed result is durably acknowledged.
-    pub sorafs_reputation_runtime_material_acknowledged: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_runtime_material_acknowledged: gauge();
     /// Provider accumulators retained by the committed projector.
-    pub sorafs_reputation_runtime_provider_count: GenericGauge<AtomicU64>,
+    pub sorafs_reputation_runtime_provider_count: gauge();
     /// Supervised committed-runtime reconciliation ticks.
-    pub sorafs_reputation_runtime_ticks_total: IntCounterVec,
+    pub sorafs_reputation_runtime_ticks_total: int_counter_vec(&["result"]);
     /// Whether the committed hedging/billing runtime completed a successful tick.
-    pub sorafs_hedging_billing_runtime_live: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_runtime_live: gauge();
     /// Whether the committed hedging/billing runtime is release-ready.
-    pub sorafs_hedging_billing_runtime_ready: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_runtime_ready: gauge();
     /// Whether all identity-pinned hedging/billing adapters are healthy.
-    pub sorafs_hedging_billing_runtime_dependencies_ready: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_runtime_dependencies_ready: gauge();
     /// Whether automatic hedge execution is enabled (always zero in V1).
-    pub sorafs_hedging_billing_automatic_execution_enabled: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_automatic_execution_enabled: gauge();
     /// Whether the most recent successful hedging/billing runtime tick is fresh.
-    pub sorafs_hedging_billing_last_tick_fresh: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_last_tick_fresh: gauge();
     /// Whether the billing projection is anchored to an admissibly recent finalized head.
-    pub sorafs_hedging_billing_finalized_projection_ready: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_finalized_projection_ready: gauge();
     /// Latest finalized height projected into billing state.
-    pub sorafs_hedging_billing_finalized_height: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_finalized_height: gauge();
     /// Latest finalized ledger head observed by the hedging/billing runtime.
-    pub sorafs_hedging_billing_finalized_head_height: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_finalized_head_height: gauge();
     /// Finalized blocks between the observed ledger head and billing projection.
-    pub sorafs_hedging_billing_finalized_lag_blocks: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_finalized_lag_blocks: gauge();
     /// First finalized billing journal sequence not yet projected.
-    pub sorafs_hedging_billing_next_event_sequence: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_next_event_sequence: gauge();
     /// Statements waiting for external software signing.
-    pub sorafs_hedging_billing_ready_for_signing: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_ready_for_signing: gauge();
     /// Signed statements waiting for immutable publication.
-    pub sorafs_hedging_billing_ready_for_publication: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_ready_for_publication: gauge();
     /// Ambiguous statement publications awaiting authoritative lookup.
-    pub sorafs_hedging_billing_publication_ambiguous: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_publication_ambiguous: gauge();
     /// Published statements waiting for acknowledgement.
-    pub sorafs_hedging_billing_published: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_published: gauge();
     /// Durably acknowledged statements.
-    pub sorafs_hedging_billing_acknowledged: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_acknowledged: gauge();
     /// Terminal billing statement delivery dead letters.
-    pub sorafs_hedging_billing_dead_letter: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_dead_letter: gauge();
     /// Generated, never-automatically-executed hedge intents.
-    pub sorafs_hedging_billing_hedge_intents: GenericGauge<AtomicU64>,
+    pub sorafs_hedging_billing_hedge_intents: gauge();
     /// Supervised hedging/billing reconciliation ticks.
-    pub sorafs_hedging_billing_runtime_ticks_total: IntCounterVec,
+    pub sorafs_hedging_billing_runtime_ticks_total: int_counter_vec(&["result"]);
     /// SoraFS reputation provider labels currently exported by the score gauge.
-    pub sorafs_reputation_score_tracked_providers: Arc<RwLock<BTreeSet<String>>>,
+    pub sorafs_reputation_score_tracked_providers: raw(Arc<RwLock<BTreeSet<String>>>);
     /// SoraFS reputation low-score state from the previous accepted snapshot.
-    pub sorafs_reputation_low_score_state: Arc<RwLock<BTreeMap<String, bool>>>,
+    pub sorafs_reputation_low_score_state: raw(Arc<RwLock<BTreeMap<String, bool>>>);
     /// Torii SoraFS fee projection (nano units) per provider.
-    pub torii_sorafs_fee_projection_nanos: GaugeVec,
+    pub torii_sorafs_fee_projection_nanos: float_gauge_vec(&["provider"]);
     /// Torii SoraFS dispute submissions labelled by result.
-    pub torii_sorafs_disputes_total: IntCounterVec,
+    pub torii_sorafs_disputes_total: int_counter_vec(&["result"]);
     /// Torii SoraFS replication orders issued per provider.
-    pub torii_sorafs_orders_issued_total: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_orders_issued_total: gauge_vec(&["provider"]);
     /// Torii SoraFS replication orders completed per provider.
-    pub torii_sorafs_orders_completed_total: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_orders_completed_total: gauge_vec(&["provider"]);
     /// Torii SoraFS replication orders failed per provider.
-    pub torii_sorafs_orders_failed_total: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_orders_failed_total: gauge_vec(&["provider"]);
     /// Torii SoraFS outstanding order count per provider.
-    pub torii_sorafs_outstanding_orders: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_outstanding_orders: gauge_vec(&["provider"]);
     /// Torii SoraFS uptime success (basis points) per provider.
-    pub torii_sorafs_uptime_bps: IntGaugeVec,
+    pub torii_sorafs_uptime_bps: int_gauge_vec(&["provider"]);
     /// Torii SoraFS PoR success (basis points) per provider.
-    pub torii_sorafs_por_bps: IntGaugeVec,
+    pub torii_sorafs_por_bps: int_gauge_vec(&["provider"]);
     /// Torii SoraFS PoR scheduler challenges grouped by result.
-    pub torii_sorafs_por_challenges_total: IntCounterVec,
+    pub torii_sorafs_por_challenges_total: int_counter_vec(&["result"]);
     /// Torii SoraFS PoR forced challenges emitted by the scheduler.
-    pub torii_sorafs_por_forced_challenges_total: IntCounter,
+    pub torii_sorafs_por_forced_challenges_total: int_counter();
     /// Torii SoraFS PoR duplicate samples observed while scheduling challenges.
-    pub torii_sorafs_por_sampling_duplicates_total: IntCounter,
+    pub torii_sorafs_por_sampling_duplicates_total: int_counter();
     /// Torii SoraFS PoR ingestion backlog per manifest/provider pair.
-    pub torii_sorafs_por_ingest_backlog: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_por_ingest_backlog: gauge_vec(&["manifest", "provider"]);
     /// Torii SoraFS PoR ingestion failures per manifest/provider pair.
-    pub torii_sorafs_por_ingest_failures_total: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_por_ingest_failures_total: gauge_vec(&["manifest", "provider"],);
     /// Torii SoraFS repair task transitions by status.
-    pub torii_sorafs_repair_tasks_total: IntCounterVec,
+    pub torii_sorafs_repair_tasks_total: int_counter_vec(&["status"]);
     /// Torii SoraFS repair latency histogram (minutes) grouped by outcome.
-    pub torii_sorafs_repair_latency_minutes: HistogramVec,
+    pub torii_sorafs_repair_latency_minutes: histogram_vec_with_buckets(
+        vec![1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 240.0, 480.0],
+                    &["outcome"],
+    );
     /// Torii SoraFS repair queue depth per provider.
-    pub torii_sorafs_repair_queue_depth: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_repair_queue_depth: gauge_vec(&["provider"]);
     /// Torii SoraFS oldest queued repair age (seconds).
-    pub torii_sorafs_repair_backlog_oldest_age_seconds: GenericGauge<AtomicU64>,
+    pub torii_sorafs_repair_backlog_oldest_age_seconds: gauge();
     /// Torii SoraFS repair lease expirations grouped by outcome.
-    pub torii_sorafs_repair_lease_expired_total: IntCounterVec,
+    pub torii_sorafs_repair_lease_expired_total: int_counter_vec(&["outcome"]);
     /// Torii SoraFS slash proposals submitted grouped by outcome.
-    pub torii_sorafs_slash_proposals_total: IntCounterVec,
+    pub torii_sorafs_slash_proposals_total: int_counter_vec(&["outcome"]);
     /// Torii SoraFS reconciliation runs grouped by result.
-    pub torii_sorafs_reconciliation_runs_total: IntCounterVec,
+    pub torii_sorafs_reconciliation_runs_total: int_counter_vec(&["result"]);
     /// Torii SoraFS reconciliation divergence count from the latest snapshot.
-    pub torii_sorafs_reconciliation_divergence_count: GenericGauge<AtomicU64>,
+    pub torii_sorafs_reconciliation_divergence_count: gauge();
     /// Torii SoraFS GC runs grouped by result.
-    pub torii_sorafs_gc_runs_total: IntCounterVec,
+    pub torii_sorafs_gc_runs_total: int_counter_vec(&["result"]);
     /// Torii SoraFS GC evictions grouped by reason.
-    pub torii_sorafs_gc_evictions_total: IntCounterVec,
+    pub torii_sorafs_gc_evictions_total: int_counter_vec(&["reason"]);
     /// Torii SoraFS GC bytes freed grouped by reason.
-    pub torii_sorafs_gc_bytes_freed_total: IntCounterVec,
+    pub torii_sorafs_gc_bytes_freed_total: int_counter_vec(&["reason"]);
     /// Torii SoraFS GC blocked evictions grouped by reason.
-    pub torii_sorafs_gc_blocked_total: IntCounterVec,
+    pub torii_sorafs_gc_blocked_total: int_counter_vec(&["reason"]);
     /// Torii SoraFS expired manifests observed by GC sweeps.
-    pub torii_sorafs_gc_expired_manifests: GenericGauge<AtomicU64>,
+    pub torii_sorafs_gc_expired_manifests: gauge();
     /// Torii SoraFS age of the oldest expired manifest (seconds).
-    pub torii_sorafs_gc_oldest_expired_age_seconds: GenericGauge<AtomicU64>,
+    pub torii_sorafs_gc_oldest_expired_age_seconds: gauge();
     /// Torii SoraFS storage bytes used per provider.
-    pub torii_sorafs_storage_bytes_used: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_storage_bytes_used: gauge_vec(&["provider"]);
     /// Torii SoraFS storage capacity bytes per provider.
-    pub torii_sorafs_storage_bytes_capacity: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_storage_bytes_capacity: gauge_vec(&["provider"]);
     /// Finalized-ledger SoraFS provider ingests in flight per provider.
-    pub sorafs_provider_ingest_inflight: GenericGaugeVec<AtomicU64>,
+    pub sorafs_provider_ingest_inflight: gauge_vec(&["provider"]);
     /// Torii SoraFS fetch workers in flight per provider.
-    pub torii_sorafs_storage_fetch_inflight: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_storage_fetch_inflight: gauge_vec(&["provider"]);
     /// Torii SoraFS fetch throughput (bytes/sec) per provider.
-    pub torii_sorafs_storage_fetch_bytes_per_sec: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_storage_fetch_bytes_per_sec: gauge_vec(&["provider"]);
     /// Torii SoraFS PoR workers in flight per provider.
-    pub torii_sorafs_storage_por_inflight: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_storage_por_inflight: gauge_vec(&["provider"]);
     /// Torii SoraFS PoR samples marked successful per provider.
-    pub torii_sorafs_storage_por_samples_success_total: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_storage_por_samples_success_total: gauge_vec(&["provider"],);
     /// Torii SoraFS PoR samples marked failed per provider.
-    pub torii_sorafs_storage_por_samples_failed_total: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_storage_por_samples_failed_total: gauge_vec(&["provider"],);
     /// Active SoraFS gateway requests grouped by the canonical request dimensions.
-    pub sorafs_gateway_active: IntGaugeVec,
+    pub sorafs_gateway_active: int_gauge_vec(
+        &["endpoint", "method", "variant", "chunker", "profile"],
+    );
     /// Completed SoraFS gateway responses grouped by bounded outcome dimensions.
-    pub sorafs_gateway_responses_total: IntCounterVec,
+    pub sorafs_gateway_responses_total: int_counter_vec(
+        &[
+                        "endpoint",
+                        "method",
+                        "variant",
+                        "chunker",
+                        "profile",
+                        "result",
+                        "status",
+                        "error_code",
+                    ],
+    );
     /// SoraFS gateway time-to-first-byte histogram in milliseconds.
-    pub sorafs_gateway_ttfb_ms: HistogramVec,
+    pub sorafs_gateway_ttfb_ms: histogram_vec_with_buckets(
+        vec![
+                        5.0, 10.0, 25.0, 50.0, 100.0, 120.0, 200.0, 500.0, 1000.0, 2500.0, 5000.0,
+                    ],
+                    &[
+                        "endpoint",
+                        "method",
+                        "variant",
+                        "chunker",
+                        "profile",
+                        "result",
+                        "status",
+                        "error_code",
+                    ],
+    );
     /// SoraFS proof verification outcomes grouped by profile and bounded error code.
-    pub sorafs_gateway_proof_verifications_total: IntCounterVec,
+    pub sorafs_gateway_proof_verifications_total: int_counter_vec(
+        &["profile_version", "result", "error_code"],
+    );
     /// SoraFS proof verification duration histogram in milliseconds.
-    pub sorafs_gateway_proof_duration_ms: HistogramVec,
+    pub sorafs_gateway_proof_duration_ms: histogram_vec_with_buckets(
+        vec![
+                        5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                    ],
+                    &["profile_version", "result", "error_code"],
+    );
     /// Torii SoraFS chunk-range request counters (endpoint, result).
-    pub torii_sorafs_chunk_range_requests_total: IntCounterVec,
+    pub torii_sorafs_chunk_range_requests_total: int_counter_vec(&["endpoint", "status"],);
     /// Torii SoraFS chunk-range bytes served per endpoint.
-    pub torii_sorafs_chunk_range_bytes_total: IntCounterVec,
+    pub torii_sorafs_chunk_range_bytes_total: int_counter_vec(&["endpoint"]);
     /// Count of providers advertising SoraFS range fetch capability grouped by feature.
-    pub torii_sorafs_provider_range_capability_total: IntGaugeVec,
+    pub torii_sorafs_provider_range_capability_total: int_gauge_vec(&["feature"]);
     /// SoraFS committed routing-authority cache events grouped by bounded outcome.
-    pub torii_sorafs_routing_authority_cache_total: IntCounterVec,
+    pub torii_sorafs_routing_authority_cache_total: int_counter_vec(&["outcome"]);
     /// SoraFS range fetch throttle events grouped by reason.
-    pub torii_sorafs_range_fetch_throttle_events_total: IntCounterVec,
+    pub torii_sorafs_range_fetch_throttle_events_total: int_counter_vec(&["reason"],);
     /// Active SoraFS range fetch streams guarded by tokens (node-wide).
-    pub torii_sorafs_range_fetch_concurrency_current: IntGauge,
+    pub torii_sorafs_range_fetch_concurrency_current: int_gauge();
     /// Torii SoraFS proof streams currently active (per proof kind).
-    pub torii_sorafs_proof_stream_inflight: IntGaugeVec,
+    pub torii_sorafs_proof_stream_inflight: int_gauge_vec(&["kind"]);
     /// Torii SoraFS proof stream outcomes grouped by result and reason.
-    pub torii_sorafs_proof_stream_events_total: IntCounterVec,
+    pub torii_sorafs_proof_stream_events_total: int_counter_vec(&["kind", "result", "reason"],);
     /// Torii SoraFS proof stream latency histogram in milliseconds.
-    pub torii_sorafs_proof_stream_latency_ms: HistogramVec,
+    pub torii_sorafs_proof_stream_latency_ms: histogram_vec_with_buckets(
+        vec![
+                        5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                    ],
+                    &["kind"],
+    );
     /// Torii SoraFS proof-health alerts grouped by provider, trigger, and penalty outcome.
-    pub torii_sorafs_proof_health_alerts_total: IntCounterVec,
+    pub torii_sorafs_proof_health_alerts_total: int_counter_vec(
+        &["provider_id", "trigger", "penalty"],
+    );
     /// Torii SoraFS proof-health PDP failure counts captured at the last alert per provider.
-    pub torii_sorafs_proof_health_pdp_failures: IntGaugeVec,
+    pub torii_sorafs_proof_health_pdp_failures: int_gauge_vec(&["provider_id"]);
     /// Torii SoraFS proof-health PoTR breach counts captured at the last alert per provider.
-    pub torii_sorafs_proof_health_potr_breaches: IntGaugeVec,
+    pub torii_sorafs_proof_health_potr_breaches: int_gauge_vec(&["provider_id"]);
     /// Torii SoraFS proof-health penalty amount (nano-XOR) observed at the last alert per provider.
-    pub torii_sorafs_proof_health_penalty_nano: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_proof_health_penalty_nano: gauge_vec(&["provider_id"]);
     /// Torii SoraFS proof-health telemetry window end epoch recorded at the last alert per provider.
-    pub torii_sorafs_proof_health_window_end_epoch: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_proof_health_window_end_epoch: gauge_vec(&["provider_id"],);
     /// Torii SoraFS proof-health cooldown flag recorded at the last alert per provider.
-    pub torii_sorafs_proof_health_cooldown: IntGaugeVec,
+    pub torii_sorafs_proof_health_cooldown: int_gauge_vec(&["provider_id"]);
     /// GAR policy violations grouped by reason/detail.
-    pub torii_sorafs_gar_violations_total: IntCounterVec,
+    pub torii_sorafs_gar_violations_total: int_counter_vec(&["reason", "detail"]);
     /// Gateway refusal counters grouped by reason/profile/provider/scope.
-    pub torii_sorafs_gateway_refusals_total: IntCounterVec,
+    pub torii_sorafs_gateway_refusals_total: int_counter_vec(
+        &["reason", "profile", "provider_id", "scope"],
+    );
     /// Canonical SoraFS gateway fixture metadata (value = release timestamp, labels = version/profile/digest).
-    pub torii_sorafs_gateway_fixture_info: IntGaugeVec,
+    pub torii_sorafs_gateway_fixture_info: int_gauge_vec(
+        &["version", "profile", "fixtures_digest"],
+    );
     /// SoraFS pin registry manifest counts grouped by status.
-    pub torii_sorafs_registry_manifests_total: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_registry_manifests_total: gauge_vec(&["status"]);
     /// SoraFS manifest alias total (active entries tracked on-chain).
-    pub torii_sorafs_registry_aliases_total: GenericGauge<AtomicU64>,
+    pub torii_sorafs_registry_aliases_total: gauge();
     /// Consensus-maintained count of retained SoraFS pin lifecycle records.
-    pub torii_sorafs_pin_retained_manifests: GenericGauge<AtomicU64>,
+    pub torii_sorafs_pin_retained_manifests: gauge();
     /// Consensus-maintained aggregate bytes represented by live SoraFS pins.
-    pub torii_sorafs_pin_live_content_bytes: GenericGauge<AtomicU64>,
+    pub torii_sorafs_pin_live_content_bytes: gauge();
     /// Alias cache evaluation outcomes (fresh/refresh/expired/hard-expired).
-    pub torii_sorafs_alias_cache_refresh_total: IntCounterVec,
+    pub torii_sorafs_alias_cache_refresh_total: int_counter_vec(&["result", "reason"],);
     /// Observed alias proof age when served (seconds).
-    pub torii_sorafs_alias_cache_age_seconds: Histogram,
+    pub torii_sorafs_alias_cache_age_seconds: histogram_with_buckets(
+        vec![
+                        30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1_200.0, 1_800.0, 3_600.0, 7_200.0,
+                    ],
+    );
     /// Seconds remaining until the active gateway TLS certificate expires.
-    pub torii_sorafs_tls_cert_expiry_seconds: Gauge,
+    pub torii_sorafs_tls_cert_expiry_seconds: float_gauge();
     /// Gateway TLS renewal attempts grouped by result.
-    pub torii_sorafs_tls_renewal_total: IntCounterVec,
+    pub torii_sorafs_tls_renewal_total: int_counter_vec(&["result"]);
     /// Whether ECH is currently enabled for the gateway (0 = disabled, 1 = enabled).
-    pub torii_sorafs_tls_ech_enabled: IntGauge,
+    pub torii_sorafs_tls_ech_enabled: int_gauge();
     /// Gauge exposing the canonical SoraFS gateway fixture version (label = version).
-    pub torii_sorafs_gateway_fixture_version: IntGaugeVec,
+    pub torii_sorafs_gateway_fixture_version: int_gauge_vec(&["version"]);
     /// SoraFS replication order counts grouped by status.
-    pub torii_sorafs_registry_orders_total: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_registry_orders_total: gauge_vec(&["status"]);
     /// SoraFS replication SLA outcomes (met, missed, pending).
-    pub torii_sorafs_replication_sla_total: GenericGaugeVec<AtomicU64>,
+    pub torii_sorafs_replication_sla_total: gauge_vec(&["outcome"]);
     /// Outstanding SoraFS replication backlog (pending order count).
-    pub torii_sorafs_replication_backlog_total: GenericGauge<AtomicU64>,
+    pub torii_sorafs_replication_backlog_total: gauge();
     /// Completion latency aggregates for SoraFS replication orders (epochs).
-    pub torii_sorafs_replication_completion_latency_epochs: GaugeVec,
+    pub torii_sorafs_replication_completion_latency_epochs: float_gauge_vec(&["stat"],);
     /// Deadline slack aggregates for pending SoraFS replication orders (epochs).
-    pub torii_sorafs_replication_deadline_slack_epochs: GaugeVec,
+    pub torii_sorafs_replication_deadline_slack_epochs: float_gauge_vec(&["stat"]);
     /// Rejections at the SoraNet privacy ingest endpoints grouped by endpoint/reason.
-    pub soranet_privacy_ingest_reject_total: IntCounterVec,
+    pub soranet_privacy_ingest_reject_total: int_counter_vec(&["endpoint", "reason"],);
     /// Aggregated SoraNet circuit outcomes keyed by relay mode and bucket start.
-    pub soranet_privacy_circuit_events_total: IntCounterVec,
+    pub soranet_privacy_circuit_events_total: int_counter_vec(&["mode", "bucket_start", "kind"],);
     /// PoW validation failures grouped by relay mode, bucket start, and reason.
-    pub soranet_privacy_pow_rejects_total: IntCounterVec,
+    pub soranet_privacy_pow_rejects_total: int_counter_vec(&["mode", "bucket_start", "reason"],);
     /// Count of SoraNet PoW revocation store fallbacks grouped by reason.
-    pub soranet_pow_revocation_store_total: IntCounterVec,
+    pub soranet_pow_revocation_store_total: int_counter_vec(&["reason"]);
     /// Aggregated SoraNet throttling events keyed by relay mode and bucket start.
-    pub soranet_privacy_throttles_total: IntCounterVec,
+    pub soranet_privacy_throttles_total: int_counter_vec(&["mode", "bucket_start", "scope"],);
     /// Aggregated verified byte totals emitted per relay mode and bucket start.
-    pub soranet_privacy_verified_bytes_total: IntCounterVec,
+    pub soranet_privacy_verified_bytes_total: int_counter_vec(&["mode", "bucket_start"],);
     /// Average active circuits per bucket.
-    pub soranet_privacy_active_circuits_avg: GaugeVec,
+    pub soranet_privacy_active_circuits_avg: float_gauge_vec(&["mode", "bucket_start"],);
     /// Maximum active circuits observed per bucket.
-    pub soranet_privacy_active_circuits_max: GaugeVec,
+    pub soranet_privacy_active_circuits_max: float_gauge_vec(&["mode", "bucket_start"],);
     /// Open privacy buckets still accumulating contributors (per relay mode).
-    pub soranet_privacy_open_buckets: GaugeVec,
+    pub soranet_privacy_open_buckets: float_gauge_vec(&["mode"]);
     /// Pending collector share accumulators grouped by relay mode.
-    pub soranet_privacy_pending_collectors: GaugeVec,
+    pub soranet_privacy_pending_collectors: float_gauge_vec(&["mode"]);
     /// Suppressed bucket counts recorded during the latest drain, grouped by reason.
-    pub soranet_privacy_snapshot_suppressed: GaugeVec,
+    pub soranet_privacy_snapshot_suppressed: float_gauge_vec(&["reason"]);
     /// Suppressed bucket counts recorded during the latest drain, grouped by mode and reason.
-    pub soranet_privacy_snapshot_suppressed_by_mode: GaugeVec,
+    pub soranet_privacy_snapshot_suppressed_by_mode: float_gauge_vec(&["mode", "reason"],);
     /// Buckets drained during the latest collector flush.
-    pub soranet_privacy_snapshot_drained: IntGauge,
+    pub soranet_privacy_snapshot_drained: int_gauge();
     /// Ratio of suppressed to drained buckets observed in the latest flush.
-    pub soranet_privacy_snapshot_suppression_ratio: Gauge,
+    pub soranet_privacy_snapshot_suppression_ratio: float_gauge();
     /// Completed privacy buckets evicted due to retention.
-    pub soranet_privacy_evicted_buckets_total: IntCounter,
+    pub soranet_privacy_evicted_buckets_total: int_counter();
     /// Suppression indicator for buckets that failed the contributor threshold.
-    pub soranet_privacy_bucket_suppressed: GaugeVec,
+    pub soranet_privacy_bucket_suppressed: float_gauge_vec(&["mode", "bucket_start"],);
     /// Suppressed bucket counters grouped by relay mode and suppression reason.
-    pub soranet_privacy_suppression_total: IntCounterVec,
+    pub soranet_privacy_suppression_total: int_counter_vec(&["mode", "reason"]);
     /// RTT percentile gauges per bucket and relay mode.
-    pub soranet_privacy_rtt_millis: GaugeVec,
+    pub soranet_privacy_rtt_millis: float_gauge_vec(&["mode", "bucket_start", "percentile"],);
     /// Aggregated GAR abuse counters keyed by hashed category.
-    pub soranet_privacy_gar_reports_total: IntCounterVec,
+    pub soranet_privacy_gar_reports_total: int_counter_vec(
+        &["mode", "bucket_start", "category_hash"],
+    );
     /// UNIX timestamp of the last successful privacy poll.
-    pub soranet_privacy_last_poll_unixtime: IntGauge,
+    pub soranet_privacy_last_poll_unixtime: int_gauge();
     /// Privacy polling failures grouped by provider alias.
-    pub soranet_privacy_poll_errors_total: IntCounterVec,
+    pub soranet_privacy_poll_errors_total: int_counter_vec(&["provider"]);
     /// Privacy collector enabled flag (0 = disabled, 1 = active).
-    pub soranet_privacy_collector_enabled: IntGauge,
+    pub soranet_privacy_collector_enabled: int_gauge();
     /// Active multi-source orchestrator fetches per manifest/region.
-    pub sorafs_orchestrator_active_fetches: IntGaugeVec,
+    pub sorafs_orchestrator_active_fetches: int_gauge_vec(&["manifest_id", "region"],);
     /// Multi-source orchestrator fetch duration histogram (milliseconds).
-    pub sorafs_orchestrator_fetch_duration_ms: HistogramVec,
+    pub sorafs_orchestrator_fetch_duration_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(10.0, 1.8, 12).expect("valid buckets"),
+                    &["manifest_id", "region"],
+    );
     /// Multi-source orchestrator failures grouped by reason.
-    pub sorafs_orchestrator_fetch_failures_total: IntCounterVec,
+    pub sorafs_orchestrator_fetch_failures_total: int_counter_vec(
+        &["manifest_id", "region", "reason"],
+    );
     /// Multi-source orchestrator retries aggregated per provider.
-    pub sorafs_orchestrator_retries_total: IntCounterVec,
+    pub sorafs_orchestrator_retries_total: int_counter_vec(
+        &["manifest_id", "provider_id", "reason"],
+    );
     /// Multi-source orchestrator provider failures aggregated per provider.
-    pub sorafs_orchestrator_provider_failures_total: IntCounterVec,
+    pub sorafs_orchestrator_provider_failures_total: int_counter_vec(
+        &["manifest_id", "provider_id", "reason"],
+    );
     /// Multi-source orchestrator per-chunk latency histogram (milliseconds).
-    pub sorafs_orchestrator_chunk_latency_ms: HistogramVec,
+    pub sorafs_orchestrator_chunk_latency_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(5.0, 1.7, 16).expect("valid buckets"),
+                    &["manifest_id", "provider_id"],
+    );
     /// Multi-source orchestrator byte counter aggregated per manifest/provider.
-    pub sorafs_orchestrator_bytes_total: IntCounterVec,
+    pub sorafs_orchestrator_bytes_total: int_counter_vec(&["manifest_id", "provider_id"],);
     /// Multi-source orchestrator stall counter (chunks exceeding latency cap).
-    pub sorafs_orchestrator_stalls_total: IntCounterVec,
+    pub sorafs_orchestrator_stalls_total: int_counter_vec(&["manifest_id", "provider_id"],);
     /// Transport-layer events emitted by the multi-source orchestrator.
-    pub sorafs_orchestrator_transport_events_total: IntCounterVec,
+    pub sorafs_orchestrator_transport_events_total: int_counter_vec(
+        &["region", "protocol", "event", "reason"],
+    );
     /// SoraFS anonymity policy events grouped by stage/outcome/reason/region.
-    pub sorafs_orchestrator_policy_events_total: IntCounterVec,
+    pub sorafs_orchestrator_policy_events_total: int_counter_vec(
+        &["region", "stage", "outcome", "reason"],
+    );
     /// Distribution of SoraFS PQ-capable relay ratios grouped by stage/region.
-    pub sorafs_orchestrator_pq_ratio: HistogramVec,
+    pub sorafs_orchestrator_pq_ratio: histogram_vec_with_buckets(
+        vec![0.0, 0.25, 0.5, 0.66, 0.75, 1.0],
+                    &["region", "stage"],
+    );
     /// Distribution of SoraFS PQ-capable candidate ratios grouped by stage/region.
-    pub sorafs_orchestrator_pq_candidate_ratio: HistogramVec,
+    pub sorafs_orchestrator_pq_candidate_ratio: histogram_vec_with_buckets(
+        vec![0.0, 0.25, 0.5, 0.75, 1.0],
+                    &["region", "stage"],
+    );
     /// Distribution of PQ policy shortfalls grouped by stage/region.
-    pub sorafs_orchestrator_pq_deficit_ratio: HistogramVec,
+    pub sorafs_orchestrator_pq_deficit_ratio: histogram_vec_with_buckets(
+        vec![0.0, 0.1, 0.25, 0.5, 0.75, 1.0],
+                    &["region", "stage"],
+    );
     /// Distribution of classical relay ratios grouped by stage/region.
-    pub sorafs_orchestrator_classical_ratio: HistogramVec,
+    pub sorafs_orchestrator_classical_ratio: histogram_vec_with_buckets(
+        vec![0.0, 0.25, 0.5, 0.75, 1.0],
+                    &["region", "stage"],
+    );
     /// Distribution of classical relay selections grouped by stage/region.
-    pub sorafs_orchestrator_classical_selected: HistogramVec,
+    pub sorafs_orchestrator_classical_selected: histogram_vec_with_buckets(
+        vec![0.0, 1.0, 2.0, 3.0, 4.0, 8.0, 16.0],
+                    &["region", "stage"],
+    );
     /// Aggregate GiB-month usage derived from DA rent quotes grouped by cluster/storage class.
-    pub torii_da_rent_gib_months_total: IntCounterVec,
+    pub torii_da_rent_gib_months_total: int_counter_vec(&["cluster", "storage_class"],);
     /// Aggregate base rent (micro XOR) derived from DA rent quotes.
-    pub torii_da_rent_base_micro_total: CounterVec,
+    pub torii_da_rent_base_micro_total: float_counter_vec(&["cluster", "storage_class"],);
     /// Aggregate protocol reserve contributions (micro XOR) derived from DA rent quotes.
-    pub torii_da_protocol_reserve_micro_total: CounterVec,
+    pub torii_da_protocol_reserve_micro_total: float_counter_vec(&["cluster", "storage_class"],);
     /// Aggregate provider reward payouts (micro XOR) derived from DA rent quotes.
-    pub torii_da_provider_reward_micro_total: CounterVec,
+    pub torii_da_provider_reward_micro_total: float_counter_vec(&["cluster", "storage_class"],);
     /// Aggregate PDP bonus payouts (micro XOR) derived from DA rent quotes.
-    pub torii_da_pdp_bonus_micro_total: CounterVec,
+    pub torii_da_pdp_bonus_micro_total: float_counter_vec(&["cluster", "storage_class"],);
     /// Aggregate PoTR bonus payouts (micro XOR) derived from DA rent quotes.
-    pub torii_da_potr_bonus_micro_total: CounterVec,
+    pub torii_da_potr_bonus_micro_total: float_counter_vec(&["cluster", "storage_class"],);
     /// DA receipt ingest outcomes grouped by bounded outcome/lane labels.
-    pub torii_da_receipts_total: IntCounterVec,
+    pub torii_da_receipts_total: int_counter_vec(&["outcome", "lane"]);
     /// Current DA receipt epoch per lane.
-    pub torii_da_receipt_epoch: GenericGaugeVec<AtomicU64>,
+    pub torii_da_receipt_epoch: gauge_vec(&["lane"]);
     /// Highest DA receipt sequence observed in the current epoch per lane.
-    pub torii_da_receipt_highest_sequence: GenericGaugeVec<AtomicU64>,
+    pub torii_da_receipt_highest_sequence: gauge_vec(&["lane"]);
     /// DA chunking + erasure coding duration (seconds).
-    pub torii_da_chunking_seconds: Histogram,
+    pub torii_da_chunking_seconds: histogram_with_buckets(
+        vec![
+                        0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+                    ],
+    );
     /// DA spool worker batch outcomes.
-    pub torii_da_spool_batches_total: IntCounterVec,
+    pub torii_da_spool_batches_total: int_counter_vec(&["outcome"]);
     /// DA spool worker artifact outcomes.
-    pub torii_da_spool_artifacts_total: IntCounterVec,
+    pub torii_da_spool_artifacts_total: int_counter_vec(&["kind", "outcome"]);
     /// Current DA spool worker queue depth.
-    pub torii_da_spool_queue_depth: GenericGauge<AtomicU64>,
+    pub torii_da_spool_queue_depth: gauge();
     /// DA spool worker batch disk-write duration (milliseconds).
-    pub torii_da_spool_batch_write_ms: Histogram,
+    pub torii_da_spool_batch_write_ms: histogram_with_buckets(
+        vec![
+                        0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
+                    ],
+    );
     /// DA shard cursor events grouped by outcome/lane/shard.
-    pub da_shard_cursor_events_total: IntCounterVec,
+    pub da_shard_cursor_events_total: int_counter_vec(&["event", "lane", "shard"]);
     /// Latest block height recorded for each shard cursor advance.
-    pub da_shard_cursor_height: IntGaugeVec,
+    pub da_shard_cursor_height: int_gauge_vec(&["lane", "shard"]);
     /// Lag in blocks between the validated height and the last shard cursor advance.
-    pub da_shard_cursor_lag_blocks: IntGaugeVec,
+    pub da_shard_cursor_lag_blocks: int_gauge_vec(&["lane", "shard"]);
     /// Taikai ingest latency histogram grouped by cluster/stream.
-    pub taikai_ingest_segment_latency_ms: HistogramVec,
+    pub taikai_ingest_segment_latency_ms: histogram_vec_with_buckets(
+        vec![
+                        10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0,
+                    ],
+                    &["cluster", "stream"],
+    );
     /// Taikai live-edge drift histogram grouped by cluster/stream (absolute value).
-    pub taikai_ingest_live_edge_drift_ms: HistogramVec,
+    pub taikai_ingest_live_edge_drift_ms: histogram_vec_with_buckets(
+        vec![
+                        50.0, 100.0, 250.0, 500.0, 1_000.0, 1_500.0, 2_000.0, 3_000.0,
+                    ],
+                    &["cluster", "stream"],
+    );
     /// Signed live-edge drift gauge grouped by cluster/stream (negative = ahead).
-    pub taikai_ingest_live_edge_drift_signed_ms: GaugeVec,
+    pub taikai_ingest_live_edge_drift_signed_ms: float_gauge_vec(&["cluster", "stream"],);
     /// Taikai ingest failures grouped by cluster/stream/reason.
-    pub taikai_ingest_errors_total: IntCounterVec,
+    pub taikai_ingest_errors_total: int_counter_vec(&["cluster", "stream", "reason"],);
     /// Taikai routing manifest alias rotations grouped by cluster/event/stream/alias.
-    pub taikai_trm_alias_rotations_total: IntCounterVec,
+    pub taikai_trm_alias_rotations_total: int_counter_vec(
+        &[
+                        "cluster",
+                        "event",
+                        "stream",
+                        "alias_namespace",
+                        "alias_name",
+                    ],
+    );
     /// Taikai viewer rebuffer events grouped by cluster/stream.
-    pub taikai_viewer_rebuffer_events_total: IntCounterVec,
+    pub taikai_viewer_rebuffer_events_total: int_counter_vec(&["cluster", "stream"],);
     /// Taikai viewer playback segments grouped by cluster/stream.
-    pub taikai_viewer_playback_segments_total: IntCounterVec,
+    pub taikai_viewer_playback_segments_total: int_counter_vec(&["cluster", "stream"],);
     /// Taikai viewer CEK fetch duration histogram grouped by cluster/lane.
-    pub taikai_viewer_cek_fetch_duration_ms: HistogramVec,
+    pub taikai_viewer_cek_fetch_duration_ms: histogram_vec_with_buckets(
+        vec![5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0],
+                    &["cluster", "lane"],
+    );
     /// Taikai viewer PQ circuit health gauge grouped by cluster.
-    pub taikai_viewer_pq_circuit_health: GaugeVec,
+    pub taikai_viewer_pq_circuit_health: float_gauge_vec(&["cluster"]);
     /// Taikai viewer CEK rotation age in seconds grouped by lane.
-    pub taikai_viewer_cek_rotation_seconds_ago: GenericGaugeVec<AtomicU64>,
+    pub taikai_viewer_cek_rotation_seconds_ago: gauge_vec(&["lane"]);
     /// Taikai viewer alerts firing counter grouped by cluster/alertname.
-    pub taikai_viewer_alerts_firing_total: IntCounterVec,
+    pub taikai_viewer_alerts_firing_total: int_counter_vec(&["cluster", "alertname"],);
     /// Taikai cache query outcomes grouped by result/tier.
-    pub sorafs_taikai_cache_query_total: IntCounterVec,
+    pub sorafs_taikai_cache_query_total: int_counter_vec(&["result", "tier"]);
     /// Taikai cache insert events grouped by tier.
-    pub sorafs_taikai_cache_insert_total: IntCounterVec,
+    pub sorafs_taikai_cache_insert_total: int_counter_vec(&["tier"]);
     /// Taikai cache eviction counters grouped by tier/reason.
-    pub sorafs_taikai_cache_evictions_total: IntCounterVec,
+    pub sorafs_taikai_cache_evictions_total: int_counter_vec(&["tier", "reason"]);
     /// Taikai cache promotion counters grouped by source/target tiers.
-    pub sorafs_taikai_cache_promotions_total: IntCounterVec,
+    pub sorafs_taikai_cache_promotions_total: int_counter_vec(&["from_tier", "to_tier"],);
     /// Taikai cache byte counters grouped by event/tier.
-    pub sorafs_taikai_cache_bytes_total: IntCounterVec,
+    pub sorafs_taikai_cache_bytes_total: int_counter_vec(&["event", "tier"]);
     /// Taikai QoS denials grouped by class.
-    pub sorafs_taikai_qos_denied_total: IntCounterVec,
+    pub sorafs_taikai_qos_denied_total: int_counter_vec(&["class"]);
     /// Taikai queue events grouped by event/class.
-    pub sorafs_taikai_queue_events_total: IntCounterVec,
+    pub sorafs_taikai_queue_events_total: int_counter_vec(&["event", "class"]);
     /// Taikai queue depth grouped by state.
-    pub sorafs_taikai_queue_depth: IntGaugeVec,
+    pub sorafs_taikai_queue_depth: int_gauge_vec(&["state"]);
     /// Taikai shard failovers grouped by preferred/selected shard.
-    pub sorafs_taikai_shard_failovers_total: IntCounterVec,
+    pub sorafs_taikai_shard_failovers_total: int_counter_vec(
+        &["preferred_shard", "selected_shard"],
+    );
     /// Gauge tracking open shard circuits in the Taikai queue.
-    pub sorafs_taikai_shard_circuits_open: IntGaugeVec,
+    pub sorafs_taikai_shard_circuits_open: int_gauge_vec(&["shard"]);
     /// Count of SoraFS anonymity policy brownouts grouped by stage/reason/region.
-    pub sorafs_orchestrator_brownouts_total: IntCounterVec,
+    pub sorafs_orchestrator_brownouts_total: int_counter_vec(&["region", "stage", "reason"],);
     /// Configured SoraNet base payout (nano XOR) applied per epoch.
-    pub soranet_reward_base_payout_nanos: GenericGauge<AtomicU64>,
+    pub soranet_reward_base_payout_nanos: gauge();
     /// SoraNet reward events grouped by relay/result label.
-    pub soranet_reward_events_total: IntCounterVec,
+    pub soranet_reward_events_total: int_counter_vec(&["relay", "result"]);
     /// Aggregated XOR payouts (nano units) grouped by relay/result.
-    pub soranet_reward_payout_nanos_total: IntCounterVec,
+    pub soranet_reward_payout_nanos_total: int_counter_vec(&["relay", "result"]);
     /// Count of SoraNet reward skips grouped by relay/reason.
-    pub soranet_reward_skips_total: IntCounterVec,
+    pub soranet_reward_skips_total: int_counter_vec(&["relay", "reason"]);
     /// Aggregated XOR adjustments (nano units) grouped by relay/kind.
-    pub soranet_reward_adjustment_nanos_total: IntCounterVec,
+    pub soranet_reward_adjustment_nanos_total: int_counter_vec(&["relay", "kind"]);
     /// Dispute lifecycle counters grouped by action label.
-    pub soranet_reward_disputes_total: IntCounterVec,
+    pub soranet_reward_disputes_total: int_counter_vec(&["action"]);
     /// Torii HTTP requests grouped by catalog route metadata and bounded response outcome.
-    pub torii_http_requests_total: IntCounterVec,
+    pub torii_http_requests_total: int_counter_vec(
+        &[
+                        "route_id",
+                        "route_template",
+                        "surface",
+                        "representation",
+                        "error_code",
+                        "content_type",
+                        "method",
+                        "status",
+                    ],
+    );
     /// Torii HTTP request latency in seconds grouped by catalog route metadata.
-    pub torii_http_request_duration_seconds: HistogramVec,
+    pub torii_http_request_duration_seconds: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid"),
+                    &[
+                        "route_id",
+                        "route_template",
+                        "surface",
+                        "representation",
+                        "content_type",
+                        "method",
+                    ],
+    );
     /// Torii HTTP request payload size (bytes) grouped by catalog route metadata.
-    pub torii_http_request_bytes_total: IntCounterVec,
+    pub torii_http_request_bytes_total: int_counter_vec(
+        &[
+                        "route_id",
+                        "route_template",
+                        "surface",
+                        "representation",
+                        "content_type",
+                        "method",
+                    ],
+    );
     /// Torii HTTP response payload size (bytes) grouped by catalog route metadata and outcome.
-    pub torii_http_response_bytes_total: IntCounterVec,
+    pub torii_http_response_bytes_total: int_counter_vec(
+        &[
+                        "route_id",
+                        "route_template",
+                        "surface",
+                        "representation",
+                        "error_code",
+                        "content_type",
+                        "method",
+                        "status",
+                    ],
+    );
     /// Torii API-token-gated endpoint hits grouped by endpoint and bounded token state.
-    pub torii_api_token_hits_total: IntCounterVec,
+    pub torii_api_token_hits_total: int_counter_vec(&["endpoint", "token_state"]);
     /// Content gateway requests grouped by outcome label.
-    pub torii_content_requests_total: IntCounterVec,
+    pub torii_content_requests_total: int_counter_vec(&["outcome"]);
     /// Content gateway response latency in seconds grouped by outcome.
-    pub torii_content_request_duration_seconds: HistogramVec,
+    pub torii_content_request_duration_seconds: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid"),
+                    &["outcome"],
+    );
     /// Content gateway bytes served grouped by outcome label.
-    pub torii_content_response_bytes_total: IntCounterVec,
+    pub torii_content_response_bytes_total: int_counter_vec(&["outcome"]);
     /// Proof endpoint requests grouped by endpoint/outcome.
-    pub torii_proof_requests_total: IntCounterVec,
+    pub torii_proof_requests_total: int_counter_vec(&["endpoint", "outcome"]);
     /// Proof endpoint latency in seconds grouped by endpoint/outcome.
-    pub torii_proof_request_duration_seconds: HistogramVec,
+    pub torii_proof_request_duration_seconds: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.001, 2.0, 12).expect("inputs are valid"),
+                    &["endpoint", "outcome"],
+    );
     /// Proof endpoint bytes served grouped by endpoint/outcome.
-    pub torii_proof_response_bytes_total: IntCounterVec,
+    pub torii_proof_response_bytes_total: int_counter_vec(&["endpoint", "outcome"]);
     /// Proof endpoint cache hits grouped by endpoint.
-    pub torii_proof_cache_hits_total: IntCounterVec,
+    pub torii_proof_cache_hits_total: int_counter_vec(&["endpoint"]);
     /// Torii request latency in seconds grouped by connection scheme.
-    pub torii_request_duration_seconds: HistogramVec,
+    pub torii_request_duration_seconds: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid"),
+                    &["scheme"],
+    );
     /// Torii request failures grouped by connection scheme and status code.
-    pub torii_request_failures_total: IntCounterVec,
+    pub torii_request_failures_total: int_counter_vec(&["scheme", "code"]);
     /// Explorer endpoint requests grouped by endpoint and outcome.
-    pub torii_explorer_requests_total: IntCounterVec,
+    pub torii_explorer_requests_total: int_counter_vec(&["endpoint", "outcome"]);
     /// Explorer endpoint latency in seconds grouped by endpoint and outcome.
-    pub torii_explorer_request_duration_seconds: HistogramVec,
+    pub torii_explorer_request_duration_seconds: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(0.001, 2.0, 14).expect("inputs are valid"),
+                    &["endpoint", "outcome"],
+    );
     /// Norito-RPC gate decisions grouped by rollout stage and outcome.
-    pub torii_norito_rpc_gate_total: IntCounterVec,
+    pub torii_norito_rpc_gate_total: int_counter_vec(&["stage", "outcome"]);
     /// Proof endpoints throttled by rate limiter (labeled by endpoint).
-    pub torii_proof_throttled_total: IntCounterVec,
+    pub torii_proof_throttled_total: int_counter_vec(&["endpoint"]);
     /// Torii contract endpoints throttled by rate limiter (labeled by endpoint).
-    pub torii_contract_throttled_total: IntCounterVec,
+    pub torii_contract_throttled_total: int_counter_vec(&["endpoint"]);
     /// Torii contract endpoints returning errors (labeled by endpoint).
-    pub torii_contract_errors_total: IntCounterVec,
+    pub torii_contract_errors_total: int_counter_vec(&["endpoint"]);
     /// SNS registrar outcomes grouped by result and suffix.
-    pub sns_registrar_status_total: IntCounterVec,
+    pub sns_registrar_status_total: int_counter_vec(&["result", "suffix"]);
     /// Torii account address rejects grouped by endpoint/reason.
-    pub torii_address_invalid_total: IntCounterVec,
+    pub torii_address_invalid_total: int_counter_vec(&["endpoint", "reason"]);
     /// Torii account-domain selections grouped by endpoint/domain kind.
-    pub torii_address_domain_total: IntCounterVec,
+    pub torii_address_domain_total: int_counter_vec(&["endpoint", "domain_kind"]);
     /// Torii Local-12 collision detections grouped by endpoint/kind.
-    pub torii_address_collision_total: IntCounterVec,
+    pub torii_address_collision_total: int_counter_vec(&["endpoint", "kind"]);
     /// Torii Local-12 collision detections grouped by endpoint/domain label.
-    pub torii_address_collision_domain_total: IntCounterVec,
+    pub torii_address_collision_domain_total: int_counter_vec(&["endpoint", "domain"],);
     /// Torii account literal selections grouped by endpoint/format.
-    pub torii_account_literal_total: IntCounterVec,
+    pub torii_account_literal_total: int_counter_vec(&["endpoint", "format"]);
     /// Torii Norito RPC decode failures grouped by payload kind/reason.
-    pub torii_norito_decode_failures_total: IntCounterVec,
+    pub torii_norito_decode_failures_total: int_counter_vec(&["payload_kind", "reason"],);
     /// Torii pre-auth: active connections tracked by scheme (http/ws)
-    pub torii_active_connections_total: GenericGaugeVec<AtomicU64>,
+    pub torii_active_connections_total: gauge_vec(&["scheme"]);
     /// Torii Connect: sessions with buffered frames (gauge)
-    pub torii_connect_buffered_sessions: GenericGauge<AtomicU64>,
+    pub torii_connect_buffered_sessions: gauge();
     /// Torii Connect: total buffered bytes across sessions (gauge)
-    pub torii_connect_total_buffer_bytes: GenericGauge<AtomicU64>,
+    pub torii_connect_total_buffer_bytes: gauge();
     /// Torii Connect: dedupe cache size (gauge)
-    pub torii_connect_dedupe_size: GenericGauge<AtomicU64>,
+    pub torii_connect_dedupe_size: gauge();
     /// Torii Connect: per-IP session counts (gauge vec labeled by ip)
-    pub torii_connect_per_ip_sessions: GenericGaugeVec<AtomicU64>,
+    pub torii_connect_per_ip_sessions: gauge_vec(&["ip"]);
     /// NTS: network time offset vs local clock (signed, milliseconds)
-    pub nts_offset_ms: IntGauge,
+    pub nts_offset_ms: int_gauge();
     /// NTS: confidence (MAD) in milliseconds
-    pub nts_confidence_ms: GenericGauge<AtomicU64>,
+    pub nts_confidence_ms: gauge();
     /// NTS: number of peers currently contributing samples
-    pub nts_peers_sampled: GenericGauge<AtomicU64>,
+    pub nts_peers_sampled: gauge();
     /// NTS: number of samples used in aggregation (post-filter)
-    pub nts_samples_used: GenericGauge<AtomicU64>,
+    pub nts_samples_used: gauge();
     /// NTS: health status (1 = healthy, 0 = unhealthy)
-    pub nts_healthy: IntGauge,
+    pub nts_healthy: int_gauge();
     /// NTS: fallback indicator (1 = local time fallback, 0 = NTS offset)
-    pub nts_fallback: IntGauge,
+    pub nts_fallback: int_gauge();
     /// NTS: minimum sample threshold check (1 = ok, 0 = fail)
-    pub nts_min_samples_ok: IntGauge,
+    pub nts_min_samples_ok: int_gauge();
     /// NTS: offset bound check (1 = ok, 0 = fail)
-    pub nts_offset_ok: IntGauge,
+    pub nts_offset_ok: int_gauge();
     /// NTS: confidence bound check (1 = ok, 0 = fail)
-    pub nts_confidence_ok: IntGauge,
+    pub nts_confidence_ok: int_gauge();
     /// NTS: RTT histogram buckets labeled by `le` (ms)
-    pub nts_rtt_ms_bucket: GenericGaugeVec<AtomicU64>,
+    pub nts_rtt_ms_bucket: gauge_vec(&["le"]);
     /// NTS: RTT histogram sum of ms
-    pub nts_rtt_ms_sum: GenericGauge<AtomicU64>,
+    pub nts_rtt_ms_sum: gauge();
     /// NTS: RTT histogram count of observations
-    pub nts_rtt_ms_count: GenericGauge<AtomicU64>,
+    pub nts_rtt_ms_count: gauge();
     /// Aggregate verification latency (ms) by event kind.
-    pub zk_verify_latency_ms: HistogramVec,
+    pub zk_verify_latency_ms: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(1.0, 2.0, 15).expect("inputs are valid"),
+                    &["backend", "status"],
+    );
     /// Aggregate verification proof size (bytes) by event kind.
-    pub zk_verify_proof_bytes: HistogramVec,
+    pub zk_verify_proof_bytes: histogram_vec_with_buckets(
+        prometheus::exponential_buckets(256.0, 2.0, 12).expect("inputs are valid"),
+                    &["backend", "status"],
+    );
     /// Serializes finalized orderbook projection updates with Prometheus exposition.
     ///
     /// A scrape therefore observes either the preceding complete projection or
     /// its complete successor, never the intermediate ready=0 update sequence.
-    sorafs_orderbook_projection_exposition_lock: Mutex<()>,
+    sorafs_orderbook_projection_exposition_lock: raw(Mutex<()>);
     /// Serializes gateway-compliance serving-catalog updates with exposition.
-    sorafs_gateway_compliance_exposition_lock: Mutex<()>,
+    sorafs_gateway_compliance_exposition_lock: raw(Mutex<()>);
     /// Low-cardinality Musubi V1 registry, publication, cache, and storage metrics.
-    pub musubi: musubi::MusubiMetrics,
+    pub musubi: raw(musubi::MusubiMetrics);
     /// Internal use only. Needed for generating the response.
-    registry: Registry,
+    registry: raw(Registry);
 }
-const METRIC_CATALOG_V1: &str = include_str!("metrics/catalog_v1.tsv");
-const METRIC_CATALOG_V1_HEADER: &str = "# iroha-telemetry-metric-catalog-v1";
-const METRIC_CATALOG_V1_ROWS: usize = 870;
-struct MetricSpecCursor {
-    lines: std::str::Lines<'static>,
-    row: usize,
+prefix (metrics) {
+    let registry = Registry::new();
+    let musubi = musubi::MusubiMetrics::new(&registry);
+    let mut metric_specs = MetricSpecCursor::v2();
+    let mut metrics = MetricFactory::new(&registry, &mut metric_specs);
 }
-impl MetricSpecCursor {
-    fn v1() -> Self {
-        let mut lines = METRIC_CATALOG_V1.lines();
-        assert_eq!(
-            lines.next(),
-            Some(METRIC_CATALOG_V1_HEADER),
-            "unexpected metric catalog header"
-        );
-        Self { lines, row: 0 }
-    }
-    fn spec(&mut self, expected_key: &str) -> (&'static str, &'static str) {
-        let row = self.row + 1;
-        let line = self
-            .lines
-            .next()
-            .unwrap_or_else(|| panic!("metric catalog ended before `{expected_key}` at row {row}"));
-        let mut fields = line.split('\t');
-        let key = fields.next().expect("metric catalog row has a key");
-        let name = fields.next().expect("metric catalog row has a name");
-        let help = fields.next().expect("metric catalog row has help text");
-        assert!(
-            fields.next().is_none(),
-            "metric catalog row {row} has extra fields"
-        );
-        assert_eq!(
-            key, expected_key,
-            "metric catalog row {row} is out of construction order"
-        );
-        self.row = row;
-        (name, help)
-    }
-    fn opts(&mut self, expected_key: &str) -> Opts {
-        let (name, help) = self.spec(expected_key);
-        Opts::new(name, help)
-    }
-    fn histogram_opts(&mut self, expected_key: &str) -> HistogramOpts {
-        let (name, help) = self.spec(expected_key);
-        HistogramOpts::new(name, help)
-    }
-    fn finish(mut self) {
-        assert_eq!(
-            self.row, METRIC_CATALOG_V1_ROWS,
-            "metric catalog construction count changed"
-        );
-        assert!(
-            self.lines.next().is_none(),
-            "metric catalog has unconsumed rows after row {}",
-            self.row
-        );
-    }
-}
-#[cfg(test)]
-mod metric_catalog_tests {
-    use super::{METRIC_CATALOG_V1, METRIC_CATALOG_V1_HEADER, METRIC_CATALOG_V1_ROWS, Metrics};
-    use std::collections::BTreeSet;
-    #[test]
-    fn v1_catalog_is_complete_and_unique() {
-        let mut lines = METRIC_CATALOG_V1.lines();
-        assert_eq!(lines.next(), Some(METRIC_CATALOG_V1_HEADER));
-        let mut keys = BTreeSet::new();
-        let mut names = BTreeSet::new();
-        for (index, line) in lines.enumerate() {
-            let row = index + 1;
-            let mut fields = line.split('\t');
-            let key = fields.next().expect("metric catalog row has a key");
-            let name = fields.next().expect("metric catalog row has a name");
-            let help = fields.next().expect("metric catalog row has help text");
-            assert!(
-                fields.next().is_none(),
-                "catalog row {row} has extra fields"
-            );
-            assert!(!key.is_empty() && !name.is_empty() && !help.is_empty());
-            assert!(keys.insert(key), "duplicate metric key `{key}`");
-            assert!(names.insert(name), "duplicate metric name `{name}`");
-        }
-        assert_eq!(keys.len(), METRIC_CATALOG_V1_ROWS);
-        let _ = Metrics::default();
-    }
-}
-impl Default for Metrics {
-    #[allow(
-        clippy::too_many_lines,
-        clippy::similar_names,
-        clippy::inconsistent_struct_constructor
-    )]
-    fn default() -> Self {
-        // Helper: guarded registration (panics on duplicates in debug, infallible in release)
-        fn register_guarded<C: Collector + Clone + 'static>(reg: &Registry, metric: &C) {
-            if let Err(err) = reg.register(Box::new(metric.clone())) {
-                let is_duplicate = matches!(&err, prometheus::Error::AlreadyReg);
-                assert!(
-                    !(duplicate_metrics_should_panic() && is_duplicate),
-                    "Duplicate metric registration attempted: {err}"
-                );
-                assert!(is_duplicate, "Metric registration failed: {err}");
-                #[cfg(debug_assertions)]
-                {
-                    eprintln!(
-                        "Duplicate metric registration attempted: {:?}: {err}",
-                        metric.desc()
-                    );
-                }
-            }
-        }
-        macro_rules! register {
-            ($reg:expr, $metric:expr)=> {
-                register_guarded(&$reg, &$metric);
-            };
-            ($reg:expr, $metric:expr,$($metrics:expr),+)=>{
-                register!($reg, $metric);
-                register!($reg, $($metrics),+);
-            }
-        }
-        // NOTE(telemetry): Metric registration below is guarded via `register_guarded`,
-        // which panics in debug builds on duplicate/invalid metric names. This catches
-        // collisions early during development and keeps release builds lean.
-        let mut metric_specs = MetricSpecCursor::v1();
-        let txs = IntCounterVec::new(metric_specs.opts("txs"), &["type"]).expect("Infallible");
-        let isi = IntCounterVec::new(metric_specs.opts("isi"), &["type", "success_status"])
-            .expect("Infallible");
-        let isi_times = HistogramVec::new(metric_specs.histogram_opts("isi_times"), &["type"])
-            .expect("Infallible");
-        let tx_amounts = Histogram::with_opts(metric_specs.histogram_opts("tx_amounts").buckets(
-            // Amounts can vary wildly.
-            // Capturing range
-            //   from -10^10 to 10^10
-            //   with the step of 2 decimal points (10 steps)
-            vec![
-                -10_00_00_00_00.0,
-                -10_00_00_00.0,
-                -10_00_00.0,
-                -10_00.0,
-                -10.0,
-                0.0,
-                10.0,
-                10_00.0,
-                10_00_00.0,
-                10_00_00_00.0,
-                10_00_00_00_00.0,
-            ],
-        ))
-        .expect("Infallible");
-        let block_height =
-            IntCounter::with_opts(metric_specs.opts("block_height")).expect("Infallible");
-        let block_height_non_empty =
-            IntCounter::with_opts(metric_specs.opts("block_height_non_empty")).expect("Infallible");
-        let last_commit_time_ms =
-            GenericGauge::with_opts(metric_specs.opts("last_commit_time_ms")).expect("Infallible");
-        let last_block_committed_at_ms =
-            GenericGauge::with_opts(metric_specs.opts("last_block_committed_at_ms"))
-                .expect("Infallible");
-        let last_non_empty_block_committed_at_ms =
-            GenericGauge::with_opts(metric_specs.opts("last_non_empty_block_committed_at_ms"))
-                .expect("Infallible");
-        let commit_time_ms =
-            Histogram::with_opts(metric_specs.histogram_opts("commit_time_ms").buckets(
-                prometheus::exponential_buckets(100.0, 4.0, 5).expect("inputs are valid"),
-            ))
-            .expect("Infallible");
-        let slot_duration_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("slot_duration_ms")
-                .buckets(vec![
-                    250.0, 500.0, 750.0, 1_000.0, 1_250.0, 1_500.0, 2_000.0, 3_000.0,
-                ]),
-        )
-        .expect("Infallible");
-        let slot_duration_ms_latest =
-            GenericGauge::with_opts(metric_specs.opts("slot_duration_ms_latest"))
-                .expect("Infallible");
-        let da_quorum_ratio =
-            Gauge::with_opts(metric_specs.opts("da_quorum_ratio")).expect("Infallible");
-        let sm_syscall_total =
-            IntCounterVec::new(metric_specs.opts("sm_syscall_total"), &["kind", "mode"])
-                .expect("Infallible");
+construct {
+    [txs isi isi_times tx_amounts block_height block_height_non_empty last_commit_time_ms
+        last_block_committed_at_ms last_non_empty_block_committed_at_ms commit_time_ms
+        slot_duration_ms slot_duration_ms_latest da_quorum_ratio sm_syscall_total]
+    {
         for (kind, mode) in [
             ("hash", "-"),
             ("verify", "-"),
@@ -8167,239 +8416,29 @@ impl Default for Metrics {
         ] {
             let _ = sm_syscall_total.with_label_values(&[kind, mode]);
         }
-        let sm_openssl_preview =
-            GenericGauge::with_opts(metric_specs.opts("sm_openssl_preview")).expect("Infallible");
-        let zk_halo2_enabled =
-            GenericGauge::with_opts(metric_specs.opts("zk_halo2_enabled")).expect("Infallible");
-        let zk_halo2_curve_id =
-            GenericGauge::with_opts(metric_specs.opts("zk_halo2_curve_id")).expect("Infallible");
-        let zk_halo2_backend_id =
-            GenericGauge::with_opts(metric_specs.opts("zk_halo2_backend_id")).expect("Infallible");
-        let zk_halo2_max_k =
-            GenericGauge::with_opts(metric_specs.opts("zk_halo2_max_k")).expect("Infallible");
-        let zk_halo2_verifier_budget_ms =
-            GenericGauge::with_opts(metric_specs.opts("zk_halo2_verifier_budget_ms"))
-                .expect("Infallible");
-        let zk_halo2_verifier_max_batch =
-            GenericGauge::with_opts(metric_specs.opts("zk_halo2_verifier_max_batch"))
-                .expect("Infallible");
-        let zk_halo2_verifier_worker_threads =
-            GenericGauge::with_opts(metric_specs.opts("zk_halo2_verifier_worker_threads"))
-                .expect("Infallible");
-        let zk_halo2_verifier_queue_cap =
-            GenericGauge::with_opts(metric_specs.opts("zk_halo2_verifier_queue_cap"))
-                .expect("Infallible");
-        let zk_lane_enqueue_wait_total =
-            IntCounter::with_opts(metric_specs.opts("zk_lane_enqueue_wait_total"))
-                .expect("Infallible");
-        let zk_lane_enqueue_timeout_total =
-            IntCounter::with_opts(metric_specs.opts("zk_lane_enqueue_timeout_total"))
-                .expect("Infallible");
-        let zk_lane_drop_total =
-            IntCounterVec::new(metric_specs.opts("zk_lane_drop_total"), &["reason"])
-                .expect("Infallible");
-        let zk_lane_retry_enqueued_total =
-            IntCounter::with_opts(metric_specs.opts("zk_lane_retry_enqueued_total"))
-                .expect("Infallible");
-        let zk_lane_retry_replayed_total =
-            IntCounter::with_opts(metric_specs.opts("zk_lane_retry_replayed_total"))
-                .expect("Infallible");
-        let zk_lane_retry_exhausted_total =
-            IntCounter::with_opts(metric_specs.opts("zk_lane_retry_exhausted_total"))
-                .expect("Infallible");
-        let zk_lane_pending_depth =
-            GenericGauge::with_opts(metric_specs.opts("zk_lane_pending_depth"))
-                .expect("Infallible");
-        let zk_lane_retry_ring_depth =
-            GenericGauge::with_opts(metric_specs.opts("zk_lane_retry_ring_depth"))
-                .expect("Infallible");
-        let zk_verifier_cache_events_total = IntCounterVec::new(
-            metric_specs.opts("zk_verifier_cache_events_total"),
-            &["cache", "event"],
-        )
-        .expect("Infallible");
-        let confidential_gas_base_verify =
-            GenericGauge::with_opts(metric_specs.opts("confidential_gas_base_verify"))
-                .expect("Infallible");
-        let confidential_gas_per_public_input =
-            GenericGauge::with_opts(metric_specs.opts("confidential_gas_per_public_input"))
-                .expect("Infallible");
-        let confidential_gas_per_proof_byte =
-            GenericGauge::with_opts(metric_specs.opts("confidential_gas_per_proof_byte"))
-                .expect("Infallible");
-        let confidential_gas_per_nullifier =
-            GenericGauge::with_opts(metric_specs.opts("confidential_gas_per_nullifier"))
-                .expect("Infallible");
-        let confidential_gas_per_commitment =
-            GenericGauge::with_opts(metric_specs.opts("confidential_gas_per_commitment"))
-                .expect("Infallible");
-        let ivm_gas_schedule_hash_lo =
-            GenericGauge::with_opts(metric_specs.opts("ivm_gas_schedule_hash_lo"))
-                .expect("Infallible");
-        let ivm_gas_schedule_hash_hi =
-            GenericGauge::with_opts(metric_specs.opts("ivm_gas_schedule_hash_hi"))
-                .expect("Infallible");
-        let confidential_tree_commitments = GenericGaugeVec::new(
-            metric_specs.opts("confidential_tree_commitments"),
-            &["asset_id"],
-        )
-        .expect("Infallible");
-        let confidential_tree_depth =
-            GenericGaugeVec::new(metric_specs.opts("confidential_tree_depth"), &["asset_id"])
-                .expect("Infallible");
-        let confidential_root_history_entries = GenericGaugeVec::new(
-            metric_specs.opts("confidential_root_history_entries"),
-            &["asset_id"],
-        )
-        .expect("Infallible");
-        let confidential_frontier_checkpoints = GenericGaugeVec::new(
-            metric_specs.opts("confidential_frontier_checkpoints"),
-            &["asset_id"],
-        )
-        .expect("Infallible");
-        let confidential_frontier_last_height = GenericGaugeVec::new(
-            metric_specs.opts("confidential_frontier_last_height"),
-            &["asset_id"],
-        )
-        .expect("Infallible");
-        let confidential_frontier_last_commitments = GenericGaugeVec::new(
-            metric_specs.opts("confidential_frontier_last_commitments"),
-            &["asset_id"],
-        )
-        .expect("Infallible");
-        let confidential_root_evictions_total = IntCounterVec::new(
-            metric_specs.opts("confidential_root_evictions_total"),
-            &["asset_id"],
-        )
-        .expect("Infallible");
-        let confidential_frontier_evictions_total = IntCounterVec::new(
-            metric_specs.opts("confidential_frontier_evictions_total"),
-            &["asset_id"],
-        )
-        .expect("Infallible");
-        let oracle_price_local_per_xor =
-            Gauge::with_opts(metric_specs.opts("oracle_price_local_per_xor")).expect("Infallible");
-        let oracle_twap_window_seconds =
-            GenericGauge::with_opts(metric_specs.opts("oracle_twap_window_seconds"))
-                .expect("Infallible");
-        let oracle_haircut_basis_points =
-            GenericGauge::with_opts(metric_specs.opts("oracle_haircut_basis_points"))
-                .expect("Infallible");
-        let oracle_staleness_seconds =
-            Gauge::with_opts(metric_specs.opts("oracle_staleness_seconds")).expect("Infallible");
-        let oracle_observations_total =
-            IntCounterVec::new(metric_specs.opts("oracle_observations_total"), &["feed_id"])
-                .expect("Infallible");
-        let oracle_aggregation_duration_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("oracle_aggregation_duration_ms")
-                .buckets(vec![1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0]),
-            &["feed_id"],
-        )
-        .expect("Infallible");
-        let oracle_rewards_total =
-            IntCounterVec::new(metric_specs.opts("oracle_rewards_total"), &["feed_id"])
-                .expect("Infallible");
-        let oracle_penalties_total =
-            IntCounterVec::new(metric_specs.opts("oracle_penalties_total"), &["feed_id"])
-                .expect("Infallible");
-        let oracle_feed_events_total =
-            IntCounterVec::new(metric_specs.opts("oracle_feed_events_total"), &["feed_id"])
-                .expect("Infallible");
-        let oracle_feed_events_with_evidence_total = IntCounterVec::new(
-            metric_specs.opts("oracle_feed_events_with_evidence_total"),
-            &["feed_id"],
-        )
-        .expect("Infallible");
-        let oracle_evidence_hashes_total = IntCounterVec::new(
-            metric_specs.opts("oracle_evidence_hashes_total"),
-            &["feed_id"],
-        )
-        .expect("Infallible");
-        let fastpq_execution_mode_total = IntCounterVec::new(
-            metric_specs.opts("fastpq_execution_mode_total"),
-            &[
-                "requested",
-                "resolved",
-                "backend",
-                "device_class",
-                "chip_family",
-                "gpu_kind",
-            ],
-        )
-        .expect("Infallible");
-        let fastpq_poseidon_pipeline_total = IntCounterVec::new(
-            metric_specs.opts("fastpq_poseidon_pipeline_total"),
-            &[
-                "requested",
-                "resolved",
-                "path",
-                "device_class",
-                "chip_family",
-                "gpu_kind",
-            ],
-        )
-        .expect("Infallible");
-        let fastpq_gpu_disable_total = IntCounterVec::new(
-            metric_specs.opts("fastpq_gpu_disable_total"),
-            &[
-                "accelerator",
-                "reason",
-                "device_class",
-                "chip_family",
-                "gpu_kind",
-            ],
-        )
-        .expect("Infallible");
-        let fastpq_gpu_parity_failure_total = IntCounterVec::new(
-            metric_specs.opts("fastpq_gpu_parity_failure_total"),
-            &[
-                "accelerator",
-                "reason",
-                "device_class",
-                "chip_family",
-                "gpu_kind",
-            ],
-        )
-        .expect("Infallible");
-        let fastpq_proof_sidecar_queue_depth =
-            GenericGauge::with_opts(metric_specs.opts("fastpq_proof_sidecar_queue_depth"))
-                .expect("Infallible");
-        let fastpq_proof_sidecar_events_total = IntCounterVec::new(
-            metric_specs.opts("fastpq_proof_sidecar_events_total"),
-            &["event"],
-        )
-        .expect("Infallible");
-        let fastpq_metal_queue_ratio = GaugeVec::new(
-            metric_specs.opts("fastpq_metal_queue_ratio"),
-            &["device_class", "chip_family", "gpu_kind", "queue", "metric"],
-        )
-        .expect("Infallible");
-        let fastpq_metal_queue_depth = GaugeVec::new(
-            metric_specs.opts("fastpq_metal_queue_depth"),
-            &["device_class", "chip_family", "gpu_kind", "metric"],
-        )
-        .expect("Infallible");
-        let fastpq_zero_fill_duration_ms = GaugeVec::new(
-            metric_specs.opts("fastpq_zero_fill_duration_ms"),
-            &["device_class", "chip_family", "gpu_kind"],
-        )
-        .expect("Infallible");
-        let fastpq_zero_fill_bandwidth_gbps = GaugeVec::new(
-            metric_specs.opts("fastpq_zero_fill_bandwidth_gbps"),
-            &["device_class", "chip_family", "gpu_kind"],
-        )
-        .expect("Infallible");
-        let sm_syscall_failures_total = IntCounterVec::new(
-            metric_specs.opts("sm_syscall_failures_total"),
-            &["kind", "mode", "reason"],
-        )
-        .expect("Infallible");
-        let settlement_events_total = IntCounterVec::new(
-            metric_specs.opts("settlement_events_total"),
-            &["kind", "outcome", "reason"],
-        )
-        .expect("Infallible");
+    }
+    [sm_openssl_preview zk_halo2_enabled zk_halo2_curve_id zk_halo2_backend_id zk_halo2_max_k
+        zk_halo2_verifier_budget_ms zk_halo2_verifier_max_batch zk_halo2_verifier_worker_threads
+        zk_halo2_verifier_queue_cap zk_lane_enqueue_wait_total zk_lane_enqueue_timeout_total
+        zk_lane_drop_total zk_lane_retry_enqueued_total zk_lane_retry_replayed_total
+        zk_lane_retry_exhausted_total zk_lane_pending_depth zk_lane_retry_ring_depth
+        zk_verifier_cache_events_total confidential_gas_base_verify
+        confidential_gas_per_public_input confidential_gas_per_proof_byte
+        confidential_gas_per_nullifier confidential_gas_per_commitment ivm_gas_schedule_hash_lo
+        ivm_gas_schedule_hash_hi confidential_tree_commitments confidential_tree_depth
+        confidential_root_history_entries confidential_frontier_checkpoints
+        confidential_frontier_last_height confidential_frontier_last_commitments
+        confidential_root_evictions_total confidential_frontier_evictions_total
+        oracle_price_local_per_xor oracle_twap_window_seconds oracle_haircut_basis_points
+        oracle_staleness_seconds oracle_observations_total oracle_aggregation_duration_ms
+        oracle_rewards_total oracle_penalties_total oracle_feed_events_total
+        oracle_feed_events_with_evidence_total oracle_evidence_hashes_total
+        fastpq_execution_mode_total fastpq_poseidon_pipeline_total fastpq_gpu_disable_total
+        fastpq_gpu_parity_failure_total fastpq_proof_sidecar_queue_depth
+        fastpq_proof_sidecar_events_total fastpq_metal_queue_ratio fastpq_metal_queue_depth
+        fastpq_zero_fill_duration_ms fastpq_zero_fill_bandwidth_gbps sm_syscall_failures_total
+        settlement_events_total]
+    {
         for kind in ["dvp", "pvp"] {
             let _ = settlement_events_total.with_label_values(&[kind, "success", "-"]);
             for reason in [
@@ -8414,11 +8453,9 @@ impl Default for Metrics {
                 let _ = settlement_events_total.with_label_values(&[kind, "failure", reason]);
             }
         }
-        let settlement_finality_events_total = IntCounterVec::new(
-            metric_specs.opts("settlement_finality_events_total"),
-            &["kind", "outcome", "final_state"],
-        )
-        .expect("Infallible");
+    }
+    [settlement_finality_events_total]
+    {
         for (kind, states) in [
             ("dvp", ["none", "delivery_only", "payment_only", "both"]),
             ("pvp", ["none", "primary_only", "counter_only", "both"]),
@@ -8430,11 +8467,9 @@ impl Default for Metrics {
                 }
             }
         }
-        let settlement_fx_window_ms = HistogramVec::new(
-            metric_specs.histogram_opts("settlement_fx_window_ms"),
-            &["kind", "order", "atomicity"],
-        )
-        .expect("Infallible");
+    }
+    [settlement_fx_window_ms]
+    {
         for kind in ["pvp"] {
             for order in ["delivery_then_payment", "payment_then_delivery"] {
                 for atomicity in ["all_or_nothing", "commit_first_leg", "commit_second_leg"] {
@@ -8442,65 +8477,21 @@ impl Default for Metrics {
                 }
             }
         }
-        let settlement_buffer_xor = GaugeVec::new(
-            metric_specs.opts("settlement_buffer_xor"),
-            &["lane_id", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let settlement_buffer_capacity_xor = GaugeVec::new(
-            metric_specs.opts("settlement_buffer_capacity_xor"),
-            &["lane_id", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let settlement_buffer_status = GaugeVec::new(
-            metric_specs.opts("settlement_buffer_status"),
-            &["lane_id", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let settlement_pnl_xor = GaugeVec::new(
-            metric_specs.opts("settlement_pnl_xor"),
-            &["lane_id", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let settlement_haircut_bp = GaugeVec::new(
-            metric_specs.opts("settlement_haircut_bp"),
-            &["lane_id", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let settlement_swapline_utilisation = GaugeVec::new(
-            metric_specs.opts("settlement_swapline_utilisation"),
-            &["lane_id", "dataspace_id", "profile"],
-        )
-        .expect("Infallible");
-        let settlement_conversion_total = IntCounterVec::new(
-            metric_specs.opts("settlement_conversion_total"),
-            &["lane_id", "dataspace_id", "source_token"],
-        )
-        .expect("Infallible");
-        let settlement_haircut_total = CounterVec::new(
-            metric_specs.opts("settlement_haircut_total"),
-            &["lane_id", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let subscription_billing_attempts_total = IntCounterVec::new(
-            metric_specs.opts("subscription_billing_attempts_total"),
-            &["pricing"],
-        )
-        .expect("Infallible");
-        let subscription_billing_outcomes_total = IntCounterVec::new(
-            metric_specs.opts("subscription_billing_outcomes_total"),
-            &["pricing", "result"],
-        )
-        .expect("Infallible");
+    }
+    [settlement_buffer_xor settlement_buffer_capacity_xor settlement_buffer_status
+        settlement_pnl_xor settlement_haircut_bp settlement_swapline_utilisation
+        settlement_conversion_total settlement_haircut_total subscription_billing_attempts_total
+        subscription_billing_outcomes_total]
+    {
         for pricing in ["fixed", "usage"] {
             let _ = subscription_billing_attempts_total.with_label_values(&[pricing]);
             for result in ["paid", "failed", "suspended", "skipped"] {
                 let _ = subscription_billing_outcomes_total.with_label_values(&[pricing, result]);
             }
         }
-        let social_events_total =
-            IntCounterVec::new(metric_specs.opts("social_events_total"), &["event"])
-                .expect("Infallible");
+    }
+    [social_events_total]
+    {
         for event in [
             "reward_paid",
             "escrow_created",
@@ -8509,21 +8500,10 @@ impl Default for Metrics {
         ] {
             let _ = social_events_total.with_label_values(&[event]);
         }
-        let social_budget_spent =
-            Gauge::with_opts(metric_specs.opts("social_budget_spent")).expect("Infallible");
-        let social_campaign_spent =
-            Gauge::with_opts(metric_specs.opts("social_campaign_spent")).expect("Infallible");
-        let social_campaign_cap =
-            Gauge::with_opts(metric_specs.opts("social_campaign_cap")).expect("Infallible");
-        let social_campaign_remaining =
-            Gauge::with_opts(metric_specs.opts("social_campaign_remaining")).expect("Infallible");
-        let social_campaign_active =
-            Gauge::with_opts(metric_specs.opts("social_campaign_active")).expect("Infallible");
-        let social_halted =
-            Gauge::with_opts(metric_specs.opts("social_halted")).expect("Infallible");
-        let social_rejections_total =
-            IntCounterVec::new(metric_specs.opts("social_rejections_total"), &["reason"])
-                .expect("Infallible");
+    }
+    [social_budget_spent social_campaign_spent social_campaign_cap social_campaign_remaining
+        social_campaign_active social_halted social_rejections_total]
+    {
         for reason in [
             "halted",
             "promo_window",
@@ -8543,278 +8523,58 @@ impl Default for Metrics {
         ] {
             let _ = social_rejections_total.with_label_values(&[reason]);
         }
-        let multisig_direct_sign_reject_total =
-            IntCounter::with_opts(metric_specs.opts("multisig_direct_sign_reject_total"))
-                .expect("Infallible");
-        let social_open_escrows =
-            GenericGauge::with_opts(metric_specs.opts("social_open_escrows")).expect("Infallible");
-        let connected_peers =
-            GenericGauge::with_opts(metric_specs.opts("connected_peers")).expect("Infallible");
-        let p2p_peer_churn_total =
-            IntCounterVec::new(metric_specs.opts("p2p_peer_churn_total"), &["event"])
-                .expect("Infallible");
+    }
+    [multisig_direct_sign_reject_total social_open_escrows connected_peers p2p_peer_churn_total]
+    {
         for event in ["connected", "disconnected"] {
             let _ = p2p_peer_churn_total.with_label_values(&[event]);
         }
-        let uptime_since_genesis_ms =
-            GenericGauge::with_opts(metric_specs.opts("uptime_since_genesis_ms"))
-                .expect("Infallible");
-        let domains = GenericGauge::with_opts(metric_specs.opts("domains")).expect("Infallible");
-        let accounts =
-            GenericGaugeVec::new(metric_specs.opts("accounts"), &["domain"]).expect("Infallible");
-        let view_changes =
-            GenericGauge::with_opts(metric_specs.opts("view_changes")).expect("Infallible");
-        let queue_size =
-            GenericGauge::with_opts(metric_specs.opts("queue_size")).expect("Infallible");
-        let queue_queued =
-            GenericGauge::with_opts(metric_specs.opts("queue_queued")).expect("Infallible");
-        let queue_inflight =
-            GenericGauge::with_opts(metric_specs.opts("queue_inflight")).expect("Infallible");
-        let kura_fsync_enabled =
-            GenericGauge::with_opts(metric_specs.opts("kura_fsync_enabled")).expect("Infallible");
-        let kura_fsync_failures_total =
-            IntCounterVec::new(metric_specs.opts("kura_fsync_failures_total"), &["target"])
-                .expect("Infallible");
-        let kura_fsync_latency_buckets =
-            prometheus::exponential_buckets(1.0, 2.0, 12).expect("valid fsync latency buckets");
-        let kura_fsync_latency_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("kura_fsync_latency_ms")
-                .buckets(kura_fsync_latency_buckets.clone()),
-            &["target"],
-        )
-        .expect("Infallible");
-        let amx_latency_buckets =
-            prometheus::exponential_buckets(1.0, 2.0, 12).expect("valid AMX latency buckets");
-        let amx_prepare_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("amx_prepare_ms")
-                .buckets(amx_latency_buckets.clone()),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let amx_commit_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("amx_commit_ms")
-                .buckets(amx_latency_buckets.clone()),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let amx_abort_total =
-            IntCounterVec::new(metric_specs.opts("amx_abort_total"), &["lane", "stage"])
-                .expect("Infallible");
-        let axt_policy_reject_total = IntCounterVec::new(
-            metric_specs.opts("axt_policy_reject_total"),
-            &["lane", "reason"],
-        )
-        .expect("Infallible");
-        let axt_policy_snapshot_version =
-            GenericGauge::with_opts(metric_specs.opts("axt_policy_snapshot_version"))
-                .expect("Infallible");
-        let axt_policy_snapshot_cache_events_total = IntCounterVec::new(
-            metric_specs.opts("axt_policy_snapshot_cache_events_total"),
-            &["event"],
-        )
-        .expect("Infallible");
-        let axt_proof_cache_events_total = IntCounterVec::new(
-            metric_specs.opts("axt_proof_cache_events_total"),
-            &["event"],
-        )
-        .expect("Infallible");
-        let axt_proof_cache_state = IntGaugeVec::new(
-            metric_specs.opts("axt_proof_cache_state"),
-            &["dsid", "status", "manifest_root_hex", "verified_slot"],
-        )
-        .expect("Infallible");
-        let ivm_exec_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("ivm_exec_ms")
-                .buckets(amx_latency_buckets.clone()),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let ivm_stack_bytes =
-            GenericGaugeVec::new(metric_specs.opts("ivm_stack_bytes"), &["kind", "state"])
-                .expect("Infallible");
-        let ivm_stack_clamped =
-            GenericGaugeVec::new(metric_specs.opts("ivm_stack_clamped"), &["kind"])
-                .expect("Infallible");
-        let ivm_stack_gas_multiplier =
-            GenericGauge::with_opts(metric_specs.opts("ivm_stack_gas_multiplier"))
-                .expect("Infallible");
-        let ivm_stack_pool_fallback_total =
-            IntCounter::with_opts(metric_specs.opts("ivm_stack_pool_fallback_total"))
-                .expect("Infallible");
-        let ivm_stack_budget_hit_total =
-            IntCounter::with_opts(metric_specs.opts("ivm_stack_budget_hit_total"))
-                .expect("Infallible");
-        let sumeragi_tx_queue_depth =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_depth"))
-                .expect("Infallible");
-        let sumeragi_tx_queue_capacity =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_capacity"))
-                .expect("Infallible");
-        let sumeragi_tx_queue_retained_bytes =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_retained_bytes"))
-                .expect("Infallible");
-        let sumeragi_tx_queue_max_retained_bytes =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_max_retained_bytes"))
-                .expect("Infallible");
-        let sumeragi_tx_queue_saturated =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_saturated"))
-                .expect("Infallible");
-        let sumeragi_tx_queue_saturated_by_count =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_saturated_by_count"))
-                .expect("Infallible");
-        let sumeragi_tx_queue_saturated_by_bytes =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_saturated_by_bytes"))
-                .expect("Infallible");
-        let sumeragi_tx_queue_saturated_by_age =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_saturated_by_age"))
-                .expect("Infallible");
-        let sumeragi_tx_queue_oldest_queued_age_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_tx_queue_oldest_queued_age_ms"))
-                .expect("Infallible");
-        let sumeragi_pending_blocks_total =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pending_blocks_total"))
-                .expect("Infallible");
-        let sumeragi_pending_blocks_blocking =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pending_blocks_blocking"))
-                .expect("Infallible");
-        let sumeragi_commit_inflight_queue_depth =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_commit_inflight_queue_depth"))
-                .expect("Infallible");
-        let missing_block_dwell_buckets = vec![
-            50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0, 20_000.0, 60_000.0,
-        ];
-        let sumeragi_missing_block_requests =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_missing_block_requests"))
-                .expect("Infallible");
-        let sumeragi_missing_block_oldest_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_missing_block_oldest_ms"))
-                .expect("Infallible");
-        let sumeragi_missing_block_retry_window_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_missing_block_retry_window_ms"))
-                .expect("Infallible");
-        let sumeragi_missing_block_dwell_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("sumeragi_missing_block_dwell_ms")
-                .buckets(missing_block_dwell_buckets),
-        )
-        .expect("Infallible");
-        let sumeragi_epoch_length_blocks =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_epoch_length_blocks"))
-                .expect("Infallible");
-        let sumeragi_epoch_commit_deadline_offset =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_epoch_commit_deadline_offset"))
-                .expect("Infallible");
-        let sumeragi_epoch_reveal_deadline_offset =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_epoch_reveal_deadline_offset"))
-                .expect("Infallible");
-        let state_tiered_hot_entries =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_entries"))
-                .expect("Infallible");
-        let state_tiered_hot_bytes =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_bytes"))
-                .expect("Infallible");
-        let state_tiered_cold_entries =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_cold_entries"))
-                .expect("Infallible");
-        let state_tiered_cold_bytes =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_cold_bytes"))
-                .expect("Infallible");
-        let state_tiered_cold_reused_entries =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_cold_reused_entries"))
-                .expect("Infallible");
-        let state_tiered_cold_reused_bytes =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_cold_reused_bytes"))
-                .expect("Infallible");
-        let state_tiered_hot_promotions =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_promotions"))
-                .expect("Infallible");
-        let state_tiered_hot_demotions =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_demotions"))
-                .expect("Infallible");
-        let state_tiered_hot_grace_overflow_keys =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_grace_overflow_keys"))
-                .expect("Infallible");
-        let state_tiered_hot_grace_overflow_bytes =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_hot_grace_overflow_bytes"))
-                .expect("Infallible");
-        let state_tiered_last_snapshot_index =
-            GenericGauge::with_opts(metric_specs.opts("state_tiered_last_snapshot_index"))
-                .expect("Infallible");
-        let storage_budget_bytes_used = GenericGaugeVec::new(
-            metric_specs.opts("storage_budget_bytes_used"),
-            &["component"],
-        )
-        .expect("Infallible");
-        let storage_budget_bytes_limit = GenericGaugeVec::new(
-            metric_specs.opts("storage_budget_bytes_limit"),
-            &["component"],
-        )
-        .expect("Infallible");
-        let storage_budget_exceeded_total = IntCounterVec::new(
-            metric_specs.opts("storage_budget_exceeded_total"),
-            &["component"],
-        )
-        .expect("Infallible");
-        let storage_da_cache_total = IntCounterVec::new(
-            metric_specs.opts("storage_da_cache_total"),
-            &["component", "result"],
-        )
-        .expect("Infallible");
-        let storage_da_churn_bytes_total = IntCounterVec::new(
-            metric_specs.opts("storage_da_churn_bytes_total"),
-            &["component", "direction"],
-        )
-        .expect("Infallible");
-        let governance_proposals_status = GenericGaugeVec::new(
-            metric_specs.opts("governance_proposals_status"),
-            &["status"],
-        )
-        .expect("Infallible");
+    }
+    [uptime_since_genesis_ms domains accounts view_changes queue_size queue_queued
+        queue_inflight kura_fsync_enabled kura_fsync_failures_total]
+    [kura_fsync_latency_ms]
+    [amx_prepare_ms amx_commit_ms amx_abort_total axt_policy_reject_total
+        axt_policy_snapshot_version axt_policy_snapshot_cache_events_total
+        axt_proof_cache_events_total axt_proof_cache_state ivm_exec_ms ivm_stack_bytes
+        ivm_stack_clamped ivm_stack_gas_multiplier ivm_stack_pool_fallback_total
+        ivm_stack_budget_hit_total sumeragi_tx_queue_depth sumeragi_tx_queue_capacity
+        sumeragi_tx_queue_retained_bytes sumeragi_tx_queue_max_retained_bytes
+        sumeragi_tx_queue_saturated sumeragi_tx_queue_saturated_by_count
+        sumeragi_tx_queue_saturated_by_bytes sumeragi_tx_queue_saturated_by_age
+        sumeragi_tx_queue_oldest_queued_age_ms sumeragi_pending_blocks_total
+        sumeragi_pending_blocks_blocking sumeragi_commit_inflight_queue_depth]
+    [sumeragi_missing_block_requests sumeragi_missing_block_oldest_ms
+        sumeragi_missing_block_retry_window_ms sumeragi_missing_block_dwell_ms
+        sumeragi_epoch_length_blocks sumeragi_epoch_commit_deadline_offset
+        sumeragi_epoch_reveal_deadline_offset state_tiered_hot_entries state_tiered_hot_bytes
+        state_tiered_cold_entries state_tiered_cold_bytes state_tiered_cold_reused_entries
+        state_tiered_cold_reused_bytes state_tiered_hot_promotions state_tiered_hot_demotions
+        state_tiered_hot_grace_overflow_keys state_tiered_hot_grace_overflow_bytes
+        state_tiered_last_snapshot_index storage_budget_bytes_used storage_budget_bytes_limit
+        storage_budget_exceeded_total storage_da_cache_total storage_da_churn_bytes_total
+        governance_proposals_status]
+    {
         for status in ["proposed", "approved", "rejected", "enacted"] {
             governance_proposals_status
                 .with_label_values(&[status])
                 .set(0);
         }
-        let governance_council_members =
-            GenericGauge::with_opts(metric_specs.opts("governance_council_members"))
-                .expect("Infallible");
-        let governance_council_alternates =
-            GenericGauge::with_opts(metric_specs.opts("governance_council_alternates"))
-                .expect("Infallible");
-        let governance_council_candidates =
-            GenericGauge::with_opts(metric_specs.opts("governance_council_candidates"))
-                .expect("Infallible");
-        let governance_council_epoch =
-            GenericGauge::with_opts(metric_specs.opts("governance_council_epoch"))
-                .expect("Infallible");
-        let governance_citizens_total =
-            GenericGauge::with_opts(metric_specs.opts("governance_citizens_total"))
-                .expect("Infallible");
-        let governance_citizen_service_events_total = IntCounterVec::new(
-            metric_specs.opts("governance_citizen_service_events_total"),
-            &["event"],
-        )
-        .expect("Infallible");
+    }
+    [governance_council_members governance_council_alternates governance_council_candidates
+        governance_council_epoch governance_citizens_total governance_citizen_service_events_total]
+    {
         for event in ["decline", "no_show", "misconduct"] {
             let _ = governance_citizen_service_events_total.with_label_values(&[event]);
         }
-        let governance_protected_namespace_total = IntCounterVec::new(
-            metric_specs.opts("governance_protected_namespace_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
+    }
+    [governance_protected_namespace_total]
+    {
         for outcome in ["allowed", "rejected"] {
             let _ = governance_protected_namespace_total.with_label_values(&[outcome]);
         }
-        let governance_manifest_admission_total = IntCounterVec::new(
-            metric_specs.opts("governance_manifest_admission_total"),
-            &["result"],
-        )
-        .expect("Infallible");
+    }
+    [governance_manifest_admission_total]
+    {
         for result in [
             "allowed",
             "missing_manifest",
@@ -8825,37 +8585,29 @@ impl Default for Metrics {
         ] {
             let _ = governance_manifest_admission_total.with_label_values(&[result]);
         }
-        let governance_manifest_quorum_total = IntCounterVec::new(
-            metric_specs.opts("governance_manifest_quorum_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
+    }
+    [governance_manifest_quorum_total]
+    {
         for outcome in ["satisfied", "rejected"] {
             let _ = governance_manifest_quorum_total.with_label_values(&[outcome]);
         }
-        let governance_manifest_hook_total = IntCounterVec::new(
-            metric_specs.opts("governance_manifest_hook_total"),
-            &["hook", "outcome"],
-        )
-        .expect("Infallible");
+    }
+    [governance_manifest_hook_total]
+    {
         for hook in ["runtime_upgrade"] {
             for outcome in ["allowed", "rejected"] {
                 let _ = governance_manifest_hook_total.with_label_values(&[hook, outcome]);
             }
         }
-        let governance_manifest_activations_total = IntCounterVec::new(
-            metric_specs.opts("governance_manifest_activations_total"),
-            &["event"],
-        )
-        .expect("Infallible");
+    }
+    [governance_manifest_activations_total]
+    {
         for event in ["manifest_inserted", "instance_bound"] {
             let _ = governance_manifest_activations_total.with_label_values(&[event]);
         }
-        let governance_bond_events_total = IntCounterVec::new(
-            metric_specs.opts("governance_bond_events_total"),
-            &["event"],
-        )
-        .expect("Infallible");
+    }
+    [governance_bond_events_total]
+    {
         for event in ["lock_created", "lock_extended", "lock_unlocked"] {
             let _ = governance_bond_events_total.with_label_values(&[event]);
         }
@@ -8876,1182 +8628,195 @@ impl Default for Metrics {
         let recent_rejection_events =
             Mutex::new(VecDeque::with_capacity(REJECTION_RECENT_EVENT_CAP));
         let last_rejection_at_ms = StdAtomicU64::new(0);
-        let alias_usage_total =
-            IntCounterVec::new(metric_specs.opts("alias_usage_total"), &["lane", "event"])
-                .expect("Infallible");
-        let iso_reference_status =
-            IntGaugeVec::new(metric_specs.opts("iso_reference_status"), &["dataset"])
-                .expect("Infallible");
-        let iso_reference_age_seconds =
-            IntGaugeVec::new(metric_specs.opts("iso_reference_age_seconds"), &["dataset"])
-                .expect("Infallible");
-        let iso_reference_records =
-            IntGaugeVec::new(metric_specs.opts("iso_reference_records"), &["dataset"])
-                .expect("Infallible");
-        let iso_reference_refresh_interval_secs = IntGaugeVec::new(
-            metric_specs.opts("iso_reference_refresh_interval_secs"),
-            &["dataset"],
-        )
-        .expect("Infallible");
+    }
+    [alias_usage_total iso_reference_status iso_reference_age_seconds iso_reference_records
+        iso_reference_refresh_interval_secs]
+    {
         for dataset in ["isin_cusip", "bic_lei", "mic_directory"] {
             let _ = iso_reference_status.with_label_values(&[dataset]);
             let _ = iso_reference_age_seconds.with_label_values(&[dataset]);
             let _ = iso_reference_records.with_label_values(&[dataset]);
             let _ = iso_reference_refresh_interval_secs.with_label_values(&[dataset]);
         }
-        let fraud_psp_assessments_total = IntCounterVec::new(
-            metric_specs.opts("fraud_psp_assessments_total"),
-            &["tenant", "band", "lane", "subnet"],
-        )
-        .expect("Infallible");
-        let fraud_psp_missing_assessment_total = IntCounterVec::new(
-            metric_specs.opts("fraud_psp_missing_assessment_total"),
-            &["tenant", "lane", "subnet", "cause"],
-        )
-        .expect("Infallible");
-        let fraud_psp_invalid_metadata_total = IntCounterVec::new(
-            metric_specs.opts("fraud_psp_invalid_metadata_total"),
-            &["tenant", "field", "lane", "subnet"],
-        )
-        .expect("Infallible");
-        let fraud_psp_attestation_total = IntCounterVec::new(
-            metric_specs.opts("fraud_psp_attestation_total"),
-            &["tenant", "engine", "lane", "subnet", "status"],
-        )
-        .expect("Infallible");
-        let fraud_psp_latency_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("fraud_psp_latency_ms")
-                .buckets(prometheus::exponential_buckets(5.0, 1.8, 12).expect("inputs are valid")),
-            &["tenant", "lane", "subnet"],
-        )
-        .expect("Infallible");
-        let fraud_psp_score_bps = HistogramVec::new(
-            metric_specs
-                .histogram_opts("fraud_psp_score_bps")
-                .buckets(prometheus::linear_buckets(0.0, 500.0, 21).expect("inputs are valid")),
-            &["tenant", "band", "lane", "subnet"],
-        )
-        .expect("Infallible");
-        let fraud_psp_outcome_mismatch_total = IntCounterVec::new(
-            metric_specs.opts("fraud_psp_outcome_mismatch_total"),
-            &["tenant", "direction", "lane", "subnet"],
-        )
-        .expect("Infallible");
-        let streaming_hpke_rekeys_total =
-            IntCounterVec::new(metric_specs.opts("streaming_hpke_rekeys_total"), &["suite"])
-                .expect("Infallible");
+    }
+    [fraud_psp_assessments_total fraud_psp_missing_assessment_total
+        fraud_psp_invalid_metadata_total fraud_psp_attestation_total fraud_psp_latency_ms
+        fraud_psp_score_bps fraud_psp_outcome_mismatch_total streaming_hpke_rekeys_total]
+    {
         for suite in ["x25519", "kyber768"] {
             let _ = streaming_hpke_rekeys_total.with_label_values(&[suite]);
         }
-        let streaming_gck_rotations_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_gck_rotations_total"))
-                .expect("Infallible");
-        let streaming_quic_datagrams_sent_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_quic_datagrams_sent_total"))
-                .expect("Infallible");
-        let streaming_quic_datagrams_dropped_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_quic_datagrams_dropped_total"))
-                .expect("Infallible");
-        let streaming_fec_parity_current = GenericGaugeVec::new(
-            metric_specs.opts("streaming_fec_parity_current"),
-            &["bucket"],
-        )
-        .expect("Infallible");
+    }
+    [streaming_gck_rotations_total streaming_quic_datagrams_sent_total
+        streaming_quic_datagrams_dropped_total streaming_fec_parity_current]
+    {
         for bucket in ["0", "1", "2", "3", "4", "ge5"] {
             streaming_fec_parity_current
                 .with_label_values(&[bucket])
                 .set(0);
         }
-        let streaming_feedback_timeout_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_feedback_timeout_total"))
-                .expect("Infallible");
-        let streaming_soranet_provision_fail_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_soranet_provision_fail_total"))
-                .expect("Infallible");
-        let streaming_soranet_provision_queue_drop_total = IntCounterVec::new(
-            metric_specs.opts("streaming_soranet_provision_queue_drop_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
+    }
+    [streaming_feedback_timeout_total streaming_soranet_provision_fail_total
+        streaming_soranet_provision_queue_drop_total]
+    {
         for reason in ["full", "disconnected"] {
             let _ = streaming_soranet_provision_queue_drop_total.with_label_values(&[reason]);
         }
-        let telemetry_redaction_total =
-            IntCounterVec::new(metric_specs.opts("telemetry_redaction_total"), &["reason"])
-                .expect("Infallible");
+    }
+    [telemetry_redaction_total]
+    {
         for reason in ["keyword", "explicit"] {
             let _ = telemetry_redaction_total.with_label_values(&[reason]);
         }
-        let telemetry_redaction_skipped_total = IntCounterVec::new(
-            metric_specs.opts("telemetry_redaction_skipped_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
+    }
+    [telemetry_redaction_skipped_total]
+    {
         for reason in ["allowlist", "disabled", "unsupported"] {
             let _ = telemetry_redaction_skipped_total.with_label_values(&[reason]);
         }
-        let telemetry_truncation_total =
-            IntCounter::with_opts(metric_specs.opts("telemetry_truncation_total"))
-                .expect("Infallible");
-        let streaming_privacy_redaction_fail_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_privacy_redaction_fail_total"))
-                .expect("Infallible");
-        let streaming_encode_latency_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_encode_latency_ms")
-                .buckets(prometheus::exponential_buckets(1.0, 2.0, 10).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let streaming_encode_audio_jitter_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_encode_audio_jitter_ms")
-                .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let streaming_encode_audio_max_jitter_ms =
-            GenericGauge::with_opts(metric_specs.opts("streaming_encode_audio_max_jitter_ms"))
-                .expect("Infallible");
+    }
+    [telemetry_truncation_total streaming_privacy_redaction_fail_total
+        streaming_encode_latency_ms streaming_encode_audio_jitter_ms
+        streaming_encode_audio_max_jitter_ms]
+    {
         streaming_encode_audio_max_jitter_ms.set(0);
-        let streaming_encode_dropped_layers_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_encode_dropped_layers_total"))
-                .expect("Infallible");
-        let streaming_decode_buffer_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_decode_buffer_ms")
-                .buckets(prometheus::exponential_buckets(10.0, 1.8, 10).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let streaming_decode_dropped_frames_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_decode_dropped_frames_total"))
-                .expect("Infallible");
-        let streaming_decode_max_queue_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_decode_max_queue_ms")
-                .buckets(prometheus::exponential_buckets(10.0, 1.8, 10).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let streaming_decode_av_drift_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_decode_av_drift_ms")
-                .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let streaming_decode_max_drift_ms =
-            GenericGauge::with_opts(metric_specs.opts("streaming_decode_max_drift_ms"))
-                .expect("Infallible");
+    }
+    [streaming_encode_dropped_layers_total streaming_decode_buffer_ms
+        streaming_decode_dropped_frames_total streaming_decode_max_queue_ms
+        streaming_decode_av_drift_ms streaming_decode_max_drift_ms]
+    {
         streaming_decode_max_drift_ms.set(0);
-        let streaming_audio_jitter_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_audio_jitter_ms")
-                .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let streaming_audio_max_jitter_ms =
-            GenericGauge::with_opts(metric_specs.opts("streaming_audio_max_jitter_ms"))
-                .expect("Infallible");
+    }
+    [streaming_audio_jitter_ms streaming_audio_max_jitter_ms]
+    {
         streaming_audio_max_jitter_ms.set(0);
-        let streaming_av_drift_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_av_drift_ms")
-                .buckets(prometheus::exponential_buckets(0.5, 2.0, 10).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let streaming_av_max_drift_ms =
-            GenericGauge::with_opts(metric_specs.opts("streaming_av_max_drift_ms"))
-                .expect("Infallible");
+    }
+    [streaming_av_drift_ms streaming_av_max_drift_ms]
+    {
         streaming_av_max_drift_ms.set(0);
-        let streaming_av_drift_ewma_ms =
-            IntGauge::with_opts(metric_specs.opts("streaming_av_drift_ewma_ms"))
-                .expect("Infallible");
+    }
+    [streaming_av_drift_ewma_ms]
+    {
         streaming_av_drift_ewma_ms.set(0);
-        let streaming_av_sync_window_ms =
-            GenericGauge::with_opts(metric_specs.opts("streaming_av_sync_window_ms"))
-                .expect("Infallible");
+    }
+    [streaming_av_sync_window_ms]
+    {
         streaming_av_sync_window_ms.set(0);
-        let streaming_av_sync_violation_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_av_sync_violation_total"))
-                .expect("Infallible");
-        let streaming_network_rtt_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_network_rtt_ms")
-                .buckets(prometheus::exponential_buckets(1.0, 1.8, 12).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let streaming_network_loss_percent_x100 = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_network_loss_percent_x100")
-                .buckets(prometheus::linear_buckets(0.0, 50.0, 21).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let streaming_network_fec_repairs_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_network_fec_repairs_total"))
-                .expect("Infallible");
-        let streaming_network_fec_failures_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_network_fec_failures_total"))
-                .expect("Infallible");
-        let streaming_network_datagram_reinjects_total =
-            IntCounter::with_opts(metric_specs.opts("streaming_network_datagram_reinjects_total"))
-                .expect("Infallible");
-        let streaming_energy_encoder_mw = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_energy_encoder_mw")
-                .buckets(prometheus::exponential_buckets(10.0, 1.8, 12).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let streaming_energy_decoder_mw = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("streaming_energy_decoder_mw")
-                .buckets(prometheus::exponential_buckets(10.0, 1.8, 12).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let nexus_audit_outcome_total = IntCounterVec::new(
-            metric_specs.opts("nexus_audit_outcome_total"),
-            &["trace_id", "status"],
-        )
-        .expect("Infallible");
-        let nexus_audit_outcome_last_timestamp = GenericGaugeVec::new(
-            metric_specs.opts("nexus_audit_outcome_last_timestamp"),
-            &["trace_id"],
-        )
-        .expect("Infallible");
-        let nexus_space_directory_revision_total = IntCounterVec::new(
-            metric_specs.opts("nexus_space_directory_revision_total"),
-            &["dataspace", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let nexus_space_directory_active_manifests = GenericGaugeVec::new(
-            metric_specs.opts("nexus_space_directory_active_manifests"),
-            &["dataspace", "dataspace_id", "profile"],
-        )
-        .expect("Infallible");
-        let nexus_space_directory_revocations_total = IntCounterVec::new(
-            metric_specs.opts("nexus_space_directory_revocations_total"),
-            &["dataspace", "dataspace_id", "reason"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_registered_total = IntCounterVec::new(
-            metric_specs.opts("kaigi_relay_registered_total"),
-            &["domain"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_registration_bandwidth = HistogramVec::new(
-            metric_specs
-                .histogram_opts("kaigi_relay_registration_bandwidth")
-                .buckets(prometheus::linear_buckets(1.0, 1.0, 8).expect("inputs are valid")),
-            &["domain"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_manifest_updates_total = IntCounterVec::new(
-            metric_specs.opts("kaigi_relay_manifest_updates_total"),
-            &["domain", "action"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_manifest_updates_by_domain_total = IntCounterVec::new(
-            Opts::new(
-                "kaigi_relay_manifest_updates_by_domain_total",
-                "Kaigi relay manifest updates grouped only by domain for bounded diagnostics",
-            ),
-            &["domain"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_manifest_hop_count = HistogramVec::new(
-            metric_specs
-                .histogram_opts("kaigi_relay_manifest_hop_count")
-                .buckets(prometheus::linear_buckets(0.0, 1.0, 9).expect("inputs are valid")),
-            &["domain"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_failover_total = IntCounterVec::new(
-            metric_specs.opts("kaigi_relay_failover_total"),
-            &["domain", "call"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_failovers_by_domain_total = IntCounterVec::new(
-            Opts::new(
-                "kaigi_relay_failovers_by_domain_total",
-                "Kaigi relay failovers grouped only by domain for bounded diagnostics",
-            ),
-            &["domain"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_failover_hop_count = HistogramVec::new(
-            metric_specs
-                .histogram_opts("kaigi_relay_failover_hop_count")
-                .buckets(prometheus::linear_buckets(0.0, 1.0, 9).expect("inputs are valid")),
-            &["domain"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_health_reports_total = IntCounterVec::new(
-            metric_specs.opts("kaigi_relay_health_reports_total"),
-            &["domain", "status"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_health_reports_by_domain_total = IntCounterVec::new(
-            Opts::new(
-                "kaigi_relay_health_reports_by_domain_total",
-                "Kaigi relay health reports grouped only by domain for bounded diagnostics",
-            ),
-            &["domain"],
-        )
-        .expect("Infallible");
-        let kaigi_relay_health_state = IntGaugeVec::new(
-            metric_specs.opts("kaigi_relay_health_state"),
-            &["domain", "relay"],
-        )
-        .expect("Infallible");
-        let dropped_messages =
-            IntCounter::with_opts(metric_specs.opts("dropped_messages")).expect("Infallible");
-        let sumeragi_dropped_block_messages_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_dropped_block_messages_total"))
-                .expect("Infallible");
-        let sumeragi_dropped_control_messages_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_dropped_control_messages_total"))
-                .expect("Infallible");
-        let registry = Registry::new();
-        let musubi = musubi::MusubiMetrics::new(&registry);
-        register_guarded(&registry, &streaming_hpke_rekeys_total);
-        register_guarded(&registry, &streaming_fec_parity_current);
-        register_guarded(&registry, &streaming_soranet_provision_queue_drop_total);
-        register_guarded(&registry, &streaming_encode_latency_ms);
-        register_guarded(&registry, &streaming_encode_audio_jitter_ms);
-        register_guarded(&registry, &streaming_encode_audio_max_jitter_ms);
-        register_guarded(&registry, &streaming_decode_buffer_ms);
-        register_guarded(&registry, &streaming_decode_max_queue_ms);
-        register_guarded(&registry, &streaming_decode_av_drift_ms);
-        register_guarded(&registry, &streaming_decode_max_drift_ms);
-        register_guarded(&registry, &streaming_audio_jitter_ms);
-        register_guarded(&registry, &streaming_audio_max_jitter_ms);
-        register_guarded(&registry, &streaming_av_drift_ms);
-        register_guarded(&registry, &streaming_av_max_drift_ms);
-        register_guarded(&registry, &streaming_av_drift_ewma_ms);
-        register_guarded(&registry, &streaming_av_sync_window_ms);
-        register_guarded(&registry, &streaming_av_sync_violation_total);
-        register_guarded(&registry, &streaming_network_rtt_ms);
-        register_guarded(&registry, &streaming_network_loss_percent_x100);
-        register_guarded(&registry, &streaming_energy_encoder_mw);
-        register_guarded(&registry, &streaming_energy_decoder_mw);
-        register_guarded(&registry, &nexus_audit_outcome_total);
-        register_guarded(&registry, &nexus_audit_outcome_last_timestamp);
-        register_guarded(&registry, &nexus_space_directory_revision_total);
-        register_guarded(&registry, &nexus_space_directory_active_manifests);
-        register_guarded(&registry, &nexus_space_directory_revocations_total);
-        register!(
-            registry,
-            streaming_gck_rotations_total,
-            streaming_quic_datagrams_sent_total,
-            streaming_quic_datagrams_dropped_total,
-            streaming_feedback_timeout_total,
-            streaming_soranet_provision_fail_total,
-            telemetry_redaction_total,
-            telemetry_redaction_skipped_total,
-            telemetry_truncation_total,
-            streaming_privacy_redaction_fail_total,
-            streaming_encode_dropped_layers_total,
-            streaming_decode_dropped_frames_total,
-            streaming_network_fec_repairs_total,
-            streaming_network_fec_failures_total,
-            streaming_network_datagram_reinjects_total
-        );
-        let sumeragi_vrf_commits_emitted_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_vrf_commits_emitted_total"))
-                .expect("Infallible");
-        let sumeragi_vrf_reveals_emitted_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_vrf_reveals_emitted_total"))
-                .expect("Infallible");
-        let sumeragi_vrf_reveals_late_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_vrf_reveals_late_total"))
-                .expect("Infallible");
-        let sumeragi_vrf_non_reveal_penalties_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_vrf_non_reveal_penalties_total"))
-                .expect("Infallible");
-        let sumeragi_vrf_non_reveal_by_signer = IntCounterVec::new(
-            metric_specs.opts("sumeragi_vrf_non_reveal_by_signer"),
-            &["idx"],
-        )
-        .expect("Infallible");
-        let sumeragi_vrf_no_participation_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_vrf_no_participation_total"))
-                .expect("Infallible");
-        let sumeragi_vrf_no_participation_by_signer = IntCounterVec::new(
-            metric_specs.opts("sumeragi_vrf_no_participation_by_signer"),
-            &["idx"],
-        )
-        .expect("Infallible");
-        let sumeragi_vrf_rejects_total_by_reason = IntCounterVec::new(
-            metric_specs.opts("sumeragi_vrf_rejects_total_by_reason"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let p2p_dropped_posts =
-            GenericGauge::with_opts(metric_specs.opts("p2p_dropped_posts")).expect("Infallible");
-        let p2p_dropped_broadcasts =
-            GenericGauge::with_opts(metric_specs.opts("p2p_dropped_broadcasts"))
-                .expect("Infallible");
-        let p2p_subscriber_queue_full_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_subscriber_queue_full_total"))
-                .expect("Infallible");
-        let p2p_subscriber_queue_full_by_topic_total = GenericGaugeVec::new(
-            metric_specs.opts("p2p_subscriber_queue_full_by_topic_total"),
-            &["topic"],
-        )
-        .expect("Infallible");
-        let p2p_subscriber_unrouted_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_subscriber_unrouted_total"))
-                .expect("Infallible");
-        let p2p_subscriber_unrouted_by_topic_total = GenericGaugeVec::new(
-            metric_specs.opts("p2p_subscriber_unrouted_by_topic_total"),
-            &["topic"],
-        )
-        .expect("Infallible");
-        let p2p_handshake_failures =
-            GenericGauge::with_opts(metric_specs.opts("p2p_handshake_failures"))
-                .expect("Infallible");
-        let p2p_low_post_throttled_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_low_post_throttled_total"))
-                .expect("Infallible");
-        let p2p_low_broadcast_throttled_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_low_broadcast_throttled_total"))
-                .expect("Infallible");
-        let p2p_post_overflow_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_post_overflow_total"))
-                .expect("Infallible");
-        let p2p_post_overflow_by_topic = GenericGaugeVec::new(
-            metric_specs.opts("p2p_post_overflow_by_topic"),
-            &["priority", "topic"],
-        )
-        .expect("Infallible");
-        let consensus_ingress_drop_total = IntCounterVec::new(
-            metric_specs.opts("consensus_ingress_drop_total"),
-            &["topic", "reason"],
-        )
-        .expect("Infallible");
-        let p2p_dns_refresh_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_dns_refresh_total"))
-                .expect("Infallible");
-        let p2p_dns_ttl_refresh_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_dns_ttl_refresh_total"))
-                .expect("Infallible");
-        let p2p_dns_resolution_fail_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_dns_resolution_fail_total"))
-                .expect("Infallible");
-        let p2p_dns_reconnect_success_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_dns_reconnect_success_total"))
-                .expect("Infallible");
-        let p2p_backoff_scheduled_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_backoff_scheduled_total"))
-                .expect("Infallible");
-        let p2p_deferred_send_enqueued_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_deferred_send_enqueued_total"))
-                .expect("Infallible");
-        let p2p_deferred_send_dropped_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_deferred_send_dropped_total"))
-                .expect("Infallible");
-        let p2p_session_reconnect_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_session_reconnect_total"))
-                .expect("Infallible");
-        let p2p_connect_retry_seconds =
-            GenericGauge::with_opts(metric_specs.opts("p2p_connect_retry_seconds"))
-                .expect("Infallible");
-        let p2p_accept_throttled_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_accept_throttled_total"))
-                .expect("Infallible");
-        let p2p_accept_bucket_evictions_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_accept_bucket_evictions_total"))
-                .expect("Infallible");
-        let p2p_accept_buckets_current =
-            GenericGauge::with_opts(metric_specs.opts("p2p_accept_buckets_current"))
-                .expect("Infallible");
-        let p2p_accept_prefix_cache_total = GenericGaugeVec::new(
-            metric_specs.opts("p2p_accept_prefix_cache_total"),
-            &["result"],
-        )
-        .expect("Infallible");
-        let p2p_accept_throttle_decisions_total = GenericGaugeVec::new(
-            metric_specs.opts("p2p_accept_throttle_decisions_total"),
-            &["scope", "decision"],
-        )
-        .expect("Infallible");
-        let p2p_incoming_cap_reject_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_incoming_cap_reject_total"))
-                .expect("Infallible");
-        let p2p_total_cap_reject_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_total_cap_reject_total"))
-                .expect("Infallible");
-        let p2p_trust_score = IntGaugeVec::new(metric_specs.opts("p2p_trust_score"), &["peer_id"])
-            .expect("Infallible");
-        let p2p_trust_penalties_total =
-            IntCounterVec::new(metric_specs.opts("p2p_trust_penalties_total"), &["reason"])
-                .expect("Infallible");
-        let p2p_trust_decay_ticks_total = IntCounterVec::new(
-            metric_specs.opts("p2p_trust_decay_ticks_total"),
-            &["peer_id"],
-        )
-        .expect("Infallible");
-        let p2p_trust_gossip_skipped_total = IntCounterVec::new(
-            metric_specs.opts("p2p_trust_gossip_skipped_total"),
-            &["direction", "reason"],
-        )
-        .expect("Infallible");
+    }
+    [streaming_av_sync_violation_total streaming_network_rtt_ms
+        streaming_network_loss_percent_x100 streaming_network_fec_repairs_total
+        streaming_network_fec_failures_total streaming_network_datagram_reinjects_total
+        streaming_energy_encoder_mw streaming_energy_decoder_mw nexus_audit_outcome_total
+        nexus_audit_outcome_last_timestamp nexus_space_directory_revision_total
+        nexus_space_directory_active_manifests nexus_space_directory_revocations_total
+        kaigi_relay_registered_total kaigi_relay_registration_bandwidth
+        kaigi_relay_manifest_updates_total kaigi_relay_manifest_hop_count
+        kaigi_relay_failover_total kaigi_relay_failover_hop_count kaigi_relay_health_reports_total
+        kaigi_relay_health_state dropped_messages sumeragi_dropped_block_messages_total
+        sumeragi_dropped_control_messages_total sumeragi_vrf_commits_emitted_total
+        sumeragi_vrf_reveals_emitted_total sumeragi_vrf_reveals_late_total
+        sumeragi_vrf_non_reveal_penalties_total sumeragi_vrf_non_reveal_by_signer
+        sumeragi_vrf_no_participation_total sumeragi_vrf_no_participation_by_signer
+        sumeragi_vrf_rejects_total_by_reason p2p_dropped_posts p2p_dropped_broadcasts
+        p2p_subscriber_queue_full_total p2p_subscriber_queue_full_by_topic_total
+        p2p_subscriber_unrouted_total p2p_subscriber_unrouted_by_topic_total p2p_handshake_failures
+        p2p_low_post_throttled_total p2p_low_broadcast_throttled_total p2p_post_overflow_total
+        p2p_post_overflow_by_topic consensus_ingress_drop_total p2p_dns_refresh_total
+        p2p_dns_ttl_refresh_total p2p_dns_resolution_fail_total p2p_dns_reconnect_success_total
+        p2p_backoff_scheduled_total p2p_deferred_send_enqueued_total
+        p2p_deferred_send_dropped_total p2p_session_reconnect_total p2p_connect_retry_seconds
+        p2p_accept_throttled_total p2p_accept_bucket_evictions_total p2p_accept_buckets_current
+        p2p_accept_prefix_cache_total p2p_accept_throttle_decisions_total
+        p2p_incoming_cap_reject_total p2p_total_cap_reject_total p2p_trust_score
+        p2p_trust_penalties_total p2p_trust_decay_ticks_total p2p_trust_gossip_skipped_total]
+    {
         for direction in ["send", "recv"] {
             for reason in ["peer_capability_off", "local_capability_off"] {
                 let _ = p2p_trust_gossip_skipped_total.with_label_values(&[direction, reason]);
             }
         }
-        let p2p_ws_inbound_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_ws_inbound_total")).expect("Infallible");
-        let p2p_ws_outbound_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_ws_outbound_total"))
-                .expect("Infallible");
-        let p2p_scion_inbound_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_scion_inbound_total"))
-                .expect("Infallible");
-        let p2p_scion_outbound_total =
-            GenericGauge::with_opts(metric_specs.opts("p2p_scion_outbound_total"))
-                .expect("Infallible");
-        let tx_gossip_sent_total = IntCounterVec::new(
-            metric_specs.opts("tx_gossip_sent_total"),
-            &["plane", "dataspace"],
-        )
-        .expect("Infallible");
-        let tx_gossip_dropped_total = IntCounterVec::new(
-            metric_specs.opts("tx_gossip_dropped_total"),
-            &["plane", "dataspace", "reason"],
-        )
-        .expect("Infallible");
-        let tx_gossip_targets = GenericGaugeVec::new(
-            metric_specs.opts("tx_gossip_targets"),
-            &["plane", "dataspace"],
-        )
-        .expect("Infallible");
-        let tx_gossip_fallback_total = IntCounterVec::new(
-            metric_specs.opts("tx_gossip_fallback_total"),
-            &["plane", "dataspace", "surface"],
-        )
-        .expect("Infallible");
-        let tx_gossip_frame_cap_bytes =
-            GenericGauge::with_opts(metric_specs.opts("tx_gossip_frame_cap_bytes"))
-                .expect("Infallible");
-        let tx_gossip_public_target_cap =
-            GenericGauge::with_opts(metric_specs.opts("tx_gossip_public_target_cap"))
-                .expect("Infallible");
-        let tx_gossip_restricted_target_cap =
-            GenericGauge::with_opts(metric_specs.opts("tx_gossip_restricted_target_cap"))
-                .expect("Infallible");
-        let tx_gossip_public_target_reshuffle_ms =
-            GenericGauge::with_opts(metric_specs.opts("tx_gossip_public_target_reshuffle_ms"))
-                .expect("Infallible");
-        let tx_gossip_restricted_target_reshuffle_ms =
-            GenericGauge::with_opts(metric_specs.opts("tx_gossip_restricted_target_reshuffle_ms"))
-                .expect("Infallible");
-        let tx_gossip_drop_unknown_dataspace =
-            GenericGauge::with_opts(metric_specs.opts("tx_gossip_drop_unknown_dataspace"))
-                .expect("Infallible");
-        let tx_gossip_restricted_fallback =
-            GenericGauge::with_opts(metric_specs.opts("tx_gossip_restricted_fallback"))
-                .expect("Infallible");
-        let tx_gossip_restricted_public_policy =
-            GenericGauge::with_opts(metric_specs.opts("tx_gossip_restricted_public_policy"))
-                .expect("Infallible");
+    }
+    [p2p_ws_inbound_total p2p_ws_outbound_total p2p_scion_inbound_total p2p_scion_outbound_total
+        tx_gossip_sent_total tx_gossip_dropped_total tx_gossip_targets tx_gossip_fallback_total
+        tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
+        tx_gossip_public_target_reshuffle_ms tx_gossip_restricted_target_reshuffle_ms
+        tx_gossip_drop_unknown_dataspace tx_gossip_restricted_fallback
+        tx_gossip_restricted_public_policy]
+    {
         let tx_gossip_status = Arc::new(RwLock::new(Vec::new()));
         let tx_gossip_caps = Arc::new(RwLock::new(TxGossipCaps::default()));
-        let sumeragi_new_view_receipts_by_hv = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_new_view_receipts_by_hv"),
-            &["height", "view"],
-        )
-        .expect("Infallible");
-        let sumeragi_post_to_peer_total =
-            IntCounterVec::new(metric_specs.opts("sumeragi_post_to_peer_total"), &["peer"])
-                .expect("Infallible");
-        let sumeragi_bg_post_enqueued_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_bg_post_enqueued_total"),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_bg_post_overflow_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_bg_post_overflow_total"),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_bg_post_drop_total =
-            IntCounterVec::new(metric_specs.opts("sumeragi_bg_post_drop_total"), &["kind"])
-                .expect("Infallible");
-        let sumeragi_bg_post_queue_depth =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_bg_post_queue_depth"))
-                .expect("Infallible");
-        let sumeragi_bg_post_queue_depth_by_peer = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_bg_post_queue_depth_by_peer"),
-            &["peer"],
-        )
-        .expect("Infallible");
-        let sumeragi_bg_post_age_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sumeragi_bg_post_age_ms")
-                .buckets(prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid")),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_new_view_publish_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_new_view_publish_total"))
-                .expect("Infallible");
-        let sumeragi_new_view_recv_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_new_view_recv_total"))
-                .expect("Infallible");
-        let sumeragi_new_view_dropped_by_lock_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_new_view_dropped_by_lock_total"))
-                .expect("Infallible");
-        let sumeragi_commit_conflict_detected_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_commit_conflict_detected_total"))
-                .expect("Infallible");
-        let sumeragi_missing_block_fetch_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_missing_block_fetch_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        let sumeragi_missing_block_fetch_target_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_missing_block_fetch_target_total"),
-            &["target"],
-        )
-        .expect("Infallible");
-        let sumeragi_missing_block_fetch_dwell_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("sumeragi_missing_block_fetch_dwell_ms")
-                .buckets(prometheus::exponential_buckets(10.0, 2.0, 8).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let sumeragi_missing_block_fetch_targets = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("sumeragi_missing_block_fetch_targets")
-                .buckets(prometheus::exponential_buckets(1.0, 2.0, 6).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let blocksync_qc_quarantine_total =
-            IntCounter::with_opts(metric_specs.opts("blocksync_qc_quarantine_total"))
-                .expect("Infallible");
-        let blocksync_qc_revalidated_total =
-            IntCounter::with_opts(metric_specs.opts("blocksync_qc_revalidated_total"))
-                .expect("Infallible");
-        let blocksync_qc_final_drop_total = IntCounterVec::new(
-            metric_specs.opts("blocksync_qc_final_drop_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let qc_deferred_missing_payload_total =
-            IntCounter::with_opts(metric_specs.opts("qc_deferred_missing_payload_total"))
-                .expect("Infallible");
-        let qc_deferred_resolved_total =
-            IntCounter::with_opts(metric_specs.opts("qc_deferred_resolved_total"))
-                .expect("Infallible");
-        let qc_deferred_expired_total =
-            IntCounter::with_opts(metric_specs.opts("qc_deferred_expired_total"))
-                .expect("Infallible");
-        let consensus_empty_commit_topology_defer_total =
-            IntCounter::with_opts(metric_specs.opts("consensus_empty_commit_topology_defer_total"))
-                .expect("Infallible");
-        let consensus_empty_commit_topology_escalation_total = IntCounter::with_opts(
-            metric_specs.opts("consensus_empty_commit_topology_escalation_total"),
-        )
-        .expect("Infallible");
-        let consensus_recovery_state_transitions_total = IntCounterVec::new(
-            metric_specs.opts("consensus_recovery_state_transitions_total"),
-            &["state"],
-        )
-        .expect("Infallible");
-        let consensus_missing_block_height_escalation_total = IntCounter::with_opts(
-            metric_specs.opts("consensus_missing_block_height_escalation_total"),
-        )
-        .expect("Infallible");
-        let consensus_sidecar_quarantine_total =
-            IntCounter::with_opts(metric_specs.opts("consensus_sidecar_quarantine_total"))
-                .expect("Infallible");
-        let consensus_sidecar_final_drop_total =
-            IntCounter::with_opts(metric_specs.opts("consensus_sidecar_final_drop_total"))
-                .expect("Infallible");
-        let blocksync_range_pull_escalation_total =
-            IntCounter::with_opts(metric_specs.opts("blocksync_range_pull_escalation_total"))
-                .expect("Infallible");
-        let blocksync_range_pull_success_total =
-            IntCounter::with_opts(metric_specs.opts("blocksync_range_pull_success_total"))
-                .expect("Infallible");
-        let blocksync_range_pull_failure_total =
-            IntCounter::with_opts(metric_specs.opts("blocksync_range_pull_failure_total"))
-                .expect("Infallible");
-        let consensus_recovery_stuck_round_seconds = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("consensus_recovery_stuck_round_seconds")
-                .buckets(prometheus::exponential_buckets(0.1, 2.0, 10).expect("inputs are valid")),
-        )
-        .expect("Infallible");
-        let sumeragi_da_gate_block_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_da_gate_block_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let sumeragi_da_gate_last_reason =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_da_gate_last_reason"))
-                .expect("Infallible");
-        let sumeragi_da_gate_last_satisfied =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_da_gate_last_satisfied"))
-                .expect("Infallible");
-        let sumeragi_da_gate_satisfied_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_da_gate_satisfied_total"),
-            &["gate"],
-        )
-        .expect("Infallible");
-        let sumeragi_da_manifest_guard_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_da_manifest_guard_total"),
-            &["result", "reason"],
-        )
-        .expect("Infallible");
-        let sumeragi_da_manifest_cache_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_da_manifest_cache_total"),
-            &["result"],
-        )
-        .expect("Infallible");
-        let sumeragi_da_spool_cache_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_da_spool_cache_total"),
-            &["kind", "result"],
-        )
-        .expect("Infallible");
-        let sumeragi_da_pin_intent_spool_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_da_pin_intent_spool_total"),
-            &["result", "reason"],
-        )
-        .expect("Infallible");
+    }
+    [sumeragi_new_view_receipts_by_hv sumeragi_post_to_peer_total
+        sumeragi_bg_post_enqueued_total sumeragi_bg_post_overflow_total sumeragi_bg_post_drop_total
+        sumeragi_bg_post_queue_depth sumeragi_bg_post_queue_depth_by_peer sumeragi_bg_post_age_ms
+        sumeragi_new_view_publish_total sumeragi_new_view_recv_total
+        sumeragi_new_view_dropped_by_lock_total sumeragi_commit_conflict_detected_total
+        sumeragi_missing_block_fetch_total sumeragi_missing_block_fetch_target_total
+        sumeragi_missing_block_fetch_dwell_ms sumeragi_missing_block_fetch_targets
+        blocksync_qc_quarantine_total blocksync_qc_revalidated_total blocksync_qc_final_drop_total
+        qc_deferred_missing_payload_total qc_deferred_resolved_total qc_deferred_expired_total
+        consensus_empty_commit_topology_defer_total
+        consensus_empty_commit_topology_escalation_total consensus_recovery_state_transitions_total
+        consensus_missing_block_height_escalation_total consensus_sidecar_quarantine_total
+        consensus_sidecar_final_drop_total blocksync_range_pull_escalation_total
+        blocksync_range_pull_success_total blocksync_range_pull_failure_total
+        consensus_recovery_stuck_round_seconds sumeragi_da_gate_block_total
+        sumeragi_da_gate_last_reason sumeragi_da_gate_last_satisfied
+        sumeragi_da_gate_satisfied_total sumeragi_da_manifest_guard_total
+        sumeragi_da_manifest_cache_total sumeragi_da_spool_cache_total
+        sumeragi_da_pin_intent_spool_total]
         // RBC metrics
-        let sumeragi_rbc_sessions_active =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_sessions_active"))
-                .expect("Infallible");
-        let sumeragi_rbc_sessions_pruned_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_sessions_pruned_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_init_requests_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_init_requests_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_chunk_requests_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_chunk_requests_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_requested_chunks_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_requested_chunks_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_initial_chunk_targets_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_rbc_initial_chunk_targets_total"),
-            &["encoding", "fanout", "outcome"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_repair_fallback_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_rbc_repair_fallback_total"),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_ready_broadcasts_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_ready_broadcasts_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_rebroadcast_skipped_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_rbc_rebroadcast_skipped_total"),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_deliver_broadcasts_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_deliver_broadcasts_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_payload_bytes_delivered_total = GenericGauge::with_opts(
-            metric_specs.opts("sumeragi_rbc_payload_bytes_delivered_total"),
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_reconstructed_stripes_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_reconstructed_stripes_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_seed_latency_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("sumeragi_rbc_seed_latency_ms")
-                .buckets(vec![
-                    0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
-                ]),
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_lane_tx_count = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_rbc_lane_tx_count"),
-            &["lane_id"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_lane_total_chunks = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_rbc_lane_total_chunks"),
-            &["lane_id"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_lane_pending_chunks = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_rbc_lane_pending_chunks"),
-            &["lane_id"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_lane_bytes_total = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_rbc_lane_bytes_total"),
-            &["lane_id"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_dataspace_tx_count = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_rbc_dataspace_tx_count"),
-            &["lane_id", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_dataspace_total_chunks = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_rbc_dataspace_total_chunks"),
-            &["lane_id", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_dataspace_pending_chunks = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_rbc_dataspace_pending_chunks"),
-            &["lane_id", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_dataspace_bytes_total = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_rbc_dataspace_bytes_total"),
-            &["lane_id", "dataspace_id"],
-        )
-        .expect("Infallible");
-        let sumeragi_da_votes_ingested_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_da_votes_ingested_total"))
-                .expect("Infallible");
-        let sumeragi_qc_assembly_latency_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sumeragi_qc_assembly_latency_ms")
-                .buckets(vec![
-                    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
-                ]),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_qc_last_latency_ms =
-            GenericGaugeVec::new(metric_specs.opts("sumeragi_qc_last_latency_ms"), &["kind"])
-                .expect("Infallible");
-        let sumeragi_rbc_store_sessions =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_store_sessions"))
-                .expect("Infallible");
-        let sumeragi_rbc_store_bytes =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_store_bytes"))
-                .expect("Infallible");
-        let sumeragi_rbc_store_pressure =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_store_pressure"))
-                .expect("Infallible");
-        let sumeragi_rbc_store_evictions_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_store_evictions_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_persist_drops_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_persist_drops_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_status_persistence_disabled =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_status_persistence_disabled"))
-                .expect("Infallible");
-        let sumeragi_rbc_status_persist_failures_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_status_persist_failures_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_backpressure_deferrals_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_backpressure_deferrals_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_deliver_defer_ready_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_deliver_defer_ready_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_deliver_defer_chunks_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_deliver_defer_chunks_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_da_reschedule_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_da_reschedule_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_da_reschedule_by_mode_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_rbc_da_reschedule_by_mode_total"),
-            &["mode"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_abort_total =
-            IntCounterVec::new(metric_specs.opts("sumeragi_rbc_abort_total"), &["mode"])
-                .expect("Infallible");
-        let sumeragi_rbc_mismatch_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_rbc_mismatch_total"),
-            &["peer", "kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_kura_store_failures_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_kura_store_failures_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        let sumeragi_kura_store_last_retry_attempt =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_kura_store_last_retry_attempt"))
-                .expect("Infallible");
-        let sumeragi_kura_store_last_retry_backoff_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_kura_store_last_retry_backoff_ms"))
-                .expect("Infallible");
-        let sumeragi_pacemaker_backpressure_deferrals_total = IntCounter::with_opts(
-            metric_specs.opts("sumeragi_pacemaker_backpressure_deferrals_total"),
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_backpressure_deferrals_by_reason_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_pacemaker_backpressure_deferrals_by_reason_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_backpressure_deferral_duration_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sumeragi_pacemaker_backpressure_deferral_duration_ms")
-                .buckets(vec![
-                    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0,
-                    20000.0,
-                ]),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_backpressure_deferral_active = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_pacemaker_backpressure_deferral_active"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_backpressure_deferral_age_ms = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_pacemaker_backpressure_deferral_age_ms"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_eval_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("sumeragi_pacemaker_eval_ms")
-                .buckets(vec![
-                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
-                ]),
-        )
-        .expect("Infallible");
-        let sumeragi_pacemaker_propose_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("sumeragi_pacemaker_propose_ms")
-                .buckets(vec![
-                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
-                ]),
-        )
-        .expect("Infallible");
-        let sumeragi_commit_stage_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sumeragi_commit_stage_ms")
-                .buckets(vec![
-                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
-                    10000.0, 20000.0,
-                ]),
-            &["stage"],
-        )
-        .expect("Infallible");
-        let state_commit_view_lock_wait_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("state_commit_view_lock_wait_ms")
-                .buckets(vec![
-                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                    10000.0,
-                ]),
-        )
-        .expect("Infallible");
-        let state_commit_view_lock_hold_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("state_commit_view_lock_hold_ms")
-                .buckets(vec![
-                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                    10000.0,
-                ]),
-        )
-        .expect("Infallible");
-        let state_commit_write_lock_wait_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("state_commit_write_lock_wait_ms")
-                .buckets(vec![
-                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                    10000.0,
-                ]),
-        )
-        .expect("Infallible");
-        let state_commit_write_lock_hold_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("state_commit_write_lock_hold_ms")
-                .buckets(vec![
-                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                    10000.0,
-                ]),
-        )
-        .expect("Infallible");
-        let sumeragi_commit_pipeline_tick_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_commit_pipeline_tick_total"),
-            &["mode", "outcome"],
-        )
-        .expect("Infallible");
-        let sumeragi_prevote_timeout_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_prevote_timeout_total"),
-            &["mode"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_backlog_chunks_total =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_backlog_chunks_total"))
-                .expect("Infallible");
-        let sumeragi_rbc_backlog_chunks_max =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_backlog_chunks_max"))
-                .expect("Infallible");
-        let sumeragi_rbc_backlog_sessions_pending =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_backlog_sessions_pending"))
-                .expect("Infallible");
-        let sumeragi_rbc_pending_sessions: GenericGauge<AtomicU64> =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_pending_sessions"))
-                .expect("Infallible");
-        let sumeragi_rbc_pending_chunks: GenericGauge<AtomicU64> =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_pending_chunks"))
-                .expect("Infallible");
-        let sumeragi_rbc_pending_bytes: GenericGauge<AtomicU64> =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_rbc_pending_bytes"))
-                .expect("Infallible");
-        let sumeragi_rbc_pending_drops_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_rbc_pending_drops_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_pending_dropped_bytes_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_rbc_pending_dropped_bytes_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let sumeragi_rbc_pending_evicted_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_rbc_pending_evicted_total"))
-                .expect("Infallible");
-        let sumeragi_membership_mismatch_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_membership_mismatch_total"),
-            &["peer", "height", "view"],
-        )
-        .expect("Infallible");
-        let sumeragi_membership_mismatch_active = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_membership_mismatch_active"),
-            &["peer"],
-        )
-        .expect("Infallible");
-        let sumeragi_highest_qc_height =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_highest_qc_height"))
-                .expect("Infallible");
-        let sumeragi_locked_qc_height =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_locked_qc_height"))
-                .expect("Infallible");
-        let sumeragi_locked_qc_view =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_locked_qc_view"))
-                .expect("Infallible");
+    [sumeragi_rbc_sessions_active sumeragi_rbc_sessions_pruned_total
+        sumeragi_rbc_init_requests_total sumeragi_rbc_chunk_requests_total
+        sumeragi_rbc_requested_chunks_total sumeragi_rbc_initial_chunk_targets_total
+        sumeragi_rbc_repair_fallback_total sumeragi_rbc_ready_broadcasts_total
+        sumeragi_rbc_rebroadcast_skipped_total sumeragi_rbc_deliver_broadcasts_total
+        sumeragi_rbc_payload_bytes_delivered_total sumeragi_rbc_reconstructed_stripes_total
+        sumeragi_rbc_seed_latency_ms sumeragi_rbc_lane_tx_count sumeragi_rbc_lane_total_chunks
+        sumeragi_rbc_lane_pending_chunks sumeragi_rbc_lane_bytes_total
+        sumeragi_rbc_dataspace_tx_count sumeragi_rbc_dataspace_total_chunks
+        sumeragi_rbc_dataspace_pending_chunks sumeragi_rbc_dataspace_bytes_total
+        sumeragi_da_votes_ingested_total sumeragi_qc_assembly_latency_ms
+        sumeragi_qc_last_latency_ms sumeragi_rbc_store_sessions sumeragi_rbc_store_bytes
+        sumeragi_rbc_store_pressure sumeragi_rbc_store_evictions_total
+        sumeragi_rbc_persist_drops_total sumeragi_rbc_status_persistence_disabled
+        sumeragi_rbc_status_persist_failures_total sumeragi_rbc_backpressure_deferrals_total
+        sumeragi_rbc_deliver_defer_ready_total sumeragi_rbc_deliver_defer_chunks_total
+        sumeragi_rbc_da_reschedule_total sumeragi_rbc_da_reschedule_by_mode_total
+        sumeragi_rbc_abort_total sumeragi_rbc_mismatch_total sumeragi_kura_store_failures_total
+        sumeragi_kura_store_last_retry_attempt sumeragi_kura_store_last_retry_backoff_ms
+        sumeragi_pacemaker_backpressure_deferrals_total
+        sumeragi_pacemaker_backpressure_deferrals_by_reason_total
+        sumeragi_pacemaker_backpressure_deferral_duration_ms
+        sumeragi_pacemaker_backpressure_deferral_active
+        sumeragi_pacemaker_backpressure_deferral_age_ms sumeragi_pacemaker_eval_ms
+        sumeragi_pacemaker_propose_ms sumeragi_commit_stage_ms state_commit_view_lock_wait_ms
+        state_commit_view_lock_hold_ms state_commit_write_lock_wait_ms
+        state_commit_write_lock_hold_ms sumeragi_commit_pipeline_tick_total
+        sumeragi_prevote_timeout_total sumeragi_rbc_backlog_chunks_total
+        sumeragi_rbc_backlog_chunks_max sumeragi_rbc_backlog_sessions_pending
+        sumeragi_rbc_pending_sessions sumeragi_rbc_pending_chunks sumeragi_rbc_pending_bytes
+        sumeragi_rbc_pending_drops_total sumeragi_rbc_pending_dropped_bytes_total
+        sumeragi_rbc_pending_evicted_total sumeragi_membership_mismatch_total
+        sumeragi_membership_mismatch_active sumeragi_highest_qc_height sumeragi_locked_qc_height
+        sumeragi_locked_qc_view]
         // Sumeragi pacemaker gauges
-        let sumeragi_pacemaker_backoff_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_backoff_ms"))
-                .expect("Infallible");
-        let sumeragi_pacemaker_rtt_floor_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_rtt_floor_ms"))
-                .expect("Infallible");
-        let sumeragi_pacemaker_backoff_multiplier =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_backoff_multiplier"))
-                .expect("Infallible");
-        let sumeragi_pacemaker_rtt_floor_multiplier =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_rtt_floor_multiplier"))
-                .expect("Infallible");
-        let sumeragi_pacemaker_max_backoff_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_max_backoff_ms"))
-                .expect("Infallible");
-        let sumeragi_pacemaker_jitter_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_jitter_ms"))
-                .expect("Infallible");
-        let sumeragi_pacemaker_jitter_frac_permille =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_jitter_frac_permille"))
-                .expect("Infallible");
-        let sumeragi_pacemaker_round_elapsed_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_round_elapsed_ms"))
-                .expect("Infallible");
-        let sumeragi_pacemaker_view_timeout_target_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_pacemaker_view_timeout_target_ms"))
-                .expect("Infallible");
-        let sumeragi_pacemaker_view_timeout_remaining_ms = GenericGauge::with_opts(
-            metric_specs.opts("sumeragi_pacemaker_view_timeout_remaining_ms"),
-        )
-        .expect("Infallible");
-        let sumeragi_phase_latency_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sumeragi_phase_latency_ms")
-                .buckets(vec![
-                    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
-                ]),
-            &["phase"],
-        )
-        .expect("Infallible");
-        let sumeragi_phase_latency_ema_ms = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_phase_latency_ema_ms"),
-            &["phase"],
-        )
-        .expect("Infallible");
-        let sumeragi_phase_total_ema_ms =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_phase_total_ema_ms"))
-                .expect("Infallible");
-        let p2p_queue_depth =
-            GenericGaugeVec::new(metric_specs.opts("p2p_queue_depth"), &["priority"])
-                .expect("Infallible");
-        let p2p_queue_dropped_total = GenericGaugeVec::new(
-            metric_specs.opts("p2p_queue_dropped_total"),
-            &["priority", "kind"],
-        )
-        .expect("Infallible");
-        let p2p_handshake_ms_bucket =
-            GenericGaugeVec::new(metric_specs.opts("p2p_handshake_ms_bucket"), &["le"])
-                .expect("Infallible");
-        let p2p_handshake_ms_sum =
-            GenericGauge::with_opts(metric_specs.opts("p2p_handshake_ms_sum")).expect("Infallible");
-        let p2p_handshake_ms_count =
-            GenericGauge::with_opts(metric_specs.opts("p2p_handshake_ms_count"))
-                .expect("Infallible");
-        let p2p_handshake_error_total =
-            GenericGaugeVec::new(metric_specs.opts("p2p_handshake_error_total"), &["kind"])
-                .expect("Infallible");
-        let p2p_frame_cap_violations_total = GenericGaugeVec::new(
-            metric_specs.opts("p2p_frame_cap_violations_total"),
-            &["topic"],
-        )
-        .expect("Infallible");
+    [sumeragi_pacemaker_backoff_ms sumeragi_pacemaker_rtt_floor_ms
+        sumeragi_pacemaker_backoff_multiplier sumeragi_pacemaker_rtt_floor_multiplier
+        sumeragi_pacemaker_max_backoff_ms sumeragi_pacemaker_jitter_ms
+        sumeragi_pacemaker_jitter_frac_permille sumeragi_pacemaker_round_elapsed_ms
+        sumeragi_pacemaker_view_timeout_target_ms sumeragi_pacemaker_view_timeout_remaining_ms
+        sumeragi_phase_latency_ms sumeragi_phase_latency_ema_ms sumeragi_phase_total_ema_ms
+        p2p_queue_depth p2p_queue_dropped_total p2p_handshake_ms_bucket p2p_handshake_ms_sum
+        p2p_handshake_ms_count p2p_handshake_error_total p2p_frame_cap_violations_total]
         // Runtime upgrade metrics
-        let runtime_upgrade_events_total =
-            IntCounterVec::new(metric_specs.opts("runtime_upgrade_events_total"), &["kind"])
-                .expect("Infallible");
-        let runtime_upgrade_provenance_rejections_total = IntCounterVec::new(
-            metric_specs.opts("runtime_upgrade_provenance_rejections_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let runtime_abi_version =
-            GenericGauge::with_opts(metric_specs.opts("runtime_abi_version")).expect("Infallible");
+    [runtime_upgrade_events_total runtime_upgrade_provenance_rejections_total
+        runtime_abi_version]
         // Sumeragi consensus counters/histogram
-        let sumeragi_tail_votes_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_tail_votes_total"))
-                .expect("Infallible");
-        let sumeragi_votes_sent_total =
-            IntCounterVec::new(metric_specs.opts("sumeragi_votes_sent_total"), &["phase"])
-                .expect("Infallible");
-        let sumeragi_votes_received_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_votes_received_total"),
-            &["phase"],
-        )
-        .expect("Infallible");
-        let sumeragi_qc_sent_total =
-            IntCounterVec::new(metric_specs.opts("sumeragi_qc_sent_total"), &["kind"])
-                .expect("Infallible");
-        let sumeragi_qc_received_total =
-            IntCounterVec::new(metric_specs.opts("sumeragi_qc_received_total"), &["kind"])
-                .expect("Infallible");
-        let sumeragi_qc_validation_errors_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_qc_validation_errors_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let sumeragi_qc_signer_counts = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sumeragi_qc_signer_counts")
-                .buckets(prometheus::linear_buckets(0.0, 1.0, 64).expect("valid signer buckets")),
-            &["phase", "kind"],
-        )
-        .expect("Infallible");
-        let sumeragi_invalid_signature_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_invalid_signature_total"),
-            &["kind", "outcome"],
-        )
-        .expect("Infallible");
+    [sumeragi_tail_votes_total sumeragi_votes_sent_total sumeragi_votes_received_total
+        sumeragi_qc_sent_total sumeragi_qc_received_total sumeragi_qc_validation_errors_total
+        sumeragi_qc_signer_counts sumeragi_invalid_signature_total]
+    {
         for label in ["prevote", "precommit", "available"] {
             let _ = sumeragi_votes_sent_total.with_label_values(&[label]);
             let _ = sumeragi_votes_received_total.with_label_values(&[label]);
@@ -10070,11 +8835,9 @@ impl Default for Metrics {
         ] {
             let _ = sumeragi_qc_validation_errors_total.with_label_values(&[label]);
         }
-        let sumeragi_validation_reject_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_validation_reject_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
+    }
+    [sumeragi_validation_reject_total]
+    {
         for label in [
             "stateless",
             "execution",
@@ -10084,60 +8847,13 @@ impl Default for Metrics {
         ] {
             let _ = sumeragi_validation_reject_total.with_label_values(&[label]);
         }
-        let sumeragi_validation_reject_last_reason =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_validation_reject_last_reason"))
-                .expect("Infallible");
-        let sumeragi_validation_reject_last_height =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_validation_reject_last_height"))
-                .expect("Infallible");
-        let sumeragi_validation_reject_last_view =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_validation_reject_last_view"))
-                .expect("Infallible");
-        let sumeragi_validation_reject_last_timestamp_ms = GenericGauge::with_opts(
-            metric_specs.opts("sumeragi_validation_reject_last_timestamp_ms"),
-        )
-        .expect("Infallible");
-        let sumeragi_block_sync_roster_source_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_block_sync_roster_source_total"),
-            &["source"],
-        )
-        .expect("Infallible");
-        for label in [
-            "commit_qc_hint",
-            "commit_checkpoint_pair_hint",
-            "validator_checkpoint_hint",
-            "commit_qc_history",
-            "validator_checkpoint_history",
-            "roster_sidecar",
-            "commit_roster_journal",
-        ] {
-            let _ = sumeragi_block_sync_roster_source_total.with_label_values(&[label]);
-        }
-        let sumeragi_block_sync_roster_drop_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_block_sync_roster_drop_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let _ = sumeragi_block_sync_roster_drop_total.with_label_values(&["missing"]);
-        let sumeragi_block_sync_share_blocks_unsolicited_total = IntCounter::with_opts(
-            metric_specs.opts("sumeragi_block_sync_share_blocks_unsolicited_total"),
-        )
-        .expect("Infallible");
-        let sumeragi_consensus_message_handling_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_consensus_message_handling_total"),
-            &["kind", "outcome", "reason"],
-        )
-        .expect("Infallible");
-        let sumeragi_view_change_cause_total = IntCounterVec::new(
-            metric_specs.opts("sumeragi_view_change_cause_total"),
-            &["cause"],
-        )
-        .expect("Infallible");
-        let sumeragi_view_change_cause_last_timestamp_ms = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_view_change_cause_last_timestamp_ms"),
-            &["cause"],
-        )
-        .expect("Infallible");
+    }
+    [sumeragi_validation_reject_last_reason sumeragi_validation_reject_last_height
+        sumeragi_validation_reject_last_view sumeragi_validation_reject_last_timestamp_ms]
+    [sumeragi_block_sync_share_blocks_unsolicited_total
+        sumeragi_consensus_message_handling_total sumeragi_view_change_cause_total
+        sumeragi_view_change_cause_last_timestamp_ms]
+    {
         for label in [
             "commit_failure",
             "quorum_timeout",
@@ -10161,713 +8877,112 @@ impl Default for Metrics {
                 let _ = sumeragi_invalid_signature_total.with_label_values(&[kind, outcome]);
             }
         }
-        let sumeragi_widen_before_rotate_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_widen_before_rotate_total"))
-                .expect("Infallible");
-        let sumeragi_view_change_suggest_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_view_change_suggest_total"))
-                .expect("Infallible");
-        let sumeragi_view_change_install_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_view_change_install_total"))
-                .expect("Infallible");
-        let sumeragi_proposal_gap_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_proposal_gap_total"))
-                .expect("Infallible");
-        let sumeragi_view_change_proof_total = GenericGaugeVec::new(
-            metric_specs.opts("sumeragi_view_change_proof_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
+    }
+    [sumeragi_widen_before_rotate_total sumeragi_view_change_suggest_total
+        sumeragi_view_change_install_total sumeragi_proposal_gap_total
+        sumeragi_view_change_proof_total]
+    {
         for label in ["accepted", "stale", "rejected"] {
             let _ = sumeragi_view_change_proof_total.with_label_values(&[label]);
         }
-        let sumeragi_wa_qc_assembled_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_wa_qc_assembled_total"))
-                .expect("Infallible");
-        let sumeragi_cert_size = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("sumeragi_cert_size")
-                .buckets(prometheus::exponential_buckets(1.0, 1.8, 10).expect("valid")),
-        )
-        .expect("Infallible");
-        let sumeragi_commit_signatures_present = GenericGauge::<AtomicU64>::with_opts(
-            metric_specs.opts("sumeragi_commit_signatures_present"),
-        )
-        .expect("Infallible");
-        let sumeragi_commit_signatures_counted = GenericGauge::<AtomicU64>::with_opts(
-            metric_specs.opts("sumeragi_commit_signatures_counted"),
-        )
-        .expect("Infallible");
-        let sumeragi_commit_signatures_set_b = GenericGauge::<AtomicU64>::with_opts(
-            metric_specs.opts("sumeragi_commit_signatures_set_b"),
-        )
-        .expect("Infallible");
-        let sumeragi_commit_signatures_required = GenericGauge::<AtomicU64>::with_opts(
-            metric_specs.opts("sumeragi_commit_signatures_required"),
-        )
-        .expect("Infallible");
-        let sumeragi_commit_qc_height =
-            GenericGauge::<AtomicU64>::with_opts(metric_specs.opts("sumeragi_commit_qc_height"))
-                .expect("Infallible");
-        let sumeragi_commit_qc_view =
-            GenericGauge::<AtomicU64>::with_opts(metric_specs.opts("sumeragi_commit_qc_view"))
-                .expect("Infallible");
-        let sumeragi_commit_qc_epoch =
-            GenericGauge::<AtomicU64>::with_opts(metric_specs.opts("sumeragi_commit_qc_epoch"))
-                .expect("Infallible");
-        let sumeragi_commit_qc_signatures_total = GenericGauge::<AtomicU64>::with_opts(
-            metric_specs.opts("sumeragi_commit_qc_signatures_total"),
-        )
-        .expect("Infallible");
-        let sumeragi_commit_qc_validator_set_len = GenericGauge::<AtomicU64>::with_opts(
-            metric_specs.opts("sumeragi_commit_qc_validator_set_len"),
-        )
-        .expect("Infallible");
-        let sumeragi_gossip_fallback_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_gossip_fallback_total"))
-                .expect("Infallible");
-        let sumeragi_block_created_dropped_by_lock_total = IntCounter::with_opts(
-            metric_specs.opts("sumeragi_block_created_dropped_by_lock_total"),
-        )
-        .expect("Infallible");
-        let sumeragi_block_created_hint_mismatch_total =
-            IntCounter::with_opts(metric_specs.opts("sumeragi_block_created_hint_mismatch_total"))
-                .expect("Infallible");
-        let sumeragi_block_created_proposal_mismatch_total = IntCounter::with_opts(
-            metric_specs.opts("sumeragi_block_created_proposal_mismatch_total"),
-        )
-        .expect("Infallible");
-        let lane_relay_invalid_total =
-            IntCounterVec::new(metric_specs.opts("lane_relay_invalid_total"), &["error"])
-                .expect("Infallible");
-        let lane_relay_emergency_override_total = IntCounterVec::new(
-            metric_specs.opts("lane_relay_emergency_override_total"),
-            &["lane", "dataspace", "outcome"],
-        )
-        .expect("Infallible");
-        register!(
-            registry,
-            lane_relay_invalid_total,
-            lane_relay_emergency_override_total
-        );
+    }
+    [sumeragi_wa_qc_assembled_total sumeragi_cert_size sumeragi_commit_signatures_present
+        sumeragi_commit_signatures_counted sumeragi_commit_signatures_set_b
+        sumeragi_commit_signatures_required sumeragi_commit_qc_height sumeragi_commit_qc_view
+        sumeragi_commit_qc_epoch sumeragi_commit_qc_signatures_total
+        sumeragi_commit_qc_validator_set_len sumeragi_gossip_fallback_total
+        sumeragi_block_created_dropped_by_lock_total sumeragi_block_created_hint_mismatch_total
+        sumeragi_block_created_proposal_mismatch_total lane_relay_invalid_total
+        lane_relay_emergency_override_total]
+    {
         let sumeragi_prf_epoch_seed_hex: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
         let sumeragi_mode_tag: Arc<RwLock<String>> =
             Arc::new(RwLock::new(PERMISSIONED_TAG.to_string()));
         let halo2_status: Arc<RwLock<Halo2Status>> = Arc::new(RwLock::new(Halo2Status::default()));
-        let sumeragi_prf_height =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_prf_height")).expect("Infallible");
-        let sumeragi_prf_view =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_prf_view")).expect("Infallible");
-        let sumeragi_membership_view_hash =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_membership_view_hash"))
-                .expect("Infallible");
-        let sumeragi_membership_height =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_membership_height"))
-                .expect("Infallible");
-        let sumeragi_membership_view =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_membership_view"))
-                .expect("Infallible");
-        let sumeragi_membership_epoch =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_membership_epoch"))
-                .expect("Infallible");
-        let sumeragi_leader_index =
-            GenericGauge::with_opts(metric_specs.opts("sumeragi_leader_index"))
-                .expect("Infallible");
-        let ivm_cache_hits =
-            GenericGauge::with_opts(metric_specs.opts("ivm_cache_hits")).expect("Infallible");
-        let ivm_cache_misses =
-            GenericGauge::with_opts(metric_specs.opts("ivm_cache_misses")).expect("Infallible");
-        let ivm_cache_evictions =
-            GenericGauge::with_opts(metric_specs.opts("ivm_cache_evictions")).expect("Infallible");
-        let ivm_cache_decoded_streams =
-            GenericGauge::with_opts(metric_specs.opts("ivm_cache_decoded_streams"))
-                .expect("Infallible");
-        let ivm_cache_decoded_ops_total =
-            GenericGauge::with_opts(metric_specs.opts("ivm_cache_decoded_ops_total"))
-                .expect("Infallible");
-        let ivm_cache_decode_failures =
-            GenericGauge::with_opts(metric_specs.opts("ivm_cache_decode_failures"))
-                .expect("Infallible");
-        let ivm_cache_decode_time_ns_total =
-            GenericGauge::with_opts(metric_specs.opts("ivm_cache_decode_time_ns_total"))
-                .expect("Infallible");
-        let ivm_register_max_index = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("ivm_register_max_index")
-                .buckets(vec![
-                    16.0, 32.0, 48.0, 64.0, 96.0, 128.0, 160.0, 192.0, 224.0, 256.0, 320.0, 384.0,
-                    448.0, 512.0,
-                ]),
-        )
-        .expect("Infallible");
-        let ivm_register_unique_count = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("ivm_register_unique_count")
-                .buckets(vec![
-                    8.0, 16.0, 24.0, 32.0, 64.0, 96.0, 128.0, 160.0, 192.0, 224.0, 256.0, 320.0,
-                    384.0, 448.0, 512.0,
-                ]),
-        )
-        .expect("Infallible");
-        let merkle_root_gpu_total =
-            IntCounter::with_opts(metric_specs.opts("merkle_root_gpu_total")).expect("Infallible");
-        let merkle_root_cpu_total =
-            IntCounter::with_opts(metric_specs.opts("merkle_root_cpu_total")).expect("Infallible");
-        let ivm_memory_commit_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("ivm_memory_commit_ms")
-                .buckets(prometheus::exponential_buckets(0.1, 2.0, 16).expect("inputs are valid")),
-            &["path"],
-        )
-        .expect("Infallible");
-        let ivm_memory_commit_dirty_chunks = HistogramVec::new(
-            metric_specs
-                .histogram_opts("ivm_memory_commit_dirty_chunks")
-                .buckets(prometheus::exponential_buckets(1.0, 2.0, 20).expect("inputs are valid")),
-            &["path"],
-        )
-        .expect("Infallible");
-        let ivm_merkle_rebuild_total =
-            IntCounter::with_opts(metric_specs.opts("ivm_merkle_rebuild_total"))
-                .expect("Infallible");
-        let ivm_merkle_incremental_leaf_updates_total =
-            IntCounter::with_opts(metric_specs.opts("ivm_merkle_incremental_leaf_updates_total"))
-                .expect("Infallible");
-        let pipeline_dag_vertices =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_dag_vertices"))
-                .expect("Infallible");
-        let pipeline_dag_edges =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_dag_edges")).expect("Infallible");
-        let pipeline_conflict_rate_bps =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_conflict_rate_bps"))
-                .expect("Infallible");
-        let pipeline_access_set_source_total = IntCounterVec::new(
-            metric_specs.opts("pipeline_access_set_source_total"),
-            &["source"],
-        )
-        .expect("Infallible");
-        let pipeline_comp_count =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_comp_count")).expect("Infallible");
-        let pipeline_comp_max =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_comp_max")).expect("Infallible");
-        let pipeline_comp_hist_bucket =
-            GenericGaugeVec::new(metric_specs.opts("pipeline_comp_hist_bucket"), &["le"])
-                .expect("Infallible");
-        let pipeline_peak_layer_width =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_peak_layer_width"))
-                .expect("Infallible");
-        let pipeline_layer_avg_width =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_layer_avg_width"))
-                .expect("Infallible");
-        let pipeline_layer_median_width =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_layer_median_width"))
-                .expect("Infallible");
-        let nexus_lane_id_placeholder =
-            GenericGauge::with_opts(metric_specs.opts("nexus_lane_id_placeholder"))
-                .expect("Infallible");
-        let nexus_dataspace_id_placeholder =
-            GenericGauge::with_opts(metric_specs.opts("nexus_dataspace_id_placeholder"))
-                .expect("Infallible");
-        let nexus_config_diff_total = IntCounterVec::new(
-            metric_specs.opts("nexus_config_diff_total"),
-            &["knob", "profile"],
-        )
-        .expect("Infallible");
-        let nexus_lane_configured_total =
-            GenericGauge::with_opts(metric_specs.opts("nexus_lane_configured_total"))
-                .expect("Infallible");
-        let nexus_lane_governance_sealed =
-            GenericGaugeVec::new(metric_specs.opts("nexus_lane_governance_sealed"), &["lane"])
-                .expect("Infallible");
-        let nexus_lane_governance_sealed_total =
-            GenericGauge::with_opts(metric_specs.opts("nexus_lane_governance_sealed_total"))
-                .expect("Infallible");
-        let nexus_lane_lifecycle_applied_total = IntCounterVec::new(
-            metric_specs.opts("nexus_lane_lifecycle_applied_total"),
-            &["result"],
-        )
-        .expect("Infallible");
+    }
+    [sumeragi_prf_height sumeragi_prf_view sumeragi_membership_view_hash
+        sumeragi_membership_height sumeragi_membership_view sumeragi_membership_epoch
+        sumeragi_leader_index ivm_cache_hits ivm_cache_misses ivm_cache_evictions
+        ivm_cache_decoded_streams ivm_cache_decoded_ops_total ivm_cache_decode_failures
+        ivm_cache_decode_time_ns_total ivm_register_max_index ivm_register_unique_count
+        merkle_root_gpu_total merkle_root_cpu_total ivm_memory_commit_ms
+        ivm_memory_commit_dirty_chunks ivm_merkle_rebuild_total
+        ivm_merkle_incremental_leaf_updates_total pipeline_dag_vertices pipeline_dag_edges
+        pipeline_conflict_rate_bps pipeline_access_set_source_total pipeline_comp_count
+        pipeline_comp_max pipeline_comp_hist_bucket pipeline_peak_layer_width
+        pipeline_layer_avg_width pipeline_layer_median_width nexus_lane_id_placeholder
+        nexus_dataspace_id_placeholder nexus_config_diff_total nexus_lane_configured_total
+        nexus_lane_governance_sealed nexus_lane_governance_sealed_total
+        nexus_lane_lifecycle_applied_total]
+    {
         let nexus_lane_governance_sealed_aliases = Arc::new(RwLock::new(Vec::new()));
-        let nexus_lane_block_height = GenericGaugeVec::new(
-            metric_specs.opts("nexus_lane_block_height"),
-            &["lane", "dataspace"],
-        )
-        .expect("Infallible");
-        let nexus_lane_finality_lag_slots = GenericGaugeVec::new(
-            metric_specs.opts("nexus_lane_finality_lag_slots"),
-            &["lane", "dataspace"],
-        )
-        .expect("Infallible");
-        let nexus_lane_settlement_backlog_xor = GaugeVec::new(
-            metric_specs.opts("nexus_lane_settlement_backlog_xor"),
-            &["lane", "dataspace"],
-        )
-        .expect("Infallible");
-        let nexus_public_lane_validator_total = IntGaugeVec::new(
-            metric_specs.opts("nexus_public_lane_validator_total"),
-            &["lane", "status"],
-        )
-        .expect("Infallible");
-        let nexus_public_lane_validator_activation_total = IntCounterVec::new(
-            metric_specs.opts("nexus_public_lane_validator_activation_total"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_public_lane_validator_reject_total = IntCounterVec::new(
-            metric_specs.opts("nexus_public_lane_validator_reject_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let nexus_public_lane_stake_bonded = GaugeVec::new(
-            metric_specs.opts("nexus_public_lane_stake_bonded"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_public_lane_unbond_pending = GaugeVec::new(
-            metric_specs.opts("nexus_public_lane_unbond_pending"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_public_lane_reward_total = GaugeVec::new(
-            metric_specs.opts("nexus_public_lane_reward_total"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_public_lane_slash_total = IntCounterVec::new(
-            metric_specs.opts("nexus_public_lane_slash_total"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_lane_teu_capacity = GenericGaugeVec::new(
-            metric_specs.opts("nexus_scheduler_lane_teu_capacity"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_lane_teu_slot_committed = GenericGaugeVec::new(
-            metric_specs.opts("nexus_scheduler_lane_teu_slot_committed"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_lane_trigger_level = GenericGaugeVec::new(
-            metric_specs.opts("nexus_scheduler_lane_trigger_level"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_starvation_bound_slots = GenericGaugeVec::new(
-            metric_specs.opts("nexus_scheduler_starvation_bound_slots"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_lane_teu_slot_breakdown = GenericGaugeVec::new(
-            metric_specs.opts("nexus_scheduler_lane_teu_slot_breakdown"),
-            &["lane", "bucket"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_lane_teu_deferral_total = IntCounterVec::new(
-            metric_specs.opts("nexus_scheduler_lane_teu_deferral_total"),
-            &["lane", "reason"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_lane_headroom_events_total = IntCounterVec::new(
-            metric_specs.opts("nexus_scheduler_lane_headroom_events_total"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_must_serve_truncations_total = IntCounterVec::new(
-            metric_specs.opts("nexus_scheduler_must_serve_truncations_total"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_dataspace_teu_backlog = GenericGaugeVec::new(
-            metric_specs.opts("nexus_scheduler_dataspace_teu_backlog"),
-            &["lane", "dataspace"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_dataspace_age_slots = GenericGaugeVec::new(
-            metric_specs.opts("nexus_scheduler_dataspace_age_slots"),
-            &["lane", "dataspace"],
-        )
-        .expect("Infallible");
-        let nexus_scheduler_dataspace_virtual_finish = GenericGaugeVec::new(
-            metric_specs.opts("nexus_scheduler_dataspace_virtual_finish"),
-            &["lane", "dataspace"],
-        )
-        .expect("Infallible");
+    }
+    [nexus_lane_block_height nexus_lane_finality_lag_slots nexus_lane_settlement_backlog_xor
+        nexus_public_lane_validator_total nexus_public_lane_validator_activation_total
+        nexus_public_lane_validator_reject_total nexus_public_lane_stake_bonded
+        nexus_public_lane_unbond_pending nexus_public_lane_reward_total
+        nexus_public_lane_slash_total nexus_scheduler_lane_teu_capacity
+        nexus_scheduler_lane_teu_slot_committed nexus_scheduler_lane_trigger_level
+        nexus_scheduler_starvation_bound_slots nexus_scheduler_lane_teu_slot_breakdown
+        nexus_scheduler_lane_teu_deferral_total nexus_scheduler_lane_headroom_events_total
+        nexus_scheduler_must_serve_truncations_total nexus_scheduler_dataspace_teu_backlog
+        nexus_scheduler_dataspace_age_slots nexus_scheduler_dataspace_virtual_finish]
+    {
         let nexus_scheduler_lane_teu_status =
             Arc::new(RwLock::new(BTreeMap::<u32, NexusLaneTeuStatus>::new()));
         let nexus_scheduler_dataspace_teu_status = Arc::new(RwLock::new(BTreeMap::<
             (u32, u64),
             NexusDataspaceTeuStatus,
         >::new()));
-        let pipeline_layer_count =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_layer_count")).expect("Infallible");
-        let pipeline_scheduler_utilization_pct =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_scheduler_utilization_pct"))
-                .expect("Infallible");
-        let pipeline_layer_width_hist_bucket = GenericGaugeVec::new(
-            metric_specs.opts("pipeline_layer_width_hist_bucket"),
-            &["le"],
-        )
-        .expect("Infallible");
-        let pipeline_overlay_count =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_overlay_count"))
-                .expect("Infallible");
-        let pipeline_overlay_instructions =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_overlay_instructions"))
-                .expect("Infallible");
-        let pipeline_overlay_bytes =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_overlay_bytes"))
-                .expect("Infallible");
-        let pipeline_quarantine_classified =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_quarantine_classified"))
-                .expect("Infallible");
-        let pipeline_quarantine_overflow =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_quarantine_overflow"))
-                .expect("Infallible");
-        let pipeline_quarantine_executed =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_quarantine_executed"))
-                .expect("Infallible");
-        let pipeline_stage_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("pipeline_stage_ms")
-                .buckets(prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid")),
-            &["lane", "stage"],
-        )
-        .expect("Infallible");
-        let pipeline_detached_prepared =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_detached_prepared"))
-                .expect("Infallible");
-        let pipeline_detached_merged =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_detached_merged"))
-                .expect("Infallible");
-        let pipeline_detached_fallback =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_detached_fallback"))
-                .expect("Infallible");
-        let pipeline_detached_fallback_reason = GenericGaugeVec::new(
-            metric_specs.opts("pipeline_detached_fallback_reason"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let merge_ledger_entries_total =
-            IntCounter::with_opts(metric_specs.opts("merge_ledger_entries_total"))
-                .expect("Infallible");
-        let merge_ledger_latest_epoch =
-            GenericGauge::with_opts(metric_specs.opts("merge_ledger_latest_epoch"))
-                .expect("Infallible");
+    }
+    [pipeline_layer_count pipeline_scheduler_utilization_pct pipeline_layer_width_hist_bucket
+        pipeline_overlay_count pipeline_overlay_instructions pipeline_overlay_bytes
+        pipeline_quarantine_classified pipeline_quarantine_overflow pipeline_quarantine_executed
+        pipeline_stage_ms pipeline_detached_prepared pipeline_detached_merged
+        pipeline_detached_fallback pipeline_detached_fallback_reason merge_ledger_entries_total
+        merge_ledger_latest_epoch]
+    {
         let merge_ledger_latest_root_hex: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+
         // Torii metrics (app-facing): record filter complexity, match counts,
         // scan latencies, and approximate stream sizes. Labeled by endpoint.
-        let torii_filter_depth = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_filter_depth")
-                .buckets(vec![1.0, 2.0, 3.0, 5.0, 8.0, 13.0]),
-            &["endpoint"],
-        )
-        .expect("Infallible");
-        let torii_filter_match_count = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_filter_match_count")
-                .buckets(prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid")),
-            &["endpoint"],
-        )
-        .expect("Infallible");
-        let torii_scan_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_scan_ms")
-                .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
-            &["endpoint"],
-        )
-        .expect("Infallible");
-        let torii_stream_rows = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_stream_rows")
-                .buckets(prometheus::exponential_buckets(1.0, 2.0, 16).expect("inputs are valid")),
-            &["endpoint"],
-        )
-        .expect("Infallible");
-        let torii_lane_admission_latency_seconds = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_lane_admission_latency_seconds")
-                .buckets(
-                    prometheus::exponential_buckets(0.001, 2.0, 16).expect("inputs are valid"),
-                ),
-            &["lane_id", "endpoint"],
-        )
-        .expect("Infallible");
-        let torii_route_stage_latency_seconds = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_route_stage_latency_seconds")
-                .buckets(
-                    prometheus::exponential_buckets(0.000_001, 2.0, 20).expect("inputs are valid"),
-                ),
-            &["route_kind", "stage", "outcome"],
-        )
-        .expect("Infallible");
-        let torii_attachment_reject_total = IntCounterVec::new(
-            metric_specs.opts("torii_attachment_reject_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let torii_attachment_sanitize_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_attachment_sanitize_ms")
-                .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
-            &[],
-        )
-        .expect("Infallible");
-        let torii_zk_prover_attachment_bytes = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_zk_prover_attachment_bytes")
-                .buckets(
-                    prometheus::exponential_buckets(256.0, 2.0, 12).expect("inputs are valid"),
-                ),
-            &["status", "content_type"],
-        )
-        .expect("Infallible");
-        let torii_zk_prover_latency_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_zk_prover_latency_ms")
-                .buckets(prometheus::exponential_buckets(5.0, 2.0, 12).expect("inputs are valid")),
-            &["status"],
-        )
-        .expect("Infallible");
-        let torii_zk_prover_gc_total =
-            IntCounter::with_opts(metric_specs.opts("torii_zk_prover_gc_total"))
-                .expect("Infallible");
-        let torii_zk_prover_inflight =
-            GenericGauge::with_opts(metric_specs.opts("torii_zk_prover_inflight"))
-                .expect("Infallible");
-        let torii_zk_prover_pending =
-            GenericGauge::with_opts(metric_specs.opts("torii_zk_prover_pending"))
-                .expect("Infallible");
-        let torii_zk_ivm_prove_inflight =
-            GenericGauge::with_opts(metric_specs.opts("torii_zk_ivm_prove_inflight"))
-                .expect("Infallible");
-        let torii_zk_ivm_prove_queued =
-            GenericGauge::with_opts(metric_specs.opts("torii_zk_ivm_prove_queued"))
-                .expect("Infallible");
-        let torii_zk_prover_last_scan_bytes =
-            GenericGauge::with_opts(metric_specs.opts("torii_zk_prover_last_scan_bytes"))
-                .expect("Infallible");
-        let torii_zk_prover_last_scan_ms =
-            GenericGauge::with_opts(metric_specs.opts("torii_zk_prover_last_scan_ms"))
-                .expect("Infallible");
-        let torii_zk_prover_budget_exhausted_total = IntCounterVec::new(
-            metric_specs.opts("torii_zk_prover_budget_exhausted_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
+    }
+    [torii_filter_depth torii_filter_match_count torii_scan_ms torii_stream_rows
+        torii_lane_admission_latency_seconds torii_route_stage_latency_seconds
+        torii_attachment_reject_total torii_attachment_sanitize_ms torii_zk_prover_attachment_bytes
+        torii_zk_prover_latency_ms torii_zk_prover_gc_total torii_zk_prover_inflight
+        torii_zk_prover_pending torii_zk_ivm_prove_inflight torii_zk_ivm_prove_queued
+        torii_zk_prover_last_scan_bytes torii_zk_prover_last_scan_ms
+        torii_zk_prover_budget_exhausted_total]
         // Snapshot-lane counters
-        let torii_query_snapshot_requests = IntCounterVec::new(
-            metric_specs.opts("torii_query_snapshot_requests"),
-            &["mode"],
-        )
-        .expect("Infallible");
-        let torii_query_snapshot_first_batch_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_query_snapshot_first_batch_ms")
-                .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
-            &["mode"],
-        )
-        .expect("Infallible");
-        let torii_query_snapshot_gas_consumed_units_total = IntCounterVec::new(
-            metric_specs.opts("torii_query_snapshot_gas_consumed_units_total"),
-            &["mode"],
-        )
-        .expect("Infallible");
-        let query_snapshot_lane_first_batch_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("query_snapshot_lane_first_batch_ms")
-                .buckets(prometheus::exponential_buckets(0.5, 2.0, 14).expect("inputs are valid")),
-            &["mode"],
-        )
-        .expect("Infallible");
-        let query_snapshot_lane_first_batch_items = HistogramVec::new(
-            metric_specs
-                .histogram_opts("query_snapshot_lane_first_batch_items")
-                .buckets(vec![
-                    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
-                ]),
-            &["mode"],
-        )
-        .expect("Infallible");
-        let query_snapshot_lane_remaining_items = GenericGaugeVec::new(
-            metric_specs.opts("query_snapshot_lane_remaining_items"),
-            &["mode"],
-        )
-        .expect("Infallible");
-        let query_snapshot_lane_cursors_total = IntCounterVec::new(
-            metric_specs.opts("query_snapshot_lane_cursors_total"),
-            &["mode"],
-        )
-        .expect("Infallible");
+    [torii_query_snapshot_requests torii_query_snapshot_first_batch_ms
+        torii_query_snapshot_gas_consumed_units_total query_snapshot_lane_first_batch_ms
+        query_snapshot_lane_first_batch_items query_snapshot_lane_remaining_items
+        query_snapshot_lane_cursors_total]
         // Torii Connect (Iroha Connect) metrics
-        let torii_connect_sessions_total =
-            GenericGauge::with_opts(metric_specs.opts("torii_connect_sessions_total"))
-                .expect("Infallible");
-        let torii_connect_sessions_active =
-            GenericGauge::with_opts(metric_specs.opts("torii_connect_sessions_active"))
-                .expect("Infallible");
-        let torii_pre_auth_reject_total = IntCounterVec::new(
-            metric_specs.opts("torii_pre_auth_reject_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let torii_operator_auth_total = IntCounterVec::new(
-            metric_specs.opts("torii_operator_auth_total"),
-            &["action", "result", "reason"],
-        )
-        .expect("Infallible");
-        let torii_operator_auth_lockout_total = IntCounterVec::new(
-            metric_specs.opts("torii_operator_auth_lockout_total"),
-            &["action", "reason"],
-        )
-        .expect("Infallible");
-        let torii_signature_limit_total =
-            IntCounter::with_opts(metric_specs.opts("torii_signature_limit_total"))
-                .expect("Infallible");
-        let torii_signature_limit_by_authority_total = IntCounterVec::new(
-            metric_specs.opts("torii_signature_limit_by_authority_total"),
-            &["authority"],
-        )
-        .expect("Infallible");
-        let torii_signature_limit_last_count =
-            GenericGauge::with_opts(metric_specs.opts("torii_signature_limit_last_count"))
-                .expect("Infallible");
-        let torii_signature_limit_max =
-            GenericGauge::with_opts(metric_specs.opts("torii_signature_limit_max"))
-                .expect("Infallible");
-        let torii_nts_unhealthy_reject_total =
-            IntCounter::with_opts(metric_specs.opts("torii_nts_unhealthy_reject_total"))
-                .expect("Infallible");
-        let torii_multisig_direct_sign_reject_total =
-            IntCounter::with_opts(metric_specs.opts("torii_multisig_direct_sign_reject_total"))
-                .expect("Infallible");
-        let torii_sorafs_admission_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_admission_total"),
-            &["result", "reason"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_capacity_telemetry_rejections_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_capacity_telemetry_rejections_total"),
-            &["provider", "reason"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_capacity_declared_gib = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_capacity_declared_gib"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_capacity_effective_gib = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_capacity_effective_gib"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_capacity_utilised_gib = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_capacity_utilised_gib"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_capacity_outstanding_gib = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_capacity_outstanding_gib"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_capacity_gibhours_total = GaugeVec::new(
-            metric_specs.opts("torii_sorafs_capacity_gibhours_total"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_egress_bytes = GaugeVec::new(
-            metric_specs.opts("torii_sorafs_egress_bytes"),
-            &["provider", "source"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_egress_drift_ratio = GaugeVec::new(
-            metric_specs.opts("torii_sorafs_egress_drift_ratio"),
-            &["provider", "source"],
-        )
-        .expect("Infallible");
-        let sorafs_governance_dag_publish_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_governance_dag_publish_total"),
-            &["payload_kind", "result", "sink"],
-        )
-        .expect("Infallible");
-        let sorafs_governance_dag_published_bytes_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_governance_dag_published_bytes_total"),
-            &["payload_kind", "sink"],
-        )
-        .expect("Infallible");
-        let sorafs_governance_dag_last_publish_timestamp_seconds = GenericGaugeVec::new(
-            metric_specs.opts("sorafs_governance_dag_last_publish_timestamp_seconds"),
-            &["payload_kind", "sink"],
-        )
-        .expect("Infallible");
-        let sorafs_governance_dag_backlog = GenericGaugeVec::new(
-            metric_specs.opts("sorafs_governance_dag_backlog"),
-            &["sink"],
-        )
-        .expect("Infallible");
-        let sorafs_governance_dag_head_age_seconds = GenericGaugeVec::new(
-            metric_specs.opts("sorafs_governance_dag_head_age_seconds"),
-            &["sink"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_finalized_events_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_orderbook_finalized_events_total"),
-            &["event"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_open_depth_gib = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_orderbook_open_depth_gib"),
-            &["tier", "side"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_matcher_lag_seconds = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_orderbook_matcher_lag_seconds"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_settlement_backlog =
-            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_orderbook_settlement_backlog"))
-                .expect("Infallible");
-        let torii_sorafs_orderbook_oldest_settlement_age_seconds = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_orderbook_oldest_settlement_age_seconds"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_escrow_runway_seconds = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_orderbook_escrow_runway_seconds"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_finalized_projection_ready = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_orderbook_finalized_projection_ready"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_finalized_projection_height = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_orderbook_finalized_projection_height"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_finalized_projection_timestamp_seconds =
-            GenericGauge::with_opts(
-                metric_specs.opts("torii_sorafs_orderbook_finalized_projection_timestamp_seconds"),
-            )
-            .expect("Infallible");
-        let torii_sorafs_orderbook_finalized_projection_failures_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_orderbook_finalized_projection_failures_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_book_revision =
-            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_orderbook_book_revision"))
-                .expect("Infallible");
-        let torii_sorafs_orderbook_matcher_scan_book_revision = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_orderbook_matcher_scan_book_revision"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_orderbook_api_requests_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_orderbook_api_requests_total"),
-            &["route", "outcome"],
-        )
-        .expect("Infallible");
+    [torii_connect_sessions_total torii_connect_sessions_active torii_pre_auth_reject_total
+        torii_operator_auth_total torii_operator_auth_lockout_total torii_signature_limit_total
+        torii_signature_limit_by_authority_total torii_signature_limit_last_count
+        torii_signature_limit_max torii_nts_unhealthy_reject_total
+        torii_multisig_direct_sign_reject_total torii_sorafs_admission_total
+        torii_sorafs_capacity_telemetry_rejections_total torii_sorafs_capacity_declared_gib
+        torii_sorafs_capacity_effective_gib torii_sorafs_capacity_utilised_gib
+        torii_sorafs_capacity_outstanding_gib torii_sorafs_capacity_gibhours_total
+        torii_sorafs_egress_bytes torii_sorafs_egress_drift_ratio
+        sorafs_governance_dag_publish_total sorafs_governance_dag_published_bytes_total
+        sorafs_governance_dag_last_publish_timestamp_seconds sorafs_governance_dag_backlog
+        sorafs_governance_dag_head_age_seconds torii_sorafs_orderbook_finalized_events_total
+        torii_sorafs_orderbook_open_depth_gib torii_sorafs_orderbook_matcher_lag_seconds
+        torii_sorafs_orderbook_settlement_backlog
+        torii_sorafs_orderbook_oldest_settlement_age_seconds
+        torii_sorafs_orderbook_escrow_runway_seconds
+        torii_sorafs_orderbook_finalized_projection_ready
+        torii_sorafs_orderbook_finalized_projection_height
+        torii_sorafs_orderbook_finalized_projection_timestamp_seconds
+        torii_sorafs_orderbook_finalized_projection_failures_total
+        torii_sorafs_orderbook_book_revision torii_sorafs_orderbook_matcher_scan_book_revision
+        torii_sorafs_orderbook_api_requests_total]
+    {
         for event in SORAFS_ORDERBOOK_EVENT_LABELS {
             let _ = torii_sorafs_orderbook_finalized_events_total.with_label_values(&[event]);
         }
@@ -10886,34 +9001,14 @@ impl Default for Metrics {
                     torii_sorafs_orderbook_api_requests_total.with_label_values(&[route, outcome]);
             }
         }
-        let torii_sorafs_gateway_compliance_requests_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_gateway_compliance_requests_total"),
-            &["operation", "outcome"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_gateway_compliance_serving_decisions_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_gateway_compliance_serving_decisions_total"),
-            &["subject_kind", "disposition", "source"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_gateway_compliance_failures_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_gateway_compliance_failures_total"),
-            &["surface", "class"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_gateway_compliance_serving_catalog_sequence = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_gateway_compliance_serving_catalog_sequence"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds =
-            GenericGauge::with_opts(
-                metric_specs
-                    .opts("torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds"),
-            )
-            .expect("Infallible");
-        let torii_sorafs_gateway_compliance_ready =
-            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_gateway_compliance_ready"))
-                .expect("Infallible");
+    }
+    [torii_sorafs_gateway_compliance_requests_total
+        torii_sorafs_gateway_compliance_serving_decisions_total
+        torii_sorafs_gateway_compliance_failures_total
+        torii_sorafs_gateway_compliance_serving_catalog_sequence
+        torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds
+        torii_sorafs_gateway_compliance_ready]
+    {
         for operation in SORAFS_GATEWAY_COMPLIANCE_OPERATION_LABELS {
             for outcome in SORAFS_GATEWAY_COMPLIANCE_REQUEST_OUTCOME_LABELS {
                 let _ = torii_sorafs_gateway_compliance_requests_total
@@ -10934,3122 +9029,861 @@ impl Default for Metrics {
                     .with_label_values(&[surface, class]);
             }
         }
-        let torii_sorafs_hedging_xor_usd_reference_price_micro_usd = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_hedging_xor_usd_reference_price_micro_usd"),
-            &["cluster"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_hedging_feed_lag_seconds = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_hedging_feed_lag_seconds"),
-            &["cluster", "source"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_hedging_feed_divergence_bps = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_hedging_feed_divergence_bps"),
-            &["cluster", "source"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_hedging_exposure_drift_bps = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_hedging_exposure_drift_bps"),
-            &["cluster", "asset"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_billing_statement_generation_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_billing_statement_generation_total"),
-            &["cluster", "account_type"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_billing_statement_failure_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_billing_statement_failure_total"),
-            &["cluster", "account_type"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_billing_statement_ack_backlog = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_billing_statement_ack_backlog"),
-            &["cluster"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_billing_escrow_runway_seconds = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_billing_escrow_runway_seconds"),
-            &["cluster", "account_type"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_lifecycle_stage_providers = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_reserve_lifecycle_stage_providers"),
-            &["stage"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_credit_draw_micro_xor = GaugeVec::new(
-            metric_specs.opts("torii_sorafs_reserve_credit_draw_micro_xor"),
-            &["stage"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_credit_shortfall_micro_xor = GaugeVec::new(
-            metric_specs.opts("torii_sorafs_reserve_credit_shortfall_micro_xor"),
-            &["stage"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_accrued_interest_micro_xor = GaugeVec::new(
-            metric_specs.opts("torii_sorafs_reserve_accrued_interest_micro_xor"),
-            &["stage"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_defaulted_providers =
-            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_reserve_defaulted_providers"))
-                .expect("Infallible");
-        let torii_sorafs_reserve_appeal_backlog =
-            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_reserve_appeal_backlog"))
-                .expect("Infallible");
-        let torii_sorafs_reserve_custody_movements = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_reserve_custody_movements"),
-            &["status"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_chain_reconciled_movements = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_reserve_chain_reconciled_movements"),
-            &["status"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_finalized_projection_ready = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_reserve_finalized_projection_ready"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_finalized_projection_height = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_reserve_finalized_projection_height"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_finalized_projection_failure_total = IntCounter::with_opts(
-            metric_specs.opts("torii_sorafs_reserve_finalized_projection_failure_total"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_service_requests_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_reserve_service_requests_total"),
-            &["route", "result"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_reserve_service_rate_limit_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_reserve_service_rate_limit_total"),
-            &["route", "reason"],
-        )
-        .expect("Infallible");
-        let sorafs_reputation_ingest_lag_seconds =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_ingest_lag_seconds"))
-                .expect("Infallible");
-        let sorafs_reputation_snapshot_age_seconds =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_snapshot_age_seconds"))
-                .expect("Infallible");
-        let sorafs_reputation_snapshot_generated_at_unix = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_reputation_snapshot_generated_at_unix"),
-        )
-        .expect("Infallible");
-        let sorafs_reputation_provider_count =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_provider_count"))
-                .expect("Infallible");
-        let sorafs_reputation_low_score_providers =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_low_score_providers"))
-                .expect("Infallible");
-        let sorafs_reputation_score = GaugeVec::new(
-            metric_specs.opts("sorafs_reputation_score"),
-            &["provider_id"],
-        )
-        .expect("Infallible");
-        let sorafs_reputation_threshold_crossings_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_reputation_threshold_crossings_total"),
-            &["level"],
-        )
-        .expect("Infallible");
-        let sorafs_reputation_runtime_live =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_runtime_live"))
-                .expect("Infallible");
-        let sorafs_reputation_runtime_ready =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_runtime_ready"))
-                .expect("Infallible");
-        let sorafs_reputation_runtime_dependencies_ready = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_reputation_runtime_dependencies_ready"),
-        )
-        .expect("Infallible");
-        let sorafs_reputation_journal_transaction_submitter_ready = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_reputation_journal_transaction_submitter_ready"),
-        )
-        .expect("Infallible");
-        let sorafs_reputation_runtime_finalized_height = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_reputation_runtime_finalized_height"),
-        )
-        .expect("Infallible");
-        let sorafs_reputation_runtime_consecutive_failures = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_reputation_runtime_consecutive_failures"),
-        )
-        .expect("Infallible");
-        let sorafs_reputation_runtime_material_acknowledged = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_reputation_runtime_material_acknowledged"),
-        )
-        .expect("Infallible");
-        let sorafs_reputation_runtime_provider_count =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_reputation_runtime_provider_count"))
-                .expect("Infallible");
-        let sorafs_reputation_runtime_ticks_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_reputation_runtime_ticks_total"),
-            &["result"],
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_runtime_live =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_runtime_live"))
-                .expect("Infallible");
-        let sorafs_hedging_billing_runtime_ready =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_runtime_ready"))
-                .expect("Infallible");
-        let sorafs_hedging_billing_runtime_dependencies_ready = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_hedging_billing_runtime_dependencies_ready"),
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_automatic_execution_enabled = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_hedging_billing_automatic_execution_enabled"),
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_last_tick_fresh =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_last_tick_fresh"))
-                .expect("Infallible");
-        let sorafs_hedging_billing_finalized_projection_ready = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_hedging_billing_finalized_projection_ready"),
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_finalized_height =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_finalized_height"))
-                .expect("Infallible");
-        let sorafs_hedging_billing_finalized_head_height = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_hedging_billing_finalized_head_height"),
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_finalized_lag_blocks = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_hedging_billing_finalized_lag_blocks"),
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_next_event_sequence = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_hedging_billing_next_event_sequence"),
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_ready_for_signing =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_ready_for_signing"))
-                .expect("Infallible");
-        let sorafs_hedging_billing_ready_for_publication = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_hedging_billing_ready_for_publication"),
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_publication_ambiguous = GenericGauge::with_opts(
-            metric_specs.opts("sorafs_hedging_billing_publication_ambiguous"),
-        )
-        .expect("Infallible");
-        let sorafs_hedging_billing_published =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_published"))
-                .expect("Infallible");
-        let sorafs_hedging_billing_acknowledged =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_acknowledged"))
-                .expect("Infallible");
-        let sorafs_hedging_billing_dead_letter =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_dead_letter"))
-                .expect("Infallible");
-        let sorafs_hedging_billing_hedge_intents =
-            GenericGauge::with_opts(metric_specs.opts("sorafs_hedging_billing_hedge_intents"))
-                .expect("Infallible");
-        let sorafs_hedging_billing_runtime_ticks_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_hedging_billing_runtime_ticks_total"),
-            &["result"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_fee_projection_nanos = GaugeVec::new(
-            metric_specs.opts("torii_sorafs_fee_projection_nanos"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_disputes_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_disputes_total"),
-            &["result"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_orders_issued_total = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_orders_issued_total"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_orders_completed_total = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_orders_completed_total"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_orders_failed_total = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_orders_failed_total"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_outstanding_orders = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_outstanding_orders"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_uptime_bps =
-            IntGaugeVec::new(metric_specs.opts("torii_sorafs_uptime_bps"), &["provider"])
-                .expect("Infallible");
-        let torii_sorafs_por_bps =
-            IntGaugeVec::new(metric_specs.opts("torii_sorafs_por_bps"), &["provider"])
-                .expect("Infallible");
-        let torii_sorafs_por_challenges_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_por_challenges_total"),
-            &["result"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_por_forced_challenges_total =
-            IntCounter::with_opts(metric_specs.opts("torii_sorafs_por_forced_challenges_total"))
-                .expect("Infallible");
-        let torii_sorafs_por_sampling_duplicates_total =
-            IntCounter::with_opts(metric_specs.opts("torii_sorafs_por_sampling_duplicates_total"))
-                .expect("Infallible");
-        let torii_sorafs_por_ingest_backlog = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_por_ingest_backlog"),
-            &["manifest", "provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_por_ingest_failures_total = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_por_ingest_failures_total"),
-            &["manifest", "provider"],
-        )
-        .expect("Infallible");
-        register_guarded(&registry, &torii_sorafs_admission_total);
-        register_guarded(&registry, &torii_sorafs_capacity_telemetry_rejections_total);
-        register_guarded(&registry, &torii_sorafs_capacity_declared_gib);
-        register_guarded(&registry, &torii_sorafs_capacity_effective_gib);
-        register_guarded(&registry, &torii_sorafs_capacity_utilised_gib);
-        register_guarded(&registry, &torii_sorafs_capacity_outstanding_gib);
-        register_guarded(&registry, &torii_sorafs_capacity_gibhours_total);
-        register_guarded(&registry, &torii_sorafs_egress_bytes);
-        register_guarded(&registry, &torii_sorafs_egress_drift_ratio);
-        register_guarded(&registry, &sorafs_governance_dag_publish_total);
-        register_guarded(&registry, &sorafs_governance_dag_published_bytes_total);
-        register_guarded(
-            &registry,
-            &sorafs_governance_dag_last_publish_timestamp_seconds,
-        );
-        register_guarded(&registry, &sorafs_governance_dag_backlog);
-        register_guarded(&registry, &sorafs_governance_dag_head_age_seconds);
-        register_guarded(&registry, &torii_sorafs_orderbook_finalized_events_total);
-        register_guarded(&registry, &torii_sorafs_orderbook_open_depth_gib);
-        register_guarded(&registry, &torii_sorafs_orderbook_matcher_lag_seconds);
-        register_guarded(&registry, &torii_sorafs_orderbook_settlement_backlog);
-        register_guarded(
-            &registry,
-            &torii_sorafs_orderbook_oldest_settlement_age_seconds,
-        );
-        register_guarded(&registry, &torii_sorafs_orderbook_escrow_runway_seconds);
-        register_guarded(
-            &registry,
-            &torii_sorafs_orderbook_finalized_projection_ready,
-        );
-        register_guarded(
-            &registry,
-            &torii_sorafs_orderbook_finalized_projection_height,
-        );
-        register_guarded(
-            &registry,
-            &torii_sorafs_orderbook_finalized_projection_timestamp_seconds,
-        );
-        register_guarded(
-            &registry,
-            &torii_sorafs_orderbook_finalized_projection_failures_total,
-        );
-        register_guarded(&registry, &torii_sorafs_orderbook_book_revision);
-        register_guarded(
-            &registry,
-            &torii_sorafs_orderbook_matcher_scan_book_revision,
-        );
-        register_guarded(&registry, &torii_sorafs_orderbook_api_requests_total);
-        register_guarded(&registry, &torii_sorafs_gateway_compliance_requests_total);
-        register_guarded(
-            &registry,
-            &torii_sorafs_gateway_compliance_serving_decisions_total,
-        );
-        register_guarded(&registry, &torii_sorafs_gateway_compliance_failures_total);
-        register_guarded(
-            &registry,
-            &torii_sorafs_gateway_compliance_serving_catalog_sequence,
-        );
-        register_guarded(
-            &registry,
-            &torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds,
-        );
-        register_guarded(&registry, &torii_sorafs_gateway_compliance_ready);
-        register_guarded(
-            &registry,
-            &torii_sorafs_hedging_xor_usd_reference_price_micro_usd,
-        );
-        register_guarded(&registry, &torii_sorafs_hedging_feed_lag_seconds);
-        register_guarded(&registry, &torii_sorafs_hedging_feed_divergence_bps);
-        register_guarded(&registry, &torii_sorafs_hedging_exposure_drift_bps);
-        register_guarded(&registry, &torii_sorafs_billing_statement_generation_total);
-        register_guarded(&registry, &torii_sorafs_billing_statement_failure_total);
-        register_guarded(&registry, &torii_sorafs_billing_statement_ack_backlog);
-        register_guarded(&registry, &torii_sorafs_billing_escrow_runway_seconds);
-        register_guarded(&registry, &torii_sorafs_reserve_lifecycle_stage_providers);
-        register_guarded(&registry, &torii_sorafs_reserve_credit_draw_micro_xor);
-        register_guarded(&registry, &torii_sorafs_reserve_credit_shortfall_micro_xor);
-        register_guarded(&registry, &torii_sorafs_reserve_accrued_interest_micro_xor);
-        register_guarded(&registry, &torii_sorafs_reserve_defaulted_providers);
-        register_guarded(&registry, &torii_sorafs_reserve_appeal_backlog);
-        register_guarded(&registry, &torii_sorafs_reserve_custody_movements);
-        register_guarded(&registry, &torii_sorafs_reserve_chain_reconciled_movements);
-        register_guarded(&registry, &torii_sorafs_reserve_finalized_projection_ready);
-        register_guarded(&registry, &torii_sorafs_reserve_finalized_projection_height);
-        register_guarded(
-            &registry,
-            &torii_sorafs_reserve_finalized_projection_failure_total,
-        );
-        register_guarded(&registry, &torii_sorafs_reserve_service_requests_total);
-        register_guarded(&registry, &torii_sorafs_reserve_service_rate_limit_total);
-        register_guarded(&registry, &sorafs_reputation_ingest_lag_seconds);
-        register_guarded(&registry, &sorafs_reputation_snapshot_age_seconds);
-        register_guarded(&registry, &sorafs_reputation_snapshot_generated_at_unix);
-        register_guarded(&registry, &sorafs_reputation_provider_count);
-        register_guarded(&registry, &sorafs_reputation_low_score_providers);
-        register_guarded(&registry, &sorafs_reputation_score);
-        register_guarded(&registry, &sorafs_reputation_threshold_crossings_total);
-        register_guarded(&registry, &sorafs_reputation_runtime_live);
-        register_guarded(&registry, &sorafs_reputation_runtime_ready);
-        register_guarded(&registry, &sorafs_reputation_runtime_dependencies_ready);
-        register_guarded(
-            &registry,
-            &sorafs_reputation_journal_transaction_submitter_ready,
-        );
-        register_guarded(&registry, &sorafs_reputation_runtime_finalized_height);
-        register_guarded(&registry, &sorafs_reputation_runtime_consecutive_failures);
-        register_guarded(&registry, &sorafs_reputation_runtime_material_acknowledged);
-        register_guarded(&registry, &sorafs_reputation_runtime_provider_count);
-        register_guarded(&registry, &sorafs_reputation_runtime_ticks_total);
-        register_guarded(&registry, &sorafs_hedging_billing_runtime_live);
-        register_guarded(&registry, &sorafs_hedging_billing_runtime_ready);
-        register_guarded(
-            &registry,
-            &sorafs_hedging_billing_runtime_dependencies_ready,
-        );
-        register_guarded(
-            &registry,
-            &sorafs_hedging_billing_automatic_execution_enabled,
-        );
-        register_guarded(&registry, &sorafs_hedging_billing_last_tick_fresh);
-        register_guarded(
-            &registry,
-            &sorafs_hedging_billing_finalized_projection_ready,
-        );
-        register_guarded(&registry, &sorafs_hedging_billing_finalized_height);
-        register_guarded(&registry, &sorafs_hedging_billing_finalized_head_height);
-        register_guarded(&registry, &sorafs_hedging_billing_finalized_lag_blocks);
-        register_guarded(&registry, &sorafs_hedging_billing_next_event_sequence);
-        register_guarded(&registry, &sorafs_hedging_billing_ready_for_signing);
-        register_guarded(&registry, &sorafs_hedging_billing_ready_for_publication);
-        register_guarded(&registry, &sorafs_hedging_billing_publication_ambiguous);
-        register_guarded(&registry, &sorafs_hedging_billing_published);
-        register_guarded(&registry, &sorafs_hedging_billing_acknowledged);
-        register_guarded(&registry, &sorafs_hedging_billing_dead_letter);
-        register_guarded(&registry, &sorafs_hedging_billing_hedge_intents);
-        register_guarded(&registry, &sorafs_hedging_billing_runtime_ticks_total);
-        register_guarded(&registry, &torii_sorafs_fee_projection_nanos);
-        register_guarded(&registry, &torii_sorafs_disputes_total);
-        register_guarded(&registry, &torii_sorafs_orders_issued_total);
-        register_guarded(&registry, &torii_sorafs_orders_completed_total);
-        register_guarded(&registry, &torii_sorafs_orders_failed_total);
-        register_guarded(&registry, &torii_sorafs_outstanding_orders);
-        register_guarded(&registry, &torii_sorafs_uptime_bps);
-        register_guarded(&registry, &torii_sorafs_por_bps);
-        register_guarded(&registry, &torii_sorafs_por_challenges_total);
-        register_guarded(&registry, &torii_sorafs_por_forced_challenges_total);
-        register_guarded(&registry, &torii_sorafs_por_sampling_duplicates_total);
-        register_guarded(&registry, &torii_sorafs_por_ingest_backlog);
-        register_guarded(&registry, &torii_sorafs_por_ingest_failures_total);
-        let torii_sorafs_repair_tasks_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_repair_tasks_total"),
-            &["status"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_repair_latency_minutes = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_sorafs_repair_latency_minutes")
-                .buckets(vec![
-                    1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 240.0, 480.0,
-                ]),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_repair_queue_depth = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_repair_queue_depth"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_repair_backlog_oldest_age_seconds = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_repair_backlog_oldest_age_seconds"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_repair_lease_expired_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_repair_lease_expired_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        register_guarded(&registry, &torii_sorafs_repair_tasks_total);
-        register_guarded(&registry, &torii_sorafs_repair_latency_minutes);
-        register_guarded(&registry, &torii_sorafs_repair_queue_depth);
-        register_guarded(&registry, &torii_sorafs_repair_backlog_oldest_age_seconds);
-        register_guarded(&registry, &torii_sorafs_repair_lease_expired_total);
-        let torii_sorafs_slash_proposals_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_slash_proposals_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        register_guarded(&registry, &torii_sorafs_slash_proposals_total);
-        let torii_sorafs_reconciliation_runs_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_reconciliation_runs_total"),
-            &["result"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_reconciliation_divergence_count = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_reconciliation_divergence_count"),
-        )
-        .expect("Infallible");
-        register_guarded(&registry, &torii_sorafs_reconciliation_runs_total);
-        register_guarded(&registry, &torii_sorafs_reconciliation_divergence_count);
-        let torii_sorafs_gc_runs_total =
-            IntCounterVec::new(metric_specs.opts("torii_sorafs_gc_runs_total"), &["result"])
-                .expect("Infallible");
-        let torii_sorafs_gc_evictions_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_gc_evictions_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_gc_bytes_freed_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_gc_bytes_freed_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_gc_blocked_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_gc_blocked_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_gc_expired_manifests =
-            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_gc_expired_manifests"))
-                .expect("Infallible");
-        let torii_sorafs_gc_oldest_expired_age_seconds = GenericGauge::with_opts(
-            metric_specs.opts("torii_sorafs_gc_oldest_expired_age_seconds"),
-        )
-        .expect("Infallible");
-        let torii_sorafs_storage_bytes_used = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_storage_bytes_used"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_storage_bytes_capacity = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_storage_bytes_capacity"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let sorafs_provider_ingest_inflight = GenericGaugeVec::new(
-            metric_specs.opts("sorafs_provider_ingest_inflight"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_storage_fetch_inflight = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_storage_fetch_inflight"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_storage_fetch_bytes_per_sec = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_storage_fetch_bytes_per_sec"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_storage_por_inflight = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_storage_por_inflight"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_storage_por_samples_success_total = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_storage_por_samples_success_total"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_storage_por_samples_failed_total = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_storage_por_samples_failed_total"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let sorafs_gateway_active = IntGaugeVec::new(
-            metric_specs.opts("sorafs_gateway_active"),
-            &["endpoint", "method", "variant", "chunker", "profile"],
-        )
-        .expect("Infallible");
-        let sorafs_gateway_responses_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_gateway_responses_total"),
-            &[
-                "endpoint",
-                "method",
-                "variant",
-                "chunker",
-                "profile",
-                "result",
-                "status",
-                "error_code",
-            ],
-        )
-        .expect("Infallible");
-        let sorafs_gateway_ttfb_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sorafs_gateway_ttfb_ms")
-                .buckets(vec![
-                    5.0, 10.0, 25.0, 50.0, 100.0, 120.0, 200.0, 500.0, 1000.0, 2500.0, 5000.0,
-                ]),
-            &[
-                "endpoint",
-                "method",
-                "variant",
-                "chunker",
-                "profile",
-                "result",
-                "status",
-                "error_code",
-            ],
-        )
-        .expect("Infallible");
-        let sorafs_gateway_proof_verifications_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_gateway_proof_verifications_total"),
-            &["profile_version", "result", "error_code"],
-        )
-        .expect("Infallible");
-        let sorafs_gateway_proof_duration_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sorafs_gateway_proof_duration_ms")
-                .buckets(vec![
-                    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                ]),
-            &["profile_version", "result", "error_code"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_chunk_range_requests_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_chunk_range_requests_total"),
-            &["endpoint", "status"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_chunk_range_bytes_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_chunk_range_bytes_total"),
-            &["endpoint"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_provider_range_capability_total = IntGaugeVec::new(
-            metric_specs.opts("torii_sorafs_provider_range_capability_total"),
-            &["feature"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_routing_authority_cache_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_routing_authority_cache_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_range_fetch_throttle_events_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_range_fetch_throttle_events_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_range_fetch_concurrency_current =
-            IntGauge::with_opts(metric_specs.opts("torii_sorafs_range_fetch_concurrency_current"))
-                .expect("Infallible");
-        let torii_sorafs_proof_stream_inflight = IntGaugeVec::new(
-            metric_specs.opts("torii_sorafs_proof_stream_inflight"),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_proof_stream_events_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_proof_stream_events_total"),
-            &["kind", "result", "reason"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_proof_stream_latency_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_sorafs_proof_stream_latency_ms")
-                .buckets(vec![
-                    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                ]),
-            &["kind"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_proof_health_alerts_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_proof_health_alerts_total"),
-            &["provider_id", "trigger", "penalty"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_proof_health_pdp_failures = IntGaugeVec::new(
-            metric_specs.opts("torii_sorafs_proof_health_pdp_failures"),
-            &["provider_id"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_proof_health_potr_breaches = IntGaugeVec::new(
-            metric_specs.opts("torii_sorafs_proof_health_potr_breaches"),
-            &["provider_id"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_proof_health_penalty_nano = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_proof_health_penalty_nano"),
-            &["provider_id"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_proof_health_window_end_epoch = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_proof_health_window_end_epoch"),
-            &["provider_id"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_proof_health_cooldown = IntGaugeVec::new(
-            metric_specs.opts("torii_sorafs_proof_health_cooldown"),
-            &["provider_id"],
-        )
-        .expect("Infallible");
-        register_guarded(&registry, &sorafs_gateway_active);
-        register_guarded(&registry, &sorafs_gateway_responses_total);
-        register_guarded(&registry, &sorafs_gateway_ttfb_ms);
-        register_guarded(&registry, &sorafs_gateway_proof_verifications_total);
-        register_guarded(&registry, &sorafs_gateway_proof_duration_ms);
-        register_guarded(&registry, &torii_sorafs_chunk_range_requests_total);
-        register_guarded(&registry, &torii_sorafs_chunk_range_bytes_total);
-        register_guarded(&registry, &torii_sorafs_provider_range_capability_total);
-        register_guarded(&registry, &torii_sorafs_routing_authority_cache_total);
-        register_guarded(&registry, &torii_sorafs_range_fetch_throttle_events_total);
-        register_guarded(&registry, &torii_sorafs_range_fetch_concurrency_current);
-        register_guarded(&registry, &torii_sorafs_proof_stream_inflight);
-        register_guarded(&registry, &torii_sorafs_proof_stream_events_total);
-        register_guarded(&registry, &torii_sorafs_proof_stream_latency_ms);
-        register_guarded(&registry, &torii_sorafs_proof_health_alerts_total);
-        register_guarded(&registry, &torii_sorafs_proof_health_pdp_failures);
-        register_guarded(&registry, &torii_sorafs_proof_health_potr_breaches);
-        register_guarded(&registry, &torii_sorafs_proof_health_penalty_nano);
-        register_guarded(&registry, &torii_sorafs_proof_health_window_end_epoch);
-        register_guarded(&registry, &torii_sorafs_proof_health_cooldown);
-        let torii_sorafs_gar_violations_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_gar_violations_total"),
-            &["reason", "detail"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_gateway_refusals_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_gateway_refusals_total"),
-            &["reason", "profile", "provider_id", "scope"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_gateway_fixture_info = IntGaugeVec::new(
-            metric_specs.opts("torii_sorafs_gateway_fixture_info"),
-            &["version", "profile", "fixtures_digest"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_registry_manifests_total = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_registry_manifests_total"),
-            &["status"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_registry_aliases_total =
-            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_registry_aliases_total"))
-                .expect("Infallible");
-        let torii_sorafs_pin_retained_manifests =
-            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_pin_retained_manifests"))
-                .expect("Infallible");
-        let torii_sorafs_pin_live_content_bytes =
-            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_pin_live_content_bytes"))
-                .expect("Infallible");
-        let torii_sorafs_alias_cache_refresh_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_alias_cache_refresh_total"),
-            &["result", "reason"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_alias_cache_age_seconds = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("torii_sorafs_alias_cache_age_seconds")
-                .buckets(vec![
-                    30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1_200.0, 1_800.0, 3_600.0, 7_200.0,
-                ]),
-        )
-        .expect("Infallible");
-        let torii_sorafs_tls_cert_expiry_seconds =
-            Gauge::with_opts(metric_specs.opts("torii_sorafs_tls_cert_expiry_seconds"))
-                .expect("Infallible");
-        let torii_sorafs_tls_renewal_total = IntCounterVec::new(
-            metric_specs.opts("torii_sorafs_tls_renewal_total"),
-            &["result"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_tls_ech_enabled =
-            IntGauge::with_opts(metric_specs.opts("torii_sorafs_tls_ech_enabled"))
-                .expect("Infallible");
-        let torii_sorafs_gateway_fixture_version = IntGaugeVec::new(
-            metric_specs.opts("torii_sorafs_gateway_fixture_version"),
-            &["version"],
-        )
-        .expect("Infallible");
-        register_guarded(&registry, &torii_sorafs_tls_cert_expiry_seconds);
-        register_guarded(&registry, &torii_sorafs_tls_renewal_total);
-        register_guarded(&registry, &torii_sorafs_tls_ech_enabled);
-        register_guarded(&registry, &torii_sorafs_gateway_fixture_version);
-        register_guarded(&registry, &torii_sorafs_gateway_fixture_info);
-        register_guarded(&registry, &torii_sorafs_gar_violations_total);
-        register_guarded(&registry, &torii_sorafs_gateway_refusals_total);
-        let torii_sorafs_registry_orders_total = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_registry_orders_total"),
-            &["status"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_replication_sla_total = GenericGaugeVec::new(
-            metric_specs.opts("torii_sorafs_replication_sla_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_replication_backlog_total =
-            GenericGauge::with_opts(metric_specs.opts("torii_sorafs_replication_backlog_total"))
-                .expect("Infallible");
-        let torii_sorafs_replication_completion_latency_epochs = GaugeVec::new(
-            metric_specs.opts("torii_sorafs_replication_completion_latency_epochs"),
-            &["stat"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_replication_deadline_slack_epochs = GaugeVec::new(
-            metric_specs.opts("torii_sorafs_replication_deadline_slack_epochs"),
-            &["stat"],
-        )
-        .expect("Infallible");
-        register_guarded(&registry, &torii_sorafs_registry_manifests_total);
-        register_guarded(&registry, &torii_sorafs_registry_aliases_total);
-        register_guarded(&registry, &torii_sorafs_registry_orders_total);
-        register_guarded(&registry, &torii_sorafs_replication_sla_total);
-        register_guarded(&registry, &torii_sorafs_replication_backlog_total);
-        register_guarded(
-            &registry,
-            &torii_sorafs_replication_completion_latency_epochs,
-        );
-        register_guarded(&registry, &torii_sorafs_replication_deadline_slack_epochs);
-        register_guarded(&registry, &torii_sorafs_pin_retained_manifests);
-        register_guarded(&registry, &torii_sorafs_pin_live_content_bytes);
-        let soranet_privacy_circuit_events_total = IntCounterVec::new(
-            metric_specs.opts("soranet_privacy_circuit_events_total"),
-            &["mode", "bucket_start", "kind"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_ingest_reject_total = IntCounterVec::new(
-            metric_specs.opts("soranet_privacy_ingest_reject_total"),
-            &["endpoint", "reason"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_pow_rejects_total = IntCounterVec::new(
-            metric_specs.opts("soranet_privacy_pow_rejects_total"),
-            &["mode", "bucket_start", "reason"],
-        )
-        .expect("Infallible");
-        let soranet_pow_revocation_store_total = IntCounterVec::new(
-            metric_specs.opts("soranet_pow_revocation_store_total"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_throttles_total = IntCounterVec::new(
-            metric_specs.opts("soranet_privacy_throttles_total"),
-            &["mode", "bucket_start", "scope"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_verified_bytes_total = IntCounterVec::new(
-            metric_specs.opts("soranet_privacy_verified_bytes_total"),
-            &["mode", "bucket_start"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_active_circuits_avg = GaugeVec::new(
-            metric_specs.opts("soranet_privacy_active_circuits_avg"),
-            &["mode", "bucket_start"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_active_circuits_max = GaugeVec::new(
-            metric_specs.opts("soranet_privacy_active_circuits_max"),
-            &["mode", "bucket_start"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_open_buckets =
-            GaugeVec::new(metric_specs.opts("soranet_privacy_open_buckets"), &["mode"])
-                .expect("Infallible");
-        let soranet_privacy_pending_collectors = GaugeVec::new(
-            metric_specs.opts("soranet_privacy_pending_collectors"),
-            &["mode"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_snapshot_suppressed = GaugeVec::new(
-            metric_specs.opts("soranet_privacy_snapshot_suppressed"),
-            &["reason"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_snapshot_suppressed_by_mode = GaugeVec::new(
-            metric_specs.opts("soranet_privacy_snapshot_suppressed_by_mode"),
-            &["mode", "reason"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_snapshot_drained =
-            IntGauge::with_opts(metric_specs.opts("soranet_privacy_snapshot_drained"))
-                .expect("Infallible");
-        let soranet_privacy_snapshot_suppression_ratio =
-            Gauge::with_opts(metric_specs.opts("soranet_privacy_snapshot_suppression_ratio"))
-                .expect("Infallible");
-        let soranet_privacy_evicted_buckets_total =
-            IntCounter::with_opts(metric_specs.opts("soranet_privacy_evicted_buckets_total"))
-                .expect("Infallible");
-        let soranet_privacy_bucket_suppressed = GaugeVec::new(
-            metric_specs.opts("soranet_privacy_bucket_suppressed"),
-            &["mode", "bucket_start"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_suppression_total = IntCounterVec::new(
-            metric_specs.opts("soranet_privacy_suppression_total"),
-            &["mode", "reason"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_rtt_millis = GaugeVec::new(
-            metric_specs.opts("soranet_privacy_rtt_millis"),
-            &["mode", "bucket_start", "percentile"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_gar_reports_total = IntCounterVec::new(
-            metric_specs.opts("soranet_privacy_gar_reports_total"),
-            &["mode", "bucket_start", "category_hash"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_last_poll_unixtime =
-            IntGauge::with_opts(metric_specs.opts("soranet_privacy_last_poll_unixtime"))
-                .expect("Infallible");
-        let soranet_privacy_poll_errors_total = IntCounterVec::new(
-            metric_specs.opts("soranet_privacy_poll_errors_total"),
-            &["provider"],
-        )
-        .expect("Infallible");
-        let soranet_privacy_collector_enabled =
-            IntGauge::with_opts(metric_specs.opts("soranet_privacy_collector_enabled"))
-                .expect("Infallible");
-        let sorafs_orchestrator_active_fetches = IntGaugeVec::new(
-            metric_specs.opts("sorafs_orchestrator_active_fetches"),
-            &["manifest_id", "region"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_fetch_duration_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sorafs_orchestrator_fetch_duration_ms")
-                .buckets(prometheus::exponential_buckets(10.0, 1.8, 12).expect("valid buckets")),
-            &["manifest_id", "region"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_fetch_failures_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_orchestrator_fetch_failures_total"),
-            &["manifest_id", "region", "reason"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_retries_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_orchestrator_retries_total"),
-            &["manifest_id", "provider_id", "reason"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_provider_failures_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_orchestrator_provider_failures_total"),
-            &["manifest_id", "provider_id", "reason"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_chunk_latency_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sorafs_orchestrator_chunk_latency_ms")
-                .buckets(prometheus::exponential_buckets(5.0, 1.7, 16).expect("valid buckets")),
-            &["manifest_id", "provider_id"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_bytes_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_orchestrator_bytes_total"),
-            &["manifest_id", "provider_id"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_stalls_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_orchestrator_stalls_total"),
-            &["manifest_id", "provider_id"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_transport_events_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_orchestrator_transport_events_total"),
-            &["region", "protocol", "event", "reason"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_policy_events_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_orchestrator_policy_events_total"),
-            &["region", "stage", "outcome", "reason"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_pq_ratio = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sorafs_orchestrator_pq_ratio")
-                .buckets(vec![0.0, 0.25, 0.5, 0.66, 0.75, 1.0]),
-            &["region", "stage"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_pq_candidate_ratio = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sorafs_orchestrator_pq_candidate_ratio")
-                .buckets(vec![0.0, 0.25, 0.5, 0.75, 1.0]),
-            &["region", "stage"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_pq_deficit_ratio = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sorafs_orchestrator_pq_deficit_ratio")
-                .buckets(vec![0.0, 0.1, 0.25, 0.5, 0.75, 1.0]),
-            &["region", "stage"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_classical_ratio = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sorafs_orchestrator_classical_ratio")
-                .buckets(vec![0.0, 0.25, 0.5, 0.75, 1.0]),
-            &["region", "stage"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_classical_selected = HistogramVec::new(
-            metric_specs
-                .histogram_opts("sorafs_orchestrator_classical_selected")
-                .buckets(vec![0.0, 1.0, 2.0, 3.0, 4.0, 8.0, 16.0]),
-            &["region", "stage"],
-        )
-        .expect("Infallible");
-        let torii_da_rent_gib_months_total = IntCounterVec::new(
-            metric_specs.opts("torii_da_rent_gib_months_total"),
-            &["cluster", "storage_class"],
-        )
-        .expect("Infallible");
-        let torii_da_rent_base_micro_total = CounterVec::new(
-            metric_specs.opts("torii_da_rent_base_micro_total"),
-            &["cluster", "storage_class"],
-        )
-        .expect("Infallible");
-        let torii_da_protocol_reserve_micro_total = CounterVec::new(
-            metric_specs.opts("torii_da_protocol_reserve_micro_total"),
-            &["cluster", "storage_class"],
-        )
-        .expect("Infallible");
-        let torii_da_provider_reward_micro_total = CounterVec::new(
-            metric_specs.opts("torii_da_provider_reward_micro_total"),
-            &["cluster", "storage_class"],
-        )
-        .expect("Infallible");
-        let torii_da_pdp_bonus_micro_total = CounterVec::new(
-            metric_specs.opts("torii_da_pdp_bonus_micro_total"),
-            &["cluster", "storage_class"],
-        )
-        .expect("Infallible");
-        let torii_da_potr_bonus_micro_total = CounterVec::new(
-            metric_specs.opts("torii_da_potr_bonus_micro_total"),
-            &["cluster", "storage_class"],
-        )
-        .expect("Infallible");
-        let torii_da_receipts_total = IntCounterVec::new(
-            metric_specs.opts("torii_da_receipts_total"),
-            &["outcome", "lane"],
-        )
-        .expect("Infallible");
-        let torii_da_receipt_epoch =
-            GenericGaugeVec::new(metric_specs.opts("torii_da_receipt_epoch"), &["lane"])
-                .expect("Infallible");
-        let torii_da_receipt_highest_sequence = GenericGaugeVec::new(
-            metric_specs.opts("torii_da_receipt_highest_sequence"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let torii_da_chunking_seconds = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("torii_da_chunking_seconds")
-                .buckets(vec![
-                    0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-                ]),
-        )
-        .expect("Infallible");
-        let torii_da_spool_batches_total = IntCounterVec::new(
-            metric_specs.opts("torii_da_spool_batches_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        let torii_da_spool_artifacts_total = IntCounterVec::new(
-            metric_specs.opts("torii_da_spool_artifacts_total"),
-            &["kind", "outcome"],
-        )
-        .expect("Infallible");
-        let torii_da_spool_queue_depth =
-            GenericGauge::with_opts(metric_specs.opts("torii_da_spool_queue_depth"))
-                .expect("Infallible");
-        let torii_da_spool_batch_write_ms = Histogram::with_opts(
-            metric_specs
-                .histogram_opts("torii_da_spool_batch_write_ms")
-                .buckets(vec![
-                    0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
-                ]),
-        )
-        .expect("Infallible");
-        let da_shard_cursor_events_total = IntCounterVec::new(
-            metric_specs.opts("da_shard_cursor_events_total"),
-            &["event", "lane", "shard"],
-        )
-        .expect("Infallible");
-        let da_shard_cursor_height = IntGaugeVec::new(
-            metric_specs.opts("da_shard_cursor_height"),
-            &["lane", "shard"],
-        )
-        .expect("Infallible");
-        let da_shard_cursor_lag_blocks = IntGaugeVec::new(
-            metric_specs.opts("da_shard_cursor_lag_blocks"),
-            &["lane", "shard"],
-        )
-        .expect("Infallible");
-        let taikai_ingest_segment_latency_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("taikai_ingest_segment_latency_ms")
-                .buckets(vec![
-                    10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0,
-                ]),
-            &["cluster", "stream"],
-        )
-        .expect("Infallible");
-        let taikai_ingest_live_edge_drift_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("taikai_ingest_live_edge_drift_ms")
-                .buckets(vec![
-                    50.0, 100.0, 250.0, 500.0, 1_000.0, 1_500.0, 2_000.0, 3_000.0,
-                ]),
-            &["cluster", "stream"],
-        )
-        .expect("Infallible");
-        let taikai_ingest_live_edge_drift_signed_ms = GaugeVec::new(
-            metric_specs.opts("taikai_ingest_live_edge_drift_signed_ms"),
-            &["cluster", "stream"],
-        )
-        .expect("Infallible");
-        let taikai_ingest_errors_total = IntCounterVec::new(
-            metric_specs.opts("taikai_ingest_errors_total"),
-            &["cluster", "stream", "reason"],
-        )
-        .expect("Infallible");
-        let taikai_trm_alias_rotations_total = IntCounterVec::new(
-            metric_specs.opts("taikai_trm_alias_rotations_total"),
-            &[
-                "cluster",
-                "event",
-                "stream",
-                "alias_namespace",
-                "alias_name",
-            ],
-        )
-        .expect("Infallible");
-        let taikai_viewer_rebuffer_events_total = IntCounterVec::new(
-            metric_specs.opts("taikai_viewer_rebuffer_events_total"),
-            &["cluster", "stream"],
-        )
-        .expect("Infallible");
-        let taikai_viewer_playback_segments_total = IntCounterVec::new(
-            metric_specs.opts("taikai_viewer_playback_segments_total"),
-            &["cluster", "stream"],
-        )
-        .expect("Infallible");
-        let taikai_viewer_cek_fetch_duration_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("taikai_viewer_cek_fetch_duration_ms")
-                .buckets(vec![5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0]),
-            &["cluster", "lane"],
-        )
-        .expect("Infallible");
-        let taikai_viewer_pq_circuit_health = GaugeVec::new(
-            metric_specs.opts("taikai_viewer_pq_circuit_health"),
-            &["cluster"],
-        )
-        .expect("Infallible");
-        let taikai_viewer_cek_rotation_seconds_ago = GenericGaugeVec::new(
-            metric_specs.opts("taikai_viewer_cek_rotation_seconds_ago"),
-            &["lane"],
-        )
-        .expect("Infallible");
-        let taikai_viewer_alerts_firing_total = IntCounterVec::new(
-            metric_specs.opts("taikai_viewer_alerts_firing_total"),
-            &["cluster", "alertname"],
-        )
-        .expect("Infallible");
-        let sorafs_taikai_cache_query_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_taikai_cache_query_total"),
-            &["result", "tier"],
-        )
-        .expect("Infallible");
-        let sorafs_taikai_cache_insert_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_taikai_cache_insert_total"),
-            &["tier"],
-        )
-        .expect("Infallible");
-        let sorafs_taikai_cache_evictions_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_taikai_cache_evictions_total"),
-            &["tier", "reason"],
-        )
-        .expect("Infallible");
-        let sorafs_taikai_cache_promotions_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_taikai_cache_promotions_total"),
-            &["from_tier", "to_tier"],
-        )
-        .expect("Infallible");
-        let sorafs_taikai_cache_bytes_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_taikai_cache_bytes_total"),
-            &["event", "tier"],
-        )
-        .expect("Infallible");
-        let sorafs_taikai_qos_denied_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_taikai_qos_denied_total"),
-            &["class"],
-        )
-        .expect("Infallible");
-        let sorafs_taikai_queue_events_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_taikai_queue_events_total"),
-            &["event", "class"],
-        )
-        .expect("Infallible");
-        let sorafs_taikai_queue_depth =
-            IntGaugeVec::new(metric_specs.opts("sorafs_taikai_queue_depth"), &["state"])
-                .expect("Infallible");
-        let sorafs_taikai_shard_failovers_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_taikai_shard_failovers_total"),
-            &["preferred_shard", "selected_shard"],
-        )
-        .expect("Infallible");
-        let sorafs_taikai_shard_circuits_open = IntGaugeVec::new(
-            metric_specs.opts("sorafs_taikai_shard_circuits_open"),
-            &["shard"],
-        )
-        .expect("Infallible");
-        let sorafs_orchestrator_brownouts_total = IntCounterVec::new(
-            metric_specs.opts("sorafs_orchestrator_brownouts_total"),
-            &["region", "stage", "reason"],
-        )
-        .expect("Infallible");
-        let soranet_reward_base_payout_nanos =
-            GenericGauge::with_opts(metric_specs.opts("soranet_reward_base_payout_nanos"))
-                .expect("Infallible");
+    }
+    [torii_sorafs_hedging_xor_usd_reference_price_micro_usd
+        torii_sorafs_hedging_feed_lag_seconds torii_sorafs_hedging_feed_divergence_bps
+        torii_sorafs_hedging_exposure_drift_bps torii_sorafs_billing_statement_generation_total
+        torii_sorafs_billing_statement_failure_total torii_sorafs_billing_statement_ack_backlog
+        torii_sorafs_billing_escrow_runway_seconds torii_sorafs_reserve_lifecycle_stage_providers
+        torii_sorafs_reserve_credit_draw_micro_xor torii_sorafs_reserve_credit_shortfall_micro_xor
+        torii_sorafs_reserve_accrued_interest_micro_xor torii_sorafs_reserve_defaulted_providers
+        torii_sorafs_reserve_appeal_backlog torii_sorafs_reserve_custody_movements
+        torii_sorafs_reserve_chain_reconciled_movements
+        torii_sorafs_reserve_finalized_projection_ready
+        torii_sorafs_reserve_finalized_projection_height
+        torii_sorafs_reserve_finalized_projection_failure_total
+        torii_sorafs_reserve_service_requests_total torii_sorafs_reserve_service_rate_limit_total
+        sorafs_reputation_ingest_lag_seconds sorafs_reputation_snapshot_age_seconds
+        sorafs_reputation_snapshot_generated_at_unix sorafs_reputation_provider_count
+        sorafs_reputation_low_score_providers sorafs_reputation_score
+        sorafs_reputation_threshold_crossings_total sorafs_reputation_runtime_live
+        sorafs_reputation_runtime_ready sorafs_reputation_runtime_dependencies_ready
+        sorafs_reputation_journal_transaction_submitter_ready
+        sorafs_reputation_runtime_finalized_height sorafs_reputation_runtime_consecutive_failures
+        sorafs_reputation_runtime_material_acknowledged sorafs_reputation_runtime_provider_count
+        sorafs_reputation_runtime_ticks_total sorafs_hedging_billing_runtime_live
+        sorafs_hedging_billing_runtime_ready sorafs_hedging_billing_runtime_dependencies_ready
+        sorafs_hedging_billing_automatic_execution_enabled sorafs_hedging_billing_last_tick_fresh
+        sorafs_hedging_billing_finalized_projection_ready sorafs_hedging_billing_finalized_height
+        sorafs_hedging_billing_finalized_head_height sorafs_hedging_billing_finalized_lag_blocks
+        sorafs_hedging_billing_next_event_sequence sorafs_hedging_billing_ready_for_signing
+        sorafs_hedging_billing_ready_for_publication sorafs_hedging_billing_publication_ambiguous
+        sorafs_hedging_billing_published sorafs_hedging_billing_acknowledged
+        sorafs_hedging_billing_dead_letter sorafs_hedging_billing_hedge_intents
+        sorafs_hedging_billing_runtime_ticks_total torii_sorafs_fee_projection_nanos
+        torii_sorafs_disputes_total torii_sorafs_orders_issued_total
+        torii_sorafs_orders_completed_total torii_sorafs_orders_failed_total
+        torii_sorafs_outstanding_orders torii_sorafs_uptime_bps torii_sorafs_por_bps
+        torii_sorafs_por_challenges_total torii_sorafs_por_forced_challenges_total
+        torii_sorafs_por_sampling_duplicates_total torii_sorafs_por_ingest_backlog
+        torii_sorafs_por_ingest_failures_total torii_sorafs_repair_tasks_total
+        torii_sorafs_repair_latency_minutes torii_sorafs_repair_queue_depth
+        torii_sorafs_repair_backlog_oldest_age_seconds torii_sorafs_repair_lease_expired_total
+        torii_sorafs_slash_proposals_total torii_sorafs_reconciliation_runs_total
+        torii_sorafs_reconciliation_divergence_count torii_sorafs_gc_runs_total
+        torii_sorafs_gc_evictions_total torii_sorafs_gc_bytes_freed_total
+        torii_sorafs_gc_blocked_total torii_sorafs_gc_expired_manifests
+        torii_sorafs_gc_oldest_expired_age_seconds torii_sorafs_storage_bytes_used
+        torii_sorafs_storage_bytes_capacity sorafs_provider_ingest_inflight
+        torii_sorafs_storage_fetch_inflight torii_sorafs_storage_fetch_bytes_per_sec
+        torii_sorafs_storage_por_inflight torii_sorafs_storage_por_samples_success_total
+        torii_sorafs_storage_por_samples_failed_total sorafs_gateway_active
+        sorafs_gateway_responses_total sorafs_gateway_ttfb_ms
+        sorafs_gateway_proof_verifications_total sorafs_gateway_proof_duration_ms
+        torii_sorafs_chunk_range_requests_total torii_sorafs_chunk_range_bytes_total
+        torii_sorafs_provider_range_capability_total torii_sorafs_routing_authority_cache_total
+        torii_sorafs_range_fetch_throttle_events_total torii_sorafs_range_fetch_concurrency_current
+        torii_sorafs_proof_stream_inflight torii_sorafs_proof_stream_events_total
+        torii_sorafs_proof_stream_latency_ms torii_sorafs_proof_health_alerts_total
+        torii_sorafs_proof_health_pdp_failures torii_sorafs_proof_health_potr_breaches
+        torii_sorafs_proof_health_penalty_nano torii_sorafs_proof_health_window_end_epoch
+        torii_sorafs_proof_health_cooldown torii_sorafs_gar_violations_total
+        torii_sorafs_gateway_refusals_total torii_sorafs_gateway_fixture_info
+        torii_sorafs_registry_manifests_total torii_sorafs_registry_aliases_total
+        torii_sorafs_pin_retained_manifests torii_sorafs_pin_live_content_bytes
+        torii_sorafs_alias_cache_refresh_total torii_sorafs_alias_cache_age_seconds
+        torii_sorafs_tls_cert_expiry_seconds torii_sorafs_tls_renewal_total
+        torii_sorafs_tls_ech_enabled torii_sorafs_gateway_fixture_version
+        torii_sorafs_registry_orders_total torii_sorafs_replication_sla_total
+        torii_sorafs_replication_backlog_total torii_sorafs_replication_completion_latency_epochs
+        torii_sorafs_replication_deadline_slack_epochs soranet_privacy_circuit_events_total
+        soranet_privacy_ingest_reject_total soranet_privacy_pow_rejects_total
+        soranet_pow_revocation_store_total soranet_privacy_throttles_total
+        soranet_privacy_verified_bytes_total soranet_privacy_active_circuits_avg
+        soranet_privacy_active_circuits_max soranet_privacy_open_buckets
+        soranet_privacy_pending_collectors soranet_privacy_snapshot_suppressed
+        soranet_privacy_snapshot_suppressed_by_mode soranet_privacy_snapshot_drained
+        soranet_privacy_snapshot_suppression_ratio soranet_privacy_evicted_buckets_total
+        soranet_privacy_bucket_suppressed soranet_privacy_suppression_total
+        soranet_privacy_rtt_millis soranet_privacy_gar_reports_total
+        soranet_privacy_last_poll_unixtime soranet_privacy_poll_errors_total
+        soranet_privacy_collector_enabled sorafs_orchestrator_active_fetches
+        sorafs_orchestrator_fetch_duration_ms sorafs_orchestrator_fetch_failures_total
+        sorafs_orchestrator_retries_total sorafs_orchestrator_provider_failures_total
+        sorafs_orchestrator_chunk_latency_ms sorafs_orchestrator_bytes_total
+        sorafs_orchestrator_stalls_total sorafs_orchestrator_transport_events_total
+        sorafs_orchestrator_policy_events_total sorafs_orchestrator_pq_ratio
+        sorafs_orchestrator_pq_candidate_ratio sorafs_orchestrator_pq_deficit_ratio
+        sorafs_orchestrator_classical_ratio sorafs_orchestrator_classical_selected
+        torii_da_rent_gib_months_total torii_da_rent_base_micro_total
+        torii_da_protocol_reserve_micro_total torii_da_provider_reward_micro_total
+        torii_da_pdp_bonus_micro_total torii_da_potr_bonus_micro_total torii_da_receipts_total
+        torii_da_receipt_epoch torii_da_receipt_highest_sequence torii_da_chunking_seconds
+        torii_da_spool_batches_total torii_da_spool_artifacts_total torii_da_spool_queue_depth
+        torii_da_spool_batch_write_ms da_shard_cursor_events_total da_shard_cursor_height
+        da_shard_cursor_lag_blocks taikai_ingest_segment_latency_ms
+        taikai_ingest_live_edge_drift_ms taikai_ingest_live_edge_drift_signed_ms
+        taikai_ingest_errors_total taikai_trm_alias_rotations_total
+        taikai_viewer_rebuffer_events_total taikai_viewer_playback_segments_total
+        taikai_viewer_cek_fetch_duration_ms taikai_viewer_pq_circuit_health
+        taikai_viewer_cek_rotation_seconds_ago taikai_viewer_alerts_firing_total
+        sorafs_taikai_cache_query_total sorafs_taikai_cache_insert_total
+        sorafs_taikai_cache_evictions_total sorafs_taikai_cache_promotions_total
+        sorafs_taikai_cache_bytes_total sorafs_taikai_qos_denied_total
+        sorafs_taikai_queue_events_total sorafs_taikai_queue_depth
+        sorafs_taikai_shard_failovers_total sorafs_taikai_shard_circuits_open
+        sorafs_orchestrator_brownouts_total soranet_reward_base_payout_nanos]
+    {
         soranet_reward_base_payout_nanos.set(0);
-        let soranet_reward_events_total = IntCounterVec::new(
-            metric_specs.opts("soranet_reward_events_total"),
-            &["relay", "result"],
-        )
-        .expect("Infallible");
-        let soranet_reward_payout_nanos_total = IntCounterVec::new(
-            metric_specs.opts("soranet_reward_payout_nanos_total"),
-            &["relay", "result"],
-        )
-        .expect("Infallible");
-        let soranet_reward_skips_total = IntCounterVec::new(
-            metric_specs.opts("soranet_reward_skips_total"),
-            &["relay", "reason"],
-        )
-        .expect("Infallible");
-        let soranet_reward_adjustment_nanos_total = IntCounterVec::new(
-            metric_specs.opts("soranet_reward_adjustment_nanos_total"),
-            &["relay", "kind"],
-        )
-        .expect("Infallible");
-        let soranet_reward_disputes_total = IntCounterVec::new(
-            metric_specs.opts("soranet_reward_disputes_total"),
-            &["action"],
-        )
-        .expect("Infallible");
-        register!(
-            registry,
-            soranet_privacy_ingest_reject_total,
-            soranet_privacy_circuit_events_total,
-            soranet_privacy_pow_rejects_total,
-            soranet_pow_revocation_store_total,
-            soranet_privacy_throttles_total,
-            soranet_privacy_verified_bytes_total,
-            soranet_privacy_evicted_buckets_total,
-            soranet_privacy_suppression_total,
-            soranet_privacy_gar_reports_total,
-            soranet_privacy_poll_errors_total
-        );
-        register_guarded(&registry, &soranet_privacy_last_poll_unixtime);
-        register_guarded(&registry, &soranet_privacy_active_circuits_avg);
-        register_guarded(&registry, &soranet_privacy_active_circuits_max);
-        register_guarded(&registry, &soranet_privacy_open_buckets);
-        register_guarded(&registry, &soranet_privacy_pending_collectors);
-        register_guarded(&registry, &soranet_privacy_snapshot_suppressed);
-        register_guarded(&registry, &soranet_privacy_snapshot_suppressed_by_mode);
-        register_guarded(&registry, &soranet_privacy_snapshot_drained);
-        register_guarded(&registry, &soranet_privacy_snapshot_suppression_ratio);
-        register_guarded(&registry, &soranet_privacy_bucket_suppressed);
-        register_guarded(&registry, &soranet_privacy_rtt_millis);
-        register_guarded(&registry, &soranet_privacy_collector_enabled);
-        register_guarded(&registry, &sorafs_orchestrator_active_fetches);
-        register_guarded(&registry, &sorafs_orchestrator_fetch_duration_ms);
-        register_guarded(&registry, &sorafs_orchestrator_fetch_failures_total);
-        register_guarded(&registry, &sorafs_orchestrator_retries_total);
-        register_guarded(&registry, &sorafs_orchestrator_provider_failures_total);
-        register_guarded(&registry, &sorafs_orchestrator_chunk_latency_ms);
-        register_guarded(&registry, &sorafs_orchestrator_bytes_total);
-        register_guarded(&registry, &sorafs_orchestrator_stalls_total);
-        register_guarded(&registry, &sorafs_orchestrator_transport_events_total);
-        register_guarded(&registry, &sorafs_orchestrator_policy_events_total);
-        register_guarded(&registry, &sorafs_orchestrator_pq_ratio);
-        register_guarded(&registry, &sorafs_orchestrator_pq_candidate_ratio);
-        register_guarded(&registry, &sorafs_orchestrator_pq_deficit_ratio);
-        register_guarded(&registry, &sorafs_orchestrator_classical_ratio);
-        register_guarded(&registry, &sorafs_orchestrator_classical_selected);
-        register_guarded(&registry, &torii_da_rent_gib_months_total);
-        register_guarded(&registry, &torii_da_rent_base_micro_total);
-        register_guarded(&registry, &torii_da_protocol_reserve_micro_total);
-        register_guarded(&registry, &torii_da_provider_reward_micro_total);
-        register_guarded(&registry, &torii_da_pdp_bonus_micro_total);
-        register_guarded(&registry, &torii_da_potr_bonus_micro_total);
-        register_guarded(&registry, &torii_da_receipts_total);
-        register_guarded(&registry, &torii_da_receipt_epoch);
-        register_guarded(&registry, &torii_da_receipt_highest_sequence);
-        register_guarded(&registry, &torii_da_chunking_seconds);
-        register_guarded(&registry, &torii_da_spool_batches_total);
-        register_guarded(&registry, &torii_da_spool_artifacts_total);
-        register_guarded(&registry, &torii_da_spool_queue_depth);
-        register_guarded(&registry, &torii_da_spool_batch_write_ms);
-        register_guarded(&registry, &da_shard_cursor_events_total);
-        register_guarded(&registry, &da_shard_cursor_height);
-        register_guarded(&registry, &da_shard_cursor_lag_blocks);
-        register!(
-            registry,
-            subscription_billing_attempts_total,
-            subscription_billing_outcomes_total,
-            social_events_total,
-            social_budget_spent,
-            social_campaign_spent,
-            social_campaign_cap,
-            social_campaign_remaining,
-            social_campaign_active,
-            social_halted,
-            social_rejections_total,
-            multisig_direct_sign_reject_total,
-            social_open_escrows
-        );
-        register_guarded(&registry, &taikai_ingest_segment_latency_ms);
-        register_guarded(&registry, &taikai_ingest_live_edge_drift_ms);
-        register_guarded(&registry, &taikai_ingest_live_edge_drift_signed_ms);
-        register_guarded(&registry, &taikai_ingest_errors_total);
-        register_guarded(&registry, &taikai_trm_alias_rotations_total);
-        register_guarded(&registry, &taikai_viewer_rebuffer_events_total);
-        register_guarded(&registry, &taikai_viewer_playback_segments_total);
-        register_guarded(&registry, &taikai_viewer_cek_fetch_duration_ms);
-        register_guarded(&registry, &taikai_viewer_pq_circuit_health);
-        register_guarded(&registry, &taikai_viewer_cek_rotation_seconds_ago);
-        register_guarded(&registry, &taikai_viewer_alerts_firing_total);
-        register_guarded(&registry, &sorafs_taikai_cache_query_total);
-        register_guarded(&registry, &sorafs_taikai_cache_insert_total);
-        register_guarded(&registry, &sorafs_taikai_cache_evictions_total);
-        register_guarded(&registry, &sorafs_taikai_cache_promotions_total);
-        register_guarded(&registry, &sorafs_taikai_cache_bytes_total);
-        register_guarded(&registry, &sorafs_taikai_qos_denied_total);
-        register_guarded(&registry, &sorafs_taikai_queue_events_total);
-        register_guarded(&registry, &sorafs_taikai_queue_depth);
-        register_guarded(&registry, &sorafs_taikai_shard_failovers_total);
-        register_guarded(&registry, &sorafs_taikai_shard_circuits_open);
-        register_guarded(&registry, &sorafs_orchestrator_brownouts_total);
-        register_guarded(&registry, &soranet_reward_base_payout_nanos);
-        register_guarded(&registry, &soranet_reward_events_total);
-        register_guarded(&registry, &soranet_reward_payout_nanos_total);
-        register_guarded(&registry, &soranet_reward_skips_total);
-        register_guarded(&registry, &soranet_reward_adjustment_nanos_total);
-        register_guarded(&registry, &soranet_reward_disputes_total);
-        let torii_http_requests_total = IntCounterVec::new(
-            metric_specs.opts("torii_http_requests_total"),
-            &[
-                "route_id",
-                "route_template",
-                "surface",
-                "representation",
-                "error_code",
-                "content_type",
-                "method",
-                "status",
-            ],
-        )
-        .expect("Infallible");
-        let torii_http_request_duration_seconds = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_http_request_duration_seconds")
-                .buckets(
-                    prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid"),
-                ),
-            &[
-                "route_id",
-                "route_template",
-                "surface",
-                "representation",
-                "content_type",
-                "method",
-            ],
-        )
-        .expect("Infallible");
-        let torii_http_request_bytes_total = IntCounterVec::new(
-            metric_specs.opts("torii_http_request_bytes_total"),
-            &[
-                "route_id",
-                "route_template",
-                "surface",
-                "representation",
-                "content_type",
-                "method",
-            ],
-        )
-        .expect("Infallible");
-        let torii_http_response_bytes_total = IntCounterVec::new(
-            metric_specs.opts("torii_http_response_bytes_total"),
-            &[
-                "route_id",
-                "route_template",
-                "surface",
-                "representation",
-                "error_code",
-                "content_type",
-                "method",
-                "status",
-            ],
-        )
-        .expect("Infallible");
-        let torii_api_token_hits_total = IntCounterVec::new(
-            metric_specs.opts("torii_api_token_hits_total"),
-            &["endpoint", "token_state"],
-        )
-        .expect("Infallible");
-        let torii_content_requests_total = IntCounterVec::new(
-            metric_specs.opts("torii_content_requests_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        let torii_content_request_duration_seconds = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_content_request_duration_seconds")
-                .buckets(
-                    prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid"),
-                ),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        let torii_content_response_bytes_total = IntCounterVec::new(
-            metric_specs.opts("torii_content_response_bytes_total"),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        let torii_proof_requests_total = IntCounterVec::new(
-            metric_specs.opts("torii_proof_requests_total"),
-            &["endpoint", "outcome"],
-        )
-        .expect("Infallible");
-        let torii_proof_request_duration_seconds = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_proof_request_duration_seconds")
-                .buckets(
-                    prometheus::exponential_buckets(0.001, 2.0, 12).expect("inputs are valid"),
-                ),
-            &["endpoint", "outcome"],
-        )
-        .expect("Infallible");
-        let torii_proof_response_bytes_total = IntCounterVec::new(
-            metric_specs.opts("torii_proof_response_bytes_total"),
-            &["endpoint", "outcome"],
-        )
-        .expect("Infallible");
-        let torii_proof_cache_hits_total = IntCounterVec::new(
-            metric_specs.opts("torii_proof_cache_hits_total"),
-            &["endpoint"],
-        )
-        .expect("Infallible");
-        let torii_request_duration_seconds = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_request_duration_seconds")
-                .buckets(
-                    prometheus::exponential_buckets(0.005, 2.0, 13).expect("inputs are valid"),
-                ),
-            &["scheme"],
-        )
-        .expect("Infallible");
-        let torii_request_failures_total = IntCounterVec::new(
-            metric_specs.opts("torii_request_failures_total"),
-            &["scheme", "code"],
-        )
-        .expect("Infallible");
-        let torii_explorer_requests_total = IntCounterVec::new(
-            metric_specs.opts("torii_explorer_requests_total"),
-            &["endpoint", "outcome"],
-        )
-        .expect("Infallible");
-        let torii_explorer_request_duration_seconds = HistogramVec::new(
-            metric_specs
-                .histogram_opts("torii_explorer_request_duration_seconds")
-                .buckets(
-                    prometheus::exponential_buckets(0.001, 2.0, 14).expect("inputs are valid"),
-                ),
-            &["endpoint", "outcome"],
-        )
-        .expect("Infallible");
-        let torii_norito_rpc_gate_total = IntCounterVec::new(
-            metric_specs.opts("torii_norito_rpc_gate_total"),
-            &["stage", "outcome"],
-        )
-        .expect("Infallible");
-        let torii_address_invalid_total = IntCounterVec::new(
-            metric_specs.opts("torii_address_invalid_total"),
-            &["endpoint", "reason"],
-        )
-        .expect("Infallible");
-        let torii_address_domain_total = IntCounterVec::new(
-            metric_specs.opts("torii_address_domain_total"),
-            &["endpoint", "domain_kind"],
-        )
-        .expect("Infallible");
-        let torii_address_collision_total = IntCounterVec::new(
-            metric_specs.opts("torii_address_collision_total"),
-            &["endpoint", "kind"],
-        )
-        .expect("Infallible");
-        let torii_address_collision_domain_total = IntCounterVec::new(
-            metric_specs.opts("torii_address_collision_domain_total"),
-            &["endpoint", "domain"],
-        )
-        .expect("Infallible");
-        let torii_account_literal_total = IntCounterVec::new(
-            metric_specs.opts("torii_account_literal_total"),
-            &["endpoint", "format"],
-        )
-        .expect("Infallible");
-        let torii_norito_decode_failures_total = IntCounterVec::new(
-            metric_specs.opts("torii_norito_decode_failures_total"),
-            &["payload_kind", "reason"],
-        )
-        .expect("Infallible");
-        register_guarded(&registry, &torii_http_requests_total);
-        register_guarded(&registry, &torii_http_request_duration_seconds);
-        register_guarded(&registry, &torii_http_request_bytes_total);
-        register_guarded(&registry, &torii_http_response_bytes_total);
-        register_guarded(&registry, &torii_api_token_hits_total);
-        register_guarded(&registry, &torii_content_requests_total);
-        register_guarded(&registry, &torii_content_request_duration_seconds);
-        register_guarded(&registry, &torii_content_response_bytes_total);
-        register_guarded(&registry, &torii_proof_requests_total);
-        register_guarded(&registry, &torii_proof_request_duration_seconds);
-        register_guarded(&registry, &torii_proof_response_bytes_total);
-        register_guarded(&registry, &torii_proof_cache_hits_total);
-        register_guarded(&registry, &torii_request_duration_seconds);
-        register_guarded(&registry, &torii_request_failures_total);
-        register_guarded(&registry, &torii_explorer_requests_total);
-        register_guarded(&registry, &torii_explorer_request_duration_seconds);
-        register_guarded(&registry, &torii_norito_rpc_gate_total);
-        register_guarded(&registry, &torii_address_invalid_total);
-        register_guarded(&registry, &torii_address_domain_total);
-        register_guarded(&registry, &torii_address_collision_total);
-        register_guarded(&registry, &torii_address_collision_domain_total);
-        register_guarded(&registry, &torii_account_literal_total);
-        register_guarded(&registry, &torii_norito_decode_failures_total);
-        register_guarded(&registry, &torii_connect_sessions_total);
-        register_guarded(&registry, &torii_connect_sessions_active);
-        register_guarded(&registry, &torii_pre_auth_reject_total);
-        register_guarded(&registry, &torii_operator_auth_total);
-        register_guarded(&registry, &torii_operator_auth_lockout_total);
-        register_guarded(&registry, &torii_signature_limit_total);
-        register_guarded(&registry, &torii_signature_limit_by_authority_total);
-        register_guarded(&registry, &torii_signature_limit_last_count);
-        register_guarded(&registry, &torii_signature_limit_max);
-        register_guarded(&registry, &torii_nts_unhealthy_reject_total);
-        register_guarded(&registry, &torii_multisig_direct_sign_reject_total);
-        let torii_proof_throttled_total = IntCounterVec::new(
-            metric_specs.opts("torii_proof_throttled_total"),
-            &["endpoint"],
-        )
-        .expect("Infallible");
-        let torii_contract_throttled_total = IntCounterVec::new(
-            metric_specs.opts("torii_contract_throttled_total"),
-            &["endpoint"],
-        )
-        .expect("Infallible");
-        let torii_contract_errors_total = IntCounterVec::new(
-            metric_specs.opts("torii_contract_errors_total"),
-            &["endpoint"],
-        )
-        .expect("Infallible");
-        let sns_registrar_status_total = IntCounterVec::new(
-            metric_specs.opts("sns_registrar_status_total"),
-            &["result", "suffix"],
-        )
-        .expect("Infallible");
-        register_guarded(&registry, &torii_proof_throttled_total);
-        register_guarded(&registry, &torii_contract_throttled_total);
-        register_guarded(&registry, &torii_contract_errors_total);
-        register_guarded(&registry, &sns_registrar_status_total);
-        let torii_active_connections_total = GenericGaugeVec::new(
-            metric_specs.opts("torii_active_connections_total"),
-            &["scheme"],
-        )
-        .expect("Infallible");
-        let torii_connect_buffered_sessions =
-            GenericGauge::with_opts(metric_specs.opts("torii_connect_buffered_sessions"))
-                .expect("Infallible");
-        let torii_connect_total_buffer_bytes =
-            GenericGauge::with_opts(metric_specs.opts("torii_connect_total_buffer_bytes"))
-                .expect("Infallible");
-        let torii_connect_dedupe_size =
-            GenericGauge::with_opts(metric_specs.opts("torii_connect_dedupe_size"))
-                .expect("Infallible");
-        let torii_connect_per_ip_sessions =
-            GenericGaugeVec::new(metric_specs.opts("torii_connect_per_ip_sessions"), &["ip"])
-                .expect("Infallible");
-        let zk_verify_latency_ms = HistogramVec::new(
-            metric_specs
-                .histogram_opts("zk_verify_latency_ms")
-                .buckets(prometheus::exponential_buckets(1.0, 2.0, 15).expect("inputs are valid")),
-            &["backend", "status"],
-        )
-        .expect("Infallible");
-        let zk_verify_proof_bytes = HistogramVec::new(
-            metric_specs
-                .histogram_opts("zk_verify_proof_bytes")
-                .buckets(
-                    prometheus::exponential_buckets(256.0, 2.0, 12).expect("inputs are valid"),
-                ),
-            &["backend", "status"],
-        )
-        .expect("Infallible");
+    }
+    [soranet_reward_events_total soranet_reward_payout_nanos_total soranet_reward_skips_total
+        soranet_reward_adjustment_nanos_total soranet_reward_disputes_total
+        torii_http_requests_total torii_http_request_duration_seconds
+        torii_http_request_bytes_total torii_http_response_bytes_total torii_api_token_hits_total
+        torii_content_requests_total torii_content_request_duration_seconds
+        torii_content_response_bytes_total torii_proof_requests_total
+        torii_proof_request_duration_seconds torii_proof_response_bytes_total
+        torii_proof_cache_hits_total torii_request_duration_seconds torii_request_failures_total
+        torii_explorer_requests_total torii_explorer_request_duration_seconds
+        torii_norito_rpc_gate_total torii_address_invalid_total torii_address_domain_total
+        torii_address_collision_total torii_address_collision_domain_total
+        torii_account_literal_total torii_norito_decode_failures_total torii_proof_throttled_total
+        torii_contract_throttled_total torii_contract_errors_total sns_registrar_status_total
+        torii_active_connections_total torii_connect_buffered_sessions
+        torii_connect_total_buffer_bytes torii_connect_dedupe_size torii_connect_per_ip_sessions
+        zk_verify_latency_ms zk_verify_proof_bytes]
         // Block-level gas and fees (latest block)
-        let block_gas_used =
-            GenericGauge::with_opts(metric_specs.opts("block_gas_used")).expect("Infallible");
-        let confidential_gas_tx_used =
-            GenericGauge::with_opts(metric_specs.opts("confidential_gas_tx_used"))
-                .expect("Infallible");
-        let confidential_gas_block_used =
-            GenericGauge::with_opts(metric_specs.opts("confidential_gas_block_used"))
-                .expect("Infallible");
-        let confidential_gas_total =
-            IntCounter::with_opts(metric_specs.opts("confidential_gas_total")).expect("Infallible");
-        let block_fee_total_units =
-            GenericGauge::with_opts(metric_specs.opts("block_fee_total_units"))
-                .expect("Infallible");
-        let block_fee_total_scale =
-            GenericGauge::with_opts(metric_specs.opts("block_fee_total_scale"))
-                .expect("Infallible");
+    [block_gas_used confidential_gas_tx_used confidential_gas_block_used confidential_gas_total
+        block_fee_total_units block_fee_total_scale]
         // Network Time Service (basic gauges)
-        let nts_offset_ms =
-            IntGauge::with_opts(metric_specs.opts("nts_offset_ms")).expect("Infallible");
-        let nts_confidence_ms =
-            GenericGauge::with_opts(metric_specs.opts("nts_confidence_ms")).expect("Infallible");
-        let nts_peers_sampled =
-            GenericGauge::with_opts(metric_specs.opts("nts_peers_sampled")).expect("Infallible");
-        let nts_samples_used =
-            GenericGauge::with_opts(metric_specs.opts("nts_samples_used")).expect("Infallible");
-        let nts_healthy =
-            IntGauge::with_opts(metric_specs.opts("nts_healthy")).expect("Infallible");
-        let nts_fallback =
-            IntGauge::with_opts(metric_specs.opts("nts_fallback")).expect("Infallible");
-        let nts_min_samples_ok =
-            IntGauge::with_opts(metric_specs.opts("nts_min_samples_ok")).expect("Infallible");
-        let nts_offset_ok =
-            IntGauge::with_opts(metric_specs.opts("nts_offset_ok")).expect("Infallible");
-        let nts_confidence_ok =
-            IntGauge::with_opts(metric_specs.opts("nts_confidence_ok")).expect("Infallible");
-        let nts_rtt_ms_bucket =
-            GenericGaugeVec::new(metric_specs.opts("nts_rtt_ms_bucket"), &["le"])
-                .expect("Infallible");
-        let nts_rtt_ms_sum =
-            GenericGauge::with_opts(metric_specs.opts("nts_rtt_ms_sum")).expect("Infallible");
-        let nts_rtt_ms_count =
-            GenericGauge::with_opts(metric_specs.opts("nts_rtt_ms_count")).expect("Infallible");
-        register!(
-            registry,
-            nts_offset_ms,
-            nts_confidence_ms,
-            nts_peers_sampled,
-            nts_samples_used,
-            nts_healthy,
-            nts_fallback,
-            nts_min_samples_ok,
-            nts_offset_ok,
-            nts_confidence_ok,
-            nts_rtt_ms_bucket,
-            nts_rtt_ms_sum,
-            nts_rtt_ms_count
-        );
+    [nts_offset_ms nts_confidence_ms nts_peers_sampled nts_samples_used nts_healthy nts_fallback
+        nts_min_samples_ok nts_offset_ok nts_confidence_ok nts_rtt_ms_bucket nts_rtt_ms_sum
+        nts_rtt_ms_count]
         // BLS signature verification counters per latest block
-        let pipeline_sig_bls_agg_same =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_sig_bls_agg_same"))
-                .expect("Infallible");
-        let pipeline_sig_bls_agg_multi =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_sig_bls_agg_multi"))
-                .expect("Infallible");
-        let pipeline_sig_bls_deterministic =
-            GenericGauge::with_opts(metric_specs.opts("pipeline_sig_bls_deterministic"))
-                .expect("Infallible");
-        let pipeline_sig_bls_agg_same_total = IntCounterVec::new(
-            metric_specs.opts("pipeline_sig_bls_agg_same_total"),
-            &["lane", "result"],
-        )
-        .expect("Infallible");
-        let pipeline_sig_bls_agg_multi_total = IntCounterVec::new(
-            metric_specs.opts("pipeline_sig_bls_agg_multi_total"),
-            &["lane", "result"],
-        )
-        .expect("Infallible");
-        metric_specs.finish();
-        register!(
-            registry,
-            txs,
-            tx_amounts,
-            block_height,
-            block_height_non_empty,
-            last_commit_time_ms,
-            last_block_committed_at_ms,
-            last_non_empty_block_committed_at_ms,
-            commit_time_ms,
-            slot_duration_ms,
-            slot_duration_ms_latest,
-            da_quorum_ratio,
-            connected_peers,
-            p2p_peer_churn_total,
-            uptime_since_genesis_ms,
-            domains,
-            accounts,
-            isi,
-            isi_times,
-            view_changes,
-            queue_size,
-            queue_queued,
-            queue_inflight,
-            kura_fsync_enabled,
-            kura_fsync_failures_total,
-            kura_fsync_latency_ms,
-            sm_syscall_total,
-            sm_syscall_failures_total,
-            sm_openssl_preview,
-            zk_halo2_enabled,
-            zk_halo2_curve_id,
-            zk_halo2_backend_id,
-            zk_halo2_max_k,
-            zk_halo2_verifier_budget_ms,
-            zk_halo2_verifier_max_batch,
-            zk_halo2_verifier_worker_threads,
-            zk_halo2_verifier_queue_cap,
-            zk_lane_enqueue_wait_total,
-            zk_lane_enqueue_timeout_total,
-            zk_lane_drop_total,
-            zk_lane_retry_enqueued_total,
-            zk_lane_retry_replayed_total,
-            zk_lane_retry_exhausted_total,
-            zk_lane_pending_depth,
-            zk_lane_retry_ring_depth,
-            zk_verifier_cache_events_total,
-            axt_proof_cache_events_total,
-            axt_proof_cache_state,
-            confidential_gas_base_verify,
-            confidential_gas_per_public_input,
-            confidential_gas_per_proof_byte,
-            confidential_gas_per_nullifier,
-            confidential_gas_per_commitment,
-            ivm_gas_schedule_hash_lo,
-            ivm_gas_schedule_hash_hi,
-            confidential_tree_commitments,
-            confidential_tree_depth,
-            confidential_root_history_entries,
-            confidential_frontier_checkpoints,
-            confidential_frontier_last_height,
-            confidential_frontier_last_commitments,
-            confidential_root_evictions_total,
-            confidential_frontier_evictions_total,
-            oracle_price_local_per_xor,
-            oracle_twap_window_seconds,
-            oracle_haircut_basis_points,
-            oracle_staleness_seconds,
-            oracle_observations_total,
-            oracle_aggregation_duration_ms,
-            oracle_rewards_total,
-            oracle_penalties_total,
-            oracle_feed_events_total,
-            oracle_feed_events_with_evidence_total,
-            oracle_evidence_hashes_total,
-            fastpq_execution_mode_total,
-            fastpq_poseidon_pipeline_total,
-            fastpq_gpu_disable_total,
-            fastpq_gpu_parity_failure_total,
-            fastpq_proof_sidecar_queue_depth,
-            fastpq_proof_sidecar_events_total,
-            fastpq_metal_queue_ratio,
-            fastpq_metal_queue_depth,
-            fastpq_zero_fill_duration_ms,
-            fastpq_zero_fill_bandwidth_gbps,
-            settlement_events_total,
-            settlement_finality_events_total,
-            settlement_fx_window_ms,
-            settlement_buffer_xor,
-            settlement_buffer_capacity_xor,
-            settlement_buffer_status,
-            settlement_pnl_xor,
-            settlement_haircut_bp,
-            settlement_swapline_utilisation,
-            settlement_conversion_total,
-            settlement_haircut_total,
-            sumeragi_tx_queue_depth,
-            sumeragi_tx_queue_capacity,
-            sumeragi_tx_queue_retained_bytes,
-            sumeragi_tx_queue_max_retained_bytes,
-            sumeragi_tx_queue_saturated,
-            sumeragi_tx_queue_saturated_by_count,
-            sumeragi_tx_queue_saturated_by_bytes,
-            sumeragi_tx_queue_saturated_by_age,
-            sumeragi_tx_queue_oldest_queued_age_ms,
-            sumeragi_pending_blocks_total,
-            sumeragi_pending_blocks_blocking,
-            sumeragi_commit_inflight_queue_depth,
-            sumeragi_missing_block_requests,
-            sumeragi_missing_block_oldest_ms,
-            sumeragi_missing_block_retry_window_ms,
-            sumeragi_missing_block_dwell_ms,
-            sumeragi_epoch_length_blocks,
-            sumeragi_epoch_commit_deadline_offset,
-            sumeragi_epoch_reveal_deadline_offset,
-            state_tiered_hot_entries,
-            state_tiered_hot_bytes,
-            state_tiered_cold_entries,
-            state_tiered_cold_bytes,
-            state_tiered_cold_reused_entries,
-            state_tiered_cold_reused_bytes,
-            state_tiered_hot_promotions,
-            state_tiered_hot_demotions,
-            state_tiered_hot_grace_overflow_keys,
-            state_tiered_hot_grace_overflow_bytes,
-            state_tiered_last_snapshot_index,
-            storage_budget_bytes_used,
-            storage_budget_bytes_limit,
-            storage_budget_exceeded_total,
-            storage_da_cache_total,
-            storage_da_churn_bytes_total,
-            alias_usage_total,
-            iso_reference_status,
-            iso_reference_age_seconds,
-            iso_reference_records,
-            iso_reference_refresh_interval_secs,
-            fraud_psp_assessments_total,
-            fraud_psp_missing_assessment_total,
-            fraud_psp_invalid_metadata_total,
-            fraud_psp_attestation_total,
-            fraud_psp_latency_ms,
-            fraud_psp_score_bps,
-            fraud_psp_outcome_mismatch_total,
-            dropped_messages,
-            sumeragi_dropped_block_messages_total,
-            sumeragi_dropped_control_messages_total,
-            sumeragi_vrf_commits_emitted_total,
-            sumeragi_vrf_reveals_emitted_total,
-            sumeragi_vrf_reveals_late_total,
-            sumeragi_vrf_non_reveal_penalties_total,
-            sumeragi_vrf_non_reveal_by_signer,
-            sumeragi_vrf_no_participation_total,
-            sumeragi_vrf_no_participation_by_signer,
-            sumeragi_vrf_rejects_total_by_reason,
-            p2p_dropped_posts,
-            p2p_dropped_broadcasts,
-            p2p_subscriber_queue_full_total,
-            p2p_subscriber_queue_full_by_topic_total,
-            p2p_subscriber_unrouted_total,
-            p2p_subscriber_unrouted_by_topic_total,
-            p2p_handshake_failures,
-            p2p_low_post_throttled_total,
-            p2p_low_broadcast_throttled_total,
-            p2p_post_overflow_total,
-            consensus_ingress_drop_total,
-            p2p_dns_refresh_total,
-            p2p_dns_ttl_refresh_total,
-            p2p_dns_resolution_fail_total,
-            p2p_dns_reconnect_success_total,
-            p2p_backoff_scheduled_total,
-            p2p_deferred_send_enqueued_total,
-            p2p_deferred_send_dropped_total,
-            p2p_session_reconnect_total,
-            p2p_connect_retry_seconds,
-            p2p_accept_throttled_total,
-            p2p_accept_bucket_evictions_total,
-            p2p_accept_buckets_current,
-            p2p_accept_prefix_cache_total,
-            p2p_accept_throttle_decisions_total,
-            p2p_incoming_cap_reject_total,
-            p2p_total_cap_reject_total,
-            p2p_trust_score,
-            p2p_trust_penalties_total,
-            p2p_trust_decay_ticks_total,
-            p2p_trust_gossip_skipped_total,
-            tx_gossip_sent_total,
-            tx_gossip_dropped_total,
-            tx_gossip_targets,
-            tx_gossip_fallback_total,
-            tx_gossip_frame_cap_bytes,
-            tx_gossip_public_target_cap,
-            tx_gossip_restricted_target_cap,
-            tx_gossip_public_target_reshuffle_ms,
-            tx_gossip_restricted_target_reshuffle_ms,
-            tx_gossip_drop_unknown_dataspace,
-            tx_gossip_restricted_fallback,
-            tx_gossip_restricted_public_policy,
-            p2p_ws_inbound_total,
-            p2p_ws_outbound_total,
-            p2p_scion_inbound_total,
-            p2p_scion_outbound_total,
-            p2p_queue_depth,
-            p2p_queue_dropped_total,
-            p2p_handshake_ms_bucket,
-            p2p_handshake_ms_sum,
-            p2p_handshake_ms_count,
-            p2p_handshake_error_total,
-            p2p_post_overflow_by_topic,
-            p2p_frame_cap_violations_total,
-            runtime_upgrade_events_total,
-            runtime_upgrade_provenance_rejections_total,
-            runtime_abi_version,
-            sumeragi_tail_votes_total,
-            sumeragi_votes_sent_total,
-            sumeragi_votes_received_total,
-            sumeragi_qc_sent_total,
-            sumeragi_qc_received_total,
-            sumeragi_qc_validation_errors_total,
-            sumeragi_validation_reject_total,
-            sumeragi_validation_reject_last_reason,
-            sumeragi_validation_reject_last_height,
-            sumeragi_validation_reject_last_view,
-            sumeragi_validation_reject_last_timestamp_ms,
-            sumeragi_block_sync_roster_source_total,
-            sumeragi_block_sync_roster_drop_total,
-            sumeragi_block_sync_share_blocks_unsolicited_total,
-            sumeragi_consensus_message_handling_total,
-            sumeragi_view_change_cause_total,
-            sumeragi_view_change_cause_last_timestamp_ms,
-            sumeragi_qc_signer_counts,
-            sumeragi_invalid_signature_total,
-            sumeragi_widen_before_rotate_total,
-            sumeragi_view_change_suggest_total,
-            sumeragi_view_change_install_total,
-            sumeragi_proposal_gap_total,
-            sumeragi_view_change_proof_total,
-            sumeragi_cert_size,
-            sumeragi_commit_signatures_present,
-            sumeragi_commit_signatures_counted,
-            sumeragi_commit_signatures_set_b,
-            sumeragi_commit_signatures_required,
-            sumeragi_commit_qc_height,
-            sumeragi_commit_qc_view,
-            sumeragi_commit_qc_epoch,
-            sumeragi_commit_qc_signatures_total,
-            sumeragi_commit_qc_validator_set_len,
-            sumeragi_leader_index,
-            sumeragi_highest_qc_height,
-            sumeragi_locked_qc_height,
-            sumeragi_locked_qc_view,
-            sumeragi_new_view_receipts_by_hv,
-            sumeragi_new_view_publish_total,
-            sumeragi_new_view_recv_total,
-            sumeragi_new_view_dropped_by_lock_total,
-            sumeragi_commit_conflict_detected_total,
-            sumeragi_missing_block_fetch_total,
-            sumeragi_missing_block_fetch_target_total,
-            sumeragi_missing_block_fetch_dwell_ms,
-            sumeragi_missing_block_fetch_targets,
-            blocksync_qc_quarantine_total,
-            blocksync_qc_revalidated_total,
-            blocksync_qc_final_drop_total,
-            qc_deferred_missing_payload_total,
-            qc_deferred_resolved_total,
-            qc_deferred_expired_total,
-            consensus_empty_commit_topology_defer_total,
-            consensus_empty_commit_topology_escalation_total,
-            consensus_recovery_state_transitions_total,
-            consensus_missing_block_height_escalation_total,
-            consensus_sidecar_quarantine_total,
-            consensus_sidecar_final_drop_total,
-            blocksync_range_pull_escalation_total,
-            blocksync_range_pull_success_total,
-            blocksync_range_pull_failure_total,
-            consensus_recovery_stuck_round_seconds,
-            sumeragi_da_gate_block_total,
-            sumeragi_da_gate_last_reason,
-            sumeragi_da_gate_last_satisfied,
-            sumeragi_da_gate_satisfied_total,
-            sumeragi_da_manifest_guard_total,
-            sumeragi_da_manifest_cache_total,
-            sumeragi_da_spool_cache_total,
-            sumeragi_da_pin_intent_spool_total,
-            sumeragi_post_to_peer_total,
-            sumeragi_bg_post_enqueued_total,
-            sumeragi_bg_post_overflow_total,
-            sumeragi_bg_post_drop_total,
-            sumeragi_bg_post_queue_depth,
-            sumeragi_bg_post_queue_depth_by_peer,
-            sumeragi_bg_post_age_ms,
-            // Per-peer queue depth gauge carries dynamic labels; registering once prevents
-            // duplicate collector panics when tests construct multiple registries.
-            ivm_cache_hits,
-            ivm_cache_misses,
-            ivm_cache_evictions,
-            ivm_cache_decoded_streams,
-            ivm_cache_decoded_ops_total,
-            ivm_cache_decode_failures,
-            ivm_cache_decode_time_ns_total,
-            ivm_register_max_index,
-            ivm_register_unique_count,
-            merkle_root_gpu_total,
-            merkle_root_cpu_total,
-            ivm_memory_commit_ms,
-            ivm_memory_commit_dirty_chunks,
-            ivm_merkle_rebuild_total,
-            ivm_merkle_incremental_leaf_updates_total,
-            pipeline_dag_vertices,
-            pipeline_dag_edges,
-            pipeline_conflict_rate_bps,
-            pipeline_access_set_source_total,
-            pipeline_overlay_count,
-            pipeline_overlay_instructions
+    [pipeline_sig_bls_agg_same pipeline_sig_bls_agg_multi pipeline_sig_bls_deterministic
+        pipeline_sig_bls_agg_same_total pipeline_sig_bls_agg_multi_total]
+}
+suffix {
+    metrics.finish();
+
+    // These postdate the sealed v2 catalog. Register them directly so the
+    // catalog's construction-order and hash invariants remain unchanged.
+    let kaigi_relay_manifest_updates_by_domain_total = IntCounterVec::new(
+        Opts::new(
+            "kaigi_relay_manifest_updates_by_domain_total",
+            "Kaigi relay manifest updates grouped only by domain for bounded diagnostics",
+        ),
+        &["domain"],
+    )
+    .expect("Infallible");
+    let kaigi_relay_failovers_by_domain_total = IntCounterVec::new(
+        Opts::new(
+            "kaigi_relay_failovers_by_domain_total",
+            "Kaigi relay failovers grouped only by domain for bounded diagnostics",
+        ),
+        &["domain"],
+    )
+    .expect("Infallible");
+    let kaigi_relay_health_reports_by_domain_total = IntCounterVec::new(
+        Opts::new(
+            "kaigi_relay_health_reports_by_domain_total",
+            "Kaigi relay health reports grouped only by domain for bounded diagnostics",
+        ),
+        &["domain"],
+    )
+    .expect("Infallible");
+    for metric in [
+        &kaigi_relay_manifest_updates_by_domain_total,
+        &kaigi_relay_failovers_by_domain_total,
+        &kaigi_relay_health_reports_by_domain_total,
+    ] {
+        register_guarded(&registry, metric);
+    }
+
+    // RBC metrics registration
+}
+initialize (metrics) {
+    [txs block_height block_height_non_empty last_commit_time_ms last_block_committed_at_ms
+        last_non_empty_block_committed_at_ms commit_time_ms slot_duration_ms
+        slot_duration_ms_latest da_quorum_ratio connected_peers p2p_peer_churn_total
+        uptime_since_genesis_ms domains accounts tx_amounts isi isi_times view_changes queue_size
+        queue_queued queue_inflight kura_fsync_enabled kura_fsync_failures_total
+        kura_fsync_latency_ms sm_syscall_total sm_syscall_failures_total sm_openssl_preview
+        zk_halo2_enabled zk_halo2_curve_id zk_halo2_backend_id zk_halo2_max_k
+        zk_halo2_verifier_budget_ms zk_halo2_verifier_max_batch zk_halo2_verifier_worker_threads
+        zk_halo2_verifier_queue_cap zk_lane_enqueue_wait_total zk_lane_enqueue_timeout_total
+        zk_lane_drop_total zk_lane_retry_enqueued_total zk_lane_retry_replayed_total
+        zk_lane_retry_exhausted_total zk_lane_pending_depth zk_lane_retry_ring_depth
+        zk_verifier_cache_events_total confidential_gas_base_verify
+        confidential_gas_per_public_input confidential_gas_per_proof_byte
+        confidential_gas_per_nullifier confidential_gas_per_commitment ivm_gas_schedule_hash_lo
+        ivm_gas_schedule_hash_hi ivm_stack_bytes ivm_stack_clamped ivm_stack_gas_multiplier
+        ivm_stack_pool_fallback_total ivm_stack_budget_hit_total confidential_tree_commitments
+        confidential_tree_depth confidential_root_history_entries confidential_frontier_checkpoints
+        confidential_frontier_last_height confidential_frontier_last_commitments
+        confidential_root_evictions_total confidential_frontier_evictions_total
+        oracle_price_local_per_xor oracle_twap_window_seconds oracle_haircut_basis_points
+        oracle_staleness_seconds oracle_observations_total oracle_aggregation_duration_ms
+        oracle_rewards_total oracle_penalties_total oracle_feed_events_total
+        oracle_feed_events_with_evidence_total oracle_evidence_hashes_total
+        fastpq_execution_mode_total fastpq_poseidon_pipeline_total fastpq_gpu_disable_total
+        fastpq_gpu_parity_failure_total fastpq_proof_sidecar_queue_depth
+        fastpq_proof_sidecar_events_total fastpq_metal_queue_ratio fastpq_metal_queue_depth
+        fastpq_zero_fill_duration_ms fastpq_zero_fill_bandwidth_gbps settlement_events_total
+        settlement_finality_events_total settlement_fx_window_ms settlement_buffer_xor
+        settlement_buffer_capacity_xor settlement_buffer_status settlement_pnl_xor
+        settlement_haircut_bp settlement_swapline_utilisation settlement_conversion_total
+        settlement_haircut_total subscription_billing_attempts_total
+        subscription_billing_outcomes_total social_events_total social_budget_spent
+        social_campaign_spent social_campaign_cap social_campaign_remaining social_campaign_active
+        social_halted social_rejections_total multisig_direct_sign_reject_total social_open_escrows
+        sumeragi_tx_queue_depth sumeragi_tx_queue_capacity sumeragi_tx_queue_retained_bytes
+        sumeragi_tx_queue_max_retained_bytes sumeragi_tx_queue_saturated
+        sumeragi_tx_queue_saturated_by_count sumeragi_tx_queue_saturated_by_bytes
+        sumeragi_tx_queue_saturated_by_age sumeragi_tx_queue_oldest_queued_age_ms
+        sumeragi_pending_blocks_total sumeragi_pending_blocks_blocking
+        sumeragi_commit_inflight_queue_depth sumeragi_missing_block_requests
+        sumeragi_missing_block_oldest_ms sumeragi_missing_block_retry_window_ms
+        sumeragi_missing_block_dwell_ms sumeragi_epoch_length_blocks
+        sumeragi_epoch_commit_deadline_offset sumeragi_epoch_reveal_deadline_offset
+        state_tiered_hot_entries state_tiered_hot_bytes state_tiered_cold_entries
+        state_tiered_cold_bytes state_tiered_cold_reused_entries state_tiered_cold_reused_bytes
+        state_tiered_hot_promotions state_tiered_hot_demotions state_tiered_hot_grace_overflow_keys
+        state_tiered_hot_grace_overflow_bytes state_tiered_last_snapshot_index
+        storage_budget_bytes_used storage_budget_bytes_limit storage_budget_exceeded_total
+        storage_da_cache_total storage_da_churn_bytes_total governance_proposals_status
+        governance_council_members governance_council_alternates governance_council_candidates
+        governance_council_epoch governance_citizens_total governance_citizen_service_events_total
+        governance_protected_namespace_total governance_manifest_admission_total
+        governance_manifest_quorum_total governance_manifest_hook_total
+        governance_manifest_activations_total governance_bond_events_total
+        governance_manifest_recent taikai_ingest_snapshots taikai_ingest_snapshot_order
+        da_receipt_metric_lanes recent_rejection_events last_rejection_at_ms
+        taikai_alias_rotation_snapshots alias_usage_total iso_reference_status
+        iso_reference_age_seconds iso_reference_records iso_reference_refresh_interval_secs
+        fraud_psp_assessments_total fraud_psp_missing_assessment_total
+        fraud_psp_invalid_metadata_total fraud_psp_attestation_total fraud_psp_latency_ms
+        fraud_psp_score_bps fraud_psp_outcome_mismatch_total streaming_hpke_rekeys_total
+        streaming_gck_rotations_total streaming_quic_datagrams_sent_total
+        streaming_quic_datagrams_dropped_total streaming_fec_parity_current
+        streaming_feedback_timeout_total streaming_soranet_provision_fail_total
+        streaming_soranet_provision_queue_drop_total telemetry_redaction_total
+        telemetry_redaction_skipped_total telemetry_truncation_total
+        streaming_privacy_redaction_fail_total streaming_encode_latency_ms
+        streaming_encode_audio_jitter_ms streaming_encode_audio_max_jitter_ms
+        streaming_encode_dropped_layers_total streaming_decode_buffer_ms
+        streaming_decode_dropped_frames_total streaming_decode_max_queue_ms
+        streaming_decode_av_drift_ms streaming_decode_max_drift_ms streaming_audio_jitter_ms
+        streaming_audio_max_jitter_ms streaming_av_drift_ms streaming_av_max_drift_ms
+        streaming_av_drift_ewma_ms streaming_av_sync_window_ms streaming_av_sync_violation_total
+        streaming_network_rtt_ms streaming_network_loss_percent_x100
+        streaming_network_fec_repairs_total streaming_network_fec_failures_total
+        streaming_network_datagram_reinjects_total streaming_energy_encoder_mw
+        streaming_energy_decoder_mw nexus_audit_outcome_total nexus_audit_outcome_last_timestamp
+        nexus_space_directory_revision_total nexus_space_directory_active_manifests
+        nexus_space_directory_revocations_total kaigi_relay_registered_total
+        kaigi_relay_registration_bandwidth kaigi_relay_manifest_updates_total
+        kaigi_relay_manifest_updates_by_domain_total kaigi_relay_manifest_hop_count
+        kaigi_relay_failover_total kaigi_relay_failovers_by_domain_total
+        kaigi_relay_failover_hop_count kaigi_relay_health_reports_total
+        kaigi_relay_health_reports_by_domain_total kaigi_relay_health_state dropped_messages
+        sumeragi_dropped_block_messages_total sumeragi_dropped_control_messages_total
+        p2p_dropped_posts p2p_dropped_broadcasts p2p_subscriber_queue_full_total
+        p2p_subscriber_queue_full_by_topic_total p2p_subscriber_unrouted_total
+        p2p_subscriber_unrouted_by_topic_total p2p_handshake_failures p2p_low_post_throttled_total
+        p2p_low_broadcast_throttled_total p2p_post_overflow_total p2p_post_overflow_by_topic
+        consensus_ingress_drop_total p2p_dns_refresh_total p2p_dns_ttl_refresh_total
+        p2p_dns_resolution_fail_total p2p_dns_reconnect_success_total p2p_backoff_scheduled_total
+        p2p_deferred_send_enqueued_total p2p_deferred_send_dropped_total
+        p2p_session_reconnect_total p2p_connect_retry_seconds p2p_accept_throttled_total
+        p2p_accept_bucket_evictions_total p2p_accept_buckets_current p2p_accept_prefix_cache_total
+        p2p_accept_throttle_decisions_total p2p_incoming_cap_reject_total
+        p2p_total_cap_reject_total p2p_trust_score p2p_trust_penalties_total
+        p2p_trust_decay_ticks_total p2p_trust_gossip_skipped_total tx_gossip_sent_total
+        tx_gossip_dropped_total tx_gossip_targets tx_gossip_fallback_total
+        tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
+        tx_gossip_public_target_reshuffle_ms tx_gossip_restricted_target_reshuffle_ms
+        tx_gossip_drop_unknown_dataspace tx_gossip_restricted_fallback
+        tx_gossip_restricted_public_policy tx_gossip_status tx_gossip_caps p2p_ws_inbound_total
+        p2p_ws_outbound_total p2p_scion_inbound_total p2p_scion_outbound_total p2p_queue_depth
+        p2p_queue_dropped_total p2p_handshake_ms_bucket p2p_handshake_ms_sum p2p_handshake_ms_count
+        p2p_handshake_error_total p2p_frame_cap_violations_total runtime_upgrade_events_total
+        runtime_upgrade_provenance_rejections_total runtime_abi_version sumeragi_tail_votes_total
+        sumeragi_votes_sent_total sumeragi_votes_received_total sumeragi_qc_sent_total
+        sumeragi_qc_received_total sumeragi_qc_validation_errors_total
+        sumeragi_validation_reject_total sumeragi_validation_reject_last_reason
+        sumeragi_validation_reject_last_height sumeragi_validation_reject_last_view
+        sumeragi_validation_reject_last_timestamp_ms sumeragi_block_sync_share_blocks_unsolicited_total
+        sumeragi_consensus_message_handling_total sumeragi_view_change_cause_total
+        sumeragi_view_change_cause_last_timestamp_ms sumeragi_qc_signer_counts
+        sumeragi_invalid_signature_total sumeragi_widen_before_rotate_total
+        sumeragi_view_change_suggest_total sumeragi_view_change_install_total
+        sumeragi_proposal_gap_total sumeragi_view_change_proof_total sumeragi_wa_qc_assembled_total
+        sumeragi_cert_size sumeragi_commit_signatures_present sumeragi_commit_signatures_counted
+        sumeragi_commit_signatures_set_b sumeragi_commit_signatures_required
+        sumeragi_commit_qc_height sumeragi_commit_qc_view sumeragi_commit_qc_epoch
+        sumeragi_commit_qc_signatures_total sumeragi_commit_qc_validator_set_len
+        sumeragi_gossip_fallback_total sumeragi_block_created_dropped_by_lock_total
+        sumeragi_block_created_hint_mismatch_total sumeragi_block_created_proposal_mismatch_total
+        lane_relay_invalid_total lane_relay_emergency_override_total sumeragi_prf_epoch_seed_hex
+        halo2_status sumeragi_prf_height sumeragi_prf_view sumeragi_membership_view_hash
+        sumeragi_membership_height sumeragi_membership_view sumeragi_membership_epoch
+        sumeragi_mode_tag sumeragi_leader_index sumeragi_highest_qc_height
+        sumeragi_locked_qc_height sumeragi_locked_qc_view sumeragi_new_view_receipts_by_hv
+        sumeragi_new_view_publish_total sumeragi_new_view_recv_total
+        sumeragi_new_view_dropped_by_lock_total sumeragi_commit_conflict_detected_total
+        sumeragi_missing_block_fetch_total sumeragi_missing_block_fetch_target_total
+        sumeragi_missing_block_fetch_dwell_ms sumeragi_missing_block_fetch_targets
+        blocksync_qc_quarantine_total blocksync_qc_revalidated_total blocksync_qc_final_drop_total
+        qc_deferred_missing_payload_total qc_deferred_resolved_total qc_deferred_expired_total
+        consensus_empty_commit_topology_defer_total
+        consensus_empty_commit_topology_escalation_total consensus_recovery_state_transitions_total
+        consensus_missing_block_height_escalation_total consensus_sidecar_quarantine_total
+        consensus_sidecar_final_drop_total blocksync_range_pull_escalation_total
+        blocksync_range_pull_success_total blocksync_range_pull_failure_total
+        consensus_recovery_stuck_round_seconds sumeragi_da_gate_block_total
+        sumeragi_da_gate_last_reason sumeragi_da_gate_last_satisfied
+        sumeragi_da_gate_satisfied_total sumeragi_da_manifest_guard_total
+        sumeragi_da_manifest_cache_total sumeragi_da_spool_cache_total
+        sumeragi_da_pin_intent_spool_total sumeragi_rbc_sessions_active
+        sumeragi_rbc_sessions_pruned_total sumeragi_rbc_init_requests_total
+        sumeragi_rbc_chunk_requests_total sumeragi_rbc_requested_chunks_total
+        sumeragi_rbc_initial_chunk_targets_total sumeragi_rbc_repair_fallback_total
+        sumeragi_rbc_ready_broadcasts_total sumeragi_rbc_rebroadcast_skipped_total
+        sumeragi_rbc_deliver_broadcasts_total sumeragi_rbc_payload_bytes_delivered_total
+        sumeragi_rbc_reconstructed_stripes_total sumeragi_rbc_seed_latency_ms
+        sumeragi_rbc_lane_tx_count sumeragi_rbc_lane_total_chunks sumeragi_rbc_lane_pending_chunks
+        sumeragi_rbc_lane_bytes_total sumeragi_rbc_dataspace_tx_count
+        sumeragi_rbc_dataspace_total_chunks sumeragi_rbc_dataspace_pending_chunks
+        sumeragi_rbc_dataspace_bytes_total sumeragi_da_votes_ingested_total
+        sumeragi_qc_assembly_latency_ms sumeragi_qc_last_latency_ms sumeragi_rbc_store_sessions
+        sumeragi_rbc_store_bytes sumeragi_rbc_store_pressure sumeragi_rbc_store_evictions_total
+        sumeragi_rbc_persist_drops_total sumeragi_rbc_status_persistence_disabled
+        sumeragi_rbc_status_persist_failures_total sumeragi_rbc_backpressure_deferrals_total
+        sumeragi_rbc_deliver_defer_ready_total sumeragi_rbc_deliver_defer_chunks_total
+        sumeragi_rbc_da_reschedule_total sumeragi_rbc_da_reschedule_by_mode_total
+        sumeragi_rbc_abort_total sumeragi_rbc_mismatch_total sumeragi_kura_store_failures_total
+        sumeragi_kura_store_last_retry_attempt sumeragi_kura_store_last_retry_backoff_ms
+        sumeragi_pacemaker_backpressure_deferrals_total
+        sumeragi_pacemaker_backpressure_deferrals_by_reason_total
+        sumeragi_pacemaker_backpressure_deferral_duration_ms
+        sumeragi_pacemaker_backpressure_deferral_active
+        sumeragi_pacemaker_backpressure_deferral_age_ms sumeragi_pacemaker_eval_ms
+        sumeragi_pacemaker_propose_ms sumeragi_commit_stage_ms state_commit_view_lock_wait_ms
+        state_commit_view_lock_hold_ms state_commit_write_lock_wait_ms
+        state_commit_write_lock_hold_ms sumeragi_commit_pipeline_tick_total
+        sumeragi_prevote_timeout_total sumeragi_rbc_backlog_chunks_total
+        sumeragi_rbc_backlog_chunks_max sumeragi_rbc_backlog_sessions_pending
+        sumeragi_rbc_pending_sessions sumeragi_rbc_pending_chunks sumeragi_rbc_pending_bytes
+        sumeragi_rbc_pending_drops_total sumeragi_rbc_pending_dropped_bytes_total
+        sumeragi_rbc_pending_evicted_total sumeragi_membership_mismatch_total
+        sumeragi_membership_mismatch_active sumeragi_post_to_peer_total
+        sumeragi_bg_post_enqueued_total sumeragi_bg_post_overflow_total sumeragi_bg_post_drop_total
+        sumeragi_bg_post_queue_depth sumeragi_bg_post_queue_depth_by_peer sumeragi_bg_post_age_ms
+        sumeragi_pacemaker_backoff_ms sumeragi_pacemaker_rtt_floor_ms
+        sumeragi_pacemaker_backoff_multiplier sumeragi_pacemaker_rtt_floor_multiplier
+        sumeragi_pacemaker_max_backoff_ms sumeragi_pacemaker_jitter_ms
+        sumeragi_pacemaker_jitter_frac_permille sumeragi_pacemaker_round_elapsed_ms
+        sumeragi_pacemaker_view_timeout_target_ms sumeragi_pacemaker_view_timeout_remaining_ms
+        sumeragi_phase_latency_ms sumeragi_phase_latency_ema_ms sumeragi_phase_total_ema_ms
+        ivm_cache_hits ivm_cache_misses ivm_cache_evictions ivm_cache_decoded_streams
+        ivm_cache_decoded_ops_total ivm_cache_decode_failures ivm_cache_decode_time_ns_total
+        ivm_register_max_index ivm_register_unique_count merkle_root_gpu_total
+        merkle_root_cpu_total ivm_memory_commit_ms ivm_memory_commit_dirty_chunks
+        ivm_merkle_rebuild_total ivm_merkle_incremental_leaf_updates_total pipeline_dag_vertices
+        pipeline_dag_edges pipeline_conflict_rate_bps pipeline_access_set_source_total
+        pipeline_comp_count pipeline_comp_max pipeline_comp_hist_bucket pipeline_peak_layer_width
+        pipeline_layer_avg_width pipeline_layer_median_width nexus_config_diff_total
+        nexus_lane_configured_total nexus_lane_id_placeholder nexus_dataspace_id_placeholder
+        nexus_lane_governance_sealed nexus_lane_governance_sealed_total
+        nexus_lane_governance_sealed_aliases nexus_lane_lifecycle_applied_total
+        nexus_lane_block_height nexus_lane_finality_lag_slots nexus_lane_settlement_backlog_xor
+        nexus_public_lane_validator_total nexus_public_lane_validator_activation_total
+        nexus_public_lane_validator_reject_total nexus_public_lane_stake_bonded
+        nexus_public_lane_unbond_pending nexus_public_lane_reward_total
+        nexus_public_lane_slash_total nexus_scheduler_lane_teu_capacity
+        nexus_scheduler_lane_teu_slot_committed nexus_scheduler_lane_trigger_level
+        nexus_scheduler_starvation_bound_slots nexus_scheduler_lane_teu_slot_breakdown
+        nexus_scheduler_lane_teu_deferral_total nexus_scheduler_lane_headroom_events_total
+        nexus_scheduler_must_serve_truncations_total nexus_scheduler_lane_teu_status
+        nexus_scheduler_dataspace_teu_backlog nexus_scheduler_dataspace_age_slots
+        nexus_scheduler_dataspace_virtual_finish nexus_scheduler_dataspace_teu_status
+        pipeline_layer_count pipeline_scheduler_utilization_pct pipeline_layer_width_hist_bucket
+        pipeline_overlay_count pipeline_overlay_instructions pipeline_overlay_bytes
+        pipeline_quarantine_classified pipeline_quarantine_overflow pipeline_quarantine_executed
+        pipeline_stage_ms amx_prepare_ms amx_commit_ms amx_abort_total axt_policy_reject_total
+        axt_policy_snapshot_version axt_policy_snapshot_cache_events_total
+        axt_proof_cache_events_total axt_proof_cache_state ivm_exec_ms pipeline_detached_prepared
+        pipeline_detached_merged pipeline_detached_fallback pipeline_detached_fallback_reason
+        merge_ledger_entries_total merge_ledger_latest_epoch merge_ledger_latest_root_hex
+        pipeline_sig_bls_agg_same pipeline_sig_bls_agg_multi pipeline_sig_bls_deterministic
+        pipeline_sig_bls_agg_same_total pipeline_sig_bls_agg_multi_total block_gas_used
+        confidential_gas_tx_used confidential_gas_block_used confidential_gas_total
+        block_fee_total_units block_fee_total_scale torii_filter_depth torii_filter_match_count
+        torii_scan_ms torii_stream_rows torii_lane_admission_latency_seconds
+        torii_route_stage_latency_seconds torii_attachment_reject_total
+        torii_attachment_sanitize_ms torii_zk_prover_attachment_bytes torii_zk_prover_latency_ms
+        torii_zk_prover_gc_total torii_zk_prover_inflight torii_zk_prover_pending
+        torii_zk_ivm_prove_inflight torii_zk_ivm_prove_queued torii_zk_prover_last_scan_bytes
+        torii_zk_prover_last_scan_ms torii_zk_prover_budget_exhausted_total
+        torii_query_snapshot_requests torii_query_snapshot_first_batch_ms
+        torii_query_snapshot_gas_consumed_units_total query_snapshot_lane_first_batch_ms
+        query_snapshot_lane_first_batch_items query_snapshot_lane_remaining_items
+        query_snapshot_lane_cursors_total torii_connect_sessions_total
+        torii_connect_sessions_active torii_pre_auth_reject_total torii_operator_auth_total
+        torii_operator_auth_lockout_total torii_signature_limit_total
+        torii_signature_limit_by_authority_total torii_signature_limit_last_count
+        torii_signature_limit_max torii_nts_unhealthy_reject_total
+        torii_multisig_direct_sign_reject_total torii_sorafs_admission_total
+        torii_sorafs_capacity_telemetry_rejections_total torii_sorafs_capacity_declared_gib
+        torii_sorafs_capacity_effective_gib torii_sorafs_capacity_utilised_gib
+        torii_sorafs_capacity_outstanding_gib torii_sorafs_capacity_gibhours_total
+        torii_sorafs_egress_bytes torii_sorafs_egress_drift_ratio
+        sorafs_governance_dag_publish_total sorafs_governance_dag_published_bytes_total
+        sorafs_governance_dag_last_publish_timestamp_seconds sorafs_governance_dag_backlog
+        sorafs_governance_dag_head_age_seconds torii_sorafs_orderbook_finalized_events_total
+        torii_sorafs_orderbook_open_depth_gib torii_sorafs_orderbook_matcher_lag_seconds
+        torii_sorafs_orderbook_settlement_backlog
+        torii_sorafs_orderbook_oldest_settlement_age_seconds
+        torii_sorafs_orderbook_escrow_runway_seconds
+        torii_sorafs_orderbook_finalized_projection_ready
+        torii_sorafs_orderbook_finalized_projection_height
+        torii_sorafs_orderbook_finalized_projection_timestamp_seconds
+        torii_sorafs_orderbook_finalized_projection_failures_total
+        torii_sorafs_orderbook_book_revision torii_sorafs_orderbook_matcher_scan_book_revision
+        torii_sorafs_orderbook_api_requests_total torii_sorafs_gateway_compliance_requests_total
+        torii_sorafs_gateway_compliance_serving_decisions_total
+        torii_sorafs_gateway_compliance_failures_total
+        torii_sorafs_gateway_compliance_serving_catalog_sequence
+        torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds
+        torii_sorafs_gateway_compliance_ready
+        torii_sorafs_hedging_xor_usd_reference_price_micro_usd
+        torii_sorafs_hedging_feed_lag_seconds torii_sorafs_hedging_feed_divergence_bps
+        torii_sorafs_hedging_exposure_drift_bps torii_sorafs_billing_statement_generation_total
+        torii_sorafs_billing_statement_failure_total torii_sorafs_billing_statement_ack_backlog
+        torii_sorafs_billing_escrow_runway_seconds torii_sorafs_reserve_lifecycle_stage_providers
+        torii_sorafs_reserve_credit_draw_micro_xor torii_sorafs_reserve_credit_shortfall_micro_xor
+        torii_sorafs_reserve_accrued_interest_micro_xor torii_sorafs_reserve_defaulted_providers
+        torii_sorafs_reserve_appeal_backlog torii_sorafs_reserve_custody_movements
+        torii_sorafs_reserve_chain_reconciled_movements
+        torii_sorafs_reserve_finalized_projection_ready
+        torii_sorafs_reserve_finalized_projection_height
+        torii_sorafs_reserve_finalized_projection_failure_total
+        torii_sorafs_reserve_service_requests_total torii_sorafs_reserve_service_rate_limit_total
+        sorafs_reputation_ingest_lag_seconds sorafs_reputation_snapshot_age_seconds
+        sorafs_reputation_snapshot_generated_at_unix sorafs_reputation_provider_count
+        sorafs_reputation_low_score_providers sorafs_reputation_score
+        sorafs_reputation_threshold_crossings_total sorafs_reputation_runtime_live
+        sorafs_reputation_runtime_ready sorafs_reputation_runtime_dependencies_ready
+        sorafs_reputation_journal_transaction_submitter_ready
+        sorafs_reputation_runtime_finalized_height sorafs_reputation_runtime_consecutive_failures
+        sorafs_reputation_runtime_material_acknowledged sorafs_reputation_runtime_provider_count
+        sorafs_reputation_runtime_ticks_total sorafs_hedging_billing_runtime_live
+        sorafs_hedging_billing_runtime_ready sorafs_hedging_billing_runtime_dependencies_ready
+        sorafs_hedging_billing_automatic_execution_enabled sorafs_hedging_billing_last_tick_fresh
+        sorafs_hedging_billing_finalized_projection_ready sorafs_hedging_billing_finalized_height
+        sorafs_hedging_billing_finalized_head_height sorafs_hedging_billing_finalized_lag_blocks
+        sorafs_hedging_billing_next_event_sequence sorafs_hedging_billing_ready_for_signing
+        sorafs_hedging_billing_ready_for_publication sorafs_hedging_billing_publication_ambiguous
+        sorafs_hedging_billing_published sorafs_hedging_billing_acknowledged
+        sorafs_hedging_billing_dead_letter sorafs_hedging_billing_hedge_intents
+        sorafs_hedging_billing_runtime_ticks_total]
+    sorafs_reputation_score_tracked_providers = Arc::new(RwLock::new(BTreeSet::new()));
+    sorafs_reputation_low_score_state = Arc::new(RwLock::new(BTreeMap::new()));
+    [torii_sorafs_fee_projection_nanos torii_sorafs_disputes_total
+        torii_sorafs_orders_issued_total torii_sorafs_orders_completed_total
+        torii_sorafs_orders_failed_total torii_sorafs_outstanding_orders torii_sorafs_uptime_bps
+        torii_sorafs_por_bps torii_sorafs_por_challenges_total
+        torii_sorafs_por_forced_challenges_total torii_sorafs_por_sampling_duplicates_total
+        torii_sorafs_por_ingest_backlog torii_sorafs_por_ingest_failures_total
+        torii_sorafs_repair_tasks_total torii_sorafs_repair_latency_minutes
+        torii_sorafs_repair_queue_depth torii_sorafs_repair_backlog_oldest_age_seconds
+        torii_sorafs_repair_lease_expired_total torii_sorafs_slash_proposals_total
+        torii_sorafs_reconciliation_runs_total torii_sorafs_reconciliation_divergence_count
+        torii_sorafs_gc_runs_total torii_sorafs_gc_evictions_total
+        torii_sorafs_gc_bytes_freed_total torii_sorafs_gc_blocked_total
+        torii_sorafs_gc_expired_manifests torii_sorafs_gc_oldest_expired_age_seconds
+        torii_sorafs_storage_bytes_used torii_sorafs_storage_bytes_capacity
+        sorafs_provider_ingest_inflight torii_sorafs_storage_fetch_inflight
+        torii_sorafs_storage_fetch_bytes_per_sec torii_sorafs_storage_por_inflight
+        torii_sorafs_storage_por_samples_success_total
+        torii_sorafs_storage_por_samples_failed_total sorafs_gateway_active
+        sorafs_gateway_responses_total sorafs_gateway_ttfb_ms
+        sorafs_gateway_proof_verifications_total sorafs_gateway_proof_duration_ms
+        torii_sorafs_chunk_range_requests_total torii_sorafs_chunk_range_bytes_total
+        torii_sorafs_provider_range_capability_total torii_sorafs_routing_authority_cache_total
+        torii_sorafs_range_fetch_throttle_events_total torii_sorafs_range_fetch_concurrency_current
+        torii_sorafs_proof_stream_inflight torii_sorafs_proof_stream_events_total
+        torii_sorafs_proof_stream_latency_ms torii_sorafs_proof_health_alerts_total
+        torii_sorafs_proof_health_pdp_failures torii_sorafs_proof_health_potr_breaches
+        torii_sorafs_proof_health_penalty_nano torii_sorafs_proof_health_window_end_epoch
+        torii_sorafs_proof_health_cooldown torii_sorafs_gar_violations_total
+        torii_sorafs_gateway_refusals_total torii_sorafs_gateway_fixture_info
+        torii_sorafs_registry_manifests_total torii_sorafs_registry_aliases_total
+        torii_sorafs_pin_retained_manifests torii_sorafs_pin_live_content_bytes
+        torii_sorafs_alias_cache_refresh_total torii_sorafs_alias_cache_age_seconds
+        torii_sorafs_tls_cert_expiry_seconds torii_sorafs_tls_renewal_total
+        torii_sorafs_tls_ech_enabled torii_sorafs_gateway_fixture_version
+        torii_sorafs_registry_orders_total torii_sorafs_replication_sla_total
+        torii_sorafs_replication_backlog_total torii_sorafs_replication_completion_latency_epochs
+        torii_sorafs_replication_deadline_slack_epochs soranet_privacy_ingest_reject_total
+        soranet_privacy_circuit_events_total soranet_privacy_pow_rejects_total
+        soranet_pow_revocation_store_total soranet_privacy_throttles_total
+        soranet_privacy_verified_bytes_total soranet_privacy_active_circuits_avg
+        soranet_privacy_active_circuits_max soranet_privacy_open_buckets
+        soranet_privacy_pending_collectors soranet_privacy_snapshot_suppressed
+        soranet_privacy_snapshot_suppressed_by_mode soranet_privacy_snapshot_drained
+        soranet_privacy_snapshot_suppression_ratio soranet_privacy_evicted_buckets_total
+        soranet_privacy_bucket_suppressed soranet_privacy_suppression_total
+        soranet_privacy_rtt_millis soranet_privacy_gar_reports_total
+        soranet_privacy_last_poll_unixtime soranet_privacy_poll_errors_total
+        soranet_privacy_collector_enabled sorafs_orchestrator_active_fetches
+        sorafs_orchestrator_fetch_duration_ms sorafs_orchestrator_fetch_failures_total
+        sorafs_orchestrator_retries_total sorafs_orchestrator_provider_failures_total
+        sorafs_orchestrator_chunk_latency_ms sorafs_orchestrator_bytes_total
+        sorafs_orchestrator_stalls_total sorafs_orchestrator_transport_events_total
+        sorafs_orchestrator_policy_events_total sorafs_orchestrator_pq_ratio
+        sorafs_orchestrator_pq_candidate_ratio sorafs_orchestrator_pq_deficit_ratio
+        sorafs_orchestrator_classical_ratio sorafs_orchestrator_classical_selected
+        torii_da_rent_gib_months_total torii_da_rent_base_micro_total
+        torii_da_protocol_reserve_micro_total torii_da_provider_reward_micro_total
+        torii_da_pdp_bonus_micro_total torii_da_potr_bonus_micro_total torii_da_receipts_total
+        torii_da_receipt_epoch torii_da_receipt_highest_sequence torii_da_chunking_seconds
+        torii_da_spool_batches_total torii_da_spool_artifacts_total torii_da_spool_queue_depth
+        torii_da_spool_batch_write_ms da_shard_cursor_events_total da_shard_cursor_height
+        da_shard_cursor_lag_blocks taikai_ingest_segment_latency_ms
+        taikai_ingest_live_edge_drift_ms taikai_ingest_live_edge_drift_signed_ms
+        taikai_ingest_errors_total taikai_trm_alias_rotations_total
+        taikai_viewer_rebuffer_events_total taikai_viewer_playback_segments_total
+        taikai_viewer_cek_fetch_duration_ms taikai_viewer_pq_circuit_health
+        taikai_viewer_cek_rotation_seconds_ago taikai_viewer_alerts_firing_total
+        sorafs_taikai_cache_query_total sorafs_taikai_cache_insert_total
+        sorafs_taikai_cache_evictions_total sorafs_taikai_cache_promotions_total
+        sorafs_taikai_cache_bytes_total sorafs_taikai_qos_denied_total
+        sorafs_taikai_queue_events_total sorafs_taikai_queue_depth
+        sorafs_taikai_shard_failovers_total sorafs_taikai_shard_circuits_open
+        sorafs_orchestrator_brownouts_total soranet_reward_base_payout_nanos
+        soranet_reward_events_total soranet_reward_payout_nanos_total soranet_reward_skips_total
+        soranet_reward_adjustment_nanos_total soranet_reward_disputes_total
+        torii_http_requests_total torii_http_request_duration_seconds
+        torii_http_request_bytes_total torii_http_response_bytes_total torii_api_token_hits_total
+        torii_content_requests_total torii_content_request_duration_seconds
+        torii_content_response_bytes_total torii_proof_requests_total
+        torii_proof_request_duration_seconds torii_proof_response_bytes_total
+        torii_proof_cache_hits_total torii_request_duration_seconds torii_request_failures_total
+        torii_explorer_requests_total torii_explorer_request_duration_seconds
+        torii_norito_rpc_gate_total torii_address_invalid_total torii_address_domain_total
+        torii_address_collision_total torii_address_collision_domain_total
+        torii_account_literal_total torii_norito_decode_failures_total torii_proof_throttled_total
+        torii_contract_throttled_total torii_contract_errors_total sns_registrar_status_total
+        torii_active_connections_total torii_connect_buffered_sessions
+        torii_connect_total_buffer_bytes torii_connect_dedupe_size torii_connect_per_ip_sessions
+        zk_verify_latency_ms zk_verify_proof_bytes nts_offset_ms nts_confidence_ms
+        nts_peers_sampled nts_samples_used nts_healthy nts_fallback nts_min_samples_ok
+        nts_offset_ok nts_confidence_ok nts_rtt_ms_bucket nts_rtt_ms_sum nts_rtt_ms_count]
+    sorafs_orderbook_projection_exposition_lock = Mutex::new(());
+    sorafs_gateway_compliance_exposition_lock = Mutex::new(());
+    [musubi registry sumeragi_vrf_commits_emitted_total sumeragi_vrf_reveals_emitted_total
+        sumeragi_vrf_reveals_late_total sumeragi_vrf_non_reveal_penalties_total
+        sumeragi_vrf_non_reveal_by_signer sumeragi_vrf_no_participation_total
+        sumeragi_vrf_no_participation_by_signer sumeragi_vrf_rejects_total_by_reason]
+}
+epilogue {
+    metrics.apply_stack_snapshot(&stack_settings_snapshot());
+    metrics
+}
+}
+const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
+const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
+const METRIC_CATALOG_V2_ROWS: usize = 868;
+const METRIC_CATALOG_V2_REGISTERED: usize = 823;
+const METRIC_CATALOG_V2_BYTES: usize = 118_155;
+#[cfg(test)]
+const METRIC_CATALOG_V2_BLAKE3: &str =
+    "b50d212eaf4d4f4e955c6bf2f8ae123abf495a84b105ed0f5c0bf34f97a6efc6";
+
+#[derive(Clone, Copy)]
+struct MetricSpec {
+    name: &'static str,
+    help: &'static str,
+    registered: bool,
+}
+
+struct MetricSpecCursor {
+    lines: std::str::Lines<'static>,
+    row: usize,
+    registered: usize,
+}
+
+impl MetricSpecCursor {
+    fn v2() -> Self {
+        let mut lines = METRIC_CATALOG_V2.lines();
+        assert_eq!(
+            lines.next(),
+            Some(METRIC_CATALOG_V2_HEADER),
+            "unexpected metric catalog header"
         );
-        register!(
-            registry,
-            kaigi_relay_registered_total,
-            kaigi_relay_registration_bandwidth,
-            kaigi_relay_manifest_updates_total,
-            kaigi_relay_manifest_updates_by_domain_total,
-            kaigi_relay_manifest_hop_count,
-            kaigi_relay_failover_total,
-            kaigi_relay_failovers_by_domain_total,
-            kaigi_relay_failover_hop_count,
-            kaigi_relay_health_reports_total,
-            kaigi_relay_health_reports_by_domain_total,
-            kaigi_relay_health_state
+        assert_eq!(
+            METRIC_CATALOG_V2.len(),
+            METRIC_CATALOG_V2_BYTES,
+            "metric catalog byte length changed"
         );
-        register!(registry, pipeline_overlay_bytes);
-        register!(
-            registry,
-            pipeline_peak_layer_width,
-            pipeline_layer_avg_width,
-            pipeline_layer_median_width,
-            nexus_config_diff_total,
-            nexus_lane_configured_total,
-            nexus_lane_id_placeholder,
-            nexus_dataspace_id_placeholder,
-            nexus_lane_governance_sealed,
-            nexus_lane_governance_sealed_total,
-            nexus_lane_lifecycle_applied_total,
-            nexus_lane_block_height,
-            nexus_lane_finality_lag_slots,
-            nexus_scheduler_lane_teu_capacity,
-            nexus_scheduler_lane_teu_slot_committed,
-            nexus_scheduler_lane_trigger_level,
-            nexus_scheduler_starvation_bound_slots,
-            pipeline_layer_count,
-            pipeline_scheduler_utilization_pct,
-            pipeline_layer_width_hist_bucket
-        );
-        register!(
-            registry,
-            nexus_scheduler_lane_teu_slot_breakdown,
-            nexus_scheduler_lane_teu_deferral_total,
-            nexus_scheduler_lane_headroom_events_total,
-            nexus_scheduler_must_serve_truncations_total,
-            nexus_lane_settlement_backlog_xor,
-            nexus_public_lane_validator_total,
-            nexus_public_lane_validator_activation_total,
-            nexus_public_lane_validator_reject_total,
-            nexus_public_lane_stake_bonded,
-            nexus_public_lane_unbond_pending,
-            nexus_public_lane_reward_total,
-            nexus_public_lane_slash_total,
-            nexus_scheduler_dataspace_teu_backlog,
-            nexus_scheduler_dataspace_age_slots,
-            nexus_scheduler_dataspace_virtual_finish
-        );
-        register!(registry, pipeline_quarantine_classified);
-        register!(registry, pipeline_quarantine_overflow);
-        register!(registry, pipeline_quarantine_executed);
-        register!(registry, pipeline_stage_ms);
-        register!(registry, amx_prepare_ms);
-        register!(registry, amx_commit_ms);
-        register!(registry, amx_abort_total);
-        register!(
-            registry,
-            axt_policy_reject_total,
-            axt_policy_snapshot_version,
-            axt_policy_snapshot_cache_events_total
-        );
-        register!(
-            registry,
-            ivm_exec_ms,
-            ivm_stack_bytes,
-            ivm_stack_clamped,
-            ivm_stack_gas_multiplier,
-            ivm_stack_pool_fallback_total,
-            ivm_stack_budget_hit_total
-        );
-        register!(
-            registry,
-            pipeline_detached_prepared,
-            pipeline_detached_merged,
-            pipeline_detached_fallback,
-            pipeline_detached_fallback_reason
-        );
-        register!(
-            registry,
-            merge_ledger_entries_total,
-            merge_ledger_latest_epoch
-        );
-        // RBC metrics registration
-        register!(registry, sumeragi_rbc_sessions_active);
-        register!(
-            registry,
-            sumeragi_rbc_sessions_pruned_total,
-            sumeragi_rbc_init_requests_total,
-            sumeragi_rbc_chunk_requests_total,
-            sumeragi_rbc_requested_chunks_total,
-            sumeragi_rbc_initial_chunk_targets_total,
-            sumeragi_rbc_repair_fallback_total,
-            sumeragi_rbc_ready_broadcasts_total,
-            sumeragi_rbc_rebroadcast_skipped_total,
-            sumeragi_rbc_deliver_broadcasts_total,
-            sumeragi_da_votes_ingested_total
-        );
-        register!(
-            registry,
-            sumeragi_rbc_payload_bytes_delivered_total,
-            sumeragi_rbc_reconstructed_stripes_total,
-            sumeragi_rbc_seed_latency_ms,
-            sumeragi_rbc_lane_tx_count,
-            sumeragi_rbc_lane_total_chunks,
-            sumeragi_rbc_lane_pending_chunks,
-            sumeragi_rbc_lane_bytes_total
-        );
-        register!(
-            registry,
-            sumeragi_rbc_dataspace_tx_count,
-            sumeragi_rbc_dataspace_total_chunks,
-            sumeragi_rbc_dataspace_pending_chunks,
-            sumeragi_rbc_dataspace_bytes_total,
-            sumeragi_qc_assembly_latency_ms,
-            sumeragi_qc_last_latency_ms
-        );
-        register!(
-            registry,
-            sumeragi_rbc_store_sessions,
-            sumeragi_rbc_store_bytes,
-            sumeragi_rbc_store_pressure,
-            sumeragi_rbc_store_evictions_total,
-            sumeragi_rbc_persist_drops_total,
-            sumeragi_rbc_status_persistence_disabled,
-            sumeragi_rbc_status_persist_failures_total
-        );
-        register!(
-            registry,
-            sumeragi_rbc_backpressure_deferrals_total,
-            sumeragi_rbc_deliver_defer_ready_total,
-            sumeragi_rbc_deliver_defer_chunks_total,
-            sumeragi_rbc_da_reschedule_total,
-            sumeragi_rbc_da_reschedule_by_mode_total,
-            sumeragi_rbc_abort_total,
-            sumeragi_rbc_mismatch_total,
-            sumeragi_kura_store_failures_total,
-            sumeragi_kura_store_last_retry_attempt,
-            sumeragi_kura_store_last_retry_backoff_ms,
-            sumeragi_pacemaker_backpressure_deferrals_total,
-            sumeragi_pacemaker_backpressure_deferrals_by_reason_total,
-            sumeragi_pacemaker_backpressure_deferral_duration_ms,
-            sumeragi_pacemaker_backpressure_deferral_active,
-            sumeragi_pacemaker_backpressure_deferral_age_ms,
-            sumeragi_pacemaker_eval_ms,
-            sumeragi_pacemaker_propose_ms,
-            sumeragi_pacemaker_backoff_ms,
-            sumeragi_pacemaker_rtt_floor_ms,
-            sumeragi_pacemaker_backoff_multiplier,
-            sumeragi_pacemaker_rtt_floor_multiplier,
-            sumeragi_pacemaker_max_backoff_ms,
-            sumeragi_pacemaker_jitter_ms,
-            sumeragi_pacemaker_jitter_frac_permille,
-            sumeragi_pacemaker_round_elapsed_ms,
-            sumeragi_pacemaker_view_timeout_target_ms,
-            sumeragi_pacemaker_view_timeout_remaining_ms,
-            sumeragi_commit_stage_ms,
-            state_commit_view_lock_wait_ms,
-            state_commit_view_lock_hold_ms,
-            state_commit_write_lock_wait_ms,
-            state_commit_write_lock_hold_ms,
-            sumeragi_commit_pipeline_tick_total,
-            sumeragi_prevote_timeout_total,
-            sumeragi_rbc_backlog_chunks_total,
-            sumeragi_rbc_backlog_chunks_max,
-            sumeragi_rbc_backlog_sessions_pending,
-            sumeragi_rbc_pending_sessions,
-            sumeragi_rbc_pending_chunks,
-            sumeragi_rbc_pending_bytes,
-            sumeragi_rbc_pending_drops_total,
-            sumeragi_rbc_pending_dropped_bytes_total,
-            sumeragi_rbc_pending_evicted_total
-        );
-        register!(
-            registry,
-            sumeragi_membership_mismatch_total,
-            sumeragi_membership_mismatch_active
-        );
-        register!(
-            registry,
-            pipeline_sig_bls_agg_same,
-            pipeline_sig_bls_agg_multi,
-            pipeline_sig_bls_deterministic,
-            pipeline_sig_bls_agg_same_total,
-            pipeline_sig_bls_agg_multi_total
-        );
-        register!(registry, block_gas_used);
-        register!(
-            registry,
-            confidential_gas_tx_used,
-            confidential_gas_block_used
-        );
-        register!(registry, confidential_gas_total);
-        register!(registry, block_fee_total_units);
-        register!(registry, block_fee_total_scale);
-        register!(
-            registry,
-            torii_filter_depth,
-            torii_filter_match_count,
-            torii_scan_ms,
-            torii_stream_rows,
-            torii_lane_admission_latency_seconds,
-            torii_route_stage_latency_seconds,
-            torii_attachment_reject_total,
-            torii_attachment_sanitize_ms
-        );
-        register!(
-            registry,
-            torii_zk_prover_attachment_bytes,
-            torii_zk_prover_latency_ms,
-            torii_zk_prover_gc_total,
-            torii_zk_prover_inflight,
-            torii_zk_prover_pending,
-            torii_zk_ivm_prove_inflight,
-            torii_zk_ivm_prove_queued,
-            torii_zk_prover_last_scan_bytes,
-            torii_zk_prover_last_scan_ms,
-            torii_zk_prover_budget_exhausted_total
-        );
-        register!(
-            registry,
-            governance_proposals_status,
-            governance_council_members,
-            governance_council_alternates,
-            governance_council_candidates,
-            governance_council_epoch,
-            governance_citizens_total,
-            governance_citizen_service_events_total,
-            governance_protected_namespace_total,
-            governance_manifest_admission_total,
-            governance_manifest_quorum_total,
-            governance_manifest_hook_total,
-            governance_manifest_activations_total,
-            governance_bond_events_total
-        );
-        register_guarded(&registry, &sumeragi_phase_latency_ms);
-        register_guarded(&registry, &sumeragi_phase_latency_ema_ms);
-        let metrics = Self {
-            txs,
-            block_height,
-            block_height_non_empty,
-            last_commit_time_ms,
-            last_block_committed_at_ms,
-            last_non_empty_block_committed_at_ms,
-            commit_time_ms,
-            slot_duration_ms,
-            slot_duration_ms_latest,
-            da_quorum_ratio,
-            connected_peers,
-            p2p_peer_churn_total,
-            uptime_since_genesis_ms,
-            domains,
-            accounts,
-            tx_amounts,
-            isi,
-            isi_times,
-            view_changes,
-            queue_size,
-            queue_queued,
-            queue_inflight,
-            kura_fsync_enabled,
-            kura_fsync_failures_total,
-            kura_fsync_latency_ms,
-            sm_syscall_total,
-            sm_syscall_failures_total,
-            sm_openssl_preview,
-            zk_halo2_enabled,
-            zk_halo2_curve_id,
-            zk_halo2_backend_id,
-            zk_halo2_max_k,
-            zk_halo2_verifier_budget_ms,
-            zk_halo2_verifier_max_batch,
-            zk_halo2_verifier_worker_threads,
-            zk_halo2_verifier_queue_cap,
-            zk_lane_enqueue_wait_total,
-            zk_lane_enqueue_timeout_total,
-            zk_lane_drop_total,
-            zk_lane_retry_enqueued_total,
-            zk_lane_retry_replayed_total,
-            zk_lane_retry_exhausted_total,
-            zk_lane_pending_depth,
-            zk_lane_retry_ring_depth,
-            zk_verifier_cache_events_total,
-            confidential_gas_base_verify,
-            confidential_gas_per_public_input,
-            confidential_gas_per_proof_byte,
-            confidential_gas_per_nullifier,
-            confidential_gas_per_commitment,
-            ivm_gas_schedule_hash_lo,
-            ivm_gas_schedule_hash_hi,
-            ivm_stack_bytes,
-            ivm_stack_clamped,
-            ivm_stack_gas_multiplier,
-            ivm_stack_pool_fallback_total,
-            ivm_stack_budget_hit_total,
-            confidential_tree_commitments,
-            confidential_tree_depth,
-            confidential_root_history_entries,
-            confidential_frontier_checkpoints,
-            confidential_frontier_last_height,
-            confidential_frontier_last_commitments,
-            confidential_root_evictions_total,
-            confidential_frontier_evictions_total,
-            oracle_price_local_per_xor,
-            oracle_twap_window_seconds,
-            oracle_haircut_basis_points,
-            oracle_staleness_seconds,
-            oracle_observations_total,
-            oracle_aggregation_duration_ms,
-            oracle_rewards_total,
-            oracle_penalties_total,
-            oracle_feed_events_total,
-            oracle_feed_events_with_evidence_total,
-            oracle_evidence_hashes_total,
-            fastpq_execution_mode_total,
-            fastpq_poseidon_pipeline_total,
-            fastpq_gpu_disable_total,
-            fastpq_gpu_parity_failure_total,
-            fastpq_proof_sidecar_queue_depth,
-            fastpq_proof_sidecar_events_total,
-            fastpq_metal_queue_ratio,
-            fastpq_metal_queue_depth,
-            fastpq_zero_fill_duration_ms,
-            fastpq_zero_fill_bandwidth_gbps,
-            settlement_events_total,
-            settlement_finality_events_total,
-            settlement_fx_window_ms,
-            settlement_buffer_xor,
-            settlement_buffer_capacity_xor,
-            settlement_buffer_status,
-            settlement_pnl_xor,
-            settlement_haircut_bp,
-            settlement_swapline_utilisation,
-            settlement_conversion_total,
-            settlement_haircut_total,
-            subscription_billing_attempts_total,
-            subscription_billing_outcomes_total,
-            social_events_total,
-            social_budget_spent,
-            social_campaign_spent,
-            social_campaign_cap,
-            social_campaign_remaining,
-            social_campaign_active,
-            social_halted,
-            social_rejections_total,
-            multisig_direct_sign_reject_total,
-            social_open_escrows,
-            sumeragi_tx_queue_depth,
-            sumeragi_tx_queue_capacity,
-            sumeragi_tx_queue_retained_bytes,
-            sumeragi_tx_queue_max_retained_bytes,
-            sumeragi_tx_queue_saturated,
-            sumeragi_tx_queue_saturated_by_count,
-            sumeragi_tx_queue_saturated_by_bytes,
-            sumeragi_tx_queue_saturated_by_age,
-            sumeragi_tx_queue_oldest_queued_age_ms,
-            sumeragi_pending_blocks_total,
-            sumeragi_pending_blocks_blocking,
-            sumeragi_commit_inflight_queue_depth,
-            sumeragi_missing_block_requests,
-            sumeragi_missing_block_oldest_ms,
-            sumeragi_missing_block_retry_window_ms,
-            sumeragi_missing_block_dwell_ms,
-            sumeragi_epoch_length_blocks,
-            sumeragi_epoch_commit_deadline_offset,
-            sumeragi_epoch_reveal_deadline_offset,
-            state_tiered_hot_entries,
-            state_tiered_hot_bytes,
-            state_tiered_cold_entries,
-            state_tiered_cold_bytes,
-            state_tiered_cold_reused_entries,
-            state_tiered_cold_reused_bytes,
-            state_tiered_hot_promotions,
-            state_tiered_hot_demotions,
-            state_tiered_hot_grace_overflow_keys,
-            state_tiered_hot_grace_overflow_bytes,
-            state_tiered_last_snapshot_index,
-            storage_budget_bytes_used,
-            storage_budget_bytes_limit,
-            storage_budget_exceeded_total,
-            storage_da_cache_total,
-            storage_da_churn_bytes_total,
-            governance_proposals_status,
-            governance_council_members,
-            governance_council_alternates,
-            governance_council_candidates,
-            governance_council_epoch,
-            governance_citizens_total,
-            governance_citizen_service_events_total,
-            governance_protected_namespace_total,
-            governance_manifest_admission_total,
-            governance_manifest_quorum_total,
-            governance_manifest_hook_total,
-            governance_manifest_activations_total,
-            governance_bond_events_total,
-            governance_manifest_recent,
-            taikai_ingest_snapshots,
-            taikai_ingest_snapshot_order,
-            da_receipt_metric_lanes,
-            recent_rejection_events,
-            last_rejection_at_ms,
-            taikai_alias_rotation_snapshots,
-            alias_usage_total,
-            iso_reference_status,
-            iso_reference_age_seconds,
-            iso_reference_records,
-            iso_reference_refresh_interval_secs,
-            fraud_psp_assessments_total,
-            fraud_psp_missing_assessment_total,
-            fraud_psp_invalid_metadata_total,
-            fraud_psp_attestation_total,
-            fraud_psp_latency_ms,
-            fraud_psp_score_bps,
-            fraud_psp_outcome_mismatch_total,
-            streaming_hpke_rekeys_total,
-            streaming_gck_rotations_total,
-            streaming_quic_datagrams_sent_total,
-            streaming_quic_datagrams_dropped_total,
-            streaming_fec_parity_current,
-            streaming_feedback_timeout_total,
-            streaming_soranet_provision_fail_total,
-            streaming_soranet_provision_queue_drop_total,
-            telemetry_redaction_total,
-            telemetry_redaction_skipped_total,
-            telemetry_truncation_total,
-            streaming_privacy_redaction_fail_total,
-            streaming_encode_latency_ms,
-            streaming_encode_audio_jitter_ms,
-            streaming_encode_audio_max_jitter_ms,
-            streaming_encode_dropped_layers_total,
-            streaming_decode_buffer_ms,
-            streaming_decode_dropped_frames_total,
-            streaming_decode_max_queue_ms,
-            streaming_decode_av_drift_ms,
-            streaming_decode_max_drift_ms,
-            streaming_audio_jitter_ms,
-            streaming_audio_max_jitter_ms,
-            streaming_av_drift_ms,
-            streaming_av_max_drift_ms,
-            streaming_av_drift_ewma_ms,
-            streaming_av_sync_window_ms,
-            streaming_av_sync_violation_total,
-            streaming_network_rtt_ms,
-            streaming_network_loss_percent_x100,
-            streaming_network_fec_repairs_total,
-            streaming_network_fec_failures_total,
-            streaming_network_datagram_reinjects_total,
-            streaming_energy_encoder_mw,
-            streaming_energy_decoder_mw,
-            nexus_audit_outcome_total,
-            nexus_audit_outcome_last_timestamp,
-            nexus_space_directory_revision_total,
-            nexus_space_directory_active_manifests,
-            nexus_space_directory_revocations_total,
-            kaigi_relay_registered_total,
-            kaigi_relay_registration_bandwidth,
-            kaigi_relay_manifest_updates_total,
-            kaigi_relay_manifest_updates_by_domain_total,
-            kaigi_relay_manifest_hop_count,
-            kaigi_relay_failover_total,
-            kaigi_relay_failovers_by_domain_total,
-            kaigi_relay_failover_hop_count,
-            kaigi_relay_health_reports_total,
-            kaigi_relay_health_reports_by_domain_total,
-            kaigi_relay_health_state,
-            dropped_messages,
-            // Sumeragi dropped message counters (consensus and control paths)
-            sumeragi_dropped_block_messages_total,
-            sumeragi_dropped_control_messages_total,
-            p2p_dropped_posts,
-            p2p_dropped_broadcasts,
-            p2p_subscriber_queue_full_total,
-            p2p_subscriber_queue_full_by_topic_total,
-            p2p_subscriber_unrouted_total,
-            p2p_subscriber_unrouted_by_topic_total,
-            p2p_handshake_failures,
-            p2p_low_post_throttled_total,
-            p2p_low_broadcast_throttled_total,
-            p2p_post_overflow_total,
-            p2p_post_overflow_by_topic,
-            consensus_ingress_drop_total,
-            p2p_dns_refresh_total,
-            p2p_dns_ttl_refresh_total,
-            p2p_dns_resolution_fail_total,
-            p2p_dns_reconnect_success_total,
-            p2p_backoff_scheduled_total,
-            p2p_deferred_send_enqueued_total,
-            p2p_deferred_send_dropped_total,
-            p2p_session_reconnect_total,
-            p2p_connect_retry_seconds,
-            p2p_accept_throttled_total,
-            p2p_accept_bucket_evictions_total,
-            p2p_accept_buckets_current,
-            p2p_accept_prefix_cache_total,
-            p2p_accept_throttle_decisions_total,
-            p2p_incoming_cap_reject_total,
-            p2p_total_cap_reject_total,
-            p2p_trust_score,
-            p2p_trust_penalties_total,
-            p2p_trust_decay_ticks_total,
-            p2p_trust_gossip_skipped_total,
-            tx_gossip_sent_total,
-            tx_gossip_dropped_total,
-            tx_gossip_targets,
-            tx_gossip_fallback_total,
-            tx_gossip_frame_cap_bytes,
-            tx_gossip_public_target_cap,
-            tx_gossip_restricted_target_cap,
-            tx_gossip_public_target_reshuffle_ms,
-            tx_gossip_restricted_target_reshuffle_ms,
-            tx_gossip_drop_unknown_dataspace,
-            tx_gossip_restricted_fallback,
-            tx_gossip_restricted_public_policy,
-            tx_gossip_status,
-            tx_gossip_caps,
-            p2p_ws_inbound_total,
-            p2p_ws_outbound_total,
-            p2p_scion_inbound_total,
-            p2p_scion_outbound_total,
-            p2p_queue_depth,
-            p2p_queue_dropped_total,
-            p2p_handshake_ms_bucket,
-            p2p_handshake_ms_sum,
-            p2p_handshake_ms_count,
-            p2p_handshake_error_total,
-            p2p_frame_cap_violations_total,
-            runtime_upgrade_events_total,
-            runtime_upgrade_provenance_rejections_total,
-            runtime_abi_version,
-            sumeragi_tail_votes_total,
-            sumeragi_votes_sent_total,
-            sumeragi_votes_received_total,
-            sumeragi_qc_sent_total,
-            sumeragi_qc_received_total,
-            sumeragi_qc_validation_errors_total,
-            sumeragi_validation_reject_total,
-            sumeragi_validation_reject_last_reason,
-            sumeragi_validation_reject_last_height,
-            sumeragi_validation_reject_last_view,
-            sumeragi_validation_reject_last_timestamp_ms,
-            sumeragi_block_sync_roster_source_total,
-            sumeragi_block_sync_roster_drop_total,
-            sumeragi_block_sync_share_blocks_unsolicited_total,
-            sumeragi_consensus_message_handling_total,
-            sumeragi_view_change_cause_total,
-            sumeragi_view_change_cause_last_timestamp_ms,
-            sumeragi_qc_signer_counts,
-            sumeragi_invalid_signature_total,
-            sumeragi_widen_before_rotate_total,
-            sumeragi_view_change_suggest_total,
-            sumeragi_view_change_install_total,
-            sumeragi_proposal_gap_total,
-            sumeragi_view_change_proof_total,
-            sumeragi_wa_qc_assembled_total,
-            sumeragi_cert_size,
-            sumeragi_commit_signatures_present,
-            sumeragi_commit_signatures_counted,
-            sumeragi_commit_signatures_set_b,
-            sumeragi_commit_signatures_required,
-            sumeragi_commit_qc_height,
-            sumeragi_commit_qc_view,
-            sumeragi_commit_qc_epoch,
-            sumeragi_commit_qc_signatures_total,
-            sumeragi_commit_qc_validator_set_len,
-            sumeragi_gossip_fallback_total,
-            sumeragi_block_created_dropped_by_lock_total,
-            sumeragi_block_created_hint_mismatch_total,
-            sumeragi_block_created_proposal_mismatch_total,
-            lane_relay_invalid_total,
-            lane_relay_emergency_override_total,
-            sumeragi_prf_epoch_seed_hex,
-            halo2_status,
-            sumeragi_prf_height,
-            sumeragi_prf_view,
-            sumeragi_membership_view_hash,
-            sumeragi_membership_height,
-            sumeragi_membership_view,
-            sumeragi_membership_epoch,
-            sumeragi_mode_tag,
-            sumeragi_leader_index,
-            sumeragi_highest_qc_height,
-            sumeragi_locked_qc_height,
-            sumeragi_locked_qc_view,
-            sumeragi_new_view_receipts_by_hv,
-            sumeragi_new_view_publish_total,
-            sumeragi_new_view_recv_total,
-            sumeragi_new_view_dropped_by_lock_total,
-            sumeragi_commit_conflict_detected_total,
-            sumeragi_missing_block_fetch_total,
-            sumeragi_missing_block_fetch_target_total,
-            sumeragi_missing_block_fetch_dwell_ms,
-            sumeragi_missing_block_fetch_targets,
-            blocksync_qc_quarantine_total,
-            blocksync_qc_revalidated_total,
-            blocksync_qc_final_drop_total,
-            qc_deferred_missing_payload_total,
-            qc_deferred_resolved_total,
-            qc_deferred_expired_total,
-            consensus_empty_commit_topology_defer_total,
-            consensus_empty_commit_topology_escalation_total,
-            consensus_recovery_state_transitions_total,
-            consensus_missing_block_height_escalation_total,
-            consensus_sidecar_quarantine_total,
-            consensus_sidecar_final_drop_total,
-            blocksync_range_pull_escalation_total,
-            blocksync_range_pull_success_total,
-            blocksync_range_pull_failure_total,
-            consensus_recovery_stuck_round_seconds,
-            sumeragi_da_gate_block_total,
-            sumeragi_da_gate_last_reason,
-            sumeragi_da_gate_last_satisfied,
-            sumeragi_da_gate_satisfied_total,
-            sumeragi_da_manifest_guard_total,
-            sumeragi_da_manifest_cache_total,
-            sumeragi_da_spool_cache_total,
-            sumeragi_da_pin_intent_spool_total,
-            sumeragi_rbc_sessions_active,
-            sumeragi_rbc_sessions_pruned_total,
-            sumeragi_rbc_init_requests_total,
-            sumeragi_rbc_chunk_requests_total,
-            sumeragi_rbc_requested_chunks_total,
-            sumeragi_rbc_initial_chunk_targets_total,
-            sumeragi_rbc_repair_fallback_total,
-            sumeragi_rbc_ready_broadcasts_total,
-            sumeragi_rbc_rebroadcast_skipped_total,
-            sumeragi_rbc_deliver_broadcasts_total,
-            sumeragi_rbc_payload_bytes_delivered_total,
-            sumeragi_rbc_reconstructed_stripes_total,
-            sumeragi_rbc_seed_latency_ms,
-            sumeragi_rbc_lane_tx_count,
-            sumeragi_rbc_lane_total_chunks,
-            sumeragi_rbc_lane_pending_chunks,
-            sumeragi_rbc_lane_bytes_total,
-            sumeragi_rbc_dataspace_tx_count,
-            sumeragi_rbc_dataspace_total_chunks,
-            sumeragi_rbc_dataspace_pending_chunks,
-            sumeragi_rbc_dataspace_bytes_total,
-            sumeragi_da_votes_ingested_total,
-            sumeragi_qc_assembly_latency_ms,
-            sumeragi_qc_last_latency_ms,
-            sumeragi_rbc_store_sessions,
-            sumeragi_rbc_store_bytes,
-            sumeragi_rbc_store_pressure,
-            sumeragi_rbc_store_evictions_total,
-            sumeragi_rbc_persist_drops_total,
-            sumeragi_rbc_status_persistence_disabled,
-            sumeragi_rbc_status_persist_failures_total,
-            sumeragi_rbc_backpressure_deferrals_total,
-            sumeragi_rbc_deliver_defer_ready_total,
-            sumeragi_rbc_deliver_defer_chunks_total,
-            sumeragi_rbc_da_reschedule_total,
-            sumeragi_rbc_da_reschedule_by_mode_total,
-            sumeragi_rbc_abort_total,
-            sumeragi_rbc_mismatch_total,
-            sumeragi_kura_store_failures_total,
-            sumeragi_kura_store_last_retry_attempt,
-            sumeragi_kura_store_last_retry_backoff_ms,
-            sumeragi_pacemaker_backpressure_deferrals_total,
-            sumeragi_pacemaker_backpressure_deferrals_by_reason_total,
-            sumeragi_pacemaker_backpressure_deferral_duration_ms,
-            sumeragi_pacemaker_backpressure_deferral_active,
-            sumeragi_pacemaker_backpressure_deferral_age_ms,
-            sumeragi_pacemaker_eval_ms,
-            sumeragi_pacemaker_propose_ms,
-            sumeragi_commit_stage_ms,
-            state_commit_view_lock_wait_ms,
-            state_commit_view_lock_hold_ms,
-            state_commit_write_lock_wait_ms,
-            state_commit_write_lock_hold_ms,
-            sumeragi_commit_pipeline_tick_total,
-            sumeragi_prevote_timeout_total,
-            sumeragi_rbc_backlog_chunks_total,
-            sumeragi_rbc_backlog_chunks_max,
-            sumeragi_rbc_backlog_sessions_pending,
-            sumeragi_rbc_pending_sessions,
-            sumeragi_rbc_pending_chunks,
-            sumeragi_rbc_pending_bytes,
-            sumeragi_rbc_pending_drops_total,
-            sumeragi_rbc_pending_dropped_bytes_total,
-            sumeragi_rbc_pending_evicted_total,
-            sumeragi_membership_mismatch_total,
-            sumeragi_membership_mismatch_active,
-            sumeragi_post_to_peer_total,
-            sumeragi_bg_post_enqueued_total,
-            sumeragi_bg_post_overflow_total,
-            sumeragi_bg_post_drop_total,
-            sumeragi_bg_post_queue_depth,
-            sumeragi_bg_post_queue_depth_by_peer,
-            sumeragi_bg_post_age_ms,
-            sumeragi_pacemaker_backoff_ms,
-            sumeragi_pacemaker_rtt_floor_ms,
-            sumeragi_pacemaker_backoff_multiplier,
-            sumeragi_pacemaker_rtt_floor_multiplier,
-            sumeragi_pacemaker_max_backoff_ms,
-            sumeragi_pacemaker_jitter_ms,
-            sumeragi_pacemaker_jitter_frac_permille,
-            sumeragi_pacemaker_round_elapsed_ms,
-            sumeragi_pacemaker_view_timeout_target_ms,
-            sumeragi_pacemaker_view_timeout_remaining_ms,
-            sumeragi_phase_latency_ms,
-            sumeragi_phase_latency_ema_ms,
-            sumeragi_phase_total_ema_ms,
-            // IVM cache counters
-            ivm_cache_hits,
-            ivm_cache_misses,
-            ivm_cache_evictions,
-            ivm_cache_decoded_streams,
-            ivm_cache_decoded_ops_total,
-            ivm_cache_decode_failures,
-            ivm_cache_decode_time_ns_total,
-            ivm_register_max_index,
-            ivm_register_unique_count,
-            // Merkle root computation counters
-            merkle_root_gpu_total,
-            merkle_root_cpu_total,
-            ivm_memory_commit_ms,
-            ivm_memory_commit_dirty_chunks,
-            ivm_merkle_rebuild_total,
-            ivm_merkle_incremental_leaf_updates_total,
-            pipeline_dag_vertices,
-            pipeline_dag_edges,
-            pipeline_conflict_rate_bps,
-            pipeline_access_set_source_total,
-            pipeline_comp_count,
-            pipeline_comp_max,
-            pipeline_comp_hist_bucket,
-            pipeline_peak_layer_width,
-            pipeline_layer_avg_width,
-            pipeline_layer_median_width,
-            nexus_config_diff_total,
-            nexus_lane_configured_total,
-            nexus_lane_id_placeholder,
-            nexus_dataspace_id_placeholder,
-            nexus_lane_governance_sealed,
-            nexus_lane_governance_sealed_total,
-            nexus_lane_governance_sealed_aliases,
-            nexus_lane_lifecycle_applied_total,
-            nexus_lane_block_height,
-            nexus_lane_finality_lag_slots,
-            nexus_lane_settlement_backlog_xor,
-            nexus_public_lane_validator_total,
-            nexus_public_lane_validator_activation_total,
-            nexus_public_lane_validator_reject_total,
-            nexus_public_lane_stake_bonded,
-            nexus_public_lane_unbond_pending,
-            nexus_public_lane_reward_total,
-            nexus_public_lane_slash_total,
-            nexus_scheduler_lane_teu_capacity,
-            nexus_scheduler_lane_teu_slot_committed,
-            nexus_scheduler_lane_trigger_level,
-            nexus_scheduler_starvation_bound_slots,
-            nexus_scheduler_lane_teu_slot_breakdown,
-            nexus_scheduler_lane_teu_deferral_total,
-            nexus_scheduler_lane_headroom_events_total,
-            nexus_scheduler_must_serve_truncations_total,
-            nexus_scheduler_lane_teu_status,
-            nexus_scheduler_dataspace_teu_backlog,
-            nexus_scheduler_dataspace_age_slots,
-            nexus_scheduler_dataspace_virtual_finish,
-            nexus_scheduler_dataspace_teu_status,
-            pipeline_layer_count,
-            pipeline_scheduler_utilization_pct,
-            pipeline_layer_width_hist_bucket,
-            pipeline_overlay_count,
-            pipeline_overlay_instructions,
-            pipeline_overlay_bytes,
-            pipeline_quarantine_classified,
-            pipeline_quarantine_overflow,
-            pipeline_quarantine_executed,
-            pipeline_stage_ms,
-            amx_prepare_ms,
-            amx_commit_ms,
-            amx_abort_total,
-            axt_policy_reject_total,
-            axt_policy_snapshot_version,
-            axt_policy_snapshot_cache_events_total,
-            axt_proof_cache_events_total,
-            axt_proof_cache_state,
-            ivm_exec_ms,
-            pipeline_detached_prepared,
-            pipeline_detached_merged,
-            pipeline_detached_fallback,
-            pipeline_detached_fallback_reason,
-            merge_ledger_entries_total,
-            merge_ledger_latest_epoch,
-            merge_ledger_latest_root_hex,
-            pipeline_sig_bls_agg_same,
-            pipeline_sig_bls_agg_multi,
-            pipeline_sig_bls_deterministic,
-            pipeline_sig_bls_agg_same_total,
-            pipeline_sig_bls_agg_multi_total,
-            block_gas_used,
-            confidential_gas_tx_used,
-            confidential_gas_block_used,
-            confidential_gas_total,
-            block_fee_total_units,
-            block_fee_total_scale,
-            torii_filter_depth,
-            torii_filter_match_count,
-            torii_scan_ms,
-            torii_stream_rows,
-            torii_lane_admission_latency_seconds,
-            torii_route_stage_latency_seconds,
-            torii_attachment_reject_total,
-            torii_attachment_sanitize_ms,
-            torii_zk_prover_attachment_bytes,
-            torii_zk_prover_latency_ms,
-            torii_zk_prover_gc_total,
-            torii_zk_prover_inflight,
-            torii_zk_prover_pending,
-            torii_zk_ivm_prove_inflight,
-            torii_zk_ivm_prove_queued,
-            torii_zk_prover_last_scan_bytes,
-            torii_zk_prover_last_scan_ms,
-            torii_zk_prover_budget_exhausted_total,
-            torii_query_snapshot_requests,
-            torii_query_snapshot_first_batch_ms,
-            torii_query_snapshot_gas_consumed_units_total,
-            query_snapshot_lane_first_batch_ms,
-            query_snapshot_lane_first_batch_items,
-            query_snapshot_lane_remaining_items,
-            query_snapshot_lane_cursors_total,
-            torii_connect_sessions_total,
-            torii_connect_sessions_active,
-            torii_pre_auth_reject_total,
-            torii_operator_auth_total,
-            torii_operator_auth_lockout_total,
-            torii_signature_limit_total,
-            torii_signature_limit_by_authority_total,
-            torii_signature_limit_last_count,
-            torii_signature_limit_max,
-            torii_nts_unhealthy_reject_total,
-            torii_multisig_direct_sign_reject_total,
-            torii_sorafs_admission_total,
-            torii_sorafs_capacity_telemetry_rejections_total,
-            torii_sorafs_capacity_declared_gib,
-            torii_sorafs_capacity_effective_gib,
-            torii_sorafs_capacity_utilised_gib,
-            torii_sorafs_capacity_outstanding_gib,
-            torii_sorafs_capacity_gibhours_total,
-            torii_sorafs_egress_bytes,
-            torii_sorafs_egress_drift_ratio,
-            sorafs_governance_dag_publish_total,
-            sorafs_governance_dag_published_bytes_total,
-            sorafs_governance_dag_last_publish_timestamp_seconds,
-            sorafs_governance_dag_backlog,
-            sorafs_governance_dag_head_age_seconds,
-            torii_sorafs_orderbook_finalized_events_total,
-            torii_sorafs_orderbook_open_depth_gib,
-            torii_sorafs_orderbook_matcher_lag_seconds,
-            torii_sorafs_orderbook_settlement_backlog,
-            torii_sorafs_orderbook_oldest_settlement_age_seconds,
-            torii_sorafs_orderbook_escrow_runway_seconds,
-            torii_sorafs_orderbook_finalized_projection_ready,
-            torii_sorafs_orderbook_finalized_projection_height,
-            torii_sorafs_orderbook_finalized_projection_timestamp_seconds,
-            torii_sorafs_orderbook_finalized_projection_failures_total,
-            torii_sorafs_orderbook_book_revision,
-            torii_sorafs_orderbook_matcher_scan_book_revision,
-            torii_sorafs_orderbook_api_requests_total,
-            torii_sorafs_gateway_compliance_requests_total,
-            torii_sorafs_gateway_compliance_serving_decisions_total,
-            torii_sorafs_gateway_compliance_failures_total,
-            torii_sorafs_gateway_compliance_serving_catalog_sequence,
-            torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds,
-            torii_sorafs_gateway_compliance_ready,
-            torii_sorafs_hedging_xor_usd_reference_price_micro_usd,
-            torii_sorafs_hedging_feed_lag_seconds,
-            torii_sorafs_hedging_feed_divergence_bps,
-            torii_sorafs_hedging_exposure_drift_bps,
-            torii_sorafs_billing_statement_generation_total,
-            torii_sorafs_billing_statement_failure_total,
-            torii_sorafs_billing_statement_ack_backlog,
-            torii_sorafs_billing_escrow_runway_seconds,
-            torii_sorafs_reserve_lifecycle_stage_providers,
-            torii_sorafs_reserve_credit_draw_micro_xor,
-            torii_sorafs_reserve_credit_shortfall_micro_xor,
-            torii_sorafs_reserve_accrued_interest_micro_xor,
-            torii_sorafs_reserve_defaulted_providers,
-            torii_sorafs_reserve_appeal_backlog,
-            torii_sorafs_reserve_custody_movements,
-            torii_sorafs_reserve_chain_reconciled_movements,
-            torii_sorafs_reserve_finalized_projection_ready,
-            torii_sorafs_reserve_finalized_projection_height,
-            torii_sorafs_reserve_finalized_projection_failure_total,
-            torii_sorafs_reserve_service_requests_total,
-            torii_sorafs_reserve_service_rate_limit_total,
-            sorafs_reputation_ingest_lag_seconds,
-            sorafs_reputation_snapshot_age_seconds,
-            sorafs_reputation_snapshot_generated_at_unix,
-            sorafs_reputation_provider_count,
-            sorafs_reputation_low_score_providers,
-            sorafs_reputation_score,
-            sorafs_reputation_threshold_crossings_total,
-            sorafs_reputation_runtime_live,
-            sorafs_reputation_runtime_ready,
-            sorafs_reputation_runtime_dependencies_ready,
-            sorafs_reputation_journal_transaction_submitter_ready,
-            sorafs_reputation_runtime_finalized_height,
-            sorafs_reputation_runtime_consecutive_failures,
-            sorafs_reputation_runtime_material_acknowledged,
-            sorafs_reputation_runtime_provider_count,
-            sorafs_reputation_runtime_ticks_total,
-            sorafs_hedging_billing_runtime_live,
-            sorafs_hedging_billing_runtime_ready,
-            sorafs_hedging_billing_runtime_dependencies_ready,
-            sorafs_hedging_billing_automatic_execution_enabled,
-            sorafs_hedging_billing_last_tick_fresh,
-            sorafs_hedging_billing_finalized_projection_ready,
-            sorafs_hedging_billing_finalized_height,
-            sorafs_hedging_billing_finalized_head_height,
-            sorafs_hedging_billing_finalized_lag_blocks,
-            sorafs_hedging_billing_next_event_sequence,
-            sorafs_hedging_billing_ready_for_signing,
-            sorafs_hedging_billing_ready_for_publication,
-            sorafs_hedging_billing_publication_ambiguous,
-            sorafs_hedging_billing_published,
-            sorafs_hedging_billing_acknowledged,
-            sorafs_hedging_billing_dead_letter,
-            sorafs_hedging_billing_hedge_intents,
-            sorafs_hedging_billing_runtime_ticks_total,
-            sorafs_reputation_score_tracked_providers: Arc::new(RwLock::new(BTreeSet::new())),
-            sorafs_reputation_low_score_state: Arc::new(RwLock::new(BTreeMap::new())),
-            torii_sorafs_fee_projection_nanos,
-            torii_sorafs_disputes_total,
-            torii_sorafs_orders_issued_total,
-            torii_sorafs_orders_completed_total,
-            torii_sorafs_orders_failed_total,
-            torii_sorafs_outstanding_orders,
-            torii_sorafs_uptime_bps,
-            torii_sorafs_por_bps,
-            torii_sorafs_por_challenges_total,
-            torii_sorafs_por_forced_challenges_total,
-            torii_sorafs_por_sampling_duplicates_total,
-            torii_sorafs_por_ingest_backlog,
-            torii_sorafs_por_ingest_failures_total,
-            torii_sorafs_repair_tasks_total,
-            torii_sorafs_repair_latency_minutes,
-            torii_sorafs_repair_queue_depth,
-            torii_sorafs_repair_backlog_oldest_age_seconds,
-            torii_sorafs_repair_lease_expired_total,
-            torii_sorafs_slash_proposals_total,
-            torii_sorafs_reconciliation_runs_total,
-            torii_sorafs_reconciliation_divergence_count,
-            torii_sorafs_gc_runs_total,
-            torii_sorafs_gc_evictions_total,
-            torii_sorafs_gc_bytes_freed_total,
-            torii_sorafs_gc_blocked_total,
-            torii_sorafs_gc_expired_manifests,
-            torii_sorafs_gc_oldest_expired_age_seconds,
-            torii_sorafs_storage_bytes_used,
-            torii_sorafs_storage_bytes_capacity,
-            sorafs_provider_ingest_inflight,
-            torii_sorafs_storage_fetch_inflight,
-            torii_sorafs_storage_fetch_bytes_per_sec,
-            torii_sorafs_storage_por_inflight,
-            torii_sorafs_storage_por_samples_success_total,
-            torii_sorafs_storage_por_samples_failed_total,
-            sorafs_gateway_active,
-            sorafs_gateway_responses_total,
-            sorafs_gateway_ttfb_ms,
-            sorafs_gateway_proof_verifications_total,
-            sorafs_gateway_proof_duration_ms,
-            torii_sorafs_chunk_range_requests_total,
-            torii_sorafs_chunk_range_bytes_total,
-            torii_sorafs_provider_range_capability_total,
-            torii_sorafs_routing_authority_cache_total,
-            torii_sorafs_range_fetch_throttle_events_total,
-            torii_sorafs_range_fetch_concurrency_current,
-            torii_sorafs_proof_stream_inflight,
-            torii_sorafs_proof_stream_events_total,
-            torii_sorafs_proof_stream_latency_ms,
-            torii_sorafs_proof_health_alerts_total,
-            torii_sorafs_proof_health_pdp_failures,
-            torii_sorafs_proof_health_potr_breaches,
-            torii_sorafs_proof_health_penalty_nano,
-            torii_sorafs_proof_health_window_end_epoch,
-            torii_sorafs_proof_health_cooldown,
-            torii_sorafs_gar_violations_total,
-            torii_sorafs_gateway_refusals_total,
-            torii_sorafs_gateway_fixture_info,
-            torii_sorafs_registry_manifests_total,
-            torii_sorafs_registry_aliases_total,
-            torii_sorafs_pin_retained_manifests,
-            torii_sorafs_pin_live_content_bytes,
-            torii_sorafs_alias_cache_refresh_total,
-            torii_sorafs_alias_cache_age_seconds,
-            torii_sorafs_tls_cert_expiry_seconds,
-            torii_sorafs_tls_renewal_total,
-            torii_sorafs_tls_ech_enabled,
-            torii_sorafs_gateway_fixture_version,
-            torii_sorafs_registry_orders_total,
-            torii_sorafs_replication_sla_total,
-            torii_sorafs_replication_backlog_total,
-            torii_sorafs_replication_completion_latency_epochs,
-            torii_sorafs_replication_deadline_slack_epochs,
-            soranet_privacy_ingest_reject_total,
-            soranet_privacy_circuit_events_total,
-            soranet_privacy_pow_rejects_total,
-            soranet_pow_revocation_store_total,
-            soranet_privacy_throttles_total,
-            soranet_privacy_verified_bytes_total,
-            soranet_privacy_active_circuits_avg,
-            soranet_privacy_active_circuits_max,
-            soranet_privacy_open_buckets,
-            soranet_privacy_pending_collectors,
-            soranet_privacy_snapshot_suppressed,
-            soranet_privacy_snapshot_suppressed_by_mode,
-            soranet_privacy_snapshot_drained,
-            soranet_privacy_snapshot_suppression_ratio,
-            soranet_privacy_evicted_buckets_total,
-            soranet_privacy_bucket_suppressed,
-            soranet_privacy_suppression_total,
-            soranet_privacy_rtt_millis,
-            soranet_privacy_gar_reports_total,
-            soranet_privacy_last_poll_unixtime,
-            soranet_privacy_poll_errors_total,
-            soranet_privacy_collector_enabled,
-            sorafs_orchestrator_active_fetches,
-            sorafs_orchestrator_fetch_duration_ms,
-            sorafs_orchestrator_fetch_failures_total,
-            sorafs_orchestrator_retries_total,
-            sorafs_orchestrator_provider_failures_total,
-            sorafs_orchestrator_chunk_latency_ms,
-            sorafs_orchestrator_bytes_total,
-            sorafs_orchestrator_stalls_total,
-            sorafs_orchestrator_transport_events_total,
-            sorafs_orchestrator_policy_events_total,
-            sorafs_orchestrator_pq_ratio,
-            sorafs_orchestrator_pq_candidate_ratio,
-            sorafs_orchestrator_pq_deficit_ratio,
-            sorafs_orchestrator_classical_ratio,
-            sorafs_orchestrator_classical_selected,
-            torii_da_rent_gib_months_total,
-            torii_da_rent_base_micro_total,
-            torii_da_protocol_reserve_micro_total,
-            torii_da_provider_reward_micro_total,
-            torii_da_pdp_bonus_micro_total,
-            torii_da_potr_bonus_micro_total,
-            torii_da_receipts_total,
-            torii_da_receipt_epoch,
-            torii_da_receipt_highest_sequence,
-            torii_da_chunking_seconds,
-            torii_da_spool_batches_total,
-            torii_da_spool_artifacts_total,
-            torii_da_spool_queue_depth,
-            torii_da_spool_batch_write_ms,
-            da_shard_cursor_events_total,
-            da_shard_cursor_height,
-            da_shard_cursor_lag_blocks,
-            taikai_ingest_segment_latency_ms,
-            taikai_ingest_live_edge_drift_ms,
-            taikai_ingest_live_edge_drift_signed_ms,
-            taikai_ingest_errors_total,
-            taikai_trm_alias_rotations_total,
-            taikai_viewer_rebuffer_events_total,
-            taikai_viewer_playback_segments_total,
-            taikai_viewer_cek_fetch_duration_ms,
-            taikai_viewer_pq_circuit_health,
-            taikai_viewer_cek_rotation_seconds_ago,
-            taikai_viewer_alerts_firing_total,
-            sorafs_taikai_cache_query_total,
-            sorafs_taikai_cache_insert_total,
-            sorafs_taikai_cache_evictions_total,
-            sorafs_taikai_cache_promotions_total,
-            sorafs_taikai_cache_bytes_total,
-            sorafs_taikai_qos_denied_total,
-            sorafs_taikai_queue_events_total,
-            sorafs_taikai_queue_depth,
-            sorafs_taikai_shard_failovers_total,
-            sorafs_taikai_shard_circuits_open,
-            sorafs_orchestrator_brownouts_total,
-            soranet_reward_base_payout_nanos,
-            soranet_reward_events_total,
-            soranet_reward_payout_nanos_total,
-            soranet_reward_skips_total,
-            soranet_reward_adjustment_nanos_total,
-            soranet_reward_disputes_total,
-            torii_http_requests_total,
-            torii_http_request_duration_seconds,
-            torii_http_request_bytes_total,
-            torii_http_response_bytes_total,
-            torii_api_token_hits_total,
-            torii_content_requests_total,
-            torii_content_request_duration_seconds,
-            torii_content_response_bytes_total,
-            torii_proof_requests_total,
-            torii_proof_request_duration_seconds,
-            torii_proof_response_bytes_total,
-            torii_proof_cache_hits_total,
-            torii_request_duration_seconds,
-            torii_request_failures_total,
-            torii_explorer_requests_total,
-            torii_explorer_request_duration_seconds,
-            torii_norito_rpc_gate_total,
-            torii_address_invalid_total,
-            torii_address_domain_total,
-            torii_address_collision_total,
-            torii_address_collision_domain_total,
-            torii_account_literal_total,
-            torii_norito_decode_failures_total,
-            torii_proof_throttled_total,
-            torii_contract_throttled_total,
-            torii_contract_errors_total,
-            sns_registrar_status_total,
-            torii_active_connections_total,
-            torii_connect_buffered_sessions,
-            torii_connect_total_buffer_bytes,
-            torii_connect_dedupe_size,
-            torii_connect_per_ip_sessions,
-            zk_verify_latency_ms,
-            zk_verify_proof_bytes,
-            nts_offset_ms,
-            nts_confidence_ms,
-            nts_peers_sampled,
-            nts_samples_used,
-            nts_healthy,
-            nts_fallback,
-            nts_min_samples_ok,
-            nts_offset_ok,
-            nts_confidence_ok,
-            nts_rtt_ms_bucket,
-            nts_rtt_ms_sum,
-            nts_rtt_ms_count,
-            sorafs_orderbook_projection_exposition_lock: Mutex::new(()),
-            sorafs_gateway_compliance_exposition_lock: Mutex::new(()),
-            musubi,
-            registry,
-            sumeragi_vrf_commits_emitted_total,
-            sumeragi_vrf_reveals_emitted_total,
-            sumeragi_vrf_reveals_late_total,
-            sumeragi_vrf_non_reveal_penalties_total,
-            sumeragi_vrf_non_reveal_by_signer,
-            sumeragi_vrf_no_participation_total,
-            sumeragi_vrf_no_participation_by_signer,
-            sumeragi_vrf_rejects_total_by_reason,
+        Self {
+            lines,
+            row: 0,
+            registered: 0,
+        }
+    }
+
+    fn spec(&mut self, expected_key: &str) -> MetricSpec {
+        let row = self.row + 1;
+        let line = self
+            .lines
+            .next()
+            .unwrap_or_else(|| panic!("metric catalog ended before `{expected_key}` at row {row}"));
+        let mut fields = line.split('\t');
+        let key = fields.next().expect("metric catalog row has a key");
+        let name = fields.next().expect("metric catalog row has a name");
+        let help = fields.next().expect("metric catalog row has help text");
+        let registered = match fields.next() {
+            Some("registered") => true,
+            Some("unregistered") => false,
+            Some(value) => panic!("metric catalog row {row} has invalid registration `{value}`"),
+            None => panic!("metric catalog row {row} has no registration state"),
         };
-        metrics.apply_stack_snapshot(&stack_settings_snapshot());
-        metrics
+        if registered {
+            self.registered += 1;
+        }
+        assert!(
+            fields.next().is_none(),
+            "metric catalog row {row} has extra fields"
+        );
+        assert_eq!(
+            key, expected_key,
+            "metric catalog row {row} is out of construction order"
+        );
+        self.row = row;
+        MetricSpec {
+            name,
+            help,
+            registered,
+        }
+    }
+
+    fn finish(&mut self) {
+        assert_eq!(
+            self.row, METRIC_CATALOG_V2_ROWS,
+            "metric catalog construction count changed"
+        );
+        assert_eq!(
+            self.registered, METRIC_CATALOG_V2_REGISTERED,
+            "metric catalog registration count changed"
+        );
+        assert!(
+            self.lines.next().is_none(),
+            "metric catalog has unconsumed rows after row {}",
+            self.row
+        );
     }
 }
+
+// Guarded registration panics on duplicate names when requested in debug builds and treats the
+// Prometheus duplicate error as the sole recoverable registration failure otherwise.
+fn register_guarded<C: Collector + Clone + 'static>(registry: &Registry, metric: &C) {
+    if let Err(err) = registry.register(Box::new(metric.clone())) {
+        let is_duplicate = matches!(&err, prometheus::Error::AlreadyReg);
+        assert!(
+            !(duplicate_metrics_should_panic() && is_duplicate),
+            "Duplicate metric registration attempted: {err}"
+        );
+        assert!(is_duplicate, "Metric registration failed: {err}");
+        #[cfg(debug_assertions)]
+        {
+            eprintln!(
+                "Duplicate metric registration attempted: {:?}: {err}",
+                metric.desc()
+            );
+        }
+    }
+}
+
+struct MetricFactory<'a> {
+    registry: &'a Registry,
+    specs: &'a mut MetricSpecCursor,
+}
+
+impl<'a> MetricFactory<'a> {
+    fn new(registry: &'a Registry, specs: &'a mut MetricSpecCursor) -> Self {
+        Self { registry, specs }
+    }
+
+    fn collect<C: Collector + Clone + 'static>(
+        &self,
+        metric: Result<C, prometheus::Error>,
+        registered: bool,
+    ) -> C {
+        let metric = metric.expect("metric catalog contains valid Prometheus descriptors");
+        if registered {
+            register_guarded(self.registry, &metric);
+        }
+        metric
+    }
+
+    fn int_counter(&mut self, key: &str) -> IntCounter {
+        let spec = self.specs.spec(key);
+        self.collect(
+            IntCounter::with_opts(Opts::new(spec.name, spec.help)),
+            spec.registered,
+        )
+    }
+
+    fn int_counter_vec(&mut self, key: &str, labels: &[&str]) -> IntCounterVec {
+        let spec = self.specs.spec(key);
+        self.collect(
+            IntCounterVec::new(Opts::new(spec.name, spec.help), labels),
+            spec.registered,
+        )
+    }
+
+    fn int_gauge(&mut self, key: &str) -> IntGauge {
+        let spec = self.specs.spec(key);
+        self.collect(
+            IntGauge::with_opts(Opts::new(spec.name, spec.help)),
+            spec.registered,
+        )
+    }
+
+    fn int_gauge_vec(&mut self, key: &str, labels: &[&str]) -> IntGaugeVec {
+        let spec = self.specs.spec(key);
+        self.collect(
+            IntGaugeVec::new(Opts::new(spec.name, spec.help), labels),
+            spec.registered,
+        )
+    }
+
+    fn gauge(&mut self, key: &str) -> GenericGauge<AtomicU64> {
+        let spec = self.specs.spec(key);
+        self.collect(
+            GenericGauge::with_opts(Opts::new(spec.name, spec.help)),
+            spec.registered,
+        )
+    }
+
+    fn gauge_vec(&mut self, key: &str, labels: &[&str]) -> GenericGaugeVec<AtomicU64> {
+        let spec = self.specs.spec(key);
+        self.collect(
+            GenericGaugeVec::new(Opts::new(spec.name, spec.help), labels),
+            spec.registered,
+        )
+    }
+
+    fn float_counter_vec(&mut self, key: &str, labels: &[&str]) -> CounterVec {
+        let spec = self.specs.spec(key);
+        self.collect(
+            CounterVec::new(Opts::new(spec.name, spec.help), labels),
+            spec.registered,
+        )
+    }
+
+    fn float_gauge(&mut self, key: &str) -> Gauge {
+        let spec = self.specs.spec(key);
+        self.collect(
+            Gauge::with_opts(Opts::new(spec.name, spec.help)),
+            spec.registered,
+        )
+    }
+
+    fn float_gauge_vec(&mut self, key: &str, labels: &[&str]) -> GaugeVec {
+        let spec = self.specs.spec(key);
+        self.collect(
+            GaugeVec::new(Opts::new(spec.name, spec.help), labels),
+            spec.registered,
+        )
+    }
+
+    fn histogram_with_buckets(&mut self, key: &str, buckets: Vec<f64>) -> Histogram {
+        let spec = self.specs.spec(key);
+        self.collect(
+            Histogram::with_opts(HistogramOpts::new(spec.name, spec.help).buckets(buckets)),
+            spec.registered,
+        )
+    }
+
+    fn histogram_vec(&mut self, key: &str, labels: &[&str]) -> HistogramVec {
+        let spec = self.specs.spec(key);
+        self.collect(
+            HistogramVec::new(HistogramOpts::new(spec.name, spec.help), labels),
+            spec.registered,
+        )
+    }
+
+    fn histogram_vec_with_buckets(
+        &mut self,
+        key: &str,
+        buckets: Vec<f64>,
+        labels: &[&str],
+    ) -> HistogramVec {
+        let spec = self.specs.spec(key);
+        self.collect(
+            HistogramVec::new(
+                HistogramOpts::new(spec.name, spec.help).buckets(buckets),
+                labels,
+            ),
+            spec.registered,
+        )
+    }
+
+    fn finish(self) {
+        self.specs.finish();
+    }
+}
+
+#[cfg(test)]
+mod metric_catalog_tests {
+    use std::collections::BTreeSet;
+
+    use super::{
+        METRIC_CATALOG_V2, METRIC_CATALOG_V2_BLAKE3, METRIC_CATALOG_V2_BYTES,
+        METRIC_CATALOG_V2_HEADER, METRIC_CATALOG_V2_REGISTERED, METRIC_CATALOG_V2_ROWS, Metrics,
+    };
+
+    #[test]
+    fn v1_catalog_is_complete_and_unique() {
+        let mut lines = METRIC_CATALOG_V2.lines();
+        assert_eq!(lines.next(), Some(METRIC_CATALOG_V2_HEADER));
+        let mut keys = BTreeSet::new();
+        let mut names = BTreeSet::new();
+        let mut registered = 0;
+        for (index, line) in lines.enumerate() {
+            let row = index + 1;
+            let mut fields = line.split('\t');
+            let key = fields.next().expect("metric catalog row has a key");
+            let name = fields.next().expect("metric catalog row has a name");
+            let help = fields.next().expect("metric catalog row has help text");
+            match fields.next() {
+                Some("registered") => registered += 1,
+                Some("unregistered") => {}
+                value => panic!("catalog row {row} has invalid registration state {value:?}"),
+            }
+            assert!(
+                fields.next().is_none(),
+                "catalog row {row} has extra fields"
+            );
+            assert!(!key.is_empty() && !name.is_empty() && !help.is_empty());
+            assert!(keys.insert(key), "duplicate metric key `{key}`");
+            assert!(names.insert(name), "duplicate metric name `{name}`");
+        }
+        assert_eq!(keys.len(), METRIC_CATALOG_V2_ROWS);
+        assert_eq!(registered, METRIC_CATALOG_V2_REGISTERED);
+        assert_eq!(METRIC_CATALOG_V2.len(), METRIC_CATALOG_V2_BYTES);
+        assert_eq!(
+            blake3::hash(METRIC_CATALOG_V2.as_bytes()).to_hex().as_str(),
+            METRIC_CATALOG_V2_BLAKE3
+        );
+        let _ = Metrics::default();
+    }
+}
+
 static GLOBAL_METRICS: OnceLock<Arc<Metrics>> = OnceLock::new();
 /// Retrieve the globally installed metrics registry, if any.
 #[must_use]
@@ -16795,28 +12629,6 @@ impl Metrics {
         let encoder = prometheus::TextEncoder::new();
         let metric_families = self.registry.gather();
         Encoder::encode(&encoder, &metric_families, &mut buffer)?;
-        Ok(String::from_utf8(buffer)?)
-    }
-    /// Convert metrics to Prometheus format, optionally stripping lane/dataspace-labelled series
-    /// when Nexus is disabled.
-    ///
-    /// # Errors
-    /// - If [`Encoder`] fails to encode the data
-    /// - If the buffer produced by [`Encoder`] causes [`String::from_utf8`] to fail.
-    pub fn try_to_string_with_nexus_gate(&self, nexus_enabled: bool) -> eyre::Result<String> {
-        if nexus_enabled {
-            return self.try_to_string();
-        }
-        let _projection_exposition_guard = self.lock_sorafs_orderbook_projection_exposition();
-        let _gateway_compliance_exposition_guard = self.lock_sorafs_gateway_compliance_exposition();
-        let mut buffer = Vec::new();
-        let encoder = prometheus::TextEncoder::new();
-        let metric_families = self.registry.gather();
-        let filtered: Vec<_> = metric_families
-            .into_iter()
-            .filter(|family| !family_has_lane_labels(family))
-            .collect();
-        Encoder::encode(&encoder, &filtered, &mut buffer)?;
         Ok(String::from_utf8(buffer)?)
     }
 }

@@ -1549,9 +1549,9 @@ fn distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner() {
         "an exact pre-runtime retry may merge into its existing Busy owner",
     );
     assert!(matches!(
-        leader_wire_ingress.try_push(InboundBlockMessage::new(
+        leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message.clone()),
-            Some(second_source),
+            second_source,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -1610,9 +1610,9 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
     // timeout owner. Preserve that real interleaving instead of fabricating
     // a post-cut physical ordinal in the ownership evidence.
     assert!(matches!(
-        leader_wire_ingress.try_push(InboundBlockMessage::new(
+        leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message.clone()),
-            Some(post_snapshot_source),
+            post_snapshot_source,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));

@@ -9,7 +9,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "a6d4a56fb74fe95a5d681e9899df1865ee83741e47685e4c4681cd2b4c5e2526"
+        "73b744b27b3cc5ffe642fec4a017aeca5bb4fb314205afa0b66531d9fdbf776d"
     ),
     "fair_v2_ingress_required_capacity": (
         "b3786ae53f4632d7035fc68d122a7dc542df6d26d2cc00ece1f6681840045105"
@@ -777,18 +777,18 @@ _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 = {
         "2df7516317611dcc3fc0f959cca1e80a7b6aa3670a90d2add798f744cfebbd4c"
     ),
     "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit": (
-        "da01b212e5b3db1163c100f1088e943c074aa124c2f225a4c068052d79e499f9"
+        "ea093accfdb33740bc7f21e9c26b17e74a1d7600c885ff45a5718caed8cb457a"
     ),
     "locked_publication_fence_serializes_unrelated_append_and_preserves_it": (
-        "3f863e16e284ffd980a06b45cd16d3ee4cfd4559a8f7ff23687a55d32ff7481b"
+        "c88fcd11bd701f1a67ffc441fe1cc4bdc08f9be32e5a8270373ea83335a6131f"
     ),
     "dropping_locked_publication_fence_releases_producer_without_dequeue": (
-        "4375aa5205367018773fec586aefb2c44940f502e6de1ae94b8e6e221a350d6f"
+        "a31983eba320245b25089ebfcbc6fbd5a5c024fc76b81946329510cf9177e687"
     ),
 }
 
 _TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
     "ordinary_selector_preserves_certified_response_before_timeout_vote": (
-        "b55aca5b506f5394f02da001467ed2f2f6465625e82d9e4cb09642391c349a49"
+        "971861171d4551fe890d1ae0399e32b137b4db5826416ebe274166e6fe008df3"
     ),
 }

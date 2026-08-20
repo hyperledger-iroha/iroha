@@ -26,7 +26,7 @@ test("normalizeAxtRejectContext preserves exact policy hints and ids", () => {
   const ctx = normalizeAxtRejectContext({
     reason: "era",
     dataspace: 7,
-    target_lane: 2,
+    lane: 2,
     snapshot_version: 55,
     detail: "stale handle",
     active_handle_era: 9,
@@ -55,7 +55,7 @@ test("normalizeAxtRejectContext rejects camelCase fields", () => {
       }),
     {
       name: "TypeError",
-      message: /snake_case/,
+      message: /canonical AXT fields/,
     },
   );
 });
@@ -70,9 +70,37 @@ test("normalizeAxtRejectContext rejects retired minimum terminology", () => {
       }),
     {
       name: "TypeError",
-      message: /snake_case/,
+      message: /canonical AXT fields/,
     },
   );
+});
+
+test("normalizeAxtRejectContext requires the exact closed V1 layout", () => {
+  const exact = {
+    reason: "policy",
+    dataspace: null,
+    lane: null,
+    snapshot_version: null,
+    detail: "policy rejected",
+    active_handle_era: null,
+    next_handle_counter: null,
+  };
+  for (const field of Object.keys(exact)) {
+    const shortened = { ...exact };
+    delete shortened[field];
+    assert.throws(() => normalizeAxtRejectContext(shortened), {
+      name: "TypeError",
+      message: new RegExp(`${field} is required`),
+    });
+  }
+  assert.throws(
+    () => normalizeAxtRejectContext({ ...exact, pre_release_field: null }),
+    {
+      name: "TypeError",
+      message: /not a canonical AXT field/,
+    },
+  );
+  assert.deepEqual(normalizeAxtRejectContext(exact), exact);
 });
 
 test("buildHandleRefreshRequest applies overrides", () => {

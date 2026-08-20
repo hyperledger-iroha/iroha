@@ -55,7 +55,6 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -186,7 +185,6 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -335,7 +333,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -467,7 +464,6 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -639,7 +635,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -760,7 +755,6 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -891,7 +885,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -1063,7 +1056,6 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -1219,7 +1211,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -1319,7 +1310,7 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-    let chain_id = ChainId::from("legacy-fee-sponsor-metadata-disabled-fees-test");
+    let chain_id = ChainId::from("legacy-fee-sponsor-metadata-default-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1369,16 +1360,6 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
     install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.enabled = false;
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("fee_sponsor").expect("metadata key"),
@@ -1433,13 +1414,13 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
     );
 }
 #[test]
-fn legacy_fee_sponsor_metadata_rejects_even_when_nexus_fees_are_enabled() {
+fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-    let chain_id = ChainId::from("legacy-fee-sponsor-metadata-enabled-fees-test");
+    let chain_id = ChainId::from("legacy-fee-sponsor-metadata-configured-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1491,7 +1472,6 @@ fn legacy_fee_sponsor_metadata_rejects_even_when_nexus_fees_are_enabled() {
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -1596,7 +1576,6 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -1715,7 +1694,6 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();

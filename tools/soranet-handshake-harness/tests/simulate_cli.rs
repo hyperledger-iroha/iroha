@@ -4,6 +4,7 @@ use std::fs;
 use tempfile::TempDir;
 #[test]
 fn simulate_writes_frames_and_telemetry() {
+    let _serial = crate::serial_guard();
     let temp = TempDir::new().expect("tempdir");
     let frames_dir = temp.path().join("frames");
     let telemetry_path = temp.path().join("telemetry.json");
@@ -119,6 +120,7 @@ fn simulate_writes_frames_and_telemetry() {
 }
 #[test]
 fn inspect_rejects_pre_release_only_suite_lists() {
+    let _serial = crate::serial_guard();
     let mut cmd = cargo_bin_cmd!("soranet-handshake-harness");
     cmd.args([
         "inspect",

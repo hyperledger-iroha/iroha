@@ -1,21 +1,26 @@
 # Iroha Release Artifact Selection
 
-This note clarifies which artifacts (bundles and container images) operators should deploy for each release profile.
+This note defines the canonical Iroha 3 artifacts (bundles and container
+images) that operators deploy.
 
-## Profiles
+## Product profile
 
-- **iroha2 (Self-hosted networks)** — single-lane configuration matching `defaults/genesis.json` and `defaults/client.toml`.
-- **iroha3 (SORA Nexus)** — Nexus multi-lane configuration using `defaults/nexus/*` templates.
+The first release has one product profile: **iroha3**. Every release artifact
+ships mandatory Nexus configuration from `defaults/nexus/*`. A deployment may
+use a one-lane catalog, but that is still an Iroha 3 Nexus deployment, not a
+separate release line.
 
 ## Bundles (Binaries)
 
-Bundles are produced via `scripts/build_release_bundle.sh` with `--profile` set to `iroha2` or `iroha3`.
+Bundles are produced via `scripts/build_release_bundle.sh`; the builder fixes
+the product profile to `iroha3` and the configuration to `nexus`.
 
 Each tarball contains:
 
 - `bin/` — `iroha3d`, `iroha`, and `kagami` built with the deploy profile.
 - `config/` — profile-specific genesis/client configuration (single vs. nexus). Nexus bundles include `config.toml` with lane and DA parameters.
-- `PROFILE.toml` — metadata describing profile, config, version, commit, OS/arch, and enabled feature set.
+- `PROFILE.toml` — metadata describing the canonical product, config, version,
+  commit, OS/arch, and enabled feature set.
 - Metadata artefacts written alongside the tarball:
   - `<profile>-<version>-<os>-<arch>.tar.zst`
   - `<profile>-<version>-<os>-<arch>.tar.zst.sha256`
@@ -26,10 +31,10 @@ Each tarball contains:
 
 Container images are produced via `scripts/build_release_image.sh` for the
 explicit `linux/amd64` and `linux/arm64` platform matrix. The production
-builder accepts only the `single` and `nexus` configurations, requires
-reviewed prebuilt binaries and digest-pinned builder/runtime images, and builds
-the closed context with network access disabled. Taira is intentionally not a
-release-pipeline configuration.
+builder fixes the configuration to `nexus`, requires reviewed prebuilt binaries
+and digest-pinned builder/runtime images, and builds the closed context with
+network access disabled. Taira is intentionally not a release-pipeline
+configuration.
 
 Outputs:
 
@@ -76,12 +81,10 @@ unsigned escape hatch,
 `--development-allow-unsigned-manifest`, is test/development-only and never
 valid for promotion.
 
-## Selecting the correct artefact
+## Selecting the release artefact
 
-1. Determine the deployment surface:
-   - **SORA Nexus / multi-lane** -> use the `iroha3` bundle and image.
-   - **Self-hosted single-lane** -> use the `iroha2` artefacts.
-   - When in doubt, run `scripts/select_release_profile.py --network <alias>` or `--chain-id <id>`; the helper maps networks to the correct profile per `release/network_profiles.toml`.
+1. Use the `iroha3` bundle or image for every deployment. Select only the
+   target OS and architecture; product-profile selection is not exposed.
 2. Download the desired tarball, checksum, per-build metadata manifest, and the
    signed aggregate-manifest tuple. Verify the aggregate tuple first using the
    command above. Then bind the artifact bytes to both manifests before
@@ -125,12 +128,6 @@ certification.
 - Confirm lane routing rules match governance expectations (`nexus.routing_policy`).
 - Validate DA thresholds (`nexus.da`) and fusion parameters (`nexus.fusion`) align with council-approved settings.
 
-## Single-lane configuration checklist
-
-- `config/config.d` (if present) should contain only single-lane overrides—no `[nexus]` sections.
-- Ensure `config/client.toml` references the intended Torii endpoint and peer list.
-- Genesis should retain the canonical domains/assets for the self-hosted network.
-
 ## Tooling quick reference
 
 - `scripts/build_release_bundle.sh --help`
@@ -138,7 +135,6 @@ certification.
 - `scripts/run_release_pipeline.py --help`
 - `scripts/release_manifest_signing.py --help`
 - `scripts/publish_plan.py --help`
-- `scripts/select_release_profile.py --list`
 - `specs/sora_nexus_operator_onboarding.md` — end-to-end onboarding flow for Sora Nexus data-space operators once artefacts are selected.
 
 The builders accept no signing or private-key option. Aggregate production

@@ -2275,8 +2275,7 @@ mod tests {
             merge_ledger_cache_capacity: kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
             fsync_interval: kura::FSYNC_INTERVAL,
-            block_sync_roster_retention: kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: kura::LANE_HISTORY_RETENTION,
             replica_advert: kura::REPLICA_ADVERT_POLICY,
         }
     }

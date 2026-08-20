@@ -934,10 +934,6 @@ fn queue_plan_synced_test_certificate_snapshot(
             name: "x-iroha-entrypoint-hash".to_owned(),
             value: entrypoint_hash_literal.as_bytes().to_vec(),
         },
-        iroha_core::torii_proxy::ToriiProxyHeaderV1 {
-            name: "x-iroha-transaction-hash".to_owned(),
-            value: entrypoint_hash_literal.into_bytes(),
-        },
     ];
     if let Some(signed_transaction_hash) = expected.signed_transaction_hash {
         headers.push(iroha_core::torii_proxy::ToriiProxyHeaderV1 {

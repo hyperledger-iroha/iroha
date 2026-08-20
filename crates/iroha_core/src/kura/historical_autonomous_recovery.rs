@@ -248,8 +248,8 @@ struct HistoricalAutonomousLaneRecoveryBatchPreflight {
 }
 struct HistoricalAutonomousExecutionInputRouteCapacity {
     namespace: BoundProgressNamespace,
-    initial_layout: SidecarIndexLayout,
-    layout: SidecarIndexLayout,
+    initial_layout: Option<SidecarIndexLayout>,
+    layout: Option<SidecarIndexLayout>,
     data_len: u64,
     index_len: u64,
     planned_inputs: BTreeMap<u64, LaneBlockExecutionInputArtifact>,
@@ -571,7 +571,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let mut by_recovery = BTreeMap::new();
             let mut by_slot = BTreeMap::new();
             let mut by_proposal = BTreeMap::new();
-            let mut by_transaction = BTreeMap::new();
+            let mut by_entrypoint = BTreeMap::new();
             for record in records {
                 let descriptor = &record.payload.origin_proposal.descriptor;
                 let record_hash = HashOf::new(record);
@@ -606,8 +606,8 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     }
                 }
                 for key in &record.reservation_group.ordered_keys {
-                    if by_transaction
-                        .insert(key.signed_transaction_hash, record.recovery_id)
+                    if by_entrypoint
+                        .insert(key.entrypoint_hash, record.recovery_id)
                         .is_some_and(|existing| existing != record.recovery_id)
                     {
                         return Err(Self::invalid_historical_autonomous_recovery(
@@ -852,7 +852,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let data_metadata = self.regular_sidecar_metadata(&data_path, parent)?;
             let index_metadata = self.regular_sidecar_metadata(&index_path, parent)?;
             let (layout, data_len, index_len) = match (data_metadata, index_metadata) {
-                (None, None) => (SidecarIndexLayout::legacy(0), 0, 0),
+                (None, None) => (None, 0, 0),
                 (Some(data_metadata), Some(index_metadata)) => {
                     let mut index = Self::open_direct_sidecar_file_in_namespace(
                         &index_path,
@@ -878,7 +878,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                             "historical autonomous execution-input index has trailing or partial bytes",
                         ));
                     }
-                    (layout, data_metadata.file.len(), index_len)
+                    (Some(layout), data_metadata.file.len(), index_len)
                 }
                 _ => {
                     return Err(Self::invalid_historical_autonomous_recovery(
@@ -901,7 +901,9 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             route: &HistoricalAutonomousExecutionInputRouteCapacity,
             lane_block_height: u64,
         ) -> Result<Option<LaneBlockExecutionInputArtifact>> {
-            let Some(entry_position) = route.initial_layout.entry_position(lane_block_height)
+            let Some(entry_position) = route
+                .initial_layout
+                .and_then(|layout| layout.entry_position(lane_block_height))
             else {
                 return Ok(None);
             };
@@ -967,9 +969,12 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             }
             let old_index_len = route.index_len;
             let (next_layout, new_index_len, individual_peak) =
-                if route.layout.is_based() && lane_block_height < route.layout.base_height {
+                if let Some(layout) = route.layout
+                    && lane_block_height < layout.base_height
+                {
                     let prepend = route
                         .layout
+                        .expect("checked present layout")
                         .base_height
                         .checked_sub(lane_block_height)
                         .ok_or_else(|| {
@@ -986,6 +991,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     }
                     let entry_count = route
                         .layout
+                        .expect("checked present layout")
                         .entry_count
                         .checked_add(prepend)
                         .ok_or_else(|| {
@@ -994,34 +1000,26 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                                 "historical autonomous execution-input prepend count overflowed",
                             )
                         })?;
-                    let entries_offset = if lane_block_height > 1 {
-                        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
-                    } else {
-                        0
-                    };
                     let new_index_len = entry_count
                         .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-                        .and_then(|bytes| bytes.checked_add(entries_offset))
+                        .and_then(|bytes| {
+                            bytes.checked_add(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
+                        })
                         .ok_or_else(|| {
                             Self::invalid_historical_autonomous_recovery(
                                 route.namespace.index_path.clone(),
                                 "historical autonomous execution-input prepend bytes overflowed",
                             )
                         })?;
-                    let layout = if lane_block_height > 1 {
-                        SidecarIndexLayout::based(lane_block_height, new_index_len).map_err(
-                            |reason| {
-                                Self::invalid_historical_autonomous_recovery(
-                                    route.namespace.index_path.clone(),
-                                    format!(
-                                        "historical autonomous execution-input prepend layout is invalid: {reason}"
-                                    ),
-                                )
-                            },
-                        )?
-                    } else {
-                        SidecarIndexLayout::legacy(new_index_len)
-                    };
+                    let layout = SidecarIndexLayout::based(lane_block_height, new_index_len)
+                        .map_err(|reason| {
+                            Self::invalid_historical_autonomous_recovery(
+                                route.namespace.index_path.clone(),
+                                format!(
+                                    "historical autonomous execution-input prepend layout is invalid: {reason}"
+                                ),
+                            )
+                        })?;
                     let peak = payload_len.checked_add(new_index_len).ok_or_else(|| {
                         Self::invalid_historical_autonomous_recovery(
                             route.namespace.data_path.clone(),
@@ -1030,10 +1028,20 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     })?;
                     (layout, new_index_len, peak)
                 } else {
-                    let index_growth = if route.layout.entry_position(lane_block_height).is_some() {
+                    let index_growth = if route
+                        .layout
+                        .and_then(|layout| layout.entry_position(lane_block_height))
+                        .is_some()
+                    {
                         0
+                    } else if route.layout.is_none() {
+                        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + PIPELINE_INDEX_ENTRY_SIZE_U64
                     } else {
-                        let expected_height = route.layout.next_height().ok_or_else(|| {
+                        let expected_height = route
+                            .layout
+                            .expect("checked present layout")
+                            .next_height()
+                            .ok_or_else(|| {
                             Self::invalid_historical_autonomous_recovery(
                                 route.namespace.index_path.clone(),
                                 "historical autonomous execution-input index height overflowed",
@@ -1067,18 +1075,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                                     "historical autonomous execution-input append bytes overflowed",
                                 )
                             })?;
-                        if route.index_len == 0 && lane_block_height > 1 {
-                            entry_bytes
-                                .checked_add(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
-                                .ok_or_else(|| {
-                                    Self::invalid_historical_autonomous_recovery(
-                                        route.namespace.index_path.clone(),
-                                        "historical autonomous execution-input base header overflowed",
-                                    )
-                                })?
-                        } else {
-                            entry_bytes
-                        }
+                        entry_bytes
                     };
                     let new_index_len = old_index_len.checked_add(index_growth).ok_or_else(|| {
                         Self::invalid_historical_autonomous_recovery(
@@ -1087,8 +1084,8 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                         )
                     })?;
                     let layout = if new_index_len == old_index_len {
-                        route.layout
-                    } else if old_index_len == 0 && lane_block_height > 1 {
+                        route.layout.expect("unchanged index has a present layout")
+                    } else if route.layout.is_none() {
                         SidecarIndexLayout::based(lane_block_height, new_index_len).map_err(
                             |reason| {
                                 Self::invalid_historical_autonomous_recovery(
@@ -1099,8 +1096,12 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                                 )
                             },
                         )?
-                    } else if route.layout.is_based() {
-                        SidecarIndexLayout::based(route.layout.base_height, new_index_len).map_err(
+                    } else {
+                        SidecarIndexLayout::based(
+                            route.layout.expect("checked present layout").base_height,
+                            new_index_len,
+                        )
+                        .map_err(
                             |reason| {
                                 Self::invalid_historical_autonomous_recovery(
                                     route.namespace.index_path.clone(),
@@ -1110,8 +1111,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                                 )
                             },
                         )?
-                    } else {
-                        SidecarIndexLayout::legacy(new_index_len)
                     };
                     let peak = payload_len
                         .checked_add(Self::maximum_index_growth_for_unresolved_sidecar_write(
@@ -1152,7 +1151,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 )
             })?;
             route.index_len = new_index_len;
-            route.layout = next_layout;
+            route.layout = Some(next_layout);
             route
                 .planned_inputs
                 .insert(lane_block_height, artifact.clone());

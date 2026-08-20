@@ -136,10 +136,10 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
         "fn",
         "admit_kura_replica_advert_ingress",
         (
-            "let authenticated_via = inbound.via().cloned()",
+            "let authenticated_via = inbound.via().clone()",
             "matches_semantic_origin(inbound.sender())",
-            "sender.as_ref() != Some(&advertised_keeper)",
-            "authenticated_via.as_ref() != Some(&advertised_keeper)",
+            "sender != advertised_keeper",
+            "authenticated_via != advertised_keeper",
             "advert.keeper != advertised_keeper",
             "kura.admit_kura_replica_advert(&advert)",
         ),

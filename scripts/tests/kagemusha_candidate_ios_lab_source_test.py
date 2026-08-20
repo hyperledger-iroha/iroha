@@ -18,6 +18,9 @@ HEADER = ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 BUILD = ROOT / "scripts/build_kagemusha_candidate_apple_native.sh"
 RUNNER = ROOT / "scripts/run_kagemusha_candidate_ios_lab.sh"
 GATE = ROOT / "ci/check_kagemusha_production_readiness.sh"
+GATE_SOURCE_CONTRACT = (
+    ROOT / "ci/check_kagemusha_production_readiness_source_contract.py"
+)
 EVIDENCE_VALIDATOR = ROOT / "scripts/kagemusha_candidate_ios_evidence.py"
 PROJECT = ROOT / "IrohaSwift/KagemushaCandidateEvidenceLab/project.yml"
 TEST = (
@@ -60,6 +63,13 @@ EXPECTED_OPERATIONS = (
 
 
 class CandidateIOSLabSourceTest(unittest.TestCase):
+    def test_runner_uses_the_exact_project_app_id_for_device_containers(self) -> None:
+        project = PROJECT.read_text(encoding="utf-8")
+        runner = RUNNER.read_text(encoding="utf-8")
+        app_id = "org.hyperledger.iroha.kagemusha.appattestlab"
+        self.assertIn(f"PRODUCT_BUNDLE_IDENTIFIER: {app_id}", project)
+        self.assertIn(f'APP_BUNDLE_ID="{app_id}"', runner)
+
     def test_shell_sources_parse(self) -> None:
         subprocess.run(
             ["/bin/bash", "-n", str(BUILD), str(RUNNER), str(GATE)],
@@ -215,6 +225,7 @@ class CandidateIOSLabSourceTest(unittest.TestCase):
     def test_signed_evidence_and_promotion_gate_bind_the_raw_candidate(self) -> None:
         validator = EVIDENCE_VALIDATOR.read_text(encoding="utf-8")
         gate = GATE.read_text(encoding="utf-8")
+        gate_source_contract = GATE_SOURCE_CONTRACT.read_text(encoding="utf-8")
         self.assertIn("SIGNED_EVIDENCE_FIELDS", validator)
         self.assertIn("canonical_signature_payload", validator)
         self.assertIn("verify_ed25519", validator)
@@ -235,7 +246,9 @@ class CandidateIOSLabSourceTest(unittest.TestCase):
             RUNNER.read_text(encoding="utf-8"),
         )
         self.assertIn("KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT", gate)
-        self.assertIn("check_kagemusha_candidate_ios_evidence.py", gate)
+        self.assertIn(
+            "check_kagemusha_candidate_ios_evidence.py", gate_source_contract
+        )
         self.assertIn('artifact_digests.get("input/candidate-v4.norito")', gate)
         self.assertIn('report.get("candidate_sha256")', gate)
 

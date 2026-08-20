@@ -430,11 +430,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   for `getBlock`), added TypeScript definitions/README docs, and extended the
   Jest suite so the explorer block endpoints enjoy the same JS-04 validation
   guarantees as the rest of the Torii query surface.
-- Added `getSumeragiTelemetry`/`getSumeragiTelemetryTyped` to `ToriiClient`
-  with typed availability/RBC/VRF snapshots, README guidance, and TypeScript
-  definitions so JS SDK users can replay `/v1/sumeragi/telemetry` data as part
-  of the JS-04/JS-07 roadmap telemetry coverage without bespoke parsing, and
-  tightened `sampleRbcChunks` validation so block/hash/proof fields must be
+- Tightened `sampleRbcChunks` validation so block/hash/proof fields must be
   hex-encoded like the Rust/Python clients.
 - Added `ToriiClient.listTelemetryPeersInfo` plus the corresponding DTOs,
   TypeScript declarations, README usage example, and unit tests so the JS SDK
@@ -447,9 +443,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   runtime now matches the published TypeScript definitions, validating
   `hashHex` inputs and reusing the existing pipeline polling logic.
 - Added `ToriiClient` helpers for Sumeragi telemetry endpoints
-  (`getSumeragiPacemaker`, `getSumeragiQc`, `getSumeragiPhases`,
-  `getSumeragiBlsKeys`, `getSumeragiLeader`, `getSumeragiCollectors`,
-  `getSumeragiParams`) with README examples, TypeScript definitions, and tests
+  (`getSumeragiPacemaker`, `getSumeragiQc`, `getSumeragiBlsKeys`,
+  `getSumeragiLeader`, `getSumeragiCollectors`, `getSumeragiParams`) with README
+  examples, TypeScript definitions, and tests
   so JS SDK consumers can inspect the same `/v1/sumeragi/*` diagnostics that
   Rust tooling relies on for roadmap JS-08 coverage.
 - Hardened `listGovernanceInstances`/`listContractInstances` validation so
@@ -509,9 +505,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   helper can stream the SoraFS registry endpoints without bespoke pagination,
   extending the JS-07 query wrapper work to the storage APIs.【javascript/iroha_js/src/toriiClient.js:681】【javascript/iroha_js/index.d.ts:3408】【javascript/iroha_js/test/toriiClient.test.js:760】【javascript/iroha_js/README.md:732】
 - Tightened the Sumeragi telemetry helpers by normalising the
-  `getSumeragiPacemaker`, `getSumeragiQc`, `getSumeragiPhases`,
-  `getSumeragiBlsKeys`, `getSumeragiLeader`, `getSumeragiCollectors`, and
-  `getSumeragiParams` responses (raising type errors on malformed telemetry)
+  `getSumeragiPacemaker`, `getSumeragiQc`, `getSumeragiBlsKeys`,
+  `getSumeragiLeader`, `getSumeragiCollectors`, and `getSumeragiParams`
+  responses (raising type errors on malformed telemetry)
   and corrected the `getSumeragiStatus` TypeScript declaration to reflect that
   it returns the raw Torii payload while `getSumeragiStatusTyped` provides the
   validated snapshot.

@@ -114,10 +114,6 @@ name = "typed_vs_serde"
 harness = false
 
 [[bench]]
-name = "adaptive_telemetry"
-harness = false
-
-[[bench]]
 name = "streaming_rans"
 harness = false
 

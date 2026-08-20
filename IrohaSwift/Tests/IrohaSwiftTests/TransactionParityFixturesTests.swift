@@ -1295,12 +1295,13 @@ private struct SwiftFixtureFeePayment: Decodable {
 private struct SwiftFixtureFeeValue: Decodable {
     private enum CodingKeys: String, CodingKey {
         case chargeLimits = "charge_limits"
+        case gasLimit = "gas_limit"
     }
 
     init(from decoder: Decoder) throws {
         try requireExactFixtureKeys(
             decoder,
-            ["charge_limits"],
+            ["charge_limits", "gas_limit"],
             context: "Swift parity fee value"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1310,6 +1311,13 @@ private struct SwiftFixtureFeeValue: Decodable {
                 forKey: .chargeLimits,
                 in: container,
                 debugDescription: "charge_limits must be an empty array"
+            )
+        }
+        guard try container.decodeNil(forKey: .gasLimit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .gasLimit,
+                in: container,
+                debugDescription: "gas_limit must be null"
             )
         }
     }

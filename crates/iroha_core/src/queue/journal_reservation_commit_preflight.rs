@@ -41,7 +41,7 @@ impl QueuePlanJournal {
         let mut entrypoints = BTreeSet::new();
         for phase in phases {
             phase.key.validate().map_err(invalid_data)?;
-            if !owner_hashes.insert(phase.key.signed_transaction_hash) {
+            if !owner_hashes.insert(phase.key.entrypoint_hash) {
                 return Err(invalid_data(
                     "queue-plan startup phase coverage contains a duplicate reservation owner",
                 ));
@@ -75,7 +75,7 @@ impl QueuePlanJournal {
         }
         for key in finalized_keys {
             key.validate().map_err(invalid_data)?;
-            if !owner_hashes.insert(key.signed_transaction_hash) {
+            if !owner_hashes.insert(key.entrypoint_hash) {
                 return Err(invalid_data(
                     "finalized reservation preflight contains a duplicate owner",
                 ));

@@ -39,3 +39,6 @@ fn rejects_ttl_smaller_than_minimum() {
         "unexpected error report: {message}"
     );
 }
+
+#[path = "sm_signing.rs"]
+mod sm_signing;

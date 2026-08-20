@@ -388,17 +388,13 @@ pub(in crate::sumeragi) struct PreparedCertifiedBodyFetchOwnerRemoval<'a> {
     owner: BodyFetchServiceOwner,
 }
 impl PreparedCertifiedBodyFetchOwnerRemoval<'_> {
-    pub(in crate::sumeragi) fn commit(
-        self,
-        permit: &ConsensusOutputPermit<'_>,
-    ) -> CertifiedBodyFetchCompletionDisposition {
+    pub(in crate::sumeragi) fn commit(self, permit: &ConsensusOutputPermit<'_>) {
         assert!(
             permit.authorizes(self.services.output_guard.as_ref()),
             "certified body-fetch removal requires this service's live output permit"
         );
         self.services
             .commit_exact_body_fetch_owner_removal(&self.task, self.owner);
-        CertifiedBodyFetchCompletionDisposition::Completed
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

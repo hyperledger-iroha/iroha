@@ -829,36 +829,6 @@ fn v6_envelope_rejects_unsupported_record_versions_without_rewrite() {
     }
 }
 #[test]
-fn v6_envelope_rejects_mismatched_reservation_identity_without_rewrite() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("v6-mismatched-reservation-identity.norito");
-    let mut mismatched = record(1, 1);
-    mismatched.key.signed_transaction_hash =
-        typed_hash::<SignedTransaction>(b"mismatched-signed-transaction");
-    let frame = encode_frame(&LaneQueueReservationJournalFrameV6::PutBatch(vec![
-        mismatched,
-    ]))
-    .expect("encode mismatched reservation identity");
-    let mut journal_bytes = encode_frame(&bootstrap_frame()).expect("encode V6 bootstrap");
-    journal_bytes.extend_from_slice(&frame);
-    fs::write(&path, &journal_bytes).expect("write mismatched reservation identity");
-    let error = LaneQueueReservationJournal::open(&path, u64::MAX)
-        .err()
-        .expect("mismatched reservation identity must fail closed");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert!(
-        error
-            .to_string()
-            .contains("compatibility transaction hash does not match its entrypoint"),
-        "unexpected mismatched-identity rejection: {error}",
-    );
-    assert_eq!(
-        fs::read(&path).expect("retain mismatched reservation evidence"),
-        journal_bytes,
-        "mismatched reservation evidence must not be rewritten",
-    );
-}
-#[test]
 fn v6_release_batch_replay_is_atomic_idempotent_and_exact() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("v6-release-batch.norito");
@@ -961,32 +931,6 @@ fn duplicate_exact_replay_is_idempotent_but_conflicting_owner_is_rejected() {
         )
         .is_err(),
         "participant legs must never become full-transaction reservations"
-    );
-}
-#[test]
-fn reservation_record_rejects_mismatched_primary_hashes_atomically() {
-    let existing = record(1, 1);
-    let mut records = vec![existing.clone()];
-    let mut committed = vec![existing.key];
-    let mut mismatched = record(2, 1);
-    mismatched.key.signed_transaction_hash =
-        typed_hash::<SignedTransaction>(b"mismatched-signed-transaction");
-    let records_before = records.clone();
-    let committed_before = committed.clone();
-    let error = apply_unprotected_frame(
-        &mut records,
-        &mut committed,
-        LaneQueueReservationJournalFrameV6::PutBatch(vec![mismatched]),
-    )
-    .expect_err("malformed reservation identity must fail closed");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert_eq!(
-        records, records_before,
-        "failed validation must not mutate live reservations",
-    );
-    assert_eq!(
-        committed, committed_before,
-        "failed validation must not mutate commit barriers",
     );
 }
 #[test]

@@ -31,14 +31,14 @@ fn v1_captured_fixture_batch(rows: usize) -> TransitionBatch {
                 transfer_idx = transfer_idx.wrapping_add(1);
             }
             1 => {
-                let key = format!("asset/xor#fixture/mint/{row_idx:08}").into_bytes();
+                let key = format!("asset/xor#fixture/mint-{row_idx:08}").into_bytes();
                 let pre = (row_idx as u64).to_le_bytes().to_vec();
                 let post = (row_idx as u64 + 1).to_le_bytes().to_vec();
                 batch.push(StateTransition::new(key, pre, post, OperationKind::Mint));
                 row_idx += 1;
             }
             _ => {
-                let key = format!("asset/xor#fixture/burn/{row_idx:08}").into_bytes();
+                let key = format!("asset/xor#fixture/burn-{row_idx:08}").into_bytes();
                 let pre = (row_idx as u64 + 2).to_le_bytes().to_vec();
                 let post = (row_idx as u64 + 1).to_le_bytes().to_vec();
                 batch.push(StateTransition::new(key, pre, post, OperationKind::Burn));
@@ -131,7 +131,9 @@ fn v1_artifact_balanced_1k_matches_fixture() {
     let prover = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
         .expect("prover");
     let batch = v1_captured_fixture_batch(1_000);
-    let proof = prover.prove(&batch).expect("proof");
+    let proof = prover
+        .prove_raw_statement(&batch)
+        .expect("raw fixture proof");
     let expected = include_bytes!("fixtures/v1_balanced_1k.bin");
     let encoded = to_bytes(&proof).expect("encode proof");
     if expected.is_empty() {
@@ -162,8 +164,12 @@ fn v1_artifact_balanced_cpu_gpu_parity() {
         .expect("cpu prover");
     let gpu = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Gpu)
         .expect("gpu prover");
-    let cpu_proof = cpu.prove(&batch).expect("cpu proof");
-    let gpu_proof = gpu.prove(&batch).expect("gpu proof");
+    let cpu_proof = cpu
+        .prove_raw_statement(&batch)
+        .expect("raw cpu fixture proof");
+    let gpu_proof = gpu
+        .prove_raw_statement(&batch)
+        .expect("raw gpu fixture proof");
     let cpu_encoded = to_bytes(&cpu_proof).expect("encode cpu proof");
     let gpu_encoded = to_bytes(&gpu_proof).expect("encode gpu proof");
     assert_eq!(
@@ -184,7 +190,9 @@ fn v1_artifact_balanced_5k_matches_fixture() {
     let prover = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
         .expect("prover");
     let batch = v1_captured_fixture_batch(5_000);
-    let proof = prover.prove(&batch).expect("proof");
+    let proof = prover
+        .prove_raw_statement(&batch)
+        .expect("raw fixture proof");
     let expected = include_bytes!("fixtures/v1_balanced_5k.bin");
     let encoded = to_bytes(&proof).expect("encode proof");
     if expected.is_empty() {

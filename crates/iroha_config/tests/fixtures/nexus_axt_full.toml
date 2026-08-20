@@ -1,7 +1,6 @@
 extends = "base.toml"
 
 [nexus]
-enabled = true
 
 [nexus.axt]
 slot_length_ms = 1_000

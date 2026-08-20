@@ -3918,12 +3918,11 @@ mod tests {
             .expect("authority fee payment")
             .remove("gas_limit");
         let Err(error) = parse_payload(&payload) else {
-            panic!("gasless direct contract calls must fail closed");
+            panic!("direct contract calls without the required gas field must fail closed");
         };
         assert!(
-            error
-                .to_string()
-                .contains("require an explicit fee_payment gas_limit")
+            error.to_string().contains("gas_limit"),
+            "unexpected missing-gas error: {error}"
         );
     }
     #[test]
@@ -3944,12 +3943,10 @@ mod tests {
                 .expect("authority fee payment")
                 .remove("gas_limit");
             let Err(error) = parse_payload(&payload) else {
-                panic!("gasless runtime fixture {name:?} must be rejected");
+                panic!("runtime fixture {name:?} without gas_limit must be rejected");
             };
             assert!(
-                error
-                    .to_string()
-                    .contains("require an explicit fee_payment gas_limit"),
+                error.to_string().contains("gas_limit"),
                 "unexpected gas-bound error for {name:?}: {error}"
             );
         }

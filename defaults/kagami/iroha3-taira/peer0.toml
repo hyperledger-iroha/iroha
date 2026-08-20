@@ -67,7 +67,6 @@ max_sites = 1024
 
 
 [nexus]
-enabled = true
 lane_count = 7
 
 [[nexus.lane_catalog]]

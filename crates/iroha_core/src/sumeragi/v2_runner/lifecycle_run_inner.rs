@@ -617,7 +617,6 @@ fn run_lifecycle_active_height(
     mut activated: ActivatedProductionLifecycleV1,
     mut active_runner: ProductionLifecycleActiveRunnerBorrowV1,
     mut lane_work: V2LaneWorkAdapter,
-    mut committed_lane_status_publisher: CommittedLaneStatusPublisher,
     context: &wire::HeightContext,
     context_store: &crate::sumeragi::v2_context_store::V2ContextStore,
     state: &Arc<State>,
@@ -658,7 +657,6 @@ fn run_lifecycle_active_height(
     let mut canonical_lane_body_recovered = false;
 
     loop {
-        committed_lane_status_publisher.publish_if_changed(&lane_work);
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {
             return Err(V2RunnerError::RestartRequired);
@@ -758,7 +756,6 @@ fn run_lifecycle_active_height(
             admitted_discovered_commit_qc = true;
         }
         if drain_disposition.requires_yield() {
-            committed_lane_status_publisher.publish_if_changed(&lane_work);
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }
@@ -853,7 +850,6 @@ fn run_lifecycle_active_height(
                 Ok::<_, V2RunnerError>((executor.ready_to_finish(), false))
             },
         )?;
-        committed_lane_status_publisher.publish_if_changed(&lane_work);
         if lifecycle_yield {
             continue;
         }
@@ -948,7 +944,6 @@ fn run_lifecycle_active_height(
             false
         };
         if ready_to_finish && !rollover_ready {
-            committed_lane_status_publisher.publish_if_changed(&lane_work);
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }
@@ -1079,7 +1074,6 @@ fn run_lifecycle_active_height(
             }));
         }
 
-        committed_lane_status_publisher.publish_if_changed(&lane_work);
         let _ = wake_rx.recv_timeout(IDLE_POLL);
     }
 }
@@ -1554,8 +1548,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
                 dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
                 Ok(lane_work)
             })?;
-        let mut committed_lane_status_publisher = CommittedLaneStatusPublisher::default();
-        committed_lane_status_publisher.publish_if_changed(&lane_work);
         let (_initial_directive, local_proposal) =
             preactivation.initialize_recovered_local_proposal(setup_runner)?;
         // Startup repair is not live-height cadence. Arm activation, proposal,
@@ -1580,7 +1572,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
             activated,
             active_runner,
             lane_work,
-            committed_lane_status_publisher,
             &context,
             &context_store,
             &state,

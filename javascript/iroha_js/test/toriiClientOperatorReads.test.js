@@ -37,21 +37,9 @@ const OPERATOR_READS = [
   ["/v1/sumeragi/status", (client) => client.getSumeragiStatus()],
   ["/v1/sumeragi/diagnostics", (client) => client.getSumeragiDiagnostics()],
   ["/v1/sumeragi/qc", (client) => client.getSumeragiQc()],
-  [
-    `/v1/sumeragi/commit-qcs/${"ab".repeat(32)}`,
-    (client) => client.getSumeragiCommitQc("ab".repeat(32)),
-  ],
   ["/v1/sumeragi/bls-keys", (client) => client.getSumeragiBlsKeys()],
   ["/v1/sumeragi/leader", (client) => client.getSumeragiLeader()],
   ["/v1/sumeragi/params", (client) => client.getSumeragiParams()],
-  ["/v1/sumeragi/telemetry", (client) => client.getSumeragiTelemetry()],
-  [
-    "/v1/sumeragi/commit-certificates",
-    async (client) => {
-      await client.listSumeragiCommitCertificates();
-      throw new Error("terminal test response");
-    },
-  ],
   [
     "/v1/sumeragi/key-lifecycle",
     async (client) => {

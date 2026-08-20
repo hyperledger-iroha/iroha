@@ -13,7 +13,7 @@ use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     block::{
-        consensus::{Evidence, EvidenceKind, EvidencePayload, EvidenceRecord},
+        consensus::{Evidence, EvidenceRecord},
         consensus_v2::{ConsensusMode, HeightContext},
     },
     consensus::{
@@ -22,7 +22,6 @@ use iroha_data_model::{
     },
     nexus::{LaneId, PublicLaneValidatorStatus},
     prelude::{AccountId, PeerId},
-    transaction::TransactionSubmissionReceipt,
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
@@ -75,16 +74,14 @@ impl<'a> PenaltyApplier<'a> {
     }
     fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
         let world = self.state.world_view();
-        let nexus_enabled = self.state.nexus_snapshot().enabled;
         let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
         for (key, record) in world.public_lane_validators().iter() {
             if !public_lane_validator_record_matches_key(key, record) {
                 continue;
             }
             let (lane_id, validator_id) = key;
-            if nexus_enabled
-                && (!self.state.is_lane_active_for_authority(*lane_id)
-                    || self.state.staking_authority_lane(*lane_id) != Some(*lane_id))
+            if !self.state.is_lane_active_for_authority(*lane_id)
+                || self.state.staking_authority_lane(*lane_id) != Some(*lane_id)
             {
                 continue;
             }
@@ -253,10 +250,7 @@ impl<'a> PenaltyApplier<'a> {
             if record.penalty_applied || record.penalty_cancelled {
                 continue;
             }
-            if matches!(
-                &record.evidence.payload,
-                EvidencePayload::SumeragiV2Equivocation(_)
-            ) && record
+            if record
                 .consensus_admitted_at_height
                 .is_none_or(|height| height >= current_height)
             {
@@ -278,8 +272,6 @@ impl<'a> PenaltyApplier<'a> {
         let validator_map = self.build_validator_locator_map();
         let mut actions = Vec::new();
         for (key, record) in pending {
-            let is_censorship =
-                matches!(&record.evidence.payload, EvidencePayload::Censorship { .. });
             let Some(context) = height_context_for_evidence(
                 self.state,
                 &record.evidence,
@@ -295,14 +287,6 @@ impl<'a> PenaltyApplier<'a> {
                 .collect::<Vec<_>>();
             let offenders = offender_indices(&record.evidence, record.recorded_at_height, &context);
             if offenders.is_empty() {
-                if !is_censorship && evidence_has_legitimate_empty_offenders(&record.evidence) {
-                    actions.push(NposPenaltyAction::MarkConsensusEvidenceApplied(
-                        NposMarkConsensusEvidenceAppliedAction {
-                            evidence_key: key,
-                            height: current_height,
-                        },
-                    ));
-                }
                 continue;
             }
             let slash_id = Hash::new(key.clone());
@@ -468,9 +452,7 @@ fn height_context_for_evidence(
     evidence: &Evidence,
     recorded_at_height: u64,
 ) -> Result<Option<HeightContext>> {
-    let Some(height) = evidence_context_height(evidence, recorded_at_height) else {
-        return Ok(None);
-    };
+    let height = evidence_context_height(evidence, recorded_at_height);
     if height == 0 || height > recorded_at_height {
         return Ok(None);
     }
@@ -500,69 +482,9 @@ fn evidence_matches_height_context(
     recorded_at_height: u64,
     context: &HeightContext,
 ) -> bool {
-    if evidence_context_height(evidence, recorded_at_height) != Some(context.height) {
-        return false;
-    }
-    match (&evidence.kind, &evidence.payload) {
-        (
-            EvidenceKind::DoublePrepare | EvidenceKind::DoubleCommit,
-            EvidencePayload::DoubleVote { v1, v2 },
-        ) => {
-            let phase_matches_kind = matches!(
-                (evidence.kind, v1.phase, v2.phase),
-                (
-                    EvidenceKind::DoublePrepare,
-                    iroha_data_model::block::consensus::CertPhase::Prepare,
-                    iroha_data_model::block::consensus::CertPhase::Prepare
-                ) | (
-                    EvidenceKind::DoubleCommit,
-                    iroha_data_model::block::consensus::CertPhase::Commit,
-                    iroha_data_model::block::consensus::CertPhase::Commit
-                ) | (
-                    EvidenceKind::DoubleCommit,
-                    iroha_data_model::block::consensus::CertPhase::Commit,
-                    iroha_data_model::block::consensus::CertPhase::Prepare
-                ) | (
-                    EvidenceKind::DoubleCommit,
-                    iroha_data_model::block::consensus::CertPhase::Prepare,
-                    iroha_data_model::block::consensus::CertPhase::Commit
-                )
-            );
-            let conflicting_subject = v1.block_hash != v2.block_hash
-                || (v1.phase == iroha_data_model::block::consensus::CertPhase::Commit
-                    && v2.phase == iroha_data_model::block::consensus::CertPhase::Commit
-                    && (v1.parent_state_root != v2.parent_state_root
-                        || v1.post_state_root != v2.post_state_root));
-            v1.height == context.height
-                && v2.height == context.height
-                && v1.epoch == context.epoch
-                && v2.epoch == context.epoch
-                && v1.view == v2.view
-                && v1.signer == v2.signer
-                && phase_matches_kind
-                && conflicting_subject
-        }
-        (EvidenceKind::InvalidProposal, EvidencePayload::InvalidProposal { proposal, .. }) => {
-            proposal.header.height == context.height && proposal.header.epoch == context.epoch
-        }
-        (EvidenceKind::InvalidQc, EvidencePayload::InvalidQc { certificate, .. }) => {
-            certificate.height == context.height && certificate.epoch == context.epoch
-        }
-        (EvidenceKind::Censorship, EvidencePayload::Censorship { tx_hash, receipts }) => {
-            !receipts.is_empty()
-                && receipts
-                    .iter()
-                    .all(|receipt| receipt.payload.tx_hash == *tx_hash)
-        }
-        (
-            EvidenceKind::SumeragiV2Equivocation,
-            EvidencePayload::SumeragiV2Equivocation(v2_evidence),
-        ) => {
-            &v2_evidence.context == context
-                && super::evidence::validate_v2_equivocation(v2_evidence).is_ok()
-        }
-        _ => false,
-    }
+    evidence_context_height(evidence, recorded_at_height) == context.height
+        && &evidence.equivocation.context == context
+        && super::evidence::validate_v2_equivocation(&evidence.equivocation).is_ok()
 }
 fn canonical_indices(
     indices: impl IntoIterator<Item = ValidatorIndex>,
@@ -575,104 +497,37 @@ fn canonical_indices(
         .into_iter()
         .collect()
 }
-fn censorship_anchor_height(
-    receipts: &[TransactionSubmissionReceipt],
-    recorded_at_height: u64,
-) -> Option<u64> {
-    let max_receipt_height = receipts
-        .iter()
-        .map(|receipt| receipt.payload.submitted_at_height)
-        .max()?;
-    Some(max_receipt_height.min(recorded_at_height))
-}
-fn evidence_context_height(evidence: &Evidence, recorded_at_height: u64) -> Option<u64> {
-    match &evidence.payload {
-        EvidencePayload::DoubleVote { v1, .. } => Some(v1.height),
-        EvidencePayload::InvalidProposal { proposal, .. } => Some(proposal.header.height),
-        EvidencePayload::InvalidQc { certificate, .. } => Some(certificate.height),
-        EvidencePayload::Censorship { receipts, .. } => {
-            censorship_anchor_height(receipts, recorded_at_height)
-        }
-        EvidencePayload::SumeragiV2Equivocation(evidence) => Some(evidence.context.height),
-    }
+fn evidence_context_height(evidence: &Evidence, _recorded_at_height: u64) -> u64 {
+    evidence.equivocation.context.height
 }
 fn offender_indices(
     evidence: &Evidence,
     recorded_at_height: u64,
     context: &HeightContext,
 ) -> Vec<ValidatorIndex> {
-    if evidence_context_height(evidence, recorded_at_height) != Some(context.height) {
+    if evidence_context_height(evidence, recorded_at_height) != context.height {
         return Vec::new();
     }
-    let roster_len = context.roster.len();
-    match &evidence.payload {
-        EvidencePayload::DoubleVote { v1, .. } if v1.epoch == context.epoch => {
-            canonical_indices([v1.signer], roster_len)
-        }
-        EvidencePayload::InvalidProposal { proposal, .. }
-            if proposal.header.epoch == context.epoch =>
-        {
-            canonical_indices([proposal.header.proposer], roster_len)
-        }
-        EvidencePayload::InvalidQc { certificate, .. } if certificate.epoch == context.epoch => {
-            canonical_indices(
-                bitmap_indices(&certificate.aggregate.signers_bitmap),
-                roster_len,
-            )
-        }
-        EvidencePayload::Censorship { .. } => canonical_indices([context.leader(0)], roster_len),
-        EvidencePayload::SumeragiV2Equivocation(evidence) => {
-            let signer = match &evidence.conflict {
-                iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::Proposal {
-                    first,
-                    ..
-                } => first.proposer,
-                iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::PhaseVote {
-                    first,
-                    ..
-                } => first.signer,
-                iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::TimeoutVote {
-                    first,
-                    ..
-                } => first.signer,
-            };
-            canonical_indices([signer], roster_len)
-        }
-        EvidencePayload::DoubleVote { .. }
-        | EvidencePayload::InvalidProposal { .. }
-        | EvidencePayload::InvalidQc { .. } => Vec::new(),
-    }
-}
-fn evidence_has_legitimate_empty_offenders(evidence: &Evidence) -> bool {
-    match &evidence.payload {
-        EvidencePayload::InvalidQc { certificate, .. } => {
-            bitmap_indices(&certificate.aggregate.signers_bitmap).is_empty()
-        }
-        EvidencePayload::Censorship { .. }
-        | EvidencePayload::DoubleVote { .. }
-        | EvidencePayload::InvalidProposal { .. }
-        | EvidencePayload::SumeragiV2Equivocation(_) => false,
-    }
-}
-fn bitmap_indices(bitmap: &[u8]) -> Vec<ValidatorIndex> {
-    let mut indices = Vec::new();
-    for (byte_idx, byte) in bitmap.iter().enumerate() {
-        for bit in 0..8 {
-            if byte & (1 << bit) != 0 {
-                if let Ok(idx) = u32::try_from(byte_idx * 8 + bit) {
-                    indices.push(idx);
-                }
-            }
-        }
-    }
-    indices
+    let signer = match &evidence.equivocation.conflict {
+        iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::Proposal {
+            first, ..
+        } => first.proposer,
+        iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::PhaseVote {
+            first, ..
+        } => first.signer,
+        iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::TimeoutVote {
+            first,
+            ..
+        } => first.signer,
+    };
+    canonical_indices([signer], context.roster.len())
 }
 fn max_slash_amount_for_validator_from_state(
     state: &State,
     locator: &ValidatorLocator,
     max_bps: u16,
 ) -> Result<Option<Quantity>> {
-    if state.nexus_snapshot().enabled && !state.is_lane_active_for_authority(locator.lane_id) {
+    if !state.is_lane_active_for_authority(locator.lane_id) {
         return Ok(None);
     }
     let world = state.world_view();
@@ -730,16 +585,14 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
-        sumeragi::{consensus::default_chain_order_hash, evidence::evidence_key},
+        sumeragi::evidence::evidence_key,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         NetworkId,
         block::{
             BlockHeader, SignedBlock,
-            consensus::{
-                CertPhase, Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, QcVote,
-            },
+            consensus::{Evidence, EvidenceRecord},
             consensus_v2::{
                 BlockSubject, ConsensusMode as V2ConsensusMode, ConsensusRound,
                 DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
@@ -755,13 +608,8 @@ mod tests {
         },
         parameter::{Parameter, system::SumeragiNposParameters},
         prelude::{AccountId, PeerId},
-        transaction::{
-            TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
-            signed::SignedTransaction,
-        },
     };
     use iroha_primitives::numeric::Quantity;
-    use mv::storage::StorageReadOnly;
     use std::{
         num::{NonZeroU32, NonZeroU64},
         sync::Arc,
@@ -779,7 +627,6 @@ mod tests {
 
     fn enable_shared_public_staking_lanes(state: &mut State) {
         let mut nexus = state.nexus_snapshot();
-        nexus.enabled = true;
         nexus.lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("non-zero lane count"),
             vec![
@@ -817,39 +664,55 @@ mod tests {
     fn test_block_hash(byte: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]))
     }
-    fn test_vote(
-        signer: ValidatorIndex,
-        height: u64,
-        view: u64,
-        epoch: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> QcVote {
-        QcVote {
-            phase: CertPhase::Prepare,
-            block_hash,
-            parent_state_root: Hash::prehashed([0; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([1; Hash::LENGTH]),
-            height,
+    fn phase_vote_evidence(context: &HeightContext, signer: ValidatorIndex, view: u64) -> Evidence {
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
             view,
-            epoch,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer,
-            bls_sig: vec![0xA5; 96],
-        }
-    }
-    fn double_prepare_evidence(
-        signer: ValidatorIndex,
-        height: u64,
-        view: u64,
-        epoch: u64,
-    ) -> Evidence {
+        };
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"penalty evidence parent state"),
+            Hash::new(b"penalty evidence post state"),
+            Hash::new(b"penalty evidence ordinary writes"),
+            1,
+            Hash::new(b"penalty evidence executed block"),
+        );
+        let keys = roster_keys();
+        let vote = |seed: u8| {
+            let mut vote = iroha_data_model::block::consensus_v2::Vote {
+                round,
+                proposal_round: round,
+                phase: GlobalPhase::Prepare,
+                subject: BlockSubject {
+                    parent_block_hash: None,
+                    block_hash: test_block_hash(seed),
+                    payload_hash: Hash::new([seed]),
+                },
+                execution_commitment,
+                signer,
+                signature: Vec::new(),
+            };
+            let key = &keys[usize::try_from(signer).expect("fixture signer index")];
+            vote.signature = Signature::new(key.private_key(), &vote.signature_preimage())
+                .payload()
+                .to_vec();
+            vote
+        };
         Evidence {
-            kind: EvidenceKind::DoublePrepare,
-            payload: EvidencePayload::DoubleVote {
-                v1: test_vote(signer, height, view, epoch, test_block_hash(0x31)),
-                v2: test_vote(signer, height, view, epoch, test_block_hash(0x32)),
+            equivocation: iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence {
+                context: context.clone(),
+                proofs_of_possession: keys
+                    .iter()
+                    .map(|key| {
+                        iroha_crypto::bls_normal_pop_prove(key.private_key())
+                            .expect("fixture validator PoP")
+                    })
+                    .collect(),
+                conflict:
+                    iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::PhaseVote {
+                        first: vote(0x31),
+                        second: vote(0x32),
+                    },
             },
         }
     }
@@ -1232,7 +1095,7 @@ mod tests {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
-            consensus_admitted_at_height: None,
+            consensus_admitted_at_height: Some(recorded_at_height),
         };
         let mut block = state.world.consensus_evidence.block();
         block.insert(key.clone(), record);
@@ -1281,22 +1144,6 @@ mod tests {
         assert!(!consensus_penalty_is_due(u64::MAX, 1, u64::MAX));
         assert!(!consensus_penalty_is_due(u64::MAX - 1, 2, u64::MAX));
     }
-    fn test_censorship_receipt(height: u64) -> TransactionSubmissionReceipt {
-        let tx_hash =
-            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x77; 32]));
-        let signer = checked_keypair();
-        TransactionSubmissionReceipt::sign(
-            TransactionSubmissionReceiptPayload {
-                tx_hash,
-                entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),
-                signed_transaction_hash: Some(tx_hash),
-                submitted_at_ms: 1,
-                submitted_at_height: height,
-                signer: signer.public_key().clone(),
-            },
-            &signer,
-        )
-    }
     #[test]
     fn canonical_artifact_context_is_the_only_roster_authority() {
         let state = fresh_state();
@@ -1304,7 +1151,7 @@ mod tests {
         let context = install_height_one_artifact(&state, &frozen_roster);
         let mutable_fallback = PeerId::new(checked_keypair().public_key().clone());
         set_commit_topology(&state, vec![mutable_fallback.clone()]);
-        let evidence = double_prepare_evidence(1, 1, 99, 0);
+        let evidence = phase_vote_evidence(&context, 1, 99);
         let resolved = height_context_for_evidence(&state, &evidence, 1)
             .expect("Kura lookup succeeds")
             .expect("canonical artifact exists");
@@ -1457,8 +1304,14 @@ mod tests {
     fn missing_artifact_fails_closed_without_mutable_topology_fallback() {
         let state = fresh_state();
         install_one_block_delay_npos(&state);
-        set_commit_topology(&state, roster());
-        let evidence = double_prepare_evidence(1, 1, 0, 0);
+        let frozen_roster = roster();
+        set_commit_topology(&state, frozen_roster.clone());
+        let context = height_one_context(
+            *state.network_id_ref(),
+            &frozen_roster,
+            test_block_hash(0x81),
+        );
+        let evidence = phase_vote_evidence(&context, 1, 0);
         let error = height_context_for_evidence(&state, &evidence, 1)
             .expect_err("missing canonical provenance must stop derivation");
         assert!(
@@ -1484,7 +1337,15 @@ mod tests {
     #[test]
     fn future_dated_evidence_is_rejected_before_history_lookup() {
         let state = fresh_state();
-        let evidence = double_prepare_evidence(0, 2, 0, 0);
+        let frozen_roster = roster();
+        let mut context = height_one_context(
+            *state.network_id_ref(),
+            &frozen_roster,
+            test_block_hash(0x82),
+        );
+        context.height = 2;
+        context.epoch_end_height = 2;
+        let evidence = phase_vote_evidence(&context, 0, 0);
         assert!(
             height_context_for_evidence(&state, &evidence, 1)
                 .expect("future evidence rejection is deterministic")
@@ -1492,104 +1353,28 @@ mod tests {
         );
     }
     #[test]
-    fn artifact_context_rejects_epoch_mismatch() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        install_height_one_artifact(&state, &frozen_roster);
-        let evidence = double_prepare_evidence(0, 1, 0, 1);
-        assert!(
-            height_context_for_evidence(&state, &evidence, 1)
-                .expect("canonical artifact lookup succeeds")
-                .is_none(),
-            "legacy evidence metadata must not override the frozen v2 epoch"
-        );
-    }
-    #[test]
     fn artifact_from_another_chain_fails_closed() {
         let state = fresh_state();
         let frozen_roster = roster();
-        install_height_one_artifact_with_network(
+        let context = install_height_one_artifact_with_network(
             &state,
             &frozen_roster,
             crate::sumeragi::synthetic_network_id("wrong-genesis"),
         );
-        let error = height_context_for_evidence(&state, &double_prepare_evidence(0, 1, 0, 0), 1)
+        let error = height_context_for_evidence(&state, &phase_vote_evidence(&context, 0, 0), 1)
             .expect_err("cross-chain provenance must never authorize a slash");
         assert!(error.to_string().contains("belongs to another chain"));
-    }
-    #[test]
-    fn artifact_context_rejects_internally_mismatched_double_vote_epoch() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        install_height_one_artifact(&state, &frozen_roster);
-        let mut evidence = double_prepare_evidence(0, 1, 0, 0);
-        let EvidencePayload::DoubleVote { v2, .. } = &mut evidence.payload else {
-            unreachable!("fixture is double-vote evidence");
-        };
-        v2.epoch = 1;
-        assert!(
-            height_context_for_evidence(&state, &evidence, 1)
-                .expect("canonical artifact lookup succeeds")
-                .is_none()
-        );
-    }
-    #[test]
-    fn artifact_context_rejects_cross_view_double_vote_claim() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        install_height_one_artifact(&state, &frozen_roster);
-        let mut evidence = double_prepare_evidence(0, 1, 0, 0);
-        let EvidencePayload::DoubleVote { v2, .. } = &mut evidence.payload else {
-            unreachable!("fixture is double-vote evidence");
-        };
-        v2.view = 1;
-        assert!(
-            height_context_for_evidence(&state, &evidence, 1)
-                .expect("canonical artifact lookup succeeds")
-                .is_none(),
-            "votes from different rounds are not an equivocation in the v2 reducer"
-        );
-    }
-    #[test]
-    fn artifact_context_rejects_different_signers_in_double_vote_claim() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        install_height_one_artifact(&state, &frozen_roster);
-        let mut evidence = double_prepare_evidence(0, 1, 0, 0);
-        let EvidencePayload::DoubleVote { v2, .. } = &mut evidence.payload else {
-            unreachable!("fixture is double-vote evidence");
-        };
-        v2.signer = 1;
-        assert!(
-            height_context_for_evidence(&state, &evidence, 1)
-                .expect("canonical artifact lookup succeeds")
-                .is_none(),
-            "a crafted pair must not transfer one validator's fault to another"
-        );
-    }
-    #[test]
-    fn artifact_context_rejects_kind_payload_mismatch() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        install_height_one_artifact(&state, &frozen_roster);
-        let mut evidence = double_prepare_evidence(0, 1, 0, 0);
-        evidence.kind = EvidenceKind::InvalidQc;
-        assert!(
-            height_context_for_evidence(&state, &evidence, 1)
-                .expect("canonical artifact lookup succeeds")
-                .is_none()
-        );
     }
     #[test]
     fn corrupt_finality_artifact_propagates_a_fail_closed_error() {
         let state = fresh_state();
         let frozen_roster = roster();
-        install_height_one_artifact(&state, &frozen_roster);
+        let context = install_height_one_artifact(&state, &frozen_roster);
         state
             .kura()
             .overwrite_v2_finality_bytes_for_tests(1, b"not a Norito finality artifact")
             .expect("corrupt test artifact");
-        let error = height_context_for_evidence(&state, &double_prepare_evidence(0, 1, 0, 0), 1)
+        let error = height_context_for_evidence(&state, &phase_vote_evidence(&context, 0, 0), 1)
             .expect_err("corrupt canonical provenance must stop derivation");
         assert!(
             error
@@ -1602,8 +1387,8 @@ mod tests {
         let state = fresh_state();
         let frozen_roster = roster();
         let context = install_height_one_artifact(&state, &frozen_roster);
-        let view_zero = double_prepare_evidence(2, 1, 0, 0);
-        let late_view = double_prepare_evidence(2, 1, u64::MAX, 0);
+        let view_zero = phase_vote_evidence(&context, 2, 0);
+        let late_view = phase_vote_evidence(&context, 2, u64::MAX);
         assert_eq!(offender_indices(&view_zero, 1, &context), vec![2]);
         assert_eq!(offender_indices(&late_view, 1, &context), vec![2]);
     }
@@ -1618,46 +1403,27 @@ mod tests {
         );
         context.mode = V2ConsensusMode::Npos;
         context.validate().expect("valid equal-vote NPoS context");
-        let evidence = double_prepare_evidence(1, 1, 47, 0);
+        let evidence = phase_vote_evidence(&context, 1, 47);
         assert_eq!(offender_indices(&evidence, 1, &context), vec![1]);
     }
     #[test]
     fn canonical_indices_filter_duplicates_and_out_of_range_signers() {
         assert_eq!(canonical_indices([3, 1, 3, 7, u32::MAX], 4), vec![1, 3]);
         assert!(canonical_indices([0], 0).is_empty());
-        assert_eq!(bitmap_indices(&[0b1000_0101]), vec![0, 2, 7]);
-    }
-    #[test]
-    fn censorship_attribution_uses_the_frozen_v2_leader() {
-        let state = fresh_state();
-        let frozen_roster = roster();
-        let context = install_height_one_artifact(&state, &frozen_roster);
-        let receipt = test_censorship_receipt(1);
-        let evidence = Evidence {
-            kind: EvidenceKind::Censorship,
-            payload: EvidencePayload::Censorship {
-                tx_hash: receipt.payload.tx_hash,
-                receipts: vec![receipt],
-            },
-        };
-        assert_eq!(
-            offender_indices(&evidence, 1, &context),
-            vec![context.leader(0)]
-        );
     }
     #[test]
     fn derived_slash_targets_frozen_roster_even_when_live_topology_diverges() {
         let state = fresh_state();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        install_height_one_artifact(&state, &frozen_roster);
+        let context = install_height_one_artifact(&state, &frozen_roster);
         set_commit_topology(
             &state,
             vec![PeerId::new(checked_keypair().public_key().clone())],
         );
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
-        let evidence = double_prepare_evidence(1, 1, 37, 0);
+        let evidence = phase_vote_evidence(&context, 1, 37);
         let key = insert_evidence(&state, evidence, 1);
         let actions = PenaltyApplier::from_parts(
             &state,
@@ -1689,10 +1455,10 @@ mod tests {
         enable_shared_public_staking_lanes(&mut state);
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
-        install_height_one_artifact(&state, &frozen_roster);
+        let context = install_height_one_artifact(&state, &frozen_roster);
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record_on_lane(&state, LaneId::new(1), &offender);
-        let evidence = double_prepare_evidence(1, 1, 37, 0);
+        let evidence = phase_vote_evidence(&context, 1, 37);
         let key = insert_evidence(&state, evidence, 1);
 
         let actions = PenaltyApplier::from_parts(
@@ -1724,29 +1490,5 @@ mod tests {
             )),
             "unresolved evidence must remain pending instead of being marked applied"
         );
-    }
-
-    #[test]
-    fn epoch_mismatch_stays_pending_without_marking_or_slashing() {
-        let state = fresh_state();
-        install_one_block_delay_npos(&state);
-        let frozen_roster = roster();
-        install_height_one_artifact(&state, &frozen_roster);
-        add_validator_record(&state, &frozen_roster[0]);
-        let key = insert_evidence(&state, double_prepare_evidence(0, 1, 0, 9), 1);
-        let actions = PenaltyApplier::from_parts(
-            &state,
-            #[cfg(feature = "telemetry")]
-            None,
-            #[cfg(not(feature = "telemetry"))]
-            None,
-        )
-        .derive_npos_consensus_effects(2, std::iter::empty())
-        .expect("epoch mismatch is a closed, deterministic rejection")
-        .penalty_actions;
-        assert!(actions.is_empty());
-        let view = state.world.consensus_evidence.view();
-        let record = view.get(&key).expect("evidence remains persisted");
-        assert!(!record.penalty_applied);
     }
 }

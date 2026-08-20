@@ -12,11 +12,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_core/src/telemetry.rs"
+MACRO_PROVIDER_PATH = ROOT / "crates/iroha_core/src/telemetry/enabled_metric_macros.rs"
+MACRO_PROVIDER_INCLUDE = 'include!("telemetry/enabled_metric_macros.rs");'
+MACRO_PROVIDER_BINDING = MACRO_PROVIDER_INCLUDE + "\nimpl StateTelemetry {"
+EXPECTED_MACRO_PROVIDER_SHA256 = (
+    "93251b200edb32cb57dd634c75f45403e01b86a55a2a072041da370fd6369bb9"
+)
 PREIMAGE_BLOB = "cd5cf22c6f9b13c1857182cf6a3526356564cb07"
 PREIMAGE_SHA256 = "ab2a41f254cdff6794f9160168e301de29ad89a7a945720df15fb2319ef43ee8"
 PREIMAGE_LINES = 14_258
 SELECTED_PREIMAGE_LINES = 1_687
-MAX_SOURCE_LINES = 13_307
+MAX_GOVERNED_LINES = 13_307
 MINIMUM_NET_REDUCTION = 900
 EXPECTED_FORWARD_ROWS = 64
 EXPECTED_ROWS = (('StateTelemetry',
@@ -279,16 +285,6 @@ EXPECTED_ROWS = (('StateTelemetry',
   'atomic_early_return',
   'explicit',
   'e28fab50e56cf5b995223df0754eb2e0b8587800bc14fb55f8ddddbaeb1fcc19'),
- ('Telemetry',
-  'note_block_sync_roster_source',
-  'atomic_early_return',
-  'explicit',
-  '89bc171638a2a27fb7a4bc75063fe9684fe9b06fb7f0f42c5a3f9588fe39b116'),
- ('Telemetry',
-  'note_block_sync_roster_drop',
-  'atomic_early_return',
-  'explicit',
-  'b8764e53b7117760d055eba0c2b1ff395573b7e0dc19d492823eac2a4ed677cf'),
  ('Telemetry',
   'note_block_sync_unsolicited_share_blocks_drop',
   'atomic_early_return',
@@ -990,9 +986,9 @@ EXPECTED_ROWS = (('StateTelemetry',
   'explicit',
   '109b6ba3b68c7824434adcf5fcbf1822c543ab2ac7a3c7aeb6285b44afb16941'))
 
-EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (146, 'd82d6a3fc77033665d068ddb5f0fb2aeb5a773377ac7332569fc3c72f1ee4ea2'),
+EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (144, 'd9491b7c0737bc149ae40fac99491d74a75e5db2c944af1cd6a276a2c176f16c'),
  'StreamingTelemetry': (21, '12cb286b009d23632d1d5cb6bb3a2416ea2e0e02fef8aecf629619befd78d747'),
- 'Telemetry': (279, 'fa181ff51f5788acee8b9908ad11a3ba7c1ddbcc6f2ade40d1c4744a2d71be85')}
+ 'Telemetry': (274, 'f085cfc045e56faffb3e5a2393eb118f1519b453c6d21580708491c8779c3b56')}
 
 EXPECTED_MACRO_HASHES = {'state_telemetry_enabled_metric_methods': '82bed9160ac70eee38046fc0e6b3f82af00dbe4391436eb5ac318a84b90833b2',
  'state_telemetry_enabled_metric_methods_early_return': '24eee9e3e063884f4ace2adf22a0f4893958f7d0e81ee089ce36dbc6ebe7238d',
@@ -1387,9 +1383,14 @@ def _rows(source: str, masked: str) -> list[Row]:
 
 
 def _macro_digest(source: str, masked: str, name: str) -> str:
-    match = re.search(r"(?m)^macro_rules! " + re.escape(name) + r"\s*\{", masked)
-    if not match:
-        raise GuardFailure(f"missing macro definition {name}")
+    matches = list(
+        re.finditer(r"(?m)^macro_rules! " + re.escape(name) + r"\s*\{", masked)
+    )
+    if len(matches) != 1:
+        raise GuardFailure(
+            f"expected one macro definition {name}, found {len(matches)}"
+        )
+    match = matches[0]
     opening = masked.find("{", match.start())
     ending = _matching(masked, opening)
     start = match.start()
@@ -1402,20 +1403,41 @@ def _macro_digest(source: str, masked: str, name: str) -> str:
     return hashlib.sha256(digest_input.encode()).hexdigest()
 
 
-def validate_source(source: str) -> dict[str, int]:
-    line_count = source.count("\n")
-    if line_count > MAX_SOURCE_LINES:
+def _bind_macro_provider(source: str, provider: str) -> str:
+    provider_sha256 = hashlib.sha256(provider.encode()).hexdigest()
+    if provider_sha256 != EXPECTED_MACRO_PROVIDER_SHA256:
+        raise GuardFailure("enabled-metric macro provider bytes drifted")
+    if source.count(MACRO_PROVIDER_INCLUDE) != 1:
+        raise GuardFailure("expected one canonical enabled-metric macro provider include")
+    if source.count(MACRO_PROVIDER_BINDING) != 1:
         raise GuardFailure(
-            f"telemetry.rs line ceiling exceeded: {line_count} > {MAX_SOURCE_LINES}"
+            "enabled-metric macro provider is not bound immediately before StateTelemetry"
         )
-    if PREIMAGE_LINES - line_count < MINIMUM_NET_REDUCTION:
-        raise GuardFailure("minimum governed Rust-line reduction was lost")
+    include_position = source.index(MACRO_PROVIDER_INCLUDE)
     masked = _mask_non_code(source)
+    if not masked.startswith("include!(", include_position):
+        raise GuardFailure("enabled-metric macro provider include is not active Rust code")
+    return source.replace(MACRO_PROVIDER_INCLUDE, provider, 1)
+
+
+def validate_source(source: str, provider: str) -> dict[str, int]:
+    source_lines = source.count("\n")
+    provider_lines = provider.count("\n")
+    governed_lines = source_lines + provider_lines
+    if governed_lines > MAX_GOVERNED_LINES:
+        raise GuardFailure(
+            "telemetry source-bundle line ceiling exceeded: "
+            f"{governed_lines} > {MAX_GOVERNED_LINES}"
+        )
+    if PREIMAGE_LINES - governed_lines < MINIMUM_NET_REDUCTION:
+        raise GuardFailure("minimum governed Rust-line reduction was lost")
+    expanded_source = _bind_macro_provider(source, provider)
+    masked = _mask_non_code(expanded_source)
     for name, expected in EXPECTED_MACRO_HASHES.items():
-        actual = _macro_digest(source, masked, name)
+        actual = _macro_digest(expanded_source, masked, name)
         if actual != expected:
             raise GuardFailure(f"{name}: emitter guard/signature semantics drifted")
-    rows = _rows(source, masked)
+    rows = _rows(expanded_source, masked)
     observed = tuple(
         (row.owner, row.name, row.style, row.form, row.digest) for row in rows
     )
@@ -1447,7 +1469,7 @@ def validate_source(source: str) -> dict[str, int]:
     for row in rows:
         row_events[row.owner].append((row.position, row.name))
     for owner, (expected_count, expected_digest) in EXPECTED_PUBLIC_METHODS.items():
-        direct = _direct_public_methods(source, masked, owner)
+        direct = _direct_public_methods(expanded_source, masked, owner)
         direct_names = {name for _, name in direct}
         missing_direct = EXCLUDED_DIRECT_METHODS[owner] - direct_names
         if missing_direct:
@@ -1465,8 +1487,10 @@ def validate_source(source: str) -> dict[str, int]:
     return {
         "rows": len(rows),
         "forward_rows": forward_count,
-        "source_lines": line_count,
-        "net_reduction": PREIMAGE_LINES - line_count,
+        "source_lines": source_lines,
+        "provider_lines": provider_lines,
+        "governed_lines": governed_lines,
+        "net_reduction": PREIMAGE_LINES - governed_lines,
     }
 
 
@@ -1495,23 +1519,48 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = SOURCE_PATH.read_text(encoding="utf-8")
+        cls.provider = MACRO_PROVIDER_PATH.read_text(encoding="utf-8")
 
     def assert_rejected(self, source: str) -> None:
         with self.assertRaises(GuardFailure):
-            validate_source(source)
+            validate_source(source, self.provider)
+
+    def assert_provider_rejected(self, provider: str) -> None:
+        with self.assertRaises(GuardFailure):
+            validate_source(self.source, provider)
 
     def test_reviewed_inventory_and_line_budget(self) -> None:
         self.assertEqual(
-            validate_source(self.source),
+            validate_source(self.source, self.provider),
             {
-                "rows": 194,
+                "rows": 192,
                 "forward_rows": 64,
-                "source_lines": 13_282,
-                "net_reduction": 976,
+                "source_lines": 12_857,
+                "provider_lines": 26,
+                "governed_lines": 12_883,
+                "net_reduction": 1_375,
             },
         )
-        self.assertEqual(PREIMAGE_LINES - MAX_SOURCE_LINES, 951)
+        self.assertEqual(PREIMAGE_LINES - MAX_GOVERNED_LINES, 951)
         self.assertGreaterEqual(951, MINIMUM_NET_REDUCTION)
+
+    def test_detached_macro_provider_is_rejected(self) -> None:
+        self.assert_rejected(
+            _replace_once(
+                self.source,
+                MACRO_PROVIDER_INCLUDE,
+                "// enabled-metric macro provider detached",
+            )
+        )
+
+    def test_macro_provider_mutation_is_rejected(self) -> None:
+        self.assert_provider_rejected(
+            _replace_once(
+                self.provider,
+                "if self.is_enabled() {",
+                "if !self.is_enabled() {",
+            )
+        )
 
     def test_doc_mutation_is_rejected(self) -> None:
         self.assert_rejected(
@@ -1583,7 +1632,8 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
         )
 
     def test_line_ceiling_mutation_is_rejected(self) -> None:
-        excess = MAX_SOURCE_LINES - self.source.count("\n") + 1
+        governed_lines = self.source.count("\n") + self.provider.count("\n")
+        excess = MAX_GOVERNED_LINES - governed_lines + 1
         self.assert_rejected(self.source + "\n" * excess)
 
 

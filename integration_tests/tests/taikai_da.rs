@@ -456,7 +456,6 @@ fn metadata_bytes(key: &str, value: Vec<u8>) -> MetadataEntry {
 }
 fn configure_da_spool<'a>(layer: &'a mut Writer<'a>, manifest_dir: &Path, replay_dir: &Path) {
     layer
-        .write(["nexus", "enabled"], true)
         .write(
             ["torii", "da_ingest", "manifest_store_dir"],
             manifest_dir.display().to_string(),

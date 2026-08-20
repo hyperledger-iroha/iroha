@@ -117,9 +117,7 @@ fn exact_retired_autonomous_attempt_accessor_uses_proposal_height_namespace() {
 
 #[test]
 fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_entry = lane_config.entry(LaneId::new(1)).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
@@ -284,9 +282,7 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
 }
 #[test]
 fn autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (_, _, payload) =
@@ -345,9 +341,7 @@ fn autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging(
 }
 #[test]
 fn autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (_, _, payload) =
@@ -397,9 +391,7 @@ fn autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation() {
 }
 #[test]
 fn autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or_stage() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (_, _, payload) =
@@ -549,9 +541,7 @@ fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
 }
 #[test]
 fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_entry = lane_config.entry(LaneId::new(1)).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
@@ -606,9 +596,7 @@ fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
 }
 #[test]
 fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -699,9 +687,7 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
 }
 #[test]
 fn autonomous_lane_slot_retirement_rejects_already_certified_slot() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -816,9 +802,7 @@ fn autonomous_merge_bundle_certifies_origin_while_new_view_advances_cursor() {
 }
 #[test]
 fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -879,9 +863,7 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
 }
 #[test]
 fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_restart() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1053,9 +1035,7 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
 }
 #[test]
 fn durable_autonomous_merge_source_rejects_execution_input_drift() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1088,7 +1068,11 @@ fn durable_autonomous_merge_source_rejects_execution_input_drift() {
     kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch)
         .expect("complete source is initially eligible");
     let mut drifted = LaneBlockExecutionInputArtifact::new(recovered);
-    drifted.autonomous_payload_hash = Some(Hash::new(b"drifted autonomous input hash"));
+    drifted.source = LaneBlockExecutionSourceV1::autonomous_lane(
+        network_id,
+        epoch,
+        Hash::new(b"drifted autonomous input hash"),
+    );
     let drifted_bytes = drifted.encode_framed().expect("encode drifted input");
     let (data_path, index_path) =
         Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
@@ -1100,7 +1084,6 @@ fn durable_autonomous_merge_source_rejects_execution_input_drift() {
         "lane block execution input",
         FsyncMode::Always,
         None,
-        SidecarIndexOrigin::FirstWrite,
     ));
     assert_eq!(
         kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch),
@@ -1110,9 +1093,7 @@ fn durable_autonomous_merge_source_rejects_execution_input_drift() {
 }
 #[test]
 fn durable_autonomous_merge_source_rejects_persisted_bundle_drift() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1162,15 +1143,15 @@ fn durable_autonomous_merge_source_rejects_persisted_bundle_drift() {
     let (data_path, index_path) =
         Kura::autonomous_lane_merge_bundle_paths_for_entry(lane_entry, temp_dir.path());
     fs::write(&data_path, &drifted_bytes).expect("write divergent canonical bundle data");
-    fs::write(
-        &index_path,
-        SidecarIndexEntry {
+    let mut index = SidecarIndexLayout::base_header(1).to_vec();
+    index.extend_from_slice(
+        &SidecarIndexEntry {
             offset: 0,
             len: u64::try_from(drifted_bytes.len()).expect("bundle length fits u64"),
         }
         .to_bytes(),
-    )
-    .expect("write divergent canonical bundle index");
+    );
+    fs::write(&index_path, index).expect("write divergent canonical bundle index");
     assert_eq!(
         kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch),
         Err("persisted autonomous merge bundle differs from exact durable components"),
@@ -1180,9 +1161,7 @@ fn durable_autonomous_merge_source_rejects_persisted_bundle_drift() {
 #[test]
 fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_and_linked_artifacts()
 {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1305,9 +1284,7 @@ fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_an
 }
 #[test]
 fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1363,9 +1340,7 @@ fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
 }
 #[test]
 fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1491,9 +1466,7 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
 }
 #[test]
 fn autonomous_payload_promotes_hint_free_bytes_to_one_exact_carrier_hint() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, mut hint_free) =
@@ -1538,9 +1511,7 @@ fn autonomous_payload_promotes_hint_free_bytes_to_one_exact_carrier_hint() {
 }
 #[test]
 fn autonomous_payload_rejects_a_conflicting_carrier_hint_after_promotion() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, mut hint_free) =
@@ -1583,9 +1554,7 @@ fn autonomous_payload_rejects_a_conflicting_carrier_hint_after_promotion() {
 }
 #[test]
 fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointers() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload_template) =

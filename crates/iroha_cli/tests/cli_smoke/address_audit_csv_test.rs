@@ -37,9 +37,9 @@ fn address_audit_supports_csv_output() {
     } else {
         stderr.as_ref()
     };
-    let mut lines = csv_stream.lines().filter(|line| {
-        !line.is_empty() && !line.starts_with("CLI started") && !line.starts_with("Build line:")
-    });
+    let mut lines = csv_stream
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with("CLI started"));
     assert_eq!(
         lines.next(),
         Some("input,status,format,domain_kind,i105,canonical_hex,error_code,error_message")

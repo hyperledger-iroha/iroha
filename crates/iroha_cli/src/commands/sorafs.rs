@@ -163,6 +163,19 @@ macro_rules! impl_run_with_client_methods {
     };
 }
 
+#[cfg(test)]
+macro_rules! assert_eq_compact {
+    ($left:expr => $right:expr $(; $($arg:tt)*)?) => {
+        assert_eq!($left, $right $(, $($arg)*)?)
+    };
+}
+#[cfg(test)]
+macro_rules! assert_compact {
+    ($condition:expr $(; $($arg:tt)*)?) => {
+        assert!($condition $(, $($arg)*)?)
+    };
+}
+
 #[allow(dead_code)]
 const ML_KEM_768_PUBLIC_LEN: usize = 1184;
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Default)]
@@ -254,10 +267,7 @@ mod capture_path_tests {
         let capture = scoreboard_capture_paths(None, None);
         let expected_dir = default_orchestrator_capture_dir();
         assert_eq!(capture.scoreboard, expected_dir.join("scoreboard.json"));
-        assert_eq!(
-            capture.summary.as_ref(),
-            Some(&expected_dir.join("summary.json"))
-        );
+        assert_eq_compact! { capture.summary.as_ref() => Some(&expected_dir.join("summary.json")) };
     }
     #[test]
     fn scoreboard_override_preserves_parent_for_summary() {
@@ -281,29 +291,15 @@ mod provider_count_tests {
     fn provider_counts_include_gateway_only_runs() {
         let mut summary = norito::json::Map::new();
         insert_provider_counts(&mut summary, ProviderCounts::new(0, 3));
-        assert_eq!(
-            summary.get("provider_count").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            summary
-                .get("gateway_provider_count")
-                .and_then(Value::as_u64),
-            Some(3)
-        );
-        assert_eq!(
-            summary.get("provider_mix").and_then(Value::as_str),
-            Some("gateway-only")
-        );
+        assert_eq_compact! { summary.get("provider_count").and_then(Value::as_u64) => Some(0) };
+        assert_eq_compact! { summary.get("gateway_provider_count").and_then(Value::as_u64) => Some(3) };
+        assert_eq_compact! { summary.get("provider_mix").and_then(Value::as_str) => Some("gateway-only") };
     }
     #[test]
     fn provider_counts_report_mixed_classifications() {
         let mut summary = norito::json::Map::new();
         insert_provider_counts(&mut summary, ProviderCounts::new(2, 2));
-        assert_eq!(
-            summary.get("provider_mix").and_then(Value::as_str),
-            Some("mixed")
-        );
+        assert_eq_compact! { summary.get("provider_mix").and_then(Value::as_str) => Some("mixed") };
     }
 }
 #[cfg(test)]
@@ -318,42 +314,17 @@ mod transport_policy_summary_tests {
             Some(TransportPolicy::SoranetPreferred),
             Some(TransportPolicy::DirectOnly),
         );
-        assert_eq!(
-            summary.get("transport_policy").and_then(Value::as_str),
-            Some("direct-only")
-        );
-        assert_eq!(
-            summary
-                .get("transport_policy_override")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            summary
-                .get("transport_policy_override_label")
-                .and_then(Value::as_str),
-            Some("direct-only")
-        );
+        assert_eq_compact! { summary.get("transport_policy").and_then(Value::as_str) => Some("direct-only") };
+        assert_eq_compact! { summary.get("transport_policy_override").and_then(Value::as_bool) => Some(true) };
+        assert_eq_compact! { summary.get("transport_policy_override_label").and_then(Value::as_str) => Some("direct-only") };
     }
     #[test]
     fn summary_defaults_transport_policy_without_override() {
         let mut summary = norito::json::Map::new();
         insert_transport_policy(&mut summary, None, None);
-        assert_eq!(
-            summary.get("transport_policy").and_then(Value::as_str),
-            Some("soranet-first")
-        );
-        assert_eq!(
-            summary
-                .get("transport_policy_override")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            summary
-                .get("transport_policy_override_label")
-                .is_none_or(Value::is_null)
-        );
+        assert_eq_compact! { summary.get("transport_policy").and_then(Value::as_str) => Some("soranet-first") };
+        assert_eq_compact! { summary.get("transport_policy_override").and_then(Value::as_bool) => Some(false) };
+        assert_compact! { summary.get("transport_policy_override_label").is_none_or(Value::is_null) };
     }
 }
 #[cfg(test)]
@@ -364,10 +335,7 @@ mod telemetry_summary_tests {
     fn summary_records_telemetry_label() {
         let mut summary = norito::json::Map::new();
         insert_summary_telemetry_source(&mut summary, Some("otel::prod"));
-        assert_eq!(
-            summary.get("telemetry_source").and_then(Value::as_str),
-            Some("otel::prod")
-        );
+        assert_eq_compact! { summary.get("telemetry_source").and_then(Value::as_str) => Some("otel::prod") };
     }
     #[test]
     fn summary_omits_telemetry_label_when_missing() {
@@ -379,10 +347,7 @@ mod telemetry_summary_tests {
     fn summary_records_telemetry_region() {
         let mut summary = norito::json::Map::new();
         insert_summary_telemetry_region(&mut summary, Some("iad-prod"));
-        assert_eq!(
-            summary.get("telemetry_region").and_then(Value::as_str),
-            Some("iad-prod")
-        );
+        assert_eq_compact! { summary.get("telemetry_region").and_then(Value::as_str) => Some("iad-prod") };
     }
     #[test]
     fn summary_omits_telemetry_region_when_missing() {
@@ -6676,10 +6641,7 @@ mod fetch_args_manifest_tests {
     #[test]
     fn merge_inputs_errors_without_source() {
         let err = merge_manifest_inputs(None, None, None, None).expect_err("expected failure");
-        assert!(
-            err.to_string().contains("`--storage-ticket` provides one"),
-            "error message should mention storage ticket fallback"
-        );
+        assert_compact! { err.to_string().contains("`--storage-ticket` provides one"); "error message should mention storage ticket fallback" };
     }
 }
 #[cfg(test)]
@@ -6699,10 +6661,7 @@ mod manifest_envelope_tests {
     fn load_manifest_envelope_rejects_empty_files() {
         let file = NamedTempFile::new().expect("temp file");
         let err = load_manifest_envelope(file.path()).expect_err("empty envelope must fail");
-        assert!(
-            err.to_string().contains("must not be empty"),
-            "error should mention empty envelope"
-        );
+        assert_compact! { err.to_string().contains("must not be empty"); "error should mention empty envelope" };
     }
     #[test]
     fn load_manifest_envelope_encodes_valid_envelope() {
@@ -6739,11 +6698,7 @@ mod manifest_envelope_tests {
         file.write_all(&encoded).expect("write envelope");
         let err =
             load_manifest_envelope(file.path()).expect_err("invalid manifest envelope must fail");
-        assert!(
-            err.to_string()
-                .contains("manifest envelope is missing required KEM or ciphertext fields"),
-            "error should call out missing fields"
-        );
+        assert_compact! { err.to_string().contains("manifest envelope is missing required KEM or ciphertext fields"); "error should call out missing fields" };
     }
 }
 #[cfg(test)]
@@ -6769,52 +6724,14 @@ mod cli_scoreboard_metadata_tests {
             telemetry_region: None,
         });
         let object = value.as_object().expect("metadata should be a JSON object");
-        assert_eq!(
-            object
-                .get("transport_policy")
-                .and_then(Value::as_str)
-                .expect("transport_policy string"),
-            "direct-only"
-        );
-        assert_eq!(
-            object
-                .get("transport_policy_override")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            object
-                .get("transport_policy_override_label")
-                .and_then(Value::as_str),
-            Some("direct-only")
-        );
-        assert_eq!(
-            object
-                .get("anonymity_policy")
-                .and_then(Value::as_str)
-                .expect("anonymity label"),
-            "anon-strict-pq"
-        );
-        assert_eq!(
-            object
-                .get("anonymity_policy_override")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            object
-                .get("anonymity_policy_override_label")
-                .and_then(Value::as_str),
-            Some("anon-strict-pq")
-        );
-        assert_eq!(
-            object.get("gateway_manifest_id").and_then(Value::as_str),
-            Some("deadbeef")
-        );
-        assert_eq!(
-            object.get("gateway_manifest_cid").and_then(Value::as_str),
-            Some("c0ffee")
-        );
+        assert_eq_compact! { object.get("transport_policy").and_then(Value::as_str).expect("transport_policy string") => "direct-only" };
+        assert_eq_compact! { object.get("transport_policy_override").and_then(Value::as_bool) => Some(true) };
+        assert_eq_compact! { object.get("transport_policy_override_label").and_then(Value::as_str) => Some("direct-only") };
+        assert_eq_compact! { object.get("anonymity_policy").and_then(Value::as_str).expect("anonymity label") => "anon-strict-pq" };
+        assert_eq_compact! { object.get("anonymity_policy_override").and_then(Value::as_bool) => Some(true) };
+        assert_eq_compact! { object.get("anonymity_policy_override_label").and_then(Value::as_str) => Some("anon-strict-pq") };
+        assert_eq_compact! { object.get("gateway_manifest_id").and_then(Value::as_str) => Some("deadbeef") };
+        assert_eq_compact! { object.get("gateway_manifest_cid").and_then(Value::as_str) => Some("c0ffee") };
     }
     #[test]
     fn cli_scoreboard_metadata_includes_timestamp_and_telemetry_label() {
@@ -6835,18 +6752,9 @@ mod cli_scoreboard_metadata_tests {
             telemetry_region: Some("iad-prod".to_string()),
         });
         let object = value.as_object().expect("metadata should be a JSON object");
-        assert_eq!(
-            object.get("assume_now").and_then(Value::as_u64),
-            Some(1_700_000_000)
-        );
-        assert_eq!(
-            object.get("telemetry_source").and_then(Value::as_str),
-            Some("otel::prod")
-        );
-        assert_eq!(
-            object.get("telemetry_region").and_then(Value::as_str),
-            Some("iad-prod")
-        );
+        assert_eq_compact! { object.get("assume_now").and_then(Value::as_u64) => Some(1_700_000_000) };
+        assert_eq_compact! { object.get("telemetry_source").and_then(Value::as_str) => Some("otel::prod") };
+        assert_eq_compact! { object.get("telemetry_region").and_then(Value::as_str) => Some("iad-prod") };
     }
     #[test]
     fn cli_scoreboard_metadata_defaults_to_soranet_first_transport() {
@@ -6867,27 +6775,10 @@ mod cli_scoreboard_metadata_tests {
             telemetry_region: None,
         });
         let object = value.as_object().expect("metadata should be a JSON object");
-        assert_eq!(
-            object
-                .get("transport_policy")
-                .and_then(Value::as_str)
-                .expect("transport_policy string"),
-            "soranet-first"
-        );
-        assert_eq!(
-            object
-                .get("transport_policy_override")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            object.get("provider_count").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            object.get("gateway_provider_count").and_then(Value::as_u64),
-            Some(2)
-        );
+        assert_eq_compact! { object.get("transport_policy").and_then(Value::as_str).expect("transport_policy string") => "soranet-first" };
+        assert_eq_compact! { object.get("transport_policy_override").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { object.get("provider_count").and_then(Value::as_u64) => Some(0) };
+        assert_eq_compact! { object.get("gateway_provider_count").and_then(Value::as_u64) => Some(2) };
     }
     #[test]
     fn cli_scoreboard_metadata_distinguishes_gateway_providers() {
@@ -6908,22 +6799,10 @@ mod cli_scoreboard_metadata_tests {
             telemetry_region: None,
         });
         let object = value.as_object().expect("metadata should be a JSON object");
-        assert_eq!(
-            object.get("provider_count").and_then(Value::as_u64),
-            Some(5)
-        );
-        assert_eq!(
-            object.get("gateway_provider_count").and_then(Value::as_u64),
-            Some(7)
-        );
-        assert_eq!(
-            object.get("transport_policy").and_then(Value::as_str),
-            Some("soranet-first")
-        );
-        assert_eq!(
-            object.get("anonymity_policy").and_then(Value::as_str),
-            Some("anon-majority-pq")
-        );
+        assert_eq_compact! { object.get("provider_count").and_then(Value::as_u64) => Some(5) };
+        assert_eq_compact! { object.get("gateway_provider_count").and_then(Value::as_u64) => Some(7) };
+        assert_eq_compact! { object.get("transport_policy").and_then(Value::as_str) => Some("soranet-first") };
+        assert_eq_compact! { object.get("anonymity_policy").and_then(Value::as_str) => Some("anon-majority-pq") };
     }
     #[test]
     fn cli_scoreboard_metadata_sets_provider_mix() {
@@ -6944,10 +6823,7 @@ mod cli_scoreboard_metadata_tests {
             telemetry_region: None,
         });
         let object = value.as_object().expect("metadata object");
-        assert_eq!(
-            object.get("provider_mix").and_then(Value::as_str),
-            Some("gateway-only")
-        );
+        assert_eq_compact! { object.get("provider_mix").and_then(Value::as_str) => Some("gateway-only") };
     }
 }
 #[derive(Debug, norito::json::JsonSerialize)]
@@ -13151,18 +13027,9 @@ mod gateway_tests {
         let config = assert_sorafs_config_snippet_is_schema_valid(&rendered);
         assert_eq!(config.gateway.rate_limit.window, Duration::from_secs(60));
         assert_eq!(config.gateway.rate_limit.ban, Some(Duration::from_secs(30)));
-        assert_eq!(
-            config.gateway.acme.renewal_window,
-            Duration::from_secs(30 * 24 * 60 * 60)
-        );
-        assert_eq!(
-            config.gateway.acme.retry_backoff,
-            Duration::from_secs(30 * 60)
-        );
-        assert_eq!(
-            config.gateway.acme.retry_jitter,
-            Duration::from_secs(5 * 60)
-        );
+        assert_eq_compact! { config.gateway.acme.renewal_window => Duration::from_secs(30 * 24 * 60 * 60) };
+        assert_eq_compact! { config.gateway.acme.retry_backoff => Duration::from_secs(30 * 60) };
+        assert_eq_compact! { config.gateway.acme.retry_jitter => Duration::from_secs(5 * 60) };
         assert!(rendered.contains("[sorafs.gateway]"));
         assert!(!rendered.contains("[torii.sorafs_gateway]"));
         assert!(rendered.contains("gateway-a.example.com"));
@@ -13177,10 +13044,7 @@ mod gateway_tests {
         ));
         let config = assert_sorafs_config_snippet_is_schema_valid(fixture);
         assert_eq!(config.gateway.rate_limit.window, Duration::from_secs(60));
-        assert_eq!(
-            config.gateway.rate_limit.ban,
-            Some(Duration::from_secs(10 * 60))
-        );
+        assert_eq_compact! { config.gateway.rate_limit.ban => Some(Duration::from_secs(10 * 60)) };
         assert!(config.gateway.direct_mode.is_some());
     }
     #[test]
@@ -13192,10 +13056,7 @@ mod gateway_tests {
         };
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("generate-hosts runs");
-        assert!(
-            !ctx.outputs().is_empty(),
-            "expected at least one daemon output entry"
-        );
+        assert_compact! { !ctx.outputs().is_empty(); "expected at least one daemon output entry" };
         let output = &ctx.outputs()[0];
         assert!(output.contains("canonical"));
         assert!(output.contains("vanity"));
@@ -17232,14 +17093,8 @@ mod tests {
         };
         let mut context = TestContext::new();
         args.run_with(&mut context, |_client, filter| {
-            assert_eq!(
-                filter.expected_checkpoint_fingerprint_hex,
-                checkpoint.as_str()
-            );
-            assert_eq!(
-                filter.after_statement_id_hex,
-                Some(after_statement_id.as_str())
-            );
+            assert_eq_compact! { filter.expected_checkpoint_fingerprint_hex => checkpoint.as_str() };
+            assert_eq_compact! { filter.after_statement_id_hex => Some(after_statement_id.as_str()) };
             assert_eq!(filter.limit, 25);
             Ok(Response::builder()
                 .status(StatusCode::OK)
@@ -17264,10 +17119,7 @@ mod tests {
         };
         let mut context = TestContext::new();
         args.run_with(&mut context, |_client, filter| {
-            assert_eq!(
-                filter.expected_checkpoint_fingerprint_hex,
-                checkpoint.as_str()
-            );
+            assert_eq_compact! { filter.expected_checkpoint_fingerprint_hex => checkpoint.as_str() };
             assert_eq!(filter.after_hex, Some(after.as_str()));
             assert_eq!(filter.limit, 100);
             Ok(Response::builder()
@@ -17283,13 +17135,7 @@ mod tests {
         assert_eq!(context.printed.len(), 1);
         let output: Value =
             norito::json::from_str(&context.printed[0]).expect("projection output JSON");
-        assert_eq!(
-            output
-                .get("automatic_execution_enabled")
-                .and_then(Value::as_bool),
-            Some(false),
-            "projection output must preserve the disabled execution claim",
-        );
+        assert_eq_compact! { output.get("automatic_execution_enabled").and_then(Value::as_bool) => Some(false); "projection output must preserve the disabled execution claim" };
     }
     include!("sorafs/hedging_billing_response_tests.rs");
     #[test]
@@ -17317,10 +17163,7 @@ mod tests {
                 assert_eq!(actual_statement_id, statement_id);
                 assert_eq!(actual_checkpoint, checkpoint);
                 assert_eq!(proof, &expected);
-                assert!(
-                    format!("{proof:?}").contains("[REDACTED]"),
-                    "proof debug output must not expose authentication bytes"
-                );
+                assert_compact! { format!("{proof:?}").contains("[REDACTED]"); "proof debug output must not expose authentication bytes" };
                 Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header("Content-Type", "application/json")
@@ -17334,10 +17177,7 @@ mod tests {
         assert_eq!(context.printed.len(), 1);
         let output: Value =
             norito::json::from_str(&context.printed[0]).expect("acknowledgement output JSON");
-        assert_eq!(
-            output.get("acknowledged").and_then(Value::as_bool),
-            Some(true)
-        );
+        assert_eq_compact! { output.get("acknowledged").and_then(Value::as_bool) => Some(true) };
     }
     #[test]
     fn hedging_billing_cli_rejects_non_regular_and_oversized_proofs() {
@@ -17395,10 +17235,7 @@ mod tests {
             "billing_proof_metadata_unchanged(&opened_metadata, &after_path_metadata)",
             "this platform does not expose a stable direct-file identity",
         ] {
-            assert!(
-                source.contains(required_guard),
-                "billing proof reader lost required direct-file guard `{required_guard}`"
-            );
+            assert_compact! { source.contains(required_guard); "billing proof reader lost required direct-file guard `{required_guard}`" };
         }
     }
     #[test]
@@ -17436,17 +17273,11 @@ mod tests {
                 .expect("published statement response"))
         })
         .expect("published statement write succeeds");
-        assert_eq!(
-            fs::read(output).expect("read written statement"),
-            expected_bytes
-        );
+        assert_eq_compact! { fs::read(output).expect("read written statement") => expected_bytes };
         assert_eq!(context.printed.len(), 1);
         let summary: Value =
             norito::json::from_str(&context.printed[0]).expect("statement summary JSON");
-        assert_eq!(
-            summary.get("bytes_written").and_then(Value::as_u64),
-            Some(4)
-        );
+        assert_eq_compact! { summary.get("bytes_written").and_then(Value::as_u64) => Some(4) };
     }
     #[test]
     fn billing_statement_cli_refuses_to_clobber_existing_file() {
@@ -17470,10 +17301,7 @@ mod tests {
             })
             .expect_err("existing output must fail closed");
         assert!(error.to_string().contains("without replacing"));
-        assert_eq!(
-            fs::read(&output).expect("read preserved statement"),
-            original
-        );
+        assert_eq_compact! { fs::read(&output).expect("read preserved statement") => original };
         assert!(context.printed.is_empty());
     }
     #[cfg(unix)]
@@ -17502,16 +17330,8 @@ mod tests {
             })
             .expect_err("symlink output must fail closed");
         assert!(error.to_string().contains("without replacing"));
-        assert_eq!(
-            fs::read(&target).expect("read preserved target statement"),
-            original
-        );
-        assert!(
-            fs::symlink_metadata(&output)
-                .expect("inspect preserved output symlink")
-                .file_type()
-                .is_symlink()
-        );
+        assert_eq_compact! { fs::read(&target).expect("read preserved target statement") => original };
+        assert_compact! { fs::symlink_metadata(&output).expect("inspect preserved output symlink").file_type().is_symlink() };
         assert!(context.printed.is_empty());
     }
     #[test]
@@ -17534,10 +17354,7 @@ mod tests {
             })
             .expect_err("non-Norito response must fail closed");
         assert!(error.to_string().contains("application/x-norito"));
-        assert!(
-            !output.exists(),
-            "substituted response must not be persisted"
-        );
+        assert_compact! { !output.exists(); "substituted response must not be persisted" };
         assert!(context.printed.is_empty());
     }
     #[test]
@@ -17605,10 +17422,7 @@ mod tests {
             "-1",
             "0.0000000001",
         ] {
-            assert!(
-                parse_xor_quantity(invalid).is_err(),
-                "invalid XOR quantity must be rejected: {invalid:?}"
-            );
+            assert_compact! { parse_xor_quantity(invalid).is_err(); "invalid XOR quantity must be rejected: {invalid:?}" };
         }
     }
     #[test]
@@ -17637,32 +17451,20 @@ mod tests {
         let root = value
             .as_object()
             .expect("quote payload should be a JSON object");
-        assert_eq!(
-            root.get("policy_source").and_then(Value::as_str),
-            Some("test policy")
-        );
+        assert_eq_compact! { root.get("policy_source").and_then(Value::as_str) => Some("test policy") };
         let inputs = root
             .get("inputs")
             .and_then(Value::as_object)
             .expect("inputs object");
-        assert_eq!(
-            inputs.get("storage_class").and_then(Value::as_str),
-            Some("hot")
-        );
+        assert_eq_compact! { inputs.get("storage_class").and_then(Value::as_str) => Some("hot") };
         assert_eq!(inputs.get("capacity_gib").and_then(Value::as_u64), Some(4));
         let quote_value = root.get("quote").expect("quote field exists");
-        assert!(
-            quote_value.get("monthly_rent").is_some(),
-            "quote field should carry rent breakdown: {quote_value:?}"
-        );
+        assert_compact! { quote_value.get("monthly_rent").is_some(); "quote field should carry rent breakdown: {quote_value:?}" };
         let ledger_projection = root
             .get("ledger_projection")
             .and_then(Value::as_object)
             .expect("ledger projection should be serialized");
-        assert!(
-            ledger_projection.contains_key("rent_due"),
-            "ledger projection exposes rent_due amount: {ledger_projection:?}"
-        );
+        assert_compact! { ledger_projection.contains_key("rent_due"); "ledger projection exposes rent_due amount: {ledger_projection:?}" };
     }
     #[test]
     fn reserve_ledger_projection_rejects_non_string_and_noncanonical_quantities() {
@@ -17705,10 +17507,7 @@ mod tests {
                 .as_object_mut()
                 .expect("ledger object")
                 .insert("rent_due".into(), invalid.clone());
-            assert!(
-                extract_ledger_projection(&artifact).is_err(),
-                "invalid exact quantity must be rejected: {invalid:?}"
-            );
+            assert_compact! { extract_ledger_projection(&artifact).is_err(); "invalid exact quantity must be rejected: {invalid:?}" };
         }
     }
     #[test]
@@ -17735,21 +17534,10 @@ mod tests {
         )
         .expect("exact reserve ledger plan");
         let root = plan.as_object().expect("ledger plan object");
-        assert_eq!(
-            root.get("rent_due").and_then(Value::as_str),
-            Some(sub_micro.to_string().as_str())
-        );
-        assert_eq!(
-            root.get("reserve_shortfall").and_then(Value::as_str),
-            Some(wide.to_string().as_str())
-        );
+        assert_eq_compact! { root.get("rent_due").and_then(Value::as_str) => Some(sub_micro.to_string().as_str()) };
+        assert_eq_compact! { root.get("reserve_shortfall").and_then(Value::as_str) => Some(wide.to_string().as_str()) };
         assert!(!root.contains_key("rent_due_micro_xor"));
-        assert_eq!(
-            root.get("instructions")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
+        assert_eq_compact! { root.get("instructions").and_then(Value::as_array).map(Vec::len) => Some(2) };
         let rendered = norito::json::to_json(&plan).expect("ledger plan JSON");
         assert!(rendered.contains(&sub_micro.to_string()));
         assert!(rendered.contains(&wide.to_string()));
@@ -17776,14 +17564,8 @@ mod tests {
             .expect("lifecycle payload should be a JSON object");
         assert_eq!(root.get("stage").and_then(Value::as_str), Some("grace"));
         assert_eq!(root.get("credit_draw").and_then(Value::as_str), Some("120"));
-        assert_eq!(
-            root.get("disable_adverts").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            root.get("lifecycle_projection").is_some(),
-            "full projection should be embedded"
-        );
+        assert_eq_compact! { root.get("disable_adverts").and_then(Value::as_bool) => Some(false) };
+        assert_compact! { root.get("lifecycle_projection").is_some(); "full projection should be embedded" };
     }
     fn sample_guard_directory_snapshot_bytes() -> Vec<u8> {
         let mut rng = StdRng::seed_from_u64(0x5EED);
@@ -18155,18 +17937,9 @@ mod tests {
         let err = read_ledger_export(file.path()).expect_err("schema mismatch should fail");
         let messages = err.chain().map(ToString::to_string).collect::<Vec<_>>();
         let combined = messages.join("\n");
-        assert!(
-            combined.contains("schema mismatch"),
-            "expected schema mismatch in error chain: {combined}"
-        );
-        assert!(
-            combined.contains("expected"),
-            "expected schema hash detail in error chain: {combined}"
-        );
-        assert!(
-            combined.contains("got"),
-            "expected actual schema hash detail in error chain: {combined}"
-        );
+        assert_compact! { combined.contains("schema mismatch"); "expected schema mismatch in error chain: {combined}" };
+        assert_compact! { combined.contains("expected"); "expected schema hash detail in error chain: {combined}" };
+        assert_compact! { combined.contains("got"); "expected actual schema hash detail in error chain: {combined}" };
     }
     #[test]
     fn reconciliation_summary_builds_expected_counts() {
@@ -18205,36 +17978,14 @@ mod tests {
         assert_eq!(summary.missing_transfers.len(), 1);
         assert_eq!(summary.unexpected_transfers.len(), 1);
         assert_eq!(summary.mismatched_transfers.len(), 1);
-        assert_eq!(
-            summary.missing_transfers[0].relay_id,
-            relay_id_to_hex(missing_record.relay_id)
-        );
-        assert_eq!(
-            summary.unexpected_transfers[0].kind,
-            transfer_kind_label(unexpected_record.kind)
-        );
-        assert!(
-            summary.mismatched_transfers[0]
-                .reasons
-                .iter()
-                .any(|reason| reason == "amount")
-        );
+        assert_eq_compact! { summary.missing_transfers[0].relay_id => relay_id_to_hex(missing_record.relay_id) };
+        assert_eq_compact! { summary.unexpected_transfers[0].kind => transfer_kind_label(unexpected_record.kind) };
+        assert_compact! { summary.mismatched_transfers[0].reasons.iter().any(|reason| reason == "amount") };
         assert_eq!(summary.amount_arithmetic_errors.len(), 1);
         assert_eq!(summary.amount_arithmetic_errors[0].source, "exported");
-        assert_eq!(
-            summary.amount_arithmetic_errors[0].record.amount,
-            invalid_amount_record.amount.to_string()
-        );
-        assert_eq!(
-            summary.amount_arithmetic_errors[0].record.amount_nanos,
-            None
-        );
-        assert!(
-            summary.amount_arithmetic_errors[0]
-                .record
-                .amount_conversion_error
-                .is_some()
-        );
+        assert_eq_compact! { summary.amount_arithmetic_errors[0].record.amount => invalid_amount_record.amount.to_string() };
+        assert_eq_compact! { summary.amount_arithmetic_errors[0].record.amount_nanos => None };
+        assert_compact! { summary.amount_arithmetic_errors[0].record.amount_conversion_error.is_some() };
     }
     fn sample_account_id(name: &str) -> AccountId {
         let mut hasher = Blake3Hasher::new();
@@ -18395,10 +18146,7 @@ mod tests {
         let output = ctx.outputs().last().expect("json output present");
         let json: Value = norito::json::from_str(output).expect("valid json");
         assert_eq!(json["flags"], Value::from(0u64));
-        assert_eq!(
-            json["token_id_hex"],
-            Value::from(hex::encode(artifacts.token.token_id()))
-        );
+        assert_eq_compact! { json["token_id_hex"] => Value::from(hex::encode(artifacts.token.token_id())) };
     }
     #[test]
     fn handshake_token_id_reports_expected_digest() {
@@ -18438,10 +18186,7 @@ mod tests {
         id_args.run(&mut ctx).expect("compute id");
         let output = ctx.outputs().last().expect("json output");
         let json: Value = norito::json::from_str(output).expect("valid json");
-        assert_eq!(
-            json["token_id_hex"],
-            Value::from(hex::encode(artifacts.token.token_id()))
-        );
+        assert_eq_compact! { json["token_id_hex"] => Value::from(hex::encode(artifacts.token.token_id())) };
     }
     #[test]
     fn handshake_token_fingerprint_matches_helper() {
@@ -18456,10 +18201,7 @@ mod tests {
         args.run(&mut ctx).expect("fingerprint");
         let output = ctx.outputs().last().expect("json output");
         let json: Value = norito::json::from_str(output).expect("valid json");
-        assert_eq!(
-            json["issuer_fingerprint_hex"],
-            Value::from(hex::encode(expected))
-        );
+        assert_eq_compact! { json["issuer_fingerprint_hex"] => Value::from(hex::encode(expected)) };
     }
     impl RunContext for TestContext {
         fn config(&self) -> &Config {
@@ -18512,10 +18254,7 @@ mod tests {
     fn gateway_provider_spec_rejects_missing_fields() {
         let err = parse_gateway_provider_spec("name=alpha, base-url=https://example.com")
             .expect_err("missing provider-id should fail");
-        assert!(
-            err.to_string().contains("provider-id"),
-            "unexpected error: {err}"
-        );
+        assert_compact! { err.to_string().contains("provider-id"); "unexpected error: {err}" };
     }
     #[test]
     fn validate_hex_digest_enforces_format() {
@@ -18546,10 +18285,7 @@ mod tests {
             "soranet_only",
         ] {
             let rejected_value = rejected.to_owned();
-            assert!(
-                parse_transport_policy_flag(Some(&rejected_value), "--transport-policy").is_err(),
-                "noncanonical transport label `{rejected}` must fail"
-            );
+            assert_compact! { parse_transport_policy_flag(Some(&rejected_value), "--transport-policy").is_err(); "noncanonical transport label `{rejected}` must fail" };
         }
     }
     #[test]
@@ -18582,10 +18318,7 @@ mod tests {
             "anon-unknown",
         ] {
             let rejected_value = rejected.to_owned();
-            assert!(
-                parse_anonymity_policy_flag(Some(&rejected_value), "--anonymity-policy").is_err(),
-                "noncanonical anonymity label `{rejected}` must fail"
-            );
+            assert_compact! { parse_anonymity_policy_flag(Some(&rejected_value), "--anonymity-policy").is_err(); "noncanonical anonymity label `{rejected}` must fail" };
         }
     }
     #[test]
@@ -18595,11 +18328,7 @@ mod tests {
             ("upload-pq-only", WriteModeHint::UploadPqOnly),
         ] {
             let label_value = label.to_owned();
-            assert_eq!(
-                parse_write_mode_flag(Some(&label_value), "--write-mode")
-                    .expect("canonical write mode"),
-                Some(expected)
-            );
+            assert_eq_compact! { parse_write_mode_flag(Some(&label_value), "--write-mode").expect("canonical write mode") => Some(expected) };
         }
         for rejected in [
             "",
@@ -18611,26 +18340,14 @@ mod tests {
             "upload_pq_only",
         ] {
             let rejected_value = rejected.to_owned();
-            assert!(
-                parse_write_mode_flag(Some(&rejected_value), "--write-mode").is_err(),
-                "noncanonical write-mode label `{rejected}` must fail"
-            );
+            assert_compact! { parse_write_mode_flag(Some(&rejected_value), "--write-mode").is_err(); "noncanonical write-mode label `{rejected}` must fail" };
         }
     }
     #[test]
     fn anonymity_policy_label_matches_expected_values() {
-        assert_eq!(
-            anonymity_policy_label(AnonymityPolicy::GuardPq),
-            "anon-guard-pq"
-        );
-        assert_eq!(
-            anonymity_policy_label(AnonymityPolicy::MajorityPq),
-            "anon-majority-pq"
-        );
-        assert_eq!(
-            anonymity_policy_label(AnonymityPolicy::StrictPq),
-            "anon-strict-pq"
-        );
+        assert_eq_compact! { anonymity_policy_label(AnonymityPolicy::GuardPq) => "anon-guard-pq" };
+        assert_eq_compact! { anonymity_policy_label(AnonymityPolicy::MajorityPq) => "anon-majority-pq" };
+        assert_eq_compact! { anonymity_policy_label(AnonymityPolicy::StrictPq) => "anon-strict-pq" };
     }
     #[test]
     fn load_guard_directory_json_rejected() {
@@ -18664,14 +18381,8 @@ mod tests {
         let err = load_guard_directory(file.path(), &digest, 1_734_000_000)
             .expect_err("json format must be rejected");
         let msg = err.to_string();
-        assert!(
-            msg.contains("failed to authenticate guard directory"),
-            "unexpected error message: {msg}"
-        );
-        assert!(
-            msg.contains("SRCv2"),
-            "error should mention the canonical SRCv2 Norito format: {msg}"
-        );
+        assert_compact! { msg.contains("failed to authenticate guard directory"); "unexpected error message: {msg}" };
+        assert_compact! { msg.contains("SRCv2"); "error should mention the canonical SRCv2 Norito format: {msg}" };
     }
     #[test]
     fn load_guard_directory_decodes_srcv2_bundle() {
@@ -18687,10 +18398,7 @@ mod tests {
         assert_eq!(descriptor.relay_id, [0x11; 32]);
         assert!(descriptor.is_pq_capable());
         assert!(descriptor.certificate().is_some());
-        assert_eq!(
-            descriptor.certificate_validity(),
-            directory.valid_after().zip(directory.valid_until())
-        );
+        assert_eq_compact! { descriptor.certificate_validity() => directory.valid_after().zip(directory.valid_until()) };
         assert_eq!(directory.valid_after(), Some(1_734_000_000));
         assert_eq!(directory.valid_until(), Some(1_734_086_400));
     }
@@ -18742,10 +18450,7 @@ mod tests {
             assert_eq!(filter.max_bytes, Some(4096));
             assert_eq!(filter.after_digest_hex, Some(after_digest.as_str()));
             assert_eq!(filter.finalized.expected_finalized_height, Some(7));
-            assert_eq!(
-                filter.finalized.expected_finalized_block_hash_hex,
-                Some(block_hash.as_str())
-            );
+            assert_eq_compact! { filter.finalized.expected_finalized_block_hash_hex => Some(block_hash.as_str()) };
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -18798,10 +18503,7 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed for 404");
-        assert_eq!(
-            ctx.printed,
-            vec!["manifest `deadbeef` not found".to_string()]
-        );
+        assert_eq_compact! { ctx.printed => vec!["manifest `deadbeef` not found".to_string()] };
     }
     #[test]
     fn alias_list_with_prints_payload() {
@@ -18953,13 +18655,7 @@ mod tests {
         let parsed = Url::parse(url).expect("canary URL should parse");
         let path = parsed.path();
         if path.ends_with("/v1/sorafs/transparency/explorer") {
-            assert_eq!(
-                parsed
-                    .query_pairs()
-                    .find(|(key, _)| key == "limit")
-                    .map(|(_, value)| value.into_owned()),
-                Some("6".to_string())
-            );
+            assert_eq_compact! { parsed.query_pairs().find(|(key, _)| key == "limit").map(|(_, value)| value.into_owned()) => Some("6".to_string()) };
             let value = if include_private_key {
                 norito::json!({
                     "schema": "sorafs.transparency.explorer_snapshot.v1",
@@ -18988,13 +18684,7 @@ mod tests {
             });
         }
         if path.ends_with("/v1/sorafs/transparency/tokens") {
-            assert_eq!(
-                parsed
-                    .query_pairs()
-                    .find(|(key, _)| key == "limit")
-                    .map(|(_, value)| value.into_owned()),
-                Some("6".to_string())
-            );
+            assert_eq_compact! { parsed.query_pairs().find(|(key, _)| key == "limit").map(|(_, value)| value.into_owned()) => Some("6".to_string()) };
             return transparency_explorer_canary_fixture_json(norito::json!({
                 "schema": "sorafs.transparency.proof_token_issuances.v1",
                 "payload_bytes_included": false,
@@ -19080,13 +18770,7 @@ mod tests {
             });
         }
         let parsed = Url::parse(url).expect("publication canary URL should parse");
-        assert_eq!(
-            parsed
-                .query_pairs()
-                .find(|(key, _)| key == "limit")
-                .map(|(_, value)| value.into_owned()),
-            Some("3".to_string())
-        );
+        assert_eq_compact! { parsed.query_pairs().find(|(key, _)| key == "limit").map(|(_, value)| value.into_owned()) => Some("3".to_string()) };
         let path = parsed.path();
         let cycle_id = "11".repeat(16);
         let publisher_labels = if include_publisher_identity {
@@ -19206,10 +18890,7 @@ mod tests {
                 panic!("malformed cycle id must fail before HTTP fetch")
             })
             .expect_err("malformed cycle id must be rejected");
-        assert!(
-            err.to_string()
-                .contains("--cycle-id must be a 16-byte hex string")
-        );
+        assert_compact! { err.to_string().contains("--cycle-id must be a 16-byte hex string") };
         assert!(ctx.printed.is_empty());
     }
     #[test]
@@ -19231,11 +18912,7 @@ mod tests {
         assert_eq!(value.get("status").and_then(Value::as_str), Some("failed"));
         assert_eq!(value["passed_route_count"].as_u64(), Some(0));
         let routes = value["routes"].as_array().expect("routes");
-        assert!(
-            routes
-                .iter()
-                .all(|route| route["publisher_identity_present"].as_bool() == Some(false))
-        );
+        assert_compact! { routes.iter().all(|route| route["publisher_identity_present"].as_bool() == Some(false)) };
     }
     #[test]
     fn transparency_publication_canary_records_http_failure_without_body() {
@@ -19295,14 +18972,8 @@ mod tests {
         let mut ctx = TestContext::new();
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq!(
-                value.get("token_b64").and_then(Value::as_str),
-                Some("proof-token-frame")
-            );
-            assert_eq!(
-                value.get("signer_key_hex").and_then(Value::as_str),
-                Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")
-            );
+            assert_eq_compact! { value.get("token_b64").and_then(Value::as_str) => Some("proof-token-frame") };
+            assert_eq_compact! { value.get("signer_key_hex").and_then(Value::as_str) => Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1") };
             Ok(Response::builder()
                 .status(StatusCode::ACCEPTED)
                 .header("Content-Type", "application/json")
@@ -19337,10 +19008,7 @@ mod tests {
         args.run_with(&mut ctx, |_client, payload| {
             submitted += 1;
             let value: Value = norito::json::from_slice(payload).expect("issuance payload JSON");
-            assert_eq!(
-                value.get("token_b64").and_then(Value::as_str),
-                Some("proof-token-frame-must-not-leak")
-            );
+            assert_eq_compact! { value.get("token_b64").and_then(Value::as_str) => Some("proof-token-frame-must-not-leak") };
             Ok(Response::builder()
                 .status(StatusCode::ACCEPTED)
                 .header("Content-Type", "application/json")
@@ -19356,49 +19024,16 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq!(
-            evidence.get("schema").and_then(Value::as_str),
-            Some("sorafs.transparency.proof_token_issuance.canary.v1")
-        );
-        assert_eq!(
-            evidence.get("status").and_then(Value::as_str),
-            Some("passed")
-        );
+        assert_eq_compact! { evidence.get("schema").and_then(Value::as_str) => Some("sorafs.transparency.proof_token_issuance.canary.v1") };
+        assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("passed") };
         assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            evidence.get("passed_probe_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            evidence.get("issuance_probe_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            evidence
-                .get("payload_bytes_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            evidence
-                .get("proof_token_frames_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            evidence
-                .get("response_bodies_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            !ctx.printed[0].contains("proof-token-frame-must-not-leak"),
-            "canary evidence must not include proof-token frames"
-        );
-        assert!(
-            !ctx.printed[0].contains("token-id-must-not-leak"),
-            "canary evidence must not archive response bodies"
-        );
+        assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(1) };
+        assert_eq_compact! { evidence.get("issuance_probe_count").and_then(Value::as_u64) => Some(1) };
+        assert_eq_compact! { evidence.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { evidence.get("proof_token_frames_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { evidence.get("response_bodies_included").and_then(Value::as_bool) => Some(false) };
+        assert_compact! { !ctx.printed[0].contains("proof-token-frame-must-not-leak"); "canary evidence must not include proof-token frames" };
+        assert_compact! { !ctx.printed[0].contains("token-id-must-not-leak"); "canary evidence must not archive response bodies" };
     }
     #[test]
     fn transparency_token_issuance_canary_records_failed_probe_without_body() {
@@ -19426,18 +19061,9 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq!(
-            evidence.get("status").and_then(Value::as_str),
-            Some("failed")
-        );
-        assert_eq!(
-            evidence.get("passed_probe_count").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert!(
-            !ctx.printed[0].contains("proof-token producer unavailable"),
-            "canary evidence must not archive response bodies"
-        );
+        assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("failed") };
+        assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(0) };
+        assert_compact! { !ctx.printed[0].contains("proof-token producer unavailable"); "canary evidence must not archive response bodies" };
     }
     #[test]
     fn transparency_token_issuance_canary_rejects_empty_payload_list() {
@@ -19474,14 +19100,8 @@ mod tests {
         let mut ctx = TestContext::new();
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq!(
-                value.get("event_id").and_then(Value::as_str),
-                Some("privacy-event-1")
-            );
-            assert_eq!(
-                value.get("population_label").and_then(Value::as_str),
-                Some("moderation.global")
-            );
+            assert_eq_compact! { value.get("event_id").and_then(Value::as_str) => Some("privacy-event-1") };
+            assert_eq_compact! { value.get("population_label").and_then(Value::as_str) => Some("moderation.global") };
             Ok(Response::builder()
                 .status(StatusCode::ACCEPTED)
                 .header("Content-Type", "application/json")
@@ -19511,10 +19131,7 @@ mod tests {
         let mut ctx = TestContext::new();
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq!(
-                value.get("previous_block_hash_hex").and_then(Value::as_str),
-                Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4")
-            );
+            assert_eq_compact! { value.get("previous_block_hash_hex").and_then(Value::as_str) => Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4") };
             assert!(value.get("cycle_prf_output_hex").is_none());
             Ok(Response::builder()
                 .status(StatusCode::OK)
@@ -19579,10 +19196,7 @@ mod tests {
             |_client, payload| {
                 submitted_source += 1;
                 let value: Value = norito::json::from_slice(payload).expect("source payload JSON");
-                assert_eq!(
-                    value.get("event_id").and_then(Value::as_str),
-                    Some("privacy-event-1")
-                );
+                assert_eq_compact! { value.get("event_id").and_then(Value::as_str) => Some("privacy-event-1") };
                 Ok(Response::builder()
                     .status(StatusCode::ACCEPTED)
                     .header("Content-Type", "application/json")
@@ -19595,10 +19209,7 @@ mod tests {
             |_client, payload| {
                 submitted_publish += 1;
                 let value: Value = norito::json::from_slice(payload).expect("publish payload JSON");
-                assert_eq!(
-                    value.get("previous_block_hash_hex").and_then(Value::as_str),
-                    Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4")
-                );
+                assert_eq_compact! { value.get("previous_block_hash_hex").and_then(Value::as_str) => Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4") };
                 assert!(value.get("cycle_prf_output_hex").is_none());
                 Ok(Response::builder()
                     .status(StatusCode::OK)
@@ -19617,39 +19228,14 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq!(
-            evidence.get("schema").and_then(Value::as_str),
-            Some("sorafs.transparency.privacy_aggregate.canary.v1")
-        );
-        assert_eq!(
-            evidence.get("status").and_then(Value::as_str),
-            Some("passed")
-        );
+        assert_eq_compact! { evidence.get("schema").and_then(Value::as_str) => Some("sorafs.transparency.privacy_aggregate.canary.v1") };
+        assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("passed") };
         assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            evidence.get("passed_probe_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            evidence
-                .get("payload_bytes_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            evidence
-                .get("raw_metric_values_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            !ctx.printed[0].contains("\"metrics\""),
-            "canary evidence must not include raw metric arrays"
-        );
-        assert!(
-            !ctx.printed[0].contains("\"quarantined\""),
-            "canary evidence must not include raw metric names"
-        );
+        assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(2) };
+        assert_eq_compact! { evidence.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { evidence.get("raw_metric_values_included").and_then(Value::as_bool) => Some(false) };
+        assert_compact! { !ctx.printed[0].contains("\"metrics\""); "canary evidence must not include raw metric arrays" };
+        assert_compact! { !ctx.printed[0].contains("\"quarantined\""); "canary evidence must not include raw metric names" };
     }
     #[test]
     fn transparency_privacy_aggregate_canary_records_failed_probe_without_body() {
@@ -19682,18 +19268,9 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq!(
-            evidence.get("status").and_then(Value::as_str),
-            Some("failed")
-        );
-        assert_eq!(
-            evidence.get("passed_probe_count").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert!(
-            !ctx.printed[0].contains("scheduler unavailable"),
-            "canary evidence must not archive response bodies"
-        );
+        assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("failed") };
+        assert_eq_compact! { evidence.get("passed_probe_count").and_then(Value::as_u64) => Some(0) };
+        assert_compact! { !ctx.printed[0].contains("scheduler unavailable"); "canary evidence must not archive response bodies" };
     }
     fn write_json_file(value: &Value) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("json file");
@@ -19744,10 +19321,7 @@ mod tests {
         let mut ctx = TestContext::new();
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq!(
-                value.get("case_id").and_then(Value::as_str),
-                Some("case-401")
-            );
+            assert_eq_compact! { value.get("case_id").and_then(Value::as_str) => Some("case-401") };
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -20354,34 +19928,15 @@ mod tests {
         .expect("execution should succeed");
         assert_eq!(committed, vec![juror_id.clone()]);
         assert_eq!(revealed, vec![juror_id]);
-        assert_eq!(
-            tallied,
-            vec![("case-401".to_string(), "round-7".to_string())]
-        );
+        assert_eq_compact! { tallied => vec![("case-401".to_string(), "round-7".to_string())] };
         assert_eq!(ctx.printed.len(), 1);
         let summary: Value =
             norito::json::from_str(&ctx.printed[0]).expect("execution summary JSON");
-        assert_eq!(
-            summary.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.ballots.execution.v1")
-        );
+        assert_eq_compact! { summary.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.execution.v1") };
         assert_eq!(summary.get("action_count").and_then(Value::as_u64), Some(3));
-        assert_eq!(
-            summary
-                .get("payload_bytes_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            summary
-                .get("private_payloads_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            !ctx.printed[0].contains("nonce"),
-            "execution summary must not print reveal payload internals"
-        );
+        assert_eq_compact! { summary.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { summary.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
+        assert_compact! { !ctx.printed[0].contains("nonce"); "execution summary must not print reveal payload internals" };
     }
     #[test]
     fn moderation_ballots_execute_rejects_non_pending_commit() {
@@ -20442,40 +19997,13 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         let summary: Value =
             norito::json::from_str(&ctx.printed[0]).expect("executor bundle summary JSON");
-        assert_eq!(
-            summary.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.ballots.executor_bundle.v1")
-        );
-        assert_eq!(
-            summary.get("commit_payload_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            summary.get("reveal_payload_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            summary.get("submit_tally").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            summary
-                .get("payload_bytes_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            summary
-                .get("private_payloads_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            summary
-                .get("private_payload_files_copied")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_eq_compact! { summary.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.executor_bundle.v1") };
+        assert_eq_compact! { summary.get("commit_payload_count").and_then(Value::as_u64) => Some(1) };
+        assert_eq_compact! { summary.get("reveal_payload_count").and_then(Value::as_u64) => Some(1) };
+        assert_eq_compact! { summary.get("submit_tally").and_then(Value::as_bool) => Some(true) };
+        assert_eq_compact! { summary.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { summary.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { summary.get("private_payload_files_copied").and_then(Value::as_bool) => Some(false) };
         let run_script = fs::read_to_string(bundle_dir.join("run.sh")).expect("read run script");
         assert!(run_script.contains("sorafs moderation ballots execute"));
         assert!(run_script.contains("--submit-tally"));
@@ -20484,10 +20012,7 @@ mod tests {
         assert!(!run_script.contains("nonce"));
         let env = fs::read_to_string(bundle_dir.join("executor.env")).expect("read env");
         assert!(env.contains("IROHA_BIN='/usr/local/bin/iroha'"));
-        assert!(env.contains(&format!(
-            "SORAFS_BALLOTS_EXECUTOR_STATUS_PATH='{}'",
-            status_path.display()
-        )));
+        assert_compact! { env.contains(&format!( "SORAFS_BALLOTS_EXECUTOR_STATUS_PATH='{}'", status_path.display() )) };
         assert!(!env.contains("commitment_blake2b_256"));
         let systemd =
             fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.service"))
@@ -20506,10 +20031,7 @@ mod tests {
         let metadata: Value =
             norito::json::from_slice(&fs::read(bundle_dir.join("bundle.json")).expect("metadata"))
                 .expect("metadata JSON");
-        assert_eq!(
-            metadata.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.ballots.executor_bundle.v1")
-        );
+        assert_eq_compact! { metadata.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.executor_bundle.v1") };
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -20543,10 +20065,7 @@ mod tests {
             .expect_err("empty executor bundle action set must be rejected");
         assert!(err.to_string().contains("at least one --commit-payload"));
         assert!(ctx.printed.is_empty());
-        assert!(
-            !temp.path().join("executor-bundle").exists(),
-            "bundle directory must not be created on validation failure"
-        );
+        assert_compact! { !temp.path().join("executor-bundle").exists(); "bundle directory must not be created on validation failure" };
     }
     #[test]
     fn moderation_ballots_executor_canary_writes_payload_free_evidence() {
@@ -20611,59 +20130,20 @@ mod tests {
         assert!(out.exists(), "executor canary evidence should be written");
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("executor canary evidence JSON");
-        assert_eq!(
-            evidence.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.ballots.executor_canary.v1")
-        );
-        assert_eq!(
-            evidence.get("status").and_then(Value::as_str),
-            Some("passed")
-        );
-        assert_eq!(
-            evidence.get("artifact_count").and_then(Value::as_u64),
-            Some(7)
-        );
-        assert_eq!(
-            evidence
-                .get("passed_artifact_count")
-                .and_then(Value::as_u64),
-            Some(7)
-        );
-        assert_eq!(
-            evidence
-                .get("execution_summary_present")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            evidence
-                .get("payload_bytes_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            evidence
-                .get("private_payloads_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            !ctx.printed[0].contains("payload_b64"),
-            "canary evidence must not include payload bytes"
-        );
-        assert!(
-            !ctx.printed[0].contains("nonce"),
-            "canary evidence must not include reveal internals"
-        );
+        assert_eq_compact! { evidence.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.ballots.executor_canary.v1") };
+        assert_eq_compact! { evidence.get("status").and_then(Value::as_str) => Some("passed") };
+        assert_eq_compact! { evidence.get("artifact_count").and_then(Value::as_u64) => Some(7) };
+        assert_eq_compact! { evidence.get("passed_artifact_count").and_then(Value::as_u64) => Some(7) };
+        assert_eq_compact! { evidence.get("execution_summary_present").and_then(Value::as_bool) => Some(true) };
+        assert_eq_compact! { evidence.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { evidence.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
+        assert_compact! { !ctx.printed[0].contains("payload_b64"); "canary evidence must not include payload bytes" };
+        assert_compact! { !ctx.printed[0].contains("nonce"); "canary evidence must not include reveal internals" };
         let artifacts = evidence
             .get("artifacts")
             .and_then(Value::as_array)
             .expect("artifact probes");
-        assert!(
-            artifacts
-                .iter()
-                .any(|artifact| artifact.get("kind").and_then(Value::as_str) == Some("run_script"))
-        );
+        assert_compact! { artifacts.iter().any(|artifact| artifact.get("kind").and_then(Value::as_str) == Some("run_script")) };
     }
     #[test]
     fn moderation_ballots_executor_canary_rejects_payload_bearing_summary() {
@@ -20738,17 +20218,11 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         let summary: Value =
             norito::json::from_str(&ctx.printed[0]).expect("delivery summary JSON");
-        assert_eq!(
-            summary["schema"].as_str(),
-            Some("sorafs.moderation.juror_notifications.delivery.v1")
-        );
+        assert_eq_compact! { summary["schema"].as_str() => Some("sorafs.moderation.juror_notifications.delivery.v1") };
         assert_eq!(summary["delivery_count"].as_u64(), Some(1));
         assert_eq!(summary["payload_bytes_included"].as_bool(), Some(false));
         assert_eq!(summary["private_payloads_included"].as_bool(), Some(false));
-        assert!(
-            !ctx.printed[0].contains("Build the private commit payload locally."),
-            "delivery summary must not repeat notification body text"
-        );
+        assert_compact! { !ctx.printed[0].contains("Build the private commit payload locally."); "delivery summary must not repeat notification body text" };
     }
     #[test]
     fn moderation_quarantine_notifications_deliver_rejects_private_payload_flags() {
@@ -20768,13 +20242,7 @@ mod tests {
             .expect_err("private payload flag must be rejected");
         assert!(err.to_string().contains("private_payload_included"));
         assert!(ctx.printed.is_empty());
-        assert!(
-            fs::read_dir(out_dir.path())
-                .expect("read outbox dir")
-                .next()
-                .is_none(),
-            "outbox must stay empty on validation failure"
-        );
+        assert_compact! { fs::read_dir(out_dir.path()).expect("read outbox dir").next().is_none(); "outbox must stay empty on validation failure" };
     }
     #[test]
     fn moderation_quarantine_notifications_canary_writes_payload_free_evidence() {
@@ -20804,27 +20272,15 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq!(
-            evidence["schema"].as_str(),
-            Some("sorafs.moderation.juror_notifications.transport_canary.v1")
-        );
+        assert_eq_compact! { evidence["schema"].as_str() => Some("sorafs.moderation.juror_notifications.transport_canary.v1") };
         assert_eq!(evidence["status"].as_str(), Some("passed"));
         assert_eq!(evidence["probe_count"].as_u64(), Some(1));
         assert_eq!(evidence["accepted_count"].as_u64(), Some(1));
-        assert!(
-            evidence["manifest_body_blake3_hex"].as_str().is_some(),
-            "canary evidence should expose the typed manifest digest key"
-        );
-        assert!(
-            evidence.get("manifest_body_blake3").is_none(),
-            "canary evidence must not emit the ambiguous manifest digest key"
-        );
+        assert_compact! { evidence["manifest_body_blake3_hex"].as_str().is_some(); "canary evidence should expose the typed manifest digest key" };
+        assert_compact! { evidence.get("manifest_body_blake3").is_none(); "canary evidence must not emit the ambiguous manifest digest key" };
         assert_eq!(evidence["payload_bytes_included"].as_bool(), Some(false));
         assert_eq!(evidence["private_payloads_included"].as_bool(), Some(false));
-        assert!(
-            !ctx.printed[0].contains("Build the private commit payload locally."),
-            "canary evidence must not repeat notification body text"
-        );
+        assert_compact! { !ctx.printed[0].contains("Build the private commit payload locally."); "canary evidence must not repeat notification body text" };
     }
     #[test]
     fn moderation_quarantine_notifications_canary_records_failed_probe_without_body() {
@@ -20848,10 +20304,7 @@ mod tests {
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
         assert_eq!(evidence["status"].as_str(), Some("failed"));
         assert_eq!(evidence["accepted_count"].as_u64(), Some(0));
-        assert!(
-            !ctx.printed[0].contains("transport unavailable"),
-            "canary evidence must hash response bodies instead of archiving them"
-        );
+        assert_compact! { !ctx.printed[0].contains("transport unavailable"); "canary evidence must hash response bodies instead of archiving them" };
     }
     #[test]
     fn moderation_quarantine_notifications_run_does_not_follow_cross_origin_redirects() {
@@ -20904,10 +20357,7 @@ mod tests {
             target
                 .set_nonblocking(true)
                 .expect("set target nonblocking");
-            assert!(
-                matches!(target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
-                "cross-origin redirect target must receive no connection"
-            );
+            assert_compact! { matches!(target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock); "cross-origin redirect target must receive no connection" };
         }
     }
     #[test]
@@ -20976,10 +20426,7 @@ mod tests {
             }
             server.join().expect("redirect server finished");
             target.set_nonblocking(true).expect("nonblocking target");
-            assert!(
-                matches!(target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
-                "cross-origin redirect target must receive no GET connection"
-            );
+            assert_compact! { matches!(target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock); "cross-origin redirect target must receive no GET connection" };
         }
     }
     #[test]
@@ -21136,10 +20583,7 @@ mod tests {
             assert_eq!(request.idempotency_key_hex, expected_idempotency_key);
             assert_eq!(request.evidence_kind, "committee_aggregate");
             assert_eq!(request.authority_b64, authority_b64);
-            assert_eq!(
-                request.committee_member_results_b64,
-                [member_one_b64.clone(), member_two_b64.clone()]
-            );
+            assert_eq_compact! { request.committee_member_results_b64 =>[member_one_b64.clone(), member_two_b64.clone()] };
             Ok(Response::builder()
                 .status(StatusCode::ACCEPTED)
                 .header("Content-Type", "application/json")
@@ -21368,10 +20812,7 @@ mod tests {
                 unreachable!("submit must not run")
             })
             .expect_err("empty appeal handoff payload must be rejected");
-        assert!(
-            err.to_string()
-                .contains("moderation quarantine appeal handoff payload")
-        );
+        assert_compact! { err.to_string().contains("moderation quarantine appeal handoff payload") };
         assert!(ctx.printed.is_empty());
     }
     #[test]
@@ -21457,31 +20898,19 @@ mod tests {
         .expect("bridge plan should render");
         assert_eq!(ctx.printed.len(), 1);
         let value: Value = norito::json::from_str(&ctx.printed[0]).expect("bridge plan json");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.quarantine.bridge_plan.v1")
-        );
-        assert_eq!(
-            value.get("payload_bytes_included").and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_eq_compact! { value.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.quarantine.bridge_plan.v1") };
+        assert_eq_compact! { value.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
         let actions = value
             .get("actions")
             .and_then(Value::as_array)
             .expect("actions");
         assert_eq!(actions.len(), 2);
-        assert_eq!(
-            actions[1].get("automation_status").and_then(Value::as_str),
-            Some("waiting_for_native_commit_reveal_finalization")
-        );
+        assert_eq_compact! { actions[1].get("automation_status").and_then(Value::as_str) => Some("waiting_for_native_commit_reveal_finalization") };
         let cli = actions[1]
             .get("cli")
             .and_then(Value::as_array)
             .expect("cli");
-        assert!(
-            cli.iter()
-                .any(|part| part.as_str() == Some("quarantine-case"))
-        );
+        assert_compact! { cli.iter().any(|part| part.as_str() == Some("quarantine-case")) };
         assert!(!ctx.printed[0].contains("payload_b64"));
     }
     #[test]
@@ -21543,10 +20972,7 @@ mod tests {
         let parsed = Url::parse(url).expect("canary URL should parse");
         let path = parsed.path();
         if path.contains("/quarantine/") {
-            assert!(
-                path.contains(&format!("/quarantine/{quarantine_id_hex}/")),
-                "unexpected canary quarantine route: {path}"
-            );
+            assert_compact! { path.contains(&format!("/quarantine/{quarantine_id_hex}/")); "unexpected canary quarantine route: {path}" };
         }
         if path.ends_with("/healthz")
             || path.ends_with("/v1/sorafs/moderation/operator-panel/status")
@@ -21656,10 +21082,7 @@ mod tests {
         assert!(!ctx.printed[0].contains("payload_b64"));
         let value: Value = norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
         let schema = value["schema"].as_str();
-        assert_eq!(
-            schema,
-            Some("sorafs.moderation.quarantine.operator_canary.v1")
-        );
+        assert_eq_compact! { schema => Some("sorafs.moderation.quarantine.operator_canary.v1") };
         assert_eq!(value["status"].as_str(), Some("passed"));
         assert_eq!(value["limit"].as_u64(), Some(4));
         assert_eq!(value["route_count"].as_u64(), Some(8));
@@ -21677,9 +21100,7 @@ mod tests {
         let operator_panel_url = operator_panel["url"].as_str().expect("operator-panel URL");
         assert!(operator_panel_url.contains("/root/v1/sorafs/moderation/quarantine/"));
         assert!(operator_panel_url.contains("limit=4"));
-        assert!(routes.iter().all(|route| {
-            route.get("payload_bytes_included").and_then(Value::as_bool) == Some(false)
-        }));
+        assert_compact! { routes.iter().all(|route| { route.get("payload_bytes_included").and_then(Value::as_bool) == Some(false) }) };
         let bytes = fs::read(out).expect("written canary evidence");
         let written: Value = norito::json::from_slice(&bytes).expect("written evidence JSON");
         assert_eq!(written["schema"], value["schema"]);
@@ -21964,10 +21385,7 @@ mod tests {
         );
         assert_eq!(response.status, StatusCode::OK);
         let value: Value = norito::json::from_slice(&response.body).expect("operator panel JSON");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.quarantine.operator_panel.v1")
-        );
+        assert_eq_compact! { value.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.quarantine.operator_panel.v1") };
         assert!(!String::from_utf8_lossy(&response.body).contains("payload_b64"));
     }
     #[test]
@@ -22003,22 +21421,13 @@ mod tests {
         );
         assert_eq!(response.status, StatusCode::OK);
         let value: Value = norito::json::from_slice(&response.body).expect("bridge plan JSON");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.quarantine.bridge_plan.v1")
-        );
-        assert_eq!(
-            value.get("payload_bytes_included").and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_eq_compact! { value.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.quarantine.bridge_plan.v1") };
+        assert_eq_compact! { value.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
         let actions = value
             .get("actions")
             .and_then(Value::as_array)
             .expect("planned actions");
-        assert_eq!(
-            actions[0].get("automation_status").and_then(Value::as_str),
-            Some("operator_review_required")
-        );
+        assert_eq_compact! { actions[0].get("automation_status").and_then(Value::as_str) => Some("operator_review_required") };
     }
     #[test]
     fn moderation_operator_service_builds_juror_plan_without_payload() {
@@ -22058,26 +21467,11 @@ mod tests {
         let body = String::from_utf8(response.body.clone()).expect("juror plan body UTF-8");
         assert!(!body.contains("payload_b64"));
         let value: Value = norito::json::from_slice(&response.body).expect("juror plan JSON");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.quarantine.juror_plan.v1")
-        );
-        assert_eq!(
-            value.get("payload_bytes_included").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            value.get("notification_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value.get("pending_commit_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("pending_reveal_count").and_then(Value::as_u64),
-            Some(1)
-        );
+        assert_eq_compact! { value.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.quarantine.juror_plan.v1") };
+        assert_eq_compact! { value.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { value.get("notification_count").and_then(Value::as_u64) => Some(2) };
+        assert_eq_compact! { value.get("pending_commit_count").and_then(Value::as_u64) => Some(1) };
+        assert_eq_compact! { value.get("pending_reveal_count").and_then(Value::as_u64) => Some(1) };
         let ballots = value
             .get("ballots")
             .and_then(Value::as_array)
@@ -22086,26 +21480,10 @@ mod tests {
             .get("jurors")
             .and_then(Value::as_array)
             .expect("planned jurors");
-        assert_eq!(
-            jurors[0].get("notification_status").and_then(Value::as_str),
-            Some("reveal_required")
-        );
-        assert_eq!(
-            jurors[0].get("signed_by").and_then(Value::as_str),
-            Some("juror-a@moderation")
-        );
-        assert_eq!(
-            jurors[1].get("notification_status").and_then(Value::as_str),
-            Some("commit_required")
-        );
-        assert_eq!(
-            jurors[1]
-                .get("routes")
-                .and_then(Value::as_object)
-                .and_then(|routes| routes.get("commit"))
-                .and_then(Value::as_str),
-            Some("/v1/sorafs/moderation/ballots/commits")
-        );
+        assert_eq_compact! { jurors[0].get("notification_status").and_then(Value::as_str) => Some("reveal_required") };
+        assert_eq_compact! { jurors[0].get("signed_by").and_then(Value::as_str) => Some("juror-a@moderation") };
+        assert_eq_compact! { jurors[1].get("notification_status").and_then(Value::as_str) => Some("commit_required") };
+        assert_eq_compact! { jurors[1].get("routes").and_then(Value::as_object).and_then(|routes| routes.get("commit")).and_then(Value::as_str) => Some("/v1/sorafs/moderation/ballots/commits") };
     }
     #[test]
     fn moderation_operator_service_builds_juror_notifications_without_payload() {
@@ -22150,73 +21528,24 @@ mod tests {
         assert!(!body.contains("payload_b64"));
         let value: Value =
             norito::json::from_slice(&response.body).expect("juror notifications JSON");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.quarantine.juror_notifications.v1")
-        );
-        assert_eq!(
-            value.get("payload_bytes_included").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            value
-                .get("private_payloads_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            value.get("planned_juror_count").and_then(Value::as_u64),
-            Some(3)
-        );
-        assert_eq!(
-            value.get("notification_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value.get("skipped_complete_count").and_then(Value::as_u64),
-            Some(1)
-        );
+        assert_eq_compact! { value.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.quarantine.juror_notifications.v1") };
+        assert_eq_compact! { value.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { value.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { value.get("planned_juror_count").and_then(Value::as_u64) => Some(3) };
+        assert_eq_compact! { value.get("notification_count").and_then(Value::as_u64) => Some(2) };
+        assert_eq_compact! { value.get("skipped_complete_count").and_then(Value::as_u64) => Some(1) };
         let notifications = value
             .get("notifications")
             .and_then(Value::as_array)
             .expect("notifications");
         assert_eq!(notifications.len(), 2);
-        assert_eq!(
-            notifications[0].get("action").and_then(Value::as_str),
-            Some("submit_reveal")
-        );
-        assert_eq!(
-            notifications[0].get("route").and_then(Value::as_str),
-            Some("/v1/sorafs/moderation/ballots/reveals")
-        );
-        assert_eq!(
-            notifications[1].get("action").and_then(Value::as_str),
-            Some("submit_commit")
-        );
-        assert_eq!(
-            notifications[1].get("route").and_then(Value::as_str),
-            Some("/v1/sorafs/moderation/ballots/commits")
-        );
-        assert_eq!(
-            notifications[1]
-                .get("private_payload_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            notifications[1]
-                .get("delivery_id")
-                .and_then(Value::as_str)
-                .map(str::len),
-            Some(64)
-        );
-        assert!(
-            notifications[1]
-                .get("body")
-                .and_then(Value::as_str)
-                .expect("notification body")
-                .contains("carries no payload bytes")
-        );
+        assert_eq_compact! { notifications[0].get("action").and_then(Value::as_str) => Some("submit_reveal") };
+        assert_eq_compact! { notifications[0].get("route").and_then(Value::as_str) => Some("/v1/sorafs/moderation/ballots/reveals") };
+        assert_eq_compact! { notifications[1].get("action").and_then(Value::as_str) => Some("submit_commit") };
+        assert_eq_compact! { notifications[1].get("route").and_then(Value::as_str) => Some("/v1/sorafs/moderation/ballots/commits") };
+        assert_eq_compact! { notifications[1].get("private_payload_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { notifications[1].get("delivery_id").and_then(Value::as_str).map(str::len) => Some(64) };
+        assert_compact! { notifications[1].get("body").and_then(Value::as_str).expect("notification body").contains("carries no payload bytes") };
     }
     #[test]
     fn moderation_operator_service_builds_commit_reveal_status_without_payload() {
@@ -22261,71 +21590,26 @@ mod tests {
         assert!(!body.contains("payload_b64"));
         let value: Value =
             norito::json::from_slice(&response.body).expect("commit/reveal status JSON");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.quarantine.commit_reveal_status.v1")
-        );
-        assert_eq!(
-            value.get("payload_bytes_included").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            value
-                .get("private_payloads_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            value.get("tally_ready_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("pending_commit_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("pending_reveal_count").and_then(Value::as_u64),
-            Some(0)
-        );
+        assert_eq_compact! { value.get("schema").and_then(Value::as_str) => Some("sorafs.moderation.quarantine.commit_reveal_status.v1") };
+        assert_eq_compact! { value.get("payload_bytes_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { value.get("private_payloads_included").and_then(Value::as_bool) => Some(false) };
+        assert_eq_compact! { value.get("tally_ready_count").and_then(Value::as_u64) => Some(1) };
+        assert_eq_compact! { value.get("pending_commit_count").and_then(Value::as_u64) => Some(1) };
+        assert_eq_compact! { value.get("pending_reveal_count").and_then(Value::as_u64) => Some(0) };
         let ballots = value
             .get("ballots")
             .and_then(Value::as_array)
             .expect("ballot statuses");
-        assert_eq!(
-            ballots[0].get("next_action").and_then(Value::as_str),
-            Some("submit_tally")
-        );
-        assert_eq!(
-            ballots[0].get("ready_to_tally").and_then(Value::as_bool),
-            Some(true)
-        );
+        assert_eq_compact! { ballots[0].get("next_action").and_then(Value::as_str) => Some("submit_tally") };
+        assert_eq_compact! { ballots[0].get("ready_to_tally").and_then(Value::as_bool) => Some(true) };
         let missing_commit = ballots[0]
             .get("missing_commit_jurors")
             .and_then(Value::as_array)
             .expect("missing commit jurors");
         assert_eq!(missing_commit[0].as_str(), Some("juror-b@moderation"));
-        assert_eq!(
-            ballots[0]
-                .get("tally_request")
-                .and_then(Value::as_object)
-                .and_then(|request| request.get("route"))
-                .and_then(Value::as_str),
-            Some("/v1/sorafs/moderation/ballots/tally")
-        );
-        assert_eq!(
-            ballots[0]
-                .get("tally_request")
-                .and_then(Value::as_object)
-                .and_then(|request| request.get("submission"))
-                .and_then(Value::as_str),
-            Some("caller-signed-native-transaction")
-        );
-        assert!(
-            ballots[0]
-                .get("tally_request")
-                .and_then(Value::as_object)
-                .is_some_and(|request| !request.contains_key("body"))
-        );
+        assert_eq_compact! { ballots[0].get("tally_request").and_then(Value::as_object).and_then(|request| request.get("route")).and_then(Value::as_str) => Some("/v1/sorafs/moderation/ballots/tally") };
+        assert_eq_compact! { ballots[0].get("tally_request").and_then(Value::as_object).and_then(|request| request.get("submission")).and_then(Value::as_str) => Some("caller-signed-native-transaction") };
+        assert_compact! { ballots[0].get("tally_request").and_then(Value::as_object).is_some_and(|request| !request.contains_key("body")) };
     }
     #[test]
     fn moderation_operator_service_rejects_juror_plan_payload_bytes() {
@@ -22529,10 +21813,7 @@ mod tests {
             "GET / HTTP/1.1\r\nHost: local\r\n\r\n".to_string(),
         );
         assert_eq!(response.status, StatusCode::OK);
-        assert_eq!(
-            response.content_type,
-            ModerationOperatorService::HTML_CONTENT_TYPE
-        );
+        assert_eq_compact! { response.content_type => ModerationOperatorService::HTML_CONTENT_TYPE };
         let body = String::from_utf8(response.body.clone()).expect("UI body UTF-8");
         assert!(body.contains("SoraFS Moderation Operator"));
         assert!(body.contains("juror-plan"));
@@ -22560,31 +21841,12 @@ mod tests {
             .get("routes")
             .and_then(Value::as_array)
             .expect("status routes");
-        assert_eq!(
-            value.get("csrf_header").and_then(Value::as_str),
-            Some(MODERATION_OPERATOR_CSRF_HEADER)
-        );
-        assert_eq!(
-            value.get("csrf_token").and_then(Value::as_str),
-            Some(service.csrf_token.as_str())
-        );
-        assert!(
-            routes
-                .iter()
-                .any(|route| { route.as_str() == Some("/v1/sorafs/moderation/operator-panel/ui") })
-        );
-        assert!(routes.iter().any(|route| {
-            route.as_str()
-                == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan")
-        }));
-        assert!(routes.iter().any(|route| {
-            route.as_str()
-                == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications")
-        }));
-        assert!(routes.iter().any(|route| {
-            route.as_str()
-                == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status")
-        }));
+        assert_eq_compact! { value.get("csrf_header").and_then(Value::as_str) => Some(MODERATION_OPERATOR_CSRF_HEADER) };
+        assert_eq_compact! { value.get("csrf_token").and_then(Value::as_str) => Some(service.csrf_token.as_str()) };
+        assert_compact! { routes.iter().any(|route| { route.as_str() == Some("/v1/sorafs/moderation/operator-panel/ui") }) };
+        assert_compact! { routes.iter().any(|route| { route.as_str() == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan") }) };
+        assert_compact! { routes.iter().any(|route| { route.as_str() == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications") }) };
+        assert_compact! { routes.iter().any(|route| { route.as_str() == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status") }) };
     }
     #[test]
     fn moderation_operator_service_rejects_browser_ui_request_body() {
@@ -22596,10 +21858,7 @@ mod tests {
                 .to_string(),
         );
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            response.content_type,
-            ModerationOperatorService::JSON_CONTENT_TYPE
-        );
+        assert_eq_compact! { response.content_type => ModerationOperatorService::JSON_CONTENT_TYPE };
     }
     #[test]
     fn moderation_operator_service_rejects_mutation_without_csrf_token() {
@@ -22668,10 +21927,7 @@ mod tests {
         );
         assert_eq!(response.status, StatusCode::ACCEPTED);
         let value: Value = norito::json::from_slice(&response.body).expect("review response JSON");
-        assert_eq!(
-            value.get("status").and_then(Value::as_str),
-            Some("reviewed")
-        );
+        assert_eq_compact! { value.get("status").and_then(Value::as_str) => Some("reviewed") };
     }
     #[test]
     fn moderation_operator_service_forwards_release_with_explicit_authority() {
@@ -22696,10 +21952,7 @@ mod tests {
         );
         assert_eq!(response.status, StatusCode::ACCEPTED);
         let value: Value = norito::json::from_slice(&response.body).expect("release response JSON");
-        assert_eq!(
-            value.get("status").and_then(Value::as_str),
-            Some("released")
-        );
+        assert_eq_compact! { value.get("status").and_then(Value::as_str) => Some("released") };
     }
     #[test]
     fn moderation_operator_service_forwards_appeal_handoff_payload() {
@@ -22724,10 +21977,7 @@ mod tests {
         );
         assert_eq!(response.status, StatusCode::OK);
         let value: Value = norito::json::from_slice(&response.body).expect("handoff response JSON");
-        assert_eq!(
-            value.get("status").and_then(Value::as_str),
-            Some("handoff_ready")
-        );
+        assert_eq_compact! { value.get("status").and_then(Value::as_str) => Some("handoff_ready") };
     }
     #[test]
     fn moderation_operator_service_rejects_mutation_payload_bytes() {
@@ -22800,10 +22050,7 @@ mod tests {
             |_client, filter| {
                 assert_eq!(filter.limit, Some(25));
                 assert_eq!(filter.finalized.expected_finalized_height, Some(7));
-                assert_eq!(
-                    filter.finalized.expected_finalized_block_hash_hex,
-                    Some("ab".repeat(32).as_str())
-                );
+                assert_eq_compact! { filter.finalized.expected_finalized_block_hash_hex => Some("ab".repeat(32).as_str()) };
                 assert_eq!(filter.after_task_id_hex, Some("cd".repeat(32).as_str()));
                 Ok(Response::builder()
                     .status(StatusCode::OK)
@@ -22954,10 +22201,7 @@ mod tests {
             assert_eq!(proposal.provider_id, provider_id);
             assert_eq!(proposal.manifest_digest, manifest_digest);
             assert_eq!(proposal.auditor_account, expected_auditor);
-            assert_eq!(
-                proposal.proposed_penalty,
-                "0.0000009".parse::<XorQuantity>().expect("valid quantity")
-            );
+            assert_eq_compact! { proposal.proposed_penalty => "0.0000009".parse::<XorQuantity>().expect("valid quantity") };
             assert_eq!(proposal.submitted_at_unix, 1_700_000_504);
             assert!(proposal.approval.is_none());
             Ok(transaction.hash())
@@ -23102,10 +22346,7 @@ mod tests {
     fn gc_manifest_entries_require_manifest_dir() {
         let dir = TempDir::new().expect("temp dir");
         let err = load_gc_manifest_entries(dir.path()).expect_err("missing manifests");
-        assert!(
-            err.to_string().contains("SoraFS manifests directory"),
-            "unexpected error: {err}"
-        );
+        assert_compact! { err.to_string().contains("SoraFS manifests directory"); "unexpected error: {err}" };
     }
     #[test]
     fn gc_retention_deadline_respects_zero_epoch() {
@@ -23114,18 +22355,9 @@ mod tests {
     }
     #[test]
     fn gc_storage_class_labels_match_expected_values() {
-        assert_eq!(
-            manifest_storage_class_label(ManifestStorageClass::Hot),
-            "hot"
-        );
-        assert_eq!(
-            manifest_storage_class_label(ManifestStorageClass::Warm),
-            "warm"
-        );
-        assert_eq!(
-            manifest_storage_class_label(ManifestStorageClass::Cold),
-            "cold"
-        );
+        assert_eq_compact! { manifest_storage_class_label(ManifestStorageClass::Hot) => "hot" };
+        assert_eq_compact! { manifest_storage_class_label(ManifestStorageClass::Warm) => "warm" };
+        assert_eq_compact! { manifest_storage_class_label(ManifestStorageClass::Cold) => "cold" };
     }
     #[test]
     fn storage_token_issue_passes_arguments_and_prints_nonce() {
@@ -23171,20 +22403,9 @@ mod tests {
         assert_eq!(overrides.rate_limit_bytes, Some(256_000));
         assert_eq!(overrides.requests_per_minute, Some(90));
         assert_eq!(ctx.printed.len(), 2);
-        assert!(
-            ctx.printed[0].starts_with("nonce: "),
-            "expected nonce println, got {}",
-            ctx.printed[0]
-        );
-        assert_eq!(
-            ctx.printed[1], "{\"token\":{\"body\":{}}}",
-            "expected JSON payload output"
-        );
-        assert_eq!(
-            nonce.len(),
-            24,
-            "nonce should be 12 random bytes hex encoded"
-        );
+        assert_compact! { ctx.printed[0].starts_with("nonce: "); "expected nonce println, got {}", ctx.printed[0] };
+        assert_eq_compact! { ctx.printed[1] => "{\"token\":{\"body\":{}}}"; "expected JSON payload output" };
+        assert_eq_compact! { nonce.len() => 24; "nonce should be 12 random bytes hex encoded" };
     }
     #[test]
     fn direct_mode_plan_generates_summary() {
@@ -23237,10 +22458,7 @@ mod tests {
             norito::json::from_str(&ctx.outputs()[0]).expect("parse plan");
         assert_eq!(plan.provider_id_hex, hex::encode(provider));
         assert_eq!(plan.chain_id, "nexus");
-        assert!(
-            plan.direct_car.canonical_url.contains("/direct/v1/car/"),
-            "direct car locator should reference the manifest digest"
-        );
+        assert_compact! { plan.direct_car.canonical_url.contains("/direct/v1/car/"); "direct car locator should reference the manifest digest" };
         assert!(plan.capabilities.direct_car_supported);
     }
     #[test]
@@ -23270,45 +22488,21 @@ mod tests {
         assert_eq!(manifest.car_size, car_bytes.len() as u64);
         let archive_digest = *blake3::hash(&car_bytes).as_bytes();
         let archive_digest_hex = hex::encode(archive_digest);
-        assert_eq!(
-            manifest.car_digest, archive_digest,
-            "manifest must bind every byte of the canonical CARv2 archive"
-        );
+        assert_eq_compact! { manifest.car_digest => archive_digest; "manifest must bind every byte of the canonical CARv2 archive" };
         let report_bytes = fs::read(&json_path).expect("read report");
         let report: Value = norito::json::from_slice(&report_bytes).expect("decode report");
-        assert_eq!(
-            report.get("car_archive_digest_hex").and_then(Value::as_str),
-            Some(archive_digest_hex.as_str())
-        );
-        assert_eq!(
-            report
-                .get("manifest")
-                .and_then(|manifest| manifest.get("car_digest_hex"))
-                .and_then(Value::as_str),
-            Some(archive_digest_hex.as_str())
-        );
+        assert_eq_compact! { report.get("car_archive_digest_hex").and_then(Value::as_str) => Some(archive_digest_hex.as_str()) };
+        assert_eq_compact! { report.get("manifest").and_then(|manifest| manifest.get("car_digest_hex")).and_then(Value::as_str) => Some(archive_digest_hex.as_str()) };
         assert_ne!(
             report.get("car_payload_digest_hex").and_then(Value::as_str),
             Some(archive_digest_hex.as_str()),
             "CARv1 payload-section digest must remain diagnostic-only"
         );
         let digest_hex = hex::encode(manifest.digest().expect("manifest digest").as_bytes());
-        assert_eq!(
-            report.get("manifest_digest_hex").and_then(Value::as_str),
-            Some(digest_hex.as_str())
-        );
+        assert_eq_compact! { report.get("manifest_digest_hex").and_then(Value::as_str) => Some(digest_hex.as_str()) };
         let por_root_hex = hex::encode(manifest.por_root);
-        assert_eq!(
-            report.get("por_root_hex").and_then(Value::as_str),
-            Some(por_root_hex.as_str())
-        );
-        assert_eq!(
-            report
-                .get("manifest")
-                .and_then(|manifest| manifest.get("por_root_hex"))
-                .and_then(Value::as_str),
-            Some(por_root_hex.as_str())
-        );
+        assert_eq_compact! { report.get("por_root_hex").and_then(Value::as_str) => Some(por_root_hex.as_str()) };
+        assert_eq_compact! { report.get("manifest").and_then(|manifest| manifest.get("por_root_hex")).and_then(Value::as_str) => Some(por_root_hex.as_str()) };
     }
     #[test]
     fn hybrid_manifest_aad_appends_filename() {
@@ -23389,10 +22583,7 @@ mod tests {
         let sorafs = root
             .remove("sorafs")
             .expect("generated snippet must use the top-level `sorafs` table");
-        assert!(
-            root.is_empty(),
-            "generated snippet contains unexpected top-level keys: {root:?}"
-        );
+        assert_compact! { root.is_empty(); "generated snippet contains unexpected top-level keys: {root:?}" };
         let sorafs = sorafs
             .as_table()
             .expect("top-level `sorafs` value must be a table")
@@ -23476,20 +22667,14 @@ mod tests {
     }
     #[test]
     fn direct_mode_toml_string_escape_blocks_config_injection() {
-        assert_eq!(
-            escape_toml_basic_string("nexus\"\nenforce_admission = false\\"),
-            "nexus\\\"\\nenforce_admission = false\\\\"
-        );
+        assert_eq_compact! { escape_toml_basic_string("nexus\"\nenforce_admission = false\\") => "nexus\\\"\\nenforce_admission = false\\\\" };
     }
     #[test]
     fn direct_mode_rollback_snippet_matches_defaults() {
         let args = GatewayDirectModeRollbackArgs;
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("rollback command runs");
-        assert_eq!(
-            ctx.outputs(),
-            &[render_direct_mode_rollback_snippet().to_owned()]
-        );
+        assert_eq_compact! { ctx.outputs() => &[render_direct_mode_rollback_snippet().to_owned()] };
         let snippet = &ctx.outputs()[0];
         assert!(snippet.contains("[sorafs.gateway]"));
         assert!(!snippet.contains("[torii.sorafs_gateway]"));
@@ -23529,42 +22714,20 @@ mod tests {
         let plan_bytes = fs::read(&output_path).expect("route plan json");
         let plan: Value =
             norito::json::from_slice(&plan_bytes).expect("route plan JSON should parse");
-        assert_eq!(
-            plan["manifest_json"].as_str().expect("manifest string"),
-            manifest_path.display().to_string()
-        );
-        assert_eq!(
-            plan["hostname"].as_str().expect("hostname string"),
-            "docs.sora.link"
-        );
+        assert_eq_compact! { plan["manifest_json"].as_str().expect("manifest string") => manifest_path.display().to_string() };
+        assert_eq_compact! { plan["hostname"].as_str().expect("hostname string") => "docs.sora.link" };
         let headers = plan["headers"].as_object().expect("headers object missing");
-        assert_eq!(
-            headers["Sora-Name"].as_str().expect("Sora-Name must exist"),
-            "sora:docs"
-        );
+        assert_eq_compact! { headers["Sora-Name"].as_str().expect("Sora-Name must exist") => "sora:docs" };
         let proof_json = BASE64
             .decode(headers["Sora-Proof"].as_str().expect("Sora-Proof base64"))
             .expect("decode proof payload");
         let proof_value: Value =
             norito::json::from_slice(&proof_json).expect("decode proof payload JSON");
-        assert_eq!(
-            proof_value["alias"].as_str().expect("alias string"),
-            "sora:docs"
-        );
-        assert!(
-            plan["headers_template"]
-                .as_str()
-                .expect("headers template string")
-                .contains("Sora-Route-Binding"),
-            "expected rendered header template"
-        );
+        assert_eq_compact! { proof_value["alias"].as_str().expect("alias string") => "sora:docs" };
+        assert_compact! { plan["headers_template"].as_str().expect("headers template string").contains("Sora-Route-Binding"); "expected rendered header template" };
         let header_file = fs::read_to_string(&headers_path).expect("header template");
         assert!(header_file.contains("Sora-Content-CID"));
-        assert!(
-            ctx.outputs()
-                .iter()
-                .any(|line| line.contains(output_path.to_string_lossy().as_ref()))
-        );
+        assert_compact! { ctx.outputs().iter().any(|line| line.contains(output_path.to_string_lossy().as_ref())) };
     }
     #[test]
     fn gateway_route_plan_supports_rollback_and_toggles() {
@@ -23608,39 +22771,15 @@ mod tests {
         let rollback = plan["rollback"]
             .as_object()
             .expect("rollback object missing");
-        assert_eq!(
-            rollback["manifest_json"]
-                .as_str()
-                .expect("rollback manifest"),
-            rollback_path.display().to_string()
-        );
-        assert_eq!(
-            rollback["release_tag"].as_str().expect("release tag"),
-            "previous"
-        );
-        assert!(
-            rollback
-                .get("headers_path")
-                .and_then(Value::as_str)
-                .is_some_and(|value| value.contains("gateway.route.rollback.headers.txt"))
-        );
+        assert_eq_compact! { rollback["manifest_json"].as_str().expect("rollback manifest") => rollback_path.display().to_string() };
+        assert_eq_compact! { rollback["release_tag"].as_str().expect("release tag") => "previous" };
+        assert_compact! { rollback.get("headers_path").and_then(Value::as_str).is_some_and(|value| value.contains("gateway.route.rollback.headers.txt")) };
         let header_file = fs::read_to_string(&headers_path).expect("header template");
-        assert!(
-            !header_file.contains("Content-Security-Policy"),
-            "CSP header should be omitted when --no-csp is set"
-        );
+        assert_compact! { !header_file.contains("Content-Security-Policy"); "CSP header should be omitted when --no-csp is set" };
         let rollback_headers =
             fs::read_to_string(&rollback_headers_path).expect("rollback header template");
-        assert!(
-            rollback_headers.contains("Sora-Route-Binding"),
-            "rollback template should include Sora-Route-Binding"
-        );
-        assert!(
-            ctx.outputs()
-                .iter()
-                .any(|line| line.contains("rollback headers written")),
-            "expected rollback output message"
-        );
+        assert_compact! { rollback_headers.contains("Sora-Route-Binding"); "rollback template should include Sora-Route-Binding" };
+        assert_compact! { ctx.outputs().iter().any(|line| line.contains("rollback headers written")); "expected rollback output message" };
     }
     #[test]
     fn gateway_cache_invalidate_prints_payload_and_curl() {
@@ -23657,22 +22796,13 @@ mod tests {
         args.run(&mut ctx).expect("cache invalidate command runs");
         assert_eq!(ctx.outputs().len(), 2);
         let payload: Value = norito::json::from_str(&ctx.outputs()[0]).expect("json payload");
-        assert_eq!(
-            payload["aliases"],
-            Value::Array(vec![Value::from("docs:portal")])
-        );
+        assert_eq_compact! { payload["aliases"] => Value::Array(vec![Value::from("docs:portal")]) };
         assert_eq!(payload["manifest_digest_hex"], Value::from("aa".repeat(32)));
         assert_eq!(payload["release_tag"], Value::from("portal-2026.04.01"));
         assert_eq!(payload["car_digest_hex"], Value::Null);
         let curl = &ctx.outputs()[1];
-        assert!(
-            curl.contains("https://cache.example.com/purge"),
-            "curl snippet should reference endpoint"
-        );
-        assert!(
-            curl.contains("Authorization: Bearer $CACHE_TOKEN"),
-            "curl snippet should reference the auth env var"
-        );
+        assert_compact! { curl.contains("https://cache.example.com/purge"); "curl snippet should reference endpoint" };
+        assert_compact! { curl.contains("Authorization: Bearer $CACHE_TOKEN"); "curl snippet should reference the auth env var" };
     }
     #[test]
     fn gateway_cache_invalidate_writes_payload_file() {
@@ -23690,19 +22820,13 @@ mod tests {
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("cache invalidate command runs");
         assert_eq!(ctx.outputs().len(), 2);
-        assert_eq!(
-            ctx.outputs()[0],
-            format!("wrote cache invalidation payload to {}", path.display())
-        );
+        assert_eq_compact! { ctx.outputs()[0] => format!("wrote cache invalidation payload to {}", path.display()) };
         let payload_str = std::fs::read_to_string(&path).expect("read payload");
         let payload: Value = norito::json::from_str(&payload_str).expect("json payload");
         assert_eq!(payload["release_tag"], Value::Null);
         assert_eq!(payload["car_digest_hex"], Value::from("cc".repeat(32)));
         let curl = &ctx.outputs()[1];
-        assert!(
-            curl.contains("--data '{"),
-            "curl snippet should embed the JSON payload"
-        );
+        assert_compact! { curl.contains("--data '{"); "curl snippet should embed the JSON payload" };
     }
     #[test]
     fn gateway_cache_invalidate_rejects_invalid_alias() {
@@ -23752,10 +22876,7 @@ mod tests {
         assert_eq!(ctx.outputs().len(), 1, "expected JSON output");
         let value: norito::json::Value =
             norito::json::from_str(&ctx.outputs()[0]).expect("parse instruction JSON");
-        assert!(
-            value.get("relay_id").is_some(),
-            "relay id missing in output"
-        );
+        assert_compact! { value.get("relay_id").is_some(); "relay id missing in output" };
         let bytes = std::fs::read(&instruction_path).expect("read instruction");
         let decoded: RelayRewardInstructionV1 =
             decode_from_bytes(&bytes).expect("decode instruction");
@@ -23977,21 +23098,14 @@ mod tests {
         assert_eq!(summary["processed_payouts"].as_u64(), Some(3));
         assert_eq!(summary["total_relays"].as_u64(), Some(2));
         let expected_budget_hex = sample_budget_id_hex();
-        assert_eq!(
-            summary["expected_budget_approval"].as_str(),
-            Some(expected_budget_hex.as_str())
-        );
+        assert_eq_compact! { summary["expected_budget_approval"].as_str() => Some(expected_budget_hex.as_str()) };
         assert_eq!(summary["missing_budget_approval"].as_u64(), Some(0));
         assert_eq!(summary["mismatched_budget_approval"].as_u64(), Some(0));
         let relays = summary["relays"]
             .as_array()
             .expect("relay summaries present");
         assert_eq!(relays.len(), 2);
-        assert!(
-            relays
-                .iter()
-                .any(|relay| relay["warning_epochs"].as_u64() == Some(1))
-        );
+        assert_compact! { relays.iter().any(|relay| relay["warning_epochs"].as_u64() == Some(1)) };
     }
     #[test]
     fn incentives_service_shadow_run_rejects_state_without_budget_id() {
@@ -24013,10 +23127,7 @@ mod tests {
         let err = args
             .run(&mut ctx)
             .expect_err("shadow run must require budget approval id");
-        assert!(
-            err.to_string().contains("budget_approval_id"),
-            "unexpected error: {err}"
-        );
+        assert_compact! { err.to_string().contains("budget_approval_id"); "unexpected error: {err}" };
         assert!(ctx.outputs().is_empty());
     }
     #[test]
@@ -24084,10 +23195,7 @@ mod tests {
         decoded.ensure_current().expect("state version matches");
         assert_eq!(decoded.treasury_account, treasury_account);
         assert_eq!(decoded.payouts.len(), state.payouts.len());
-        assert_eq!(
-            decoded.reward_config.base_reward,
-            state.reward_config.base_reward
-        );
+        assert_eq_compact! { decoded.reward_config.base_reward => state.reward_config.base_reward };
     }
     #[test]
     fn incentives_service_init_rejects_missing_budget_id() {
@@ -24104,14 +23212,8 @@ mod tests {
         let err = args
             .run(&mut ctx)
             .expect_err("init must require budget approval id");
-        assert!(
-            err.to_string().contains("budget_approval_id"),
-            "unexpected error: {err}"
-        );
-        assert!(
-            !state_path.exists(),
-            "init must not write state without budget approval"
-        );
+        assert_compact! { err.to_string().contains("budget_approval_id"); "unexpected error: {err}" };
+        assert_compact! { !state_path.exists(); "init must not write state without budget approval" };
     }
     #[test]
     fn incentives_service_process_rejects_state_without_budget_id() {
@@ -24134,10 +23236,7 @@ mod tests {
         let err = args
             .run(&mut ctx)
             .expect_err("budget id should be required");
-        assert!(
-            err.to_string().contains("budget_approval_id"),
-            "unexpected error: {err}"
-        );
+        assert_compact! { err.to_string().contains("budget_approval_id"); "unexpected error: {err}" };
     }
     #[test]
     fn incentives_service_audit_flags_underbonded_relay() {
@@ -24191,11 +23290,7 @@ mod tests {
         assert!(err.to_string().contains("issue"), "unexpected error: {err}");
         assert_eq!(ctx.outputs().len(), 1, "expected JSON summary output");
         let summary: Value = norito::json::from_str(&ctx.outputs()[0]).expect("parse summary");
-        assert_eq!(
-            summary["bond"]["insufficient_bond"].as_u64(),
-            Some(1),
-            "underbonded relay should be reported"
-        );
+        assert_eq_compact! { summary["bond"]["insufficient_bond"].as_u64() => Some(1); "underbonded relay should be reported" };
     }
     #[test]
     fn incentives_service_audit_flags_budget_mismatch_and_missing() {
@@ -24230,22 +23325,9 @@ mod tests {
             .as_object()
             .expect("budget summary present");
         let expected_budget = sample_budget_id_hex();
-        assert_eq!(
-            budget
-                .get("configured_budget_approval_id")
-                .and_then(Value::as_str),
-            Some(expected_budget.as_str())
-        );
-        assert_eq!(
-            budget
-                .get("mismatched_budget_approval")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            budget.get("payouts_without_budget").and_then(Value::as_u64),
-            Some(1)
-        );
+        assert_eq_compact! { budget.get("configured_budget_approval_id").and_then(Value::as_str) => Some(expected_budget.as_str()) };
+        assert_eq_compact! { budget.get("mismatched_budget_approval").and_then(Value::as_u64) => Some(1) };
+        assert_eq_compact! { budget.get("payouts_without_budget").and_then(Value::as_u64) => Some(1) };
     }
     #[test]
     fn incentives_service_init_writes_state() {
@@ -24266,10 +23348,7 @@ mod tests {
         assert_eq!(state.treasury_account, sample_account_id("treasury"));
         assert!(state.payouts.is_empty());
         assert!(state.disputes.is_empty());
-        assert_eq!(
-            state.reward_config.policy.bond_asset_id,
-            xor_asset_id().to_string()
-        );
+        assert_eq_compact! { state.reward_config.policy.bond_asset_id => xor_asset_id().to_string() };
     }
     #[test]
     fn incentives_service_process_records_reward() {
@@ -24308,10 +23387,7 @@ mod tests {
         let state = read_state(&state_path);
         assert_eq!(state.payouts.len(), 1);
         assert_eq!(state.payouts[0].epoch, metrics.epoch);
-        assert_eq!(
-            state.payouts[0].beneficiary,
-            sample_account_id("beneficiary")
-        );
+        assert_eq_compact! { state.payouts[0].beneficiary => sample_account_id("beneficiary") };
         let instruction_bytes = fs::read(instruction_out.path()).expect("read instruction");
         let instruction: RelayRewardInstructionV1 =
             decode_from_bytes(&instruction_bytes).expect("decode instruction");
@@ -24363,10 +23439,7 @@ mod tests {
         let result = daemon_args.run(&mut ctx);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("budget_approval_id"),
-            "unexpected error: {err}"
-        );
+        assert_compact! { err.contains("budget_approval_id"); "unexpected error: {err}" };
     }
     #[test]
     fn incentives_daemon_reports_budget_hash() {
@@ -24435,10 +23508,7 @@ mod tests {
         assert_eq!(summary["missing_budget_approval"].as_u64(), Some(0));
         assert_eq!(summary["mismatched_budget_approval"].as_u64(), Some(0));
         let expected_budget_hex = sample_budget_id_hex();
-        assert_eq!(
-            summary["expected_budget_approval"].as_str(),
-            Some(expected_budget_hex.as_str())
-        );
+        assert_eq_compact! { summary["expected_budget_approval"].as_str() => Some(expected_budget_hex.as_str()) };
     }
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -24491,18 +23561,8 @@ mod tests {
         let state = read_state(&state_path);
         assert_eq!(state.disputes.len(), 1);
         let stored = &state.disputes[0];
-        assert_eq!(
-            stored.requested_amount,
-            Quantity::from_str("120").expect("quantity literal")
-        );
-        assert_eq!(
-            stored
-                .requested_adjustment
-                .as_ref()
-                .expect("adjustment present")
-                .amount,
-            Quantity::from_str("25").expect("quantity literal")
-        );
+        assert_eq_compact! { stored.requested_amount => Quantity::from_str("120").expect("quantity literal") };
+        assert_eq_compact! { stored.requested_adjustment.as_ref().expect("adjustment present").amount => Quantity::from_str("25").expect("quantity literal") };
         let transfer_file = NamedTempFile::new().expect("transfer file");
         let resolve_args = IncentivesServiceDisputeResolveArgs {
             state: state_path.clone(),
@@ -24524,10 +23584,7 @@ mod tests {
         match &state.disputes[0].status {
             StoredDisputeStatus::Resolved { kind, amount, .. } => {
                 assert!(matches!(kind, StoredResolutionKind::Credit));
-                assert_eq!(
-                    amount.clone(),
-                    Some(Quantity::from_str("25").expect("quantity literal"))
-                );
+                assert_eq_compact! { amount.clone() => Some(Quantity::from_str("25").expect("quantity literal")) };
             }
             other => panic!("unexpected dispute status: {other:?}"),
         }

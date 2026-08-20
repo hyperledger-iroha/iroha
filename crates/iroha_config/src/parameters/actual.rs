@@ -38,7 +38,7 @@ use iroha_data_model::{
     content::ContentAuthMode,
     da::{
         commitment::DaProofScheme,
-        confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
+        confidential_compute::ConfidentialComputePolicy,
         prelude::DaStripeLayout,
         types::{BlobClass, DaRentPolicyV1, RetentionPolicy},
     },
@@ -49,8 +49,8 @@ use iroha_data_model::{
     name::Name,
     nexus::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
-        LaneConfig as LaneConfigMetadata, LaneId, LaneStorageProfile, LaneVisibility, ShardId,
-        UniversalAccountId,
+        LaneConfig as LaneConfigMetadata, LaneId, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
+        LaneStorageProfile, LaneVisibility, ShardId, UniversalAccountId,
     },
     oracle::KeyedHash,
     peer::{Peer, PeerId},
@@ -87,7 +87,11 @@ use crate::{
     kura::{FsyncMode, InitMode},
     parameters::{defaults, user, user::ParseError},
 };
-use norito::{codec::Encode, streaming::EntropyMode};
+pub use iroha_data_model::nexus::DaManifestPolicy;
+use norito::{
+    codec::{Decode, Encode},
+    streaming::EntropyMode,
+};
 pub use sorafs_reputation::{
     SorafsReputationFinalizedArchiveRetentionAuthority, SorafsReputationRuntime,
     SorafsReserveTransparencyRuntime,
@@ -558,8 +562,8 @@ impl Root {
             || self.torii.sorafs_discovery.discovery_enabled
             || self.torii.sorafs_repair.enabled
             || self.torii.sorafs_gc.enabled;
-        let multilane = self.uses_multilane_catalogs();
-        sorafs || multilane
+        let nexus = self.uses_multilane_catalogs() || self.nexus.has_lane_overrides();
+        sorafs || nexus
     }
     /// Detect whether the configuration declares multiple lanes/dataspaces or non-default routing.
     #[must_use]
@@ -572,7 +576,6 @@ impl Root {
     /// complete admission trust policy. The profile never manufactures trust
     /// roots on behalf of the operator.
     pub fn apply_sora_profile(&mut self) {
-        self.nexus.enabled = true;
         self.torii.sorafs_storage.enabled = true;
         self.torii.sorafs_discovery.discovery_enabled =
             self.torii.sorafs_discovery.admission.is_some();
@@ -580,19 +583,11 @@ impl Root {
             self.tiered_state.da_store_root =
                 Some(PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT));
         }
-        let catalog = &self.nexus.lane_catalog;
-        let is_default_catalog = catalog.lane_count().get() == 1
-            && matches!(catalog.lanes(), [lane] if lane.id == LaneId::SINGLE && lane.alias == "default");
-        let dataspace = &self.nexus.dataspace_catalog;
-        let is_default_dataspace = matches!(dataspace.entries(), [entry]
-            if entry.id == DataSpaceId::UNIVERSAL
-                && entry.alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS
-        );
-        let policy = &self.nexus.routing_policy;
-        let is_default_policy = policy.default_lane == LaneId::SINGLE
-            && policy.default_dataspace == DataSpaceId::UNIVERSAL
-            && policy.rules.is_empty();
-        if is_default_catalog && is_default_dataspace && is_default_policy {
+        // Apply bundled geometry only to the exact untouched default. A lane
+        // can remain SINGLE/"default" while carrying security- or
+        // storage-relevant overrides (for example a pinned shard); treating
+        // that as pristine would silently discard explicit operator policy.
+        if !self.nexus.has_lane_overrides() {
             let lane_catalog = sora_lane_catalog();
             self.nexus.configured_lane_catalog = lane_catalog.clone();
             self.nexus.lane_catalog = lane_catalog;
@@ -606,9 +601,6 @@ impl Root {
     /// When the aggregate budget is omitted, `irohad` derives a filesystem-aware budget at
     /// runtime and applies it with [`Self::apply_derived_storage_budget`].
     pub fn apply_storage_budget(&mut self) {
-        if !self.nexus.enabled {
-            return;
-        }
         self.apply_storage_memory_budget();
         let Some(max_disk) = self.nexus.storage.local_budget_bytes.map(Bytes::get) else {
             return;
@@ -648,9 +640,6 @@ impl Root {
                 })?;
         let aggregate_budget_bytes = NonZeroU64::new(aggregate_budget_bytes)
             .ok_or(NexusStorageBudgetApplicationError::NoFilesystemBudgets)?;
-        if !self.nexus.enabled {
-            return Ok(aggregate_budget_bytes);
-        }
         self.apply_storage_memory_budget();
         self.nexus.storage.effective_local_budget_bytes = Some(Bytes(aggregate_budget_bytes.get()));
         let derived_caps = derive_filesystem_nexus_storage_component_caps(
@@ -932,6 +921,10 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
             settlement: None,
             storage: LaneStorageProfile::FullReplica,
             proof_scheme: DaProofScheme::default(),
+            manifest_policy: DaManifestPolicy::default(),
+            confidential_compute: None,
+            scheduler: None,
+            settlement_buffer: None,
             metadata: BTreeMap::new(),
         },
         LaneConfigMetadata {
@@ -946,6 +939,10 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
             settlement: None,
             storage: LaneStorageProfile::FullReplica,
             proof_scheme: DaProofScheme::default(),
+            manifest_policy: DaManifestPolicy::default(),
+            confidential_compute: None,
+            scheduler: None,
+            settlement_buffer: None,
             metadata: BTreeMap::new(),
         },
         LaneConfigMetadata {
@@ -960,6 +957,10 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
             settlement: None,
             storage: LaneStorageProfile::FullReplica,
             proof_scheme: DaProofScheme::default(),
+            manifest_policy: DaManifestPolicy::default(),
+            confidential_compute: None,
+            scheduler: None,
+            settlement_buffer: None,
             metadata: BTreeMap::new(),
         },
     ];
@@ -2417,8 +2418,9 @@ pub struct NexusFees {
     pub sponsor_vault_custody_account_id: AccountId,
     /// How fees are settled after they are computed.
     pub settlement_mode: NexusFeeSettlementMode,
-    /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
-    pub successful_claim_fee_exempt_authorities: Vec<String>,
+    /// Canonical authorities allowed to submit fee-free successful SORA v2 XOR claim mint
+    /// transactions.
+    pub successful_claim_fee_exempt_authorities: BTreeSet<AccountId>,
 }
 /// Settlement mode for Nexus fee debits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2440,7 +2442,7 @@ impl Default for NexusFees {
             sponsor_vault_custody_account_id:
                 defaults::nexus::fees::sponsor_vault_custody_account_id(),
             settlement_mode: NexusFeeSettlementMode::Direct,
-            successful_claim_fee_exempt_authorities: Vec::new(),
+            successful_claim_fee_exempt_authorities: BTreeSet::new(),
         }
     }
 }
@@ -2535,16 +2537,30 @@ impl Default for NexusUploadedModels {
 /// Committee and quorum settings for protected-domain endorsements.
 #[derive(Debug, Clone)]
 pub struct NexusEndorsement {
-    /// Committee member public keys allowed to sign endorsements (string form).
-    pub committee_keys: Vec<String>,
+    /// Canonical committee public keys allowed to sign endorsements.
+    pub committee_keys: BTreeSet<PublicKey>,
     /// Quorum required to accept an endorsement (0 disables enforcement).
     pub quorum: u16,
 }
 impl Default for NexusEndorsement {
     fn default() -> Self {
+        let committee_keys: BTreeSet<PublicKey> = defaults::nexus::endorsement::committee_keys()
+            .into_iter()
+            .enumerate()
+            .map(|(index, raw_key)| {
+                PublicKey::from_str(raw_key.trim()).unwrap_or_else(|error| {
+                    panic!("invalid default nexus.endorsement.committee_keys[{index}]: {error}")
+                })
+            })
+            .collect();
+        let quorum = defaults::nexus::endorsement::QUORUM;
+        assert!(
+            quorum == 0 || usize::from(quorum) <= committee_keys.len(),
+            "default nexus.endorsement.quorum exceeds the unique default committee size"
+        );
         Self {
-            committee_keys: defaults::nexus::endorsement::committee_keys(),
-            quorum: defaults::nexus::endorsement::QUORUM,
+            committee_keys,
+            quorum,
         }
     }
 }
@@ -2703,7 +2719,7 @@ pub enum NexusStorageBudgetApplicationError {
         component: NexusStorageBudgetComponent,
     },
 }
-/// Storage budget configuration for Nexus-enabled nodes.
+/// Storage budget configuration for Nexus nodes.
 #[derive(Clone, Copy)]
 pub struct NexusStorage {
     /// Operator-configured aggregate on-disk storage budget (bytes).
@@ -2792,9 +2808,7 @@ impl Default for NexusStorageWeights {
 /// Nexus configuration describing lanes, data spaces, and routing policy.
 #[derive(Debug, Clone)]
 pub struct Nexus {
-    /// Whether multilane (Nexus/Iroha3) features are enabled at runtime.
-    pub enabled: bool,
-    /// Storage budget configuration for Nexus-enabled nodes.
+    /// Storage budget configuration for Nexus nodes.
     pub storage: NexusStorage,
     /// Staking guardrails for public lanes.
     pub staking: NexusStaking,
@@ -2846,7 +2860,6 @@ pub struct Nexus {
 impl Default for Nexus {
     fn default() -> Self {
         Self {
-            enabled: defaults::nexus::ENABLED,
             storage: NexusStorage::default(),
             staking: NexusStaking::default(),
             fees: NexusFees::default(),
@@ -2892,6 +2905,7 @@ impl Nexus {
     #[must_use]
     pub fn has_lane_overrides(&self) -> bool {
         self.lane_catalog != LaneCatalog::default()
+            || self.configured_lane_catalog != LaneCatalog::default()
             || self.dataspace_catalog != DataSpaceCatalog::default()
             || !self.dataspace_fee_sponsor_program_ids.is_empty()
             || self.routing_policy != LaneRoutingPolicy::default()
@@ -2933,7 +2947,6 @@ pub enum NexusConsensusPolicyDigestError {
 #[derive(Encode)]
 struct NexusConsensusPolicyPreimageV1 {
     version: u8,
-    enabled: bool,
     configured_lane_catalog_hash: [u8; 32],
     dataspaces: Vec<NexusConsensusDataspaceV1>,
     dataspace_fee_sponsor_program_ids: Vec<(u64, FeeSponsorProgramId)>,
@@ -3213,10 +3226,22 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         .iter()
         .map(|(id, program_id)| (id.as_u64(), program_id.clone()))
         .collect();
-    let mut successful_claim_fee_exempt_authorities =
-        nexus.fees.successful_claim_fee_exempt_authorities.clone();
-    successful_claim_fee_exempt_authorities.sort_unstable();
-    successful_claim_fee_exempt_authorities.dedup();
+    let successful_claim_fee_exempt_authorities = nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .iter()
+        .map(|authority| {
+            authority
+                .canonical_i105()
+                .expect("validated Nexus fee-exempt authority must encode as canonical I105")
+        })
+        .collect();
+    let endorsement_committee_keys = nexus
+        .endorsement
+        .committee_keys
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
     let governance_modules = nexus
         .governance
         .modules
@@ -3232,14 +3257,12 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         })
         .collect();
     let autoscale = &nexus.autoscale;
-    let configured_lane_catalog = (
-        nexus.configured_lane_catalog.lane_count().get(),
-        nexus.configured_lane_catalog.lanes().to_vec(),
-    )
+    let configured_lane_catalog = nexus
+        .configured_lane_catalog
+        .consensus_projection()
         .encode();
     let preimage = NexusConsensusPolicyPreimageV1 {
         version: VERSION,
-        enabled: nexus.enabled,
         configured_lane_catalog_hash: Hash::new_from_chunks(&[
             CONFIGURED_LANE_CATALOG_DOMAIN,
             configured_lane_catalog.as_slice(),
@@ -3300,7 +3323,7 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             max_session_image_budget: nexus.uploaded_models.max_session_image_budget,
         },
         endorsement: NexusConsensusEndorsementV1 {
-            committee_keys: nexus.endorsement.committee_keys.clone(),
+            committee_keys: endorsement_committee_keys,
             quorum: nexus.endorsement.quorum,
         },
         axt: NexusConsensusAxtV1 {
@@ -4347,20 +4370,31 @@ impl LaneConfig {
     #[must_use]
     pub fn is_confidential_compute(&self, id: LaneId) -> bool {
         self.entry(id)
-            .is_some_and(|entry| entry.confidential_compute)
+            .is_some_and(|entry| entry.confidential_compute.is_some())
     }
     /// Resolve the confidential compute policy for a lane if configured.
     #[must_use]
     pub fn confidential_compute_policy(&self, id: LaneId) -> Option<&ConfidentialComputePolicy> {
         self.entry(id)
-            .and_then(|entry| entry.confidential_policy.as_ref())
+            .and_then(|entry| entry.confidential_compute.as_ref())
     }
-    /// Declared access audience labels for a confidential compute lane.
+    /// Canonically ordered access audience labels for a confidential-compute lane.
     #[must_use]
-    pub fn confidential_access(&self, id: LaneId) -> &[String] {
+    pub fn confidential_access(&self, id: LaneId) -> Option<&BTreeSet<String>> {
         self.entry(id)
-            .map(|entry| entry.confidential_access.as_slice())
-            .unwrap_or_default()
+            .and_then(|entry| entry.confidential_compute.as_ref())
+            .map(|policy| &policy.allowed_audiences)
+    }
+    /// Resolve typed scheduler overrides for a lane if configured.
+    #[must_use]
+    pub fn scheduler_policy(&self, id: LaneId) -> Option<&LaneSchedulerPolicy> {
+        self.entry(id).and_then(|entry| entry.scheduler.as_ref())
+    }
+    /// Resolve the typed settlement reserve policy for a lane if configured.
+    #[must_use]
+    pub fn settlement_buffer_policy(&self, id: LaneId) -> Option<&LaneSettlementBufferPolicy> {
+        self.entry(id)
+            .and_then(|entry| entry.settlement_buffer.as_ref())
     }
 }
 /// Derived configuration for a single lane.
@@ -4390,64 +4424,22 @@ pub struct LaneConfigEntry {
     pub key_prefix: [u8; 4],
     /// Manifest availability enforcement policy for this lane.
     pub manifest_policy: DaManifestPolicy,
-    /// Whether the lane is marked for confidential compute handling.
-    pub confidential_compute: bool,
-    /// Confidential compute policy derived from lane metadata (if enabled).
-    pub confidential_policy: Option<ConfidentialComputePolicy>,
-    /// Declared audiences allowed to fetch confidential compute payloads.
-    pub confidential_access: Vec<String>,
+    /// Typed confidential-compute policy, absent for ordinary lanes.
+    pub confidential_compute: Option<ConfidentialComputePolicy>,
+    /// Positive scheduler overrides, absent when global fallbacks apply.
+    pub scheduler: Option<LaneSchedulerPolicy>,
+    /// Typed settlement reserve policy, absent when the lane has no reserve.
+    pub settlement_buffer: Option<LaneSettlementBufferPolicy>,
 }
 impl LaneConfigEntry {
-    const MANIFEST_POLICY_METADATA_KEY: &'static str = "da_manifest_policy";
-    const CONFIDENTIAL_FLAG_KEY: &'static str = "confidential_compute";
-    const CONFIDENTIAL_MECHANISM_KEY: &'static str = "confidential_mechanism";
-    const CONFIDENTIAL_KEY_VERSION_KEY: &'static str = "confidential_key_version";
-    const CONFIDENTIAL_ACCESS_KEY: &'static str = "confidential_access";
     fn from_metadata(meta: &LaneConfigMetadata) -> Self {
         let slug = Self::slugify(&meta.alias, meta.id);
         let lane_numeric = meta.id.as_u32();
         let key_prefix = lane_numeric.to_be_bytes();
         let kura_segment = format!("lane_{lane_numeric:03}_{slug}");
         let merge_segment = format!("lane_{lane_numeric:03}_{slug}_merge");
-        let manifest_policy = meta
-            .metadata
-            .get(Self::MANIFEST_POLICY_METADATA_KEY)
-            .and_then(|raw| DaManifestPolicy::from_metadata_value(raw))
-            .unwrap_or_default();
+        let manifest_policy = meta.manifest_policy;
         let shard_id = meta.effective_shard_id().as_u32();
-        let confidential_compute = meta
-            .metadata
-            .get(Self::CONFIDENTIAL_FLAG_KEY)
-            .and_then(|raw| Self::parse_bool(raw.as_str()))
-            .unwrap_or(false);
-        let confidential_access = meta
-            .metadata
-            .get(Self::CONFIDENTIAL_ACCESS_KEY)
-            .map(|raw| {
-                raw.split(',')
-                    .filter_map(|entry| {
-                        let trimmed = entry.trim();
-                        (!trimmed.is_empty()).then(|| trimmed.to_string())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let mechanism = meta
-            .metadata
-            .get(Self::CONFIDENTIAL_MECHANISM_KEY)
-            .and_then(|raw| ConfidentialComputeMechanism::from_metadata_value(raw.as_str()))
-            .unwrap_or(ConfidentialComputeMechanism::Encryption);
-        let key_version = meta
-            .metadata
-            .get(Self::CONFIDENTIAL_KEY_VERSION_KEY)
-            .and_then(|raw| raw.parse::<u32>().ok());
-        let confidential_policy = if confidential_compute {
-            key_version.map(|key_version| {
-                ConfidentialComputePolicy::new(mechanism, key_version, confidential_access.clone())
-            })
-        } else {
-            None
-        };
         Self {
             lane_id: meta.id,
             shard_id,
@@ -4461,16 +4453,9 @@ impl LaneConfigEntry {
             merge_segment,
             key_prefix,
             manifest_policy,
-            confidential_compute,
-            confidential_policy,
-            confidential_access,
-        }
-    }
-    fn parse_bool(raw: &str) -> Option<bool> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "y" | "on" => Some(true),
-            "0" | "false" | "no" | "n" | "off" => Some(false),
-            _ => None,
+            confidential_compute: meta.confidential_compute.clone(),
+            scheduler: meta.scheduler.clone(),
+            settlement_buffer: meta.settlement_buffer.clone(),
         }
     }
     fn slugify(alias: &str, lane_id: LaneId) -> String {
@@ -4512,24 +4497,6 @@ impl LaneConfigEntry {
         root.as_ref()
             .join("merge_ledger")
             .join(format!("{}.log", self.merge_segment))
-    }
-}
-/// Per-lane manifest availability enforcement policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DaManifestPolicy {
-    /// Missing manifests block commitment and proposal sealing.
-    #[default]
-    Strict,
-    /// Missing manifests produce warnings but do not block commitment.
-    AuditOnly,
-}
-impl DaManifestPolicy {
-    fn from_metadata_value(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "strict" => Some(Self::Strict),
-            "audit" | "audit_only" | "warn" | "warn_only" => Some(Self::AuditOnly),
-            _ => None,
-        }
     }
 }
 /// Lane-fusion tuning parameters.
@@ -4948,12 +4915,18 @@ impl Default for Pipeline {
         }
     }
 }
-/// One active lane lifecycle binding committed into a Sumeragi v2 height context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
+/// One retained lane-incarnation lineage binding committed into a Sumeragi v2 height context.
+///
+/// The complete projection contains every active or retired lane identifier ever
+/// observed by the state. Retired entries remain consensus-relevant because a
+/// later recreation derives its next incarnation from this retained generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
 pub struct SumeragiV2LaneLifecycleEntry {
     /// Canonical lane identifier.
     pub lane_id: LaneId,
-    /// Non-zero incarnation commitment for the active lane generation.
+    /// Monotonic incarnation generation retained for this lane identifier.
+    pub generation: u64,
+    /// Non-zero commitment for the latest active or retired incarnation.
     pub incarnation: Hash,
     /// Global carrier height that activated this incarnation.
     pub activation_height: u64,
@@ -4965,16 +4938,17 @@ pub struct SumeragiV2LaneLifecycleEntry {
 /// sizing, caches, and telemetry. It includes the validated lane geometry,
 /// dataspace and routing catalogs, lane election/fee/AXT/DA policy, the five
 /// deterministic AMX budgets, and staged active public-lane validator records.
-/// It also commits the active lane incarnation and activation-height map so
-/// peers with divergent lifecycle histories cannot enter the same height.
-/// Active records are sorted by their storage key before encoding so callers
-/// cannot accidentally make the commitment depend on iteration order.
+/// It also commits the complete retained lane-incarnation lineage, including
+/// retired lane identifiers, generations, commitments, and activation heights,
+/// so peers with divergent lifecycle histories cannot enter the same height or
+/// later derive the same recreated lane differently. Active validator records
+/// and retained lineage entries are sorted canonically before encoding.
 #[must_use]
 pub fn sumeragi_v2_nexus_amx_context_hash(
     nexus: &Nexus,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
-    lane_lifecycle: &[SumeragiV2LaneLifecycleEntry],
+    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
 ) -> Hash {
     const DATASPACE_COUNT_TAG: &str = "nexus.dataspace_catalog.count";
     fn append<T: Encode>(out: &mut Vec<u8>, tag: &'static str, value: &T) {
@@ -4987,29 +4961,37 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         out.extend_from_slice(&bytes);
     }
     let mut preimage = b"sumeragi-v2:nexus-amx-context\0v2".to_vec();
-    append(&mut preimage, "nexus.enabled", &nexus.enabled);
     append(
         &mut preimage,
         "nexus.lane_catalog.lane_count",
         &nexus.lane_catalog.lane_count().get(),
     );
-    append(
-        &mut preimage,
-        "nexus.lane_catalog.lanes",
-        &nexus.lane_catalog.lanes().to_vec(),
-    );
-    let mut lane_lifecycle = lane_lifecycle.to_vec();
-    lane_lifecycle.sort_by_key(|entry| entry.lane_id);
+    let (_, consensus_lanes) = nexus.lane_catalog.consensus_projection();
+    append(&mut preimage, "nexus.lane_catalog.lanes", &consensus_lanes);
+    let mut retained_lane_lineage = retained_lane_lineage.to_vec();
+    retained_lane_lineage.sort_unstable_by(|left, right| {
+        left.lane_id
+            .cmp(&right.lane_id)
+            .then_with(|| left.generation.cmp(&right.generation))
+            .then_with(|| left.incarnation.cmp(&right.incarnation))
+            .then_with(|| left.activation_height.cmp(&right.activation_height))
+    });
     append(
         &mut preimage,
         "nexus.lane_lifecycle.count",
-        &u64::try_from(lane_lifecycle.len()).expect("lane lifecycle length fits in u64"),
+        &u64::try_from(retained_lane_lineage.len())
+            .expect("retained lane lineage length fits in u64"),
     );
-    for entry in lane_lifecycle {
+    for entry in retained_lane_lineage {
         append(
             &mut preimage,
             "nexus.lane_lifecycle.lane_id",
             &entry.lane_id,
+        );
+        append(
+            &mut preimage,
+            "nexus.lane_lifecycle.generation",
+            &entry.generation,
         );
         append(
             &mut preimage,
@@ -5029,11 +5011,6 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     for entry in dataspaces {
         append(&mut preimage, "nexus.dataspace.id", &entry.id);
         append(&mut preimage, "nexus.dataspace.alias", &entry.alias);
-        append(
-            &mut preimage,
-            "nexus.dataspace.description",
-            &entry.description,
-        );
         append(
             &mut preimage,
             "nexus.dataspace.fault_tolerance",
@@ -5071,11 +5048,6 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
             &mut preimage,
             "nexus.routing.rule.instruction",
             &rule.matcher.instruction,
-        );
-        append(
-            &mut preimage,
-            "nexus.routing.rule.description",
-            &rule.matcher.description,
         );
     }
     let public_validator_mode = match nexus.staking.public_validator_mode {
@@ -5177,10 +5149,16 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         "nexus.fees.settlement_mode",
         &settlement_mode,
     );
-    let mut successful_claim_fee_exempt_authorities =
-        nexus.fees.successful_claim_fee_exempt_authorities.clone();
-    successful_claim_fee_exempt_authorities.sort_unstable();
-    successful_claim_fee_exempt_authorities.dedup();
+    let successful_claim_fee_exempt_authorities = nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .iter()
+        .map(|authority| {
+            authority
+                .canonical_i105()
+                .expect("validated Nexus fee-exempt authority must encode as canonical I105")
+        })
+        .collect::<Vec<_>>();
     append(
         &mut preimage,
         "nexus.fees.successful_claim_exempt_authorities",
@@ -5835,12 +5813,8 @@ pub struct Kura {
     pub max_disk_usage_bytes: Bytes<u64>,
     /// Number of recent blocks kept in memory.
     pub blocks_in_memory: NonZeroUsize,
-    /// Number of recent committed non-genesis roster records retained for block-sync validation.
-    /// Genesis is pinned separately, and one additional row is reserved for an authenticated
-    /// pre-Kura successor.
-    pub block_sync_roster_retention: NonZeroUsize,
-    /// Number of recent roster sidecars retained alongside the block store.
-    pub roster_sidecar_retention: NonZeroUsize,
+    /// Number of recent lane-history entries retained alongside the block store.
+    pub lane_history_retention: NonZeroUsize,
     /// Authenticated replica-advert retention, expiry, and refresh policy.
     pub replica_advert: KuraReplicaAdvertPolicy,
     /// Whether to append new blocks as JSONL to `blocks.jsonl` under the active Kura lane.
@@ -6091,8 +6065,8 @@ pub struct SumeragiQueues {
     pub body_bytes: NonZeroUsize,
     /// Per-ingress-source canonical wire-byte partition. Validator partitions
     /// isolate ordinary traffic, payload completions, and timeout votes;
-    /// authenticated non-validator and anonymous partitions do not spend the
-    /// timeout reserve. Lane progress and executable-payload recovery impose
+    /// authenticated non-validator partitions do not spend the timeout
+    /// reserve. Lane progress and executable-payload recovery impose
     /// fixed one-MiB and four-MiB minima on ordinary and completion regions.
     pub body_source_bytes: NonZeroUsize,
     /// Payload-chunk ingress and orphan-buffer capacity.
@@ -6416,7 +6390,7 @@ impl Sumeragi {
             });
         }
         let minimum_body_sources = authenticated_non_validator_source_capacity
-            .checked_add(2)
+            .checked_add(1)
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 authenticated-source outer-ingress partition count",
             ))?;
@@ -7144,29 +7118,24 @@ pub fn sumeragi_v2_lifecycle_capacity_geometry(
 }
 /// Derive the outer-ingress message capacity required for a validator roster.
 ///
-/// Every validator owns five protected positions, every configured
-/// authenticated non-validator source owns three, and anonymous traffic owns
-/// one position without a validator roster or two positions once validators
-/// are configured.
+/// Every validator owns five protected positions and every configured
+/// authenticated non-validator source owns three. Identityless ingress has no
+/// production partition.
 #[must_use]
 pub fn sumeragi_v2_body_ingress_required_message_capacity(
     validator_roster_len: usize,
     authenticated_non_validator_source_capacity: usize,
 ) -> Option<usize> {
-    let anonymous_slots = if validator_roster_len == 0 { 1 } else { 2 };
-    validator_roster_len
-        .checked_mul(5)
-        .and_then(|required| {
-            authenticated_non_validator_source_capacity
-                .checked_mul(3)
-                .and_then(|authenticated_sources| required.checked_add(authenticated_sources))
-        })
-        .and_then(|required| required.checked_add(anonymous_slots))
+    validator_roster_len.checked_mul(5).and_then(|required| {
+        authenticated_non_validator_source_capacity
+            .checked_mul(3)
+            .and_then(|authenticated_sources| required.checked_add(authenticated_sources))
+    })
 }
 /// Derive the aggregate outer-ingress byte capacity for a validator roster.
 ///
-/// Every validator, configured authenticated non-validator source, and the
-/// anonymous source owns one isolated `body_source_bytes` partition.
+/// Every validator and configured authenticated non-validator source owns one
+/// isolated `body_source_bytes` partition.
 #[must_use]
 pub fn sumeragi_v2_body_ingress_required_byte_capacity(
     validator_roster_len: usize,
@@ -7175,7 +7144,6 @@ pub fn sumeragi_v2_body_ingress_required_byte_capacity(
 ) -> Option<usize> {
     validator_roster_len
         .checked_add(authenticated_non_validator_source_capacity)
-        .and_then(|source_count| source_count.checked_add(1))
         .and_then(|source_count| source_count.checked_mul(body_source_bytes))
 }
 /// Invalid or non-canonical Sumeragi v2 runtime configuration.
@@ -7222,7 +7190,7 @@ pub enum SumeragiV2ConfigError {
     /// Reserved reducer FIFO capacity consumed the whole queue.
     #[error("Sumeragi v2 reducer queue reserves leave no normal-ingress capacity")]
     InvalidQueueAllocation,
-    /// Outer ingress cannot retain one validator, every non-validator source lane, and anonymous work.
+    /// Outer ingress cannot retain one validator and every non-validator source lane.
     #[error(
         "Sumeragi v2 body queue capacity {actual} is below minimum {minimum} for {authenticated_non_validator_sources} authenticated non-validator source lanes"
     )]
@@ -7379,9 +7347,9 @@ pub struct TrustedPeers {
     /// Other trusted peers.
     pub others: UniqueVec<Peer>,
     /// Proof-of-Possession (PoP) for validator BLS keys, keyed by public key.
-    /// When this map is non-empty, BLS trusted peers with valid PoPs form the
-    /// validator roster; trusted peers without PoPs remain network-trusted peers
-    /// and are excluded from consensus.
+    /// Only BLS trusted peers with explicit valid entries form the validator
+    /// roster. An empty map yields no validators, and entries cannot introduce
+    /// peers outside the trusted-peer set.
     pub pops: std::collections::BTreeMap<PublicKey, Vec<u8>>,
 }
 impl TrustedPeers {

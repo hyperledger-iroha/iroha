@@ -1597,7 +1597,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 530/530 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, and 100,000 heights; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 522/522 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, and 100,000 heights; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -2956,8 +2956,6 @@ required_multilane_core_focus_tests=(
   kura::tests::bounded_pending_merge_hash_scan_filters_orders_and_reports_overflow
   kura::tests::complete_merge_retry_ignores_unrelated_pending_sidecar_capacity
   kura::tests::bounded_pending_merge_selection_skips_committed_prefix_without_underfill
-  kura::tests::canonical_prune_capacity_includes_large_commit_roster_generation
-  kura::tests::startup_prune_capacity_reuses_large_roster_admission_exactly
   kura::tests::active_prune_recovery_never_allocates_missing_retained_merge_carrier
   kura::tests::historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rejection
   kura::tests::historical_recovery_partial_batch_restart_completes_remaining_records
@@ -2999,12 +2997,6 @@ required_multilane_core_focus_tests=(
   kura::tests::deterministic_commit_marker_temp_recovers_or_rolls_back_exactly
   kura::tests::commit_marker_rejects_oversized_deterministic_temp
   kura::tests::commit_marker_rejects_symlinked_deterministic_temp
-  commit_roster_journal::tests::durable_pointer_temp_recovers_forward_after_restart
-  commit_roster_journal::tests::durable_generation_temp_without_pointer_rolls_back_after_restart
-  commit_roster_journal::tests::partial_deterministic_temps_roll_back_to_stable_pointer
-  commit_roster_journal::tests::load_rejects_oversized_and_unexpected_publication_artifacts
-  commit_roster_journal::tests::load_rejects_symlinked_deterministic_publication_temp
-  commit_roster_journal::tests::prune_projection_accounts_large_generation_and_pointer_peak_exactly
   kura::tests::kura_start_rejects_unbound_local_peer_identity
   kura::tests::eviction_requires_distinct_matching_replica_adverts
   kura::tests::deterministic_commit_qc_keepers_use_f_plus_one_and_pin_a_local_keeper
@@ -3360,7 +3352,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=530
+readonly expected_multilane_focus_test_count=522
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -3490,7 +3482,7 @@ done
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 530-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 522-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -3598,8 +3590,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 531 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 530 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 523 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 522 focused tests" >&2
     exit 1
   fi
 fi
@@ -3998,9 +3990,9 @@ if [[ "$profile" == "--release" ]]; then
     7
     63
     61
-    4
-    6
     5
+    7
+    6
   )
   for native_amx_grouped_parity_index in \
     "${!native_amx_grouped_parity_surfaces[@]}"; do

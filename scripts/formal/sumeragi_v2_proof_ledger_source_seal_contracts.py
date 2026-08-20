@@ -784,6 +784,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/sumeragi/v2.rs': (
         'v2_authenticated_recovered_adapter_startup_impl.rs',
         'v2_verified_height_context_recovered_output_auth.rs',
+        'v2_adapter_equivocation_evidence.rs',
         'v2_ready_durable_validate_adapter_preview.rs',
         'tests/v2_adapter_main_00.rs',
         'tests/v2_adapter_main_01.rs',
@@ -856,6 +857,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_runtime_durable_recovery_pending.rs',
         'v2_runtime_effect_ownership_core_impl.rs',
         'v2_runtime_effect_ownership_rebind_impl.rs',
+        'v2_runtime_ready_validate_publication.rs',
         'v2_runtime/network_ingress_classification.rs',
         'tests/v2_runtime_pending_binding_cases.rs',
         'tests/v2_runtime_main_00.rs',
@@ -1482,7 +1484,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "c9c5192fe1e4b7042a76aced8da8fcbafe51d4ed4a0f5ad6608c0b81492864a6"
     ),
     "drive_effects": (
-        "5adf00903e0a88fb10917c9e614352be22f3ec1feb7ec94767a5a5f4dc243a08"
+        "228291c466d581465006e2b731591caea95750c08dd0c5cea836b8d3c7de6e95"
     ),
     "pop_fence_dependency_with_ownership": (
         "cf5a9312b16db72176857a1dfad4e7b64636f7bebd7edc7142f052ec3a2e567b"
@@ -1697,7 +1699,7 @@ _RUNTIME_ENQUEUE_NETWORK_WITH_INGRESS_OWNERSHIP_ITEM_SHA256 = (
     "422f7ae170b202c5023c98f94182a4526eb883c39e7576d3c1e0ba69f0723958"
 )
 _RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256 = (
-    "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
+    "6f698df89965d5ec5c98058d48015c07c65c50335fa2db4d237b49882015ce8d"
 )
 _RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256 = (
     "57da29721e6df2151d024228810103c3e65c04789a7ac19b06d8a39b705b6104"
@@ -1836,7 +1838,7 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
         "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
     ),
     "distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner": (
-        "9fd964c7159754e3a01d6d905f40423fb1fb4d573f033f031b3497b02969c1d4"
+        "70e6ec9072aa3675905f837b2aace19b2a985f1643bb9f05796689aa2979a708"
     ),
     "pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_busy_producer": (
         "5ae5c533c0498b9d067634d88722b736f52ff78c6a63983111a390c36c3603fe"
@@ -1853,7 +1855,7 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
 # inventory may be bulk-refreshed.
 _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::fair_v2_ingress_queue_gate_verdict": (
-        "a6d4a56fb74fe95a5d681e9899df1865ee83741e47685e4c4681cd2b4c5e2526"
+        "73b744b27b3cc5ffe642fec4a017aeca5bb4fb314205afa0b66531d9fdbf776d"
     ),
     "ingress::select_fair_v2_ingress_candidate": (
         "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068"
@@ -1913,13 +1915,13 @@ _TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
         "00eb6a4425997fe9ef985adb09e792913c5df8805e58c4de9473e7fd720724d2"
     ),
     "pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot": (
-        "47d9e77bbf51c1564dbdb4bb7ab2f5d3dafecc279a11fb59f91dcdeed2254d7f"
+        "c1bbb1ecbce90f807f45eb40edfc834fa18d636824b47abc9364c7f4571442ef"
     ),
     "two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view": (
-        "a4e4de848ef3701270462522e0b1a9c66a1705e8e6840ad393c260d528854b4e"
+        "3627cc149c725afbfc064f283eecf45af650ef9fa3345afee130d5484c0b1620"
     ),
     "restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission": (
-        "89eb5d842b627d1c1382143a53b73600936443130b086e5a9e0be5e5180dc6d8"
+        "88bd126133d6471dbd53c474136ef99b5fe7a5816b488288f6e2939516d63d68"
     ),
 }
 
@@ -2412,10 +2414,10 @@ _SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 530
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 531
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 522
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 523
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474"
+    "e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -3708,7 +3710,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "a6d4a56fb74fe95a5d681e9899df1865ee83741e47685e4c4681cd2b4c5e2526"
+        "73b744b27b3cc5ffe642fec4a017aeca5bb4fb314205afa0b66531d9fdbf776d"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"

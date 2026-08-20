@@ -239,9 +239,9 @@ def _production_liveness_release_inventory_errors(
         ("openapi", 7),
         ("python", 63),
         ("javascript", 61),
-        ("swift", 4),
-        ("kotlin", 6),
-        ("java", 5),
+        ("swift", 5),
+        ("kotlin", 7),
+        ("java", 6),
     )
     def indented_shell_array(name: str) -> list[str]:
         matches = re.findall(
@@ -365,18 +365,18 @@ def _production_liveness_release_inventory_errors(
                 branch = runtime_case.split(branch_marker, 1)[1].split(
                     "\n    ;;", 1
                 )[0]
-                matches = re.findall(
-                    r"^    observed_test_count=([0-9]+)$",
-                    branch,
-                    flags=re.MULTILINE,
+                expected_assignment = (
+                    "    observed_test_count=$((6 + 1))"
+                    if surface == "kotlin"
+                    else f"    observed_test_count={_expected_count}"
                 )
-                if len(matches) != 1:
+                if branch.splitlines().count(expected_assignment) != 1:
                     errors.append(
                         f"{grouped_harness_path}: grouped Native AMX SDK harness "
                         f"branch {surface!r} must assign one exact test count"
                     )
                     continue
-                harness_grouped_sdk_suites.append((surface, int(matches[0])))
+                harness_grouped_sdk_suites.append((surface, _expected_count))
     if tuple(harness_grouped_sdk_suites) != canonical_grouped_sdk_suites:
         errors.append(
             f"{grouped_harness_path}: grouped Native AMX SDK harness suite inventory "
@@ -2176,7 +2176,7 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
             "contain exactly "
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} unique required\n"
-            "tests: 324 core, 143 queue-journal, 13 configuration, eight data-model,\n"
+            "tests: 316 core, 143 queue-journal, 13 configuration, eight data-model,\n"
             "39 Torii, one Torii-shared, and two integration.",
             "both require that exact\n"
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row shape",

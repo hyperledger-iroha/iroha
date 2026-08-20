@@ -1,8 +1,8 @@
 #[test]
 fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
     let fixture = globally_bound_guard_fixture();
-    let hash = fixture.transaction.hash();
-    let follower_hash = fixture.follower_transaction.hash();
+    let hash = fixture.transaction.hash_as_entrypoint();
+    let follower_hash = fixture.follower_transaction.hash_as_entrypoint();
     fixture
         .queue
         .push_with_lane_with_state(fixture.follower_transaction.clone(), &fixture.state)
@@ -32,7 +32,7 @@ fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
     assert_eq!(
         pending
             .iter()
-            .map(AcceptedTransaction::hash)
+            .map(AcceptedTransaction::hash_as_entrypoint)
             .collect::<Vec<_>>(),
         vec![hash, follower_hash]
     );
@@ -42,7 +42,7 @@ fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
 #[test]
 fn globally_bound_gossip_waits_for_certificate_and_retains_it_after_exact_marker() {
     let fixture = globally_bound_guard_fixture();
-    let hash = fixture.transaction.hash();
+    let hash = fixture.transaction.hash_as_entrypoint();
     let awaiting = fixture.queue.gossip_batch_with_state(1, &fixture.state);
     assert_eq!(awaiting.len(), 1);
     assert!(matches!(
@@ -111,12 +111,7 @@ fn exact_pending_body_handoff_preserves_historical_admission_after_ttl() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = false;
-    state
-        .set_nexus(nexus)
-        .expect("apply disabled Nexus state for exact pending handoff");
-    install_single_validator_topology_for_queue_test(&state, 0xBA);
+    install_single_validator_topology_for_queue_test(&mut state, 0xBA);
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: LaneId::SINGLE,
@@ -203,7 +198,7 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
         fixture
             .time_handle
             .advance(fixture.transaction_time_to_live + Duration::from_millis(1));
-        let hash = fixture.transaction.hash();
+        let hash = fixture.transaction.hash_as_entrypoint();
         let mut claim = fixture
             .queue
             .durable_plan_claims
@@ -216,12 +211,11 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
             .version = 0;
     };
     let assert_faulted_owner_retained = |fixture: &GloballyBoundGuardFixture| {
-        let hash = fixture.transaction.hash();
+        let hash = fixture.transaction.hash_as_entrypoint();
         assert!(fixture.queue.accepted_work_validation_faulted());
         assert_eq!(fixture.queue.active_len(), 1);
         assert_eq!(fixture.queue.queued_len(), 1);
         assert!(fixture.queue.txs.contains_key(&hash));
-        assert!(fixture.queue.routing_decisions.contains_key(&hash));
         assert!(fixture.queue.routing_plans.contains_key(&hash));
         assert!(
             fixture
@@ -289,7 +283,7 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
     assert_faulted_owner_retained(&bounded_snapshot_fixture);
     let revalidation_fixture = globally_bound_guard_fixture();
     poison_expired_global_identity(&revalidation_fixture);
-    let revalidation_hash = revalidation_fixture.transaction.hash();
+    let revalidation_hash = revalidation_fixture.transaction.hash_as_entrypoint();
     let checked_transaction = revalidation_fixture
         .queue
         .txs
@@ -337,7 +331,14 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
     );
     assert_faulted_owner_retained(&revalidation_fixture);
     let fixture = globally_bound_guard_fixture();
-    let hash = fixture.transaction.hash();
+    let hash = fixture.transaction.hash_as_entrypoint();
+    assert_eq!(
+        fixture
+            .state
+            .queue_plan_admission_binding_registry_match(&fixture.binding)
+            .expect("read initially absent global guard registry"),
+        QueuePlanAdmissionRegistryMatch::Absent
+    );
     let routing_plan = fixture
         .binding
         .routing_plan()

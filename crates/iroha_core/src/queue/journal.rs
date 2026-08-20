@@ -238,11 +238,7 @@ impl QueuePlanJournalRecordV4 {
         global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
     ) -> Self {
         let entrypoint_hash = entrypoint.hash();
-        let signed_transaction_hash = match &entrypoint {
-            TransactionEntrypoint::External(signed) => Some(signed.hash()),
-            TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
-        };
+        let signed_transaction_hash = crate::tx::exact_signed_transaction_hash(&entrypoint);
         Self {
             version: QUEUE_PLAN_JOURNAL_VERSION,
             entrypoint,
@@ -565,10 +561,7 @@ fn queue_plan_startup_reservation_phase_root(
     let mut ordered = BTreeMap::new();
     for phase in phases {
         phase.key.validate().map_err(invalid_data)?;
-        if ordered
-            .insert(phase.key.signed_transaction_hash, *phase)
-            .is_some()
-        {
+        if ordered.insert(phase.key.entrypoint_hash, *phase).is_some() {
             return Err(invalid_data(
                 "queue-plan startup phase root contains a duplicate reservation owner",
             ));
@@ -2487,13 +2480,7 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
                     "queue plan journal entrypoint hash does not match its canonical entrypoint",
                 ));
             }
-            let expected_signed_hash = match &record.entrypoint {
-                TransactionEntrypoint::External(signed) => Some(signed.hash()),
-                TransactionEntrypoint::SealedReveal(reveal) => {
-                    Some(reveal.signed_transaction().hash())
-                }
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
-            };
+            let expected_signed_hash = crate::tx::exact_signed_transaction_hash(&record.entrypoint);
             if record.signed_transaction_hash != expected_signed_hash {
                 return Err(invalid_data(
                     "queue plan journal signed-transaction hash does not match its entrypoint",
@@ -4124,9 +4111,6 @@ mod tests {
             .expect("global journal fixture has a coordinator");
         LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(
-                record.entrypoint_hash.clone(),
-            )),
             entrypoint_hash: record.entrypoint_hash.clone(),
             queue_plan_admission_binding_hash: binding_hash,
             routing_plan_digest: record.plan_digest(),

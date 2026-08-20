@@ -5,7 +5,7 @@ The public first-release Torii API does not expose per-session chunk sampling,
 delivery inspection, or global collector-plan endpoints, and there is no
 dedicated Torii sampling configuration.
 
-For operator visibility, use `/v1/sumeragi/telemetry` for aggregate RBC backlog
-and availability fields and `/v1/sumeragi/status` for the compact consensus
-state. These endpoints provide operational telemetry, not light-client data-
+For operator visibility, use authenticated `/v1/sumeragi/status` for compact
+consensus state and `/metrics` for node-local transport observations.
+These surfaces provide operational diagnostics, not light-client data-
 availability proofs.

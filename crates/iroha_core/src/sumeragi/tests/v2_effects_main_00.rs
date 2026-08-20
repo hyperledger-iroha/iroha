@@ -947,7 +947,6 @@ struct FakeServices {
     fetch_tasks: Vec<BodyFetchTask>,
     cancelled_fetches: Vec<EffectWorkId>,
     completed_reconstruction_fetches: Vec<EffectWorkId>,
-    completed_certified_fetches: Vec<EffectWorkId>,
     chunks: Vec<EffectWorkId>,
     reject_authenticated_chunks: bool,
     store_tasks: Vec<BodyStoreTask>,
@@ -967,7 +966,6 @@ struct FakeServices {
     closed: Vec<String>,
     fail_on: Option<&'static str>,
     fail_on_call: Option<(&'static str, usize)>,
-    retry_certified_fetch_once: bool,
     operation_calls: BTreeMap<&'static str, usize>,
     leader_wire_terminals: Vec<LeaderWireRuntimeTerminal>,
     durable_runtime_decision: Option<wire::BlockSubject>,
@@ -1128,18 +1126,6 @@ impl V2EffectServices for FakeServices {
         self.check("complete-reconstruction-fetch")?;
         self.completed_reconstruction_fetches.push(task.id());
         Ok(())
-    }
-    fn complete_certified_body_fetch(
-        &mut self,
-        task: &BodyFetchTask,
-    ) -> Result<CertifiedBodyFetchCompletionDisposition, Self::Error> {
-        if self.retry_certified_fetch_once {
-            self.retry_certified_fetch_once = false;
-            return Ok(CertifiedBodyFetchCompletionDisposition::Retryable);
-        }
-        self.check("complete-certified-fetch")?;
-        self.completed_certified_fetches.push(task.id());
-        Ok(CertifiedBodyFetchCompletionDisposition::Completed)
     }
     fn accept_authenticated_chunk(
         &mut self,

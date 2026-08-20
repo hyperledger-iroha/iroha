@@ -2301,22 +2301,15 @@ pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
         .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect::<Vec<_>>();
-    let lane_lifecycle = view
-        .nexus
-        .lane_catalog
-        .lanes()
+    let retained_lane_lineage = view
+        .lane_incarnation_lineage
         .iter()
         .map(
-            |lane| iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry {
-                lane_id: lane.id,
-                incarnation: *view
-                    .lane_incarnations
-                    .get(&lane.id)
-                    .expect("validated state view has every active lane incarnation"),
-                activation_height: *view
-                    .lane_incarnation_activation_heights
-                    .get(&lane.id)
-                    .expect("validated state view has every lane activation height"),
+            |(&lane_id, lineage)| iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry {
+                lane_id,
+                generation: lineage.generation,
+                incarnation: lineage.incarnation,
+                activation_height: lineage.activation_height,
             },
         )
         .collect::<Vec<_>>();
@@ -2324,7 +2317,7 @@ pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
         &view.nexus,
         &view.pipeline,
         &active_validators,
-        &lane_lifecycle,
+        &retained_lane_lineage,
     )
 }
 pub(crate) fn committed_execution_policy_hash(state: &State) -> Result<Hash, V2RecoveryError> {

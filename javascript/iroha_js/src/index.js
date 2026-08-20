@@ -598,7 +598,3 @@ export {
   tairaMonPrettyGatewaySuffix,
   canonicalGatewayWildcard,
 } from "./soradns.js";
-export {
-  captureSumeragiTelemetrySnapshot,
-  appendSumeragiTelemetrySnapshot,
-} from "./telemetryReplay.js";

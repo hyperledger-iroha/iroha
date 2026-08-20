@@ -1,9 +1,6 @@
 use crate::{
     Outcome, RunArgs,
-    genesis::{
-        ConsensusPolicy, build_line_from_env, ensure_npos_parameters,
-        validate_consensus_mode_for_line,
-    },
+    genesis::{ConsensusPolicy, ensure_npos_parameters, validate_consensus_mode},
     tui,
 };
 use clap::Args as ClapArgs;
@@ -32,10 +29,9 @@ use iroha_genesis::{
     ValidatedGenesisBundle,
 };
 use iroha_swarm::{
-    PeerOverride, PreparedBuildLine, PreparedGenesisArtifacts, PreparedRuntimeFile,
-    PreparedSecretFile, PreparedValidator,
+    PeerOverride, PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile,
+    PreparedValidator,
 };
-use iroha_version::BuildLine;
 use std::{
     collections::BTreeSet,
     fs,
@@ -2277,7 +2273,7 @@ fn project_prepared_runtime_config(
         runtime_files.push(file);
         captured_validation_paths.push(captured);
     }
-    let captured_manifest_directory = if source.nexus.enabled {
+    let captured_manifest_directory =
         if let Some(manifest_directory) = source.nexus.registry.manifest_directory.as_deref() {
             let (files, validation_directory) = collect_runtime_directory(
                 manifest_directory,
@@ -2296,12 +2292,8 @@ fn project_prepared_runtime_config(
             Some(validation_directory)
         } else {
             None
-        }
-    } else {
-        remove_toml_key(&mut table, &["nexus", "registry"], "manifest_directory")?;
-        None
-    };
-    let captured_manifest_cache_directory = if source.nexus.enabled {
+        };
+    let captured_manifest_cache_directory =
         if let Some(cache_directory) = source.nexus.registry.cache_directory.as_deref() {
             let (files, validation_directory) = collect_runtime_directory(
                 cache_directory,
@@ -2320,11 +2312,7 @@ fn project_prepared_runtime_config(
             Some(validation_directory)
         } else {
             None
-        }
-    } else {
-        remove_toml_key(&mut table, &["nexus", "registry"], "cache_directory")?;
-        None
-    };
+        };
     let captured_compliance_policy_directory = if source.nexus.compliance.enabled {
         if let Some(policy_directory) = source.nexus.compliance.policy_dir.as_deref() {
             let (files, validation_directory) = collect_runtime_directory(
@@ -2560,7 +2548,6 @@ fn load_prepared_bundle(
     projection_root: &Path,
     count: std::num::NonZeroU16,
     manifest: &RawGenesisTransaction,
-    build_line: PreparedBuildLine,
 ) -> color_eyre::Result<PreparedBundle> {
     let signed_block = config_dir.join("genesis.signed.nrt");
     let public_key_path = config_dir.join(crate::localnet::GENESIS_PUBLIC_KEY_FILE);
@@ -2875,7 +2862,6 @@ fn load_prepared_bundle(
             key_pair: admitted.key_pair,
             pop: admitted.pop,
             requires_sora_profile,
-            build_line,
             runtime_config_path,
             runtime_config_blake3,
             runtime_files,
@@ -2924,7 +2910,6 @@ impl<T: Write> RunArgs<T> for Args {
         if !args.print && !args.user_allows_overwrite()? {
             return Ok(());
         }
-        let build_line = build_line_from_env();
         let genesis_path = args.config_dir.join("genesis.json");
         let manifest_raw = read_runtime_file_bounded(
             &genesis_path,
@@ -2941,14 +2926,10 @@ impl<T: Write> RunArgs<T> for Args {
             })?;
         drop(manifest_raw);
         let manifest_mode = manifest.consensus_mode();
-        validate_consensus_mode_for_line(build_line, manifest_mode, ConsensusPolicy::Any)?;
+        validate_consensus_mode(manifest_mode, ConsensusPolicy::Any)?;
         if matches!(manifest_mode, SumeragiConsensusMode::Npos) {
             ensure_npos_parameters(&manifest)?;
         }
-        let prepared_build_line = match build_line {
-            BuildLine::Iroha2 => PreparedBuildLine::Iroha2,
-            BuildLine::Iroha3 => PreparedBuildLine::Iroha3,
-        };
         let peer_overrides = match &args.peer_config {
             Some(path) => Some(load_peer_overrides(path)?),
             None => None,
@@ -2980,13 +2961,7 @@ impl<T: Write> RunArgs<T> for Args {
                 signed_block,
                 public_key,
                 expected_hash,
-            } = load_prepared_bundle(
-                &args.config_dir,
-                &projection_root,
-                args.peers,
-                &manifest,
-                prepared_build_line,
-            )?;
+            } = load_prepared_bundle(&args.config_dir, &projection_root, args.peers, &manifest)?;
             let artifacts = PreparedGenesisArtifacts {
                 signed_block: &signed_block,
                 public_key: &public_key,
@@ -3150,8 +3125,6 @@ mod tests {
         peer::PeerId,
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
-    use iroha_swarm::PreparedBuildLine;
-    use iroha_version::BuildLine;
     use std::{
         fs,
         io::{BufWriter, Write},
@@ -3191,7 +3164,6 @@ mod tests {
     fn generate_prepared_bundle(root: &Path) -> PathBuf {
         let bundle = root.join("prepared-bundle");
         let options = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -3217,13 +3189,7 @@ mod tests {
     ) -> color_eyre::Result<super::PreparedBundle> {
         let manifest =
             iroha_genesis::RawGenesisTransaction::from_path(config_dir.join("genesis.json"))?;
-        load_prepared_bundle(
-            config_dir,
-            projection_root,
-            count,
-            &manifest,
-            PreparedBuildLine::Iroha3,
-        )
+        load_prepared_bundle(config_dir, projection_root, count, &manifest)
     }
     #[test]
     fn run_succeeds_without_banner() {
@@ -3322,7 +3288,6 @@ mod tests {
         let output = String::from_utf8(output).expect("Compose output is UTF-8");
         assert_eq!(output.matches("--config /config/peer.toml").count(), 4);
         assert_eq!(output.matches("exec env -i").count(), 4);
-        assert_eq!(output.matches("IROHA_BUILD_LINE=iroha3").count(), 4);
         assert_eq!(output.matches("--config-blake3 ").count(), 4);
         assert_eq!(output.matches("read_only: true").count(), 4);
         assert_eq!(output.matches("target: /config/peer.toml").count(), 4);
@@ -3813,11 +3778,16 @@ mod tests {
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
         let genesis_key = KeyPair::random();
-        let signed = manifest
-            .clone()
-            .build_and_sign(&genesis_key)
-            .expect("sign resultless prepared fixture")
-            .0;
+        let (manifest, signed) = crate::genesis::bind_and_sign_staged_sumeragi_v2_context(
+            manifest,
+            &genesis_key,
+            None,
+            None,
+            iroha_core::state::default_genesis_confidential_policy_hash(),
+            None,
+        )
+        .expect("bind and execute prepared genesis fixture");
+        let signed = signed.0;
         iroha_core::validate_genesis_block(
             &signed,
             &iroha_data_model::account::AccountId::new(genesis_key.public_key().clone()),

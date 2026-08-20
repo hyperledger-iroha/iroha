@@ -19,7 +19,7 @@ met before admitting or upgrading a node.
 
 | Stage | Checklist | Evidence |
 |-------|-----------|----------|
-| **Pre-flight** | Validate artefact hashes/signatures, confirm `profile = "iroha3"`, and stage config templates. | `scripts/select_release_profile.py` output, checksum log, signed manifest bundle. |
+| **Pre-flight** | Validate artefact hashes/signatures, confirm `profile = "iroha3"`, and stage config templates. | Checksum log and signed manifest bundle. |
 | **Catalog alignment** | Update `[nexus]` lane + dataspace catalog, routing policy, and DA thresholds to match the council-issued manifest. | `iroha3d --sora --config … --trace-config` output stored with ticket. |
 | **Smoke & cutover** | Run `iroha3d --sora --config … --trace-config`, execute CLI smoke test (e.g., `FindNetworkStatus`), verify telemetry endpoints, then request admission. | Smoke-test log + Alertmanager silence confirmation. |
 | **Steady state** | Monitor dashboards/alerts, rotate keys per governance cadence, and keep configs + runbooks in sync with manifest revisions. | Quarterly review minutes, linked dashboard screenshots, and rotation ticket IDs. |

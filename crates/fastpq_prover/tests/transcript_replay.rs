@@ -2,7 +2,7 @@
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_prover::{
     OperationKind, Proof, Prover, PublicInputs, StateTransition, TransitionBatch,
-    gadgets::transfer::attach_transfer_smt_witnesses, verify,
+    gadgets::transfer::attach_transfer_smt_witnesses, verify_raw_statement,
 };
 #[cfg(feature = "fastpq-gpu")]
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -53,14 +53,14 @@ fn preview_fixture_batch(rows: usize) -> TransitionBatch {
                 transfer_idx = transfer_idx.wrapping_add(1);
             }
             1 => {
-                let key = format!("asset/xor#fixture/mint/{row_idx:04}").into_bytes();
+                let key = format!("asset/xor#fixture/mint-{row_idx:04}").into_bytes();
                 let pre = (row_idx as u64).to_le_bytes().to_vec();
                 let post = (row_idx as u64 + 1).to_le_bytes().to_vec();
                 batch.push(StateTransition::new(key, pre, post, OperationKind::Mint));
                 row_idx += 1;
             }
             _ => {
-                let key = format!("asset/xor#fixture/burn/{row_idx:04}").into_bytes();
+                let key = format!("asset/xor#fixture/burn-{row_idx:04}").into_bytes();
                 let pre = (row_idx as u64 + 2).to_le_bytes().to_vec();
                 let post = (row_idx as u64 + 1).to_le_bytes().to_vec();
                 batch.push(StateTransition::new(key, pre, post, OperationKind::Burn));
@@ -159,7 +159,9 @@ fn v1_preview_fixture_verifies_transcript() {
     let path = fixture_path();
     if fixture_update_requested() {
         let prover = Prover::canonical("fastpq-lane-balanced").expect("prover");
-        let proof = prover.prove(&batch).expect("proof");
+        let proof = prover
+            .prove_raw_statement(&batch)
+            .expect("raw fixture proof");
         let encoded = to_bytes(&proof).expect("encode proof");
         fs::write(&path, &encoded).expect("write fixture");
         panic!("updated {FIXTURE_NAME}; re-run tests without FASTPQ_UPDATE_FIXTURES to validate");
@@ -170,9 +172,11 @@ fn v1_preview_fixture_verifies_transcript() {
         "fixture {FIXTURE_NAME} is empty; set FASTPQ_UPDATE_FIXTURES=1 and re-run tests"
     );
     let proof: Proof = norito::decode_from_bytes(expected).expect("decode proof");
-    verify(&batch, &proof).expect("fixture proof verifies");
+    verify_raw_statement(&batch, &proof).expect("raw fixture proof verifies");
     let prover = Prover::canonical("fastpq-lane-balanced").expect("prover");
-    let regenerated = prover.prove(&batch).expect("regenerate proof");
+    let regenerated = prover
+        .prove_raw_statement(&batch)
+        .expect("regenerate raw fixture proof");
     let encoded = to_bytes(&regenerated).expect("encode regenerated proof");
     assert_eq!(
         encoded.as_slice(),

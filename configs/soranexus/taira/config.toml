@@ -341,7 +341,6 @@ sm2_distid_default = "1234567812345678"
 allowed_curve_ids = [1, 3, 4]
 
 [nexus]
-enabled = true
 lane_count = 7
 
 [nexus.storage]
@@ -374,7 +373,9 @@ enabled = true
 # reserves index 7 for deterministic creation.
 min_lanes = 7
 max_lanes = 8
-target_block_ms = 1000
+# Match the canonical 4 s genesis cadence so healthy blocks do not look four
+# times slower than the autoscale target.
+target_block_ms = 4000
 scale_out_latency_ratio = 1.50
 scale_in_latency_ratio = 1.10
 scale_out_utilization_ratio = 0.75
@@ -410,7 +411,7 @@ description = "Primary execution lane"
 dataspace = "universal"
 storage = "full_replica"
 visibility = "public"
-metadata = { "scheduler.teu_capacity" = "50000000" }
+scheduler = { teu_capacity = 50000000 }
 
 [[nexus.lane_catalog]]
 index = 1
@@ -438,7 +439,7 @@ description = "Digital payments network traffic"
 dataspace = "dpn"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 [[nexus.lane_catalog]]
 index = 4
@@ -447,7 +448,7 @@ description = "External PoC traffic"
 dataspace = "is"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 [[nexus.lane_catalog]]
 index = 5
@@ -456,7 +457,7 @@ description = "Bank of Israel mobile-wallet traffic"
 dataspace = "is2"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 [[nexus.lane_catalog]]
 index = 6
@@ -465,7 +466,7 @@ description = "Central-bank service integration traffic"
 dataspace = "cbsi"
 storage = "full_replica"
 visibility = "restricted"
-metadata = { "scheduler.teu_capacity" = "25000000" }
+scheduler = { teu_capacity = 25000000 }
 
 # Physical data spaces only. Namespace, governance-module, and workload names
 # must not be promoted into this catalog.

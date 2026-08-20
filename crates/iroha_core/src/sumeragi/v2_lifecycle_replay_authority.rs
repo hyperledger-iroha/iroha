@@ -4853,6 +4853,7 @@ pub(super) struct RecoveredStandaloneValidateSourceV1 {
     source: BodyPipelineReplaySourceV1,
     body_frame: BodyFrameBindingV1,
 }
+/// Opaque authenticated replay evidence for one recovered standalone Validate owner.
 #[derive(Clone, Debug)]
 pub(in crate::sumeragi) struct RecoveredStandaloneValidateReplayEvidenceV1 {
     source: BodyPipelineReplaySourceV1,

@@ -1,11 +1,72 @@
 use super::*;
 use crate::consensus::VALIDATOR_SET_HASH_VERSION_V1;
-use iroha_crypto::{
-    Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommitment, SignatureOf,
-};
+use iroha_crypto::{Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::core::DecodeFromSlice;
 use std::num::NonZeroU64;
+#[expect(
+    dead_code,
+    reason = "all retired discriminants are retained solely to encode decode-negative fixtures"
+)]
+#[derive(norito::codec::Encode)]
+enum RetiredEvidenceKind {
+    DoublePrepare,
+    DoubleCommit,
+    InvalidQc,
+    InvalidProposal,
+    Censorship,
+    SumeragiV2Equivocation,
+}
+#[expect(
+    dead_code,
+    clippy::large_enum_variant,
+    reason = "all retired discriminants are retained solely to encode decode-negative fixtures"
+)]
+#[derive(norito::codec::Encode)]
+enum RetiredEvidencePayload {
+    DoubleVote {
+        v1: QcVote,
+        v2: QcVote,
+    },
+    InvalidQc {
+        certificate: Qc,
+        reason: String,
+    },
+    InvalidProposal {
+        proposal: Proposal,
+        reason: String,
+    },
+    Censorship {
+        tx_hash: HashOf<crate::transaction::SignedTransaction>,
+        receipts: Vec<crate::transaction::TransactionSubmissionReceipt>,
+    },
+    SumeragiV2Equivocation(SumeragiV2EquivocationEvidence),
+}
+#[derive(norito::codec::Encode)]
+struct RetiredEvidence {
+    kind: RetiredEvidenceKind,
+    payload: RetiredEvidencePayload,
+}
+#[derive(norito::codec::Encode)]
+struct RetiredEvidenceRecord {
+    evidence: RetiredEvidence,
+    recorded_at_height: Height,
+    recorded_at_view: View,
+    recorded_at_ms: u64,
+    #[norito(default)]
+    penalty_applied: bool,
+    #[norito(default)]
+    penalty_cancelled: bool,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    penalty_cancelled_at_height: Option<Height>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    penalty_applied_at_height: Option<Height>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    consensus_admitted_at_height: Option<Height>,
+}
 fn dummy_hash() -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32]))
 }
@@ -45,9 +106,6 @@ fn sample_roster() -> Vec<PeerId> {
             )
         })
         .collect()
-}
-fn roster_hash(roster: &[PeerId]) -> Hash {
-    Hash::new(roster.to_vec().encode())
 }
 include!("consensus/wire_schema_tests.rs");
 fn sample_qc_ref() -> QcRef {
@@ -290,6 +348,82 @@ fn sponsored_nexus_fee_receipt_roundtrips_typed_source_and_asset() {
         receipt
     );
 }
+
+#[test]
+fn nexus_fee_receipt_rejects_pre_release_layout_without_nullable_bindings() {
+    #[derive(Encode)]
+    struct PreReleaseNexusFeeReceipt {
+        version: u16,
+        source_id: [u8; 32],
+        dataspace_id: DataSpaceId,
+        lane_id: LaneId,
+        block_height: u64,
+        debit_source: FeeDebitSource,
+        fee_asset_id: crate::asset::AssetDefinitionId,
+        fee_amount: Quantity,
+        schedule: NexusFeeScheduleInputs,
+    }
+
+    let receipt = sample_nexus_fee_receipt([0x5C; 32]);
+    let bytes = PreReleaseNexusFeeReceipt {
+        version: receipt.version,
+        source_id: receipt.source_id,
+        dataspace_id: receipt.dataspace_id,
+        lane_id: receipt.lane_id,
+        block_height: receipt.block_height,
+        debit_source: receipt.debit_source,
+        fee_asset_id: receipt.fee_asset_id,
+        fee_amount: receipt.fee_amount,
+        schedule: receipt.schedule,
+    }
+    .encode();
+    assert!(
+        NexusFeeReceipt::decode_all(&mut bytes.as_slice()).is_err(),
+        "the first-release fee receipt must reject the layout without revision and lease slots"
+    );
+}
+
+#[test]
+fn nexus_fee_receipt_json_requires_nullable_bindings_and_closed_nested_schedule() {
+    let receipt = sample_nexus_fee_receipt([0x5D; 32]);
+    for field in ["program_revision", "lease_id"] {
+        let mut value = norito::json::to_value(&receipt).expect("serialize Nexus fee receipt");
+        assert!(
+            value
+                .as_object_mut()
+                .expect("Nexus fee receipt JSON object")
+                .remove(field)
+                .is_some(),
+            "fixture must contain nullable field {field}"
+        );
+        assert!(
+            norito::json::from_value::<NexusFeeReceipt>(value).is_err(),
+            "the first-release Nexus fee receipt must require {field}"
+        );
+    }
+
+    let mut unknown = norito::json::to_value(&receipt).expect("serialize Nexus fee receipt");
+    unknown
+        .as_object_mut()
+        .expect("Nexus fee receipt JSON object")
+        .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<NexusFeeReceipt>(unknown).is_err(),
+        "the first-release Nexus fee receipt must reject unknown fields"
+    );
+
+    let mut unknown_schedule =
+        norito::json::to_value(&receipt.schedule).expect("serialize Nexus fee schedule");
+    unknown_schedule
+        .as_object_mut()
+        .expect("Nexus fee schedule JSON object")
+        .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<NexusFeeScheduleInputs>(unknown_schedule).is_err(),
+        "the first-release Nexus fee schedule must reject unknown fields"
+    );
+}
+
 #[test]
 fn negative_numeric_payloads_cannot_decode_as_npos_bonds() {
     let forged = ForgedNposGenesisParams {
@@ -378,6 +512,107 @@ fn negative_numeric_payloads_cannot_decode_as_lane_amounts() {
         "a negative signed payload must not decode as a lane commitment total"
     );
 }
+
+#[test]
+fn lane_block_commitment_rejects_pre_release_layout_without_settlement_slots() {
+    #[derive(Encode)]
+    struct PreReleaseLaneBlockCommitment {
+        block_height: u64,
+        lane_id: LaneId,
+        lane_incarnation: Hash,
+        dataspace_id: DataSpaceId,
+        tx_count: u64,
+        total_local_amount: Quantity,
+        total_xor_due: Quantity,
+        total_xor_after_haircut: Quantity,
+        total_xor_variance: Quantity,
+    }
+
+    let bytes = PreReleaseLaneBlockCommitment {
+        block_height: 1,
+        lane_id: LaneId::SINGLE,
+        lane_incarnation: Hash::new(b"pre-release lane commitment"),
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        tx_count: 0,
+        total_local_amount: Quantity::zero(),
+        total_xor_due: Quantity::zero(),
+        total_xor_after_haircut: Quantity::zero(),
+        total_xor_variance: Quantity::zero(),
+    }
+    .encode();
+    assert!(
+        LaneBlockCommitment::decode_all(&mut bytes.as_slice()).is_err(),
+        "the first-release lane commitment must reject the layout without settlement collections"
+    );
+}
+
+#[test]
+fn lane_block_commitment_json_requires_exact_settlement_shape() {
+    let mut commitment = LaneBlockCommitment {
+        block_height: 1,
+        lane_id: LaneId::SINGLE,
+        lane_incarnation: Hash::new(b"strict lane commitment"),
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        tx_count: 0,
+        total_local_amount: Quantity::zero(),
+        total_xor_due: Quantity::zero(),
+        total_xor_after_haircut: Quantity::zero(),
+        total_xor_variance: Quantity::zero(),
+        swap_metadata: None,
+        receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
+    };
+    for field in [
+        "swap_metadata",
+        "receipts",
+        "nexus_fee_receipts",
+        "native_amx_receipts",
+    ] {
+        let mut value = norito::json::to_value(&commitment).expect("serialize lane commitment");
+        assert!(
+            value
+                .as_object_mut()
+                .expect("lane commitment JSON object")
+                .remove(field)
+                .is_some(),
+            "fixture must contain settlement field {field}"
+        );
+        assert!(
+            norito::json::from_value::<LaneBlockCommitment>(value).is_err(),
+            "the first-release lane commitment must require {field}"
+        );
+    }
+
+    commitment.swap_metadata = Some(LaneSwapMetadata {
+        epsilon_bps: 25,
+        twap_window_seconds: 60,
+        liquidity_profile: LaneLiquidityProfile::Tier1,
+        twap_local_per_xor: "1".parse().expect("valid TWAP fixture"),
+        volatility_class: LaneVolatilityClass::Stable,
+    });
+    let metadata = commitment.swap_metadata.as_ref().expect("swap metadata");
+    let mut missing = norito::json::to_value(metadata).expect("serialize lane swap metadata");
+    missing
+        .as_object_mut()
+        .expect("lane swap metadata JSON object")
+        .remove("volatility_class");
+    assert!(
+        norito::json::from_value::<LaneSwapMetadata>(missing).is_err(),
+        "the first-release swap metadata must require its volatility class"
+    );
+
+    let mut unknown = norito::json::to_value(metadata).expect("serialize lane swap metadata");
+    unknown
+        .as_object_mut()
+        .expect("lane swap metadata JSON object")
+        .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<LaneSwapMetadata>(unknown).is_err(),
+        "the first-release swap metadata must reject unknown fields"
+    );
+}
+
 fn sample_native_amx_invariant_qc() -> NativeAmxAttestationQcV2 {
     sample_native_amx_qc(
         NativeAmxPhase::Prepare,
@@ -416,6 +651,21 @@ fn native_amx_qc_constructor_rejects_misaligned_validator_material() {
     assert_eq!(error.validator_count(), validator_count);
     assert_eq!(error.proof_count(), 0);
 }
+
+#[test]
+fn native_amx_attestation_json_requires_predecessor_slot() {
+    let body = sample_native_amx_invariant_qc().body;
+    let mut missing = norito::json::to_value(&body).expect("serialize Native AMX attestation body");
+    missing
+        .as_object_mut()
+        .expect("Native AMX attestation JSON object")
+        .remove("participant_previous_block_descriptor_hash");
+    assert!(
+        norito::json::from_value::<NativeAmxAttestationBodyV2>(missing).is_err(),
+        "the first-release Native AMX body must require its nullable predecessor slot"
+    );
+}
+
 #[test]
 fn native_amx_qc_binary_decode_preserves_layout_and_rejects_misalignment() {
     let qc = sample_native_amx_invariant_qc();
@@ -1026,12 +1276,12 @@ fn native_amx_application_evidence_rejects_coherently_wrong_manifest_count() {
     );
 }
 #[test]
-fn native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift() {
-    let mut unordered = grouped_native_amx_commitment_fixture();
-    unordered.native_amx_receipts.swap(0, 1);
+fn native_amx_grouped_receipts_reject_duplicate_bounds_and_same_route_drift() {
+    let mut duplicate = grouped_native_amx_commitment_fixture();
+    duplicate.native_amx_receipts[1].source_id = duplicate.native_amx_receipts[0].source_id;
     assert_eq!(
-        unordered.validate_native_amx_receipts(),
-        Err("Native AMX receipt sources must be strictly ordered")
+        duplicate.validate_native_amx_receipts(),
+        Err("Native AMX receipt sources must be unique")
     );
     let mut oversized = grouped_native_amx_commitment_fixture();
     let template = oversized.native_amx_receipts[0].legs[0]
@@ -1063,6 +1313,72 @@ fn native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift() {
         same_route_drift.validate_native_amx_receipts(),
         Err("Native AMX same-route leg differs from the coordinator identity")
     );
+}
+#[test]
+fn native_amx_grouped_receipts_accept_fifo_order_and_route_local_participant_groups() {
+    fn receipt(
+        source_id: [u8; 32],
+        plan_digest: Hash,
+        coordinator: (LaneId, DataSpaceId),
+        participant: (LaneId, DataSpaceId),
+        validators: &[PeerId],
+    ) -> NativeAmxReceipt {
+        let leg =
+            sample_native_amx_leg(source_id, plan_digest, coordinator, participant, validators);
+        let body = leg.prepare_qc.body;
+        NativeAmxReceipt {
+            version: NATIVE_AMX_RECEIPT_VERSION_V2,
+            source_id,
+            network_id: body.network_id,
+            plan_digest,
+            lane_id: coordinator.0,
+            dataspace_id: coordinator.1,
+            lane_incarnation: body.coordinator_lane_incarnation,
+            authority_context_height: body.authority_context_height,
+            lane_block_height: body.planned_coordinator_block_height,
+            lane_block_view: body.coordinator_lane_block_view,
+            coordinator_proposal_hash: body.coordinator_proposal_hash,
+            legs: vec![leg],
+        }
+    }
+    let validators = sample_roster();
+    let coordinator = (LaneId::new(1), DataSpaceId::new(7));
+    let first = receipt(
+        [0xF0; 32],
+        Hash::new(b"FIFO first Native AMX plan"),
+        coordinator,
+        (LaneId::new(2), DataSpaceId::new(8)),
+        &validators,
+    );
+    let second = receipt(
+        [0x10; 32],
+        Hash::new(b"FIFO second Native AMX plan"),
+        coordinator,
+        (LaneId::new(3), DataSpaceId::new(9)),
+        &validators,
+    );
+    assert!(
+        first.source_id > second.source_id,
+        "fixture is not hash-sorted"
+    );
+    let commitment = LaneBlockCommitment {
+        block_height: 42,
+        lane_id: coordinator.0,
+        lane_incarnation: first.lane_incarnation,
+        dataspace_id: coordinator.1,
+        tx_count: 2,
+        total_local_amount: Quantity::zero(),
+        total_xor_due: Quantity::zero(),
+        total_xor_after_haircut: Quantity::zero(),
+        total_xor_variance: Quantity::zero(),
+        swap_metadata: None,
+        receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: vec![first, second],
+    };
+    commitment
+        .validate_native_amx_receipts()
+        .expect("FIFO coordinator order and route-local participant controls are valid");
 }
 #[test]
 fn native_amx_grouped_receipts_reject_cross_context_height_drift() {
@@ -1253,7 +1569,7 @@ fn native_amx_receipts_change_lane_block_commitment_hash_inputs() {
 #[test]
 fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() {
     let source_id = [0xC7; 32];
-    let ordered_sources = [[0xC6; 32], source_id];
+    let fifo_sources = [[0xC8; 32], source_id];
     let body = sample_native_amx_qc(
         NativeAmxPhase::Prepare,
         source_id,
@@ -1264,8 +1580,8 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
     )
     .body;
     let settlement = body
-        .computed_grouped_participant_settlement(&ordered_sources)
-        .expect("ordered grouped participant settlement");
+        .computed_grouped_participant_settlement(&fifo_sources)
+        .expect("FIFO-ordered grouped participant settlement");
     assert_eq!(settlement.block_height, body.participant_lane_block_height);
     assert_eq!(settlement.lane_id, body.participant_lane_id);
     assert_eq!(
@@ -1287,7 +1603,7 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
             .iter()
             .map(|receipt| receipt.source_id)
             .collect::<Vec<_>>(),
-        ordered_sources
+        fifo_sources
     );
     assert!(settlement.receipts.iter().all(|receipt| {
         receipt.local_amount.is_zero()
@@ -1301,8 +1617,8 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
             crate::nexus::compute_settlement_hash(&settlement)
                 .expect("computed participant settlement must hash")
         ),
-        body.computed_grouped_participant_settlement_commitment(&ordered_sources)
-            .expect("ordered grouped participant commitment")
+        body.computed_grouped_participant_settlement_commitment(&fifo_sources)
+            .expect("FIFO-ordered grouped participant commitment")
     );
     let encoded = norito::to_bytes(&settlement).expect("encode participant settlement");
     let decoded = norito::decode_from_bytes::<LaneBlockCommitment>(&encoded)
@@ -1325,13 +1641,21 @@ fn native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups() 
         body.computed_grouped_participant_settlement(&[[0x32; 32]])
             .is_err()
     );
-    assert!(
-        body.computed_grouped_participant_settlement(&[body.source_id, body.source_id])
-            .is_err()
+    assert_eq!(
+        body.computed_grouped_participant_settlement(&[body.source_id, body.source_id]),
+        Err("Native AMX participant source group must be unique")
     );
-    assert!(
-        body.computed_grouped_participant_settlement(&[[0x32; 32], body.source_id])
-            .is_err()
+    let reverse_hash_order = [[0x32; 32], body.source_id];
+    let reverse_settlement = body
+        .computed_grouped_participant_settlement(&reverse_hash_order)
+        .expect("candidate order is independent of source hash order");
+    assert_eq!(
+        reverse_settlement
+            .receipts
+            .iter()
+            .map(|receipt| receipt.source_id)
+            .collect::<Vec<_>>(),
+        reverse_hash_order
     );
     assert!(
         body.computed_grouped_participant_settlement(&vec![
@@ -1790,6 +2114,121 @@ fn lane_block_proposal_roundtrips_and_derives_vote_body() {
         decoded.descriptor.accepted_transaction_hashes
     );
 }
+
+#[test]
+fn lane_consensus_artifacts_reject_pre_release_omitted_nullable_slots() {
+    #[derive(Encode)]
+    struct PreReleaseLaneBlockProposal {
+        descriptor: LaneBlockDescriptorV1,
+        proposal_hash: Hash,
+    }
+    #[derive(Encode)]
+    struct PreReleaseLaneBlockQc {
+        body: LaneBlockVoteBodyV1,
+        validator_set_hash_version: u16,
+        validator_set_hash: HashOf<Vec<PeerId>>,
+        validator_set: Vec<PeerId>,
+        signers_bitmap: Vec<u8>,
+        bls_aggregate_signature: Vec<u8>,
+    }
+
+    let proposal = sample_lane_block_proposal();
+    let bytes = PreReleaseLaneBlockProposal {
+        descriptor: proposal.descriptor.clone(),
+        proposal_hash: proposal.proposal_hash,
+    }
+    .encode();
+    assert!(
+        LaneBlockProposalV1::decode_all(&mut bytes.as_slice()).is_err(),
+        "the first-release lane proposal must reject the layout without its carrier-hint slot"
+    );
+
+    let bytes = PreReleaseLaneBlockQc {
+        body: proposal.vote_body(CertPhase::Prepare),
+        validator_set_hash_version: proposal.descriptor.validator_set_hash_version,
+        validator_set_hash: proposal.descriptor.validator_set_hash,
+        validator_set: proposal.descriptor.validator_set.clone(),
+        signers_bitmap: vec![0b0000_0111],
+        bls_aggregate_signature: vec![0xA5; 96],
+    }
+    .encode();
+    assert!(
+        LaneBlockQcV1::decode_all(&mut bytes.as_slice()).is_err(),
+        "the first-release lane QC must reject the layout without its availability-QC slot"
+    );
+}
+
+#[test]
+fn lane_consensus_json_requires_nullable_slots_and_rejects_unknown_fields() {
+    let proposal = sample_lane_block_proposal();
+    let mut descriptor =
+        norito::json::to_value(&proposal.descriptor).expect("serialize lane descriptor");
+    descriptor
+        .as_object_mut()
+        .expect("lane descriptor JSON object")
+        .remove("previous_lane_block_descriptor_hash");
+    assert!(
+        norito::json::from_value::<LaneBlockDescriptorV1>(descriptor).is_err(),
+        "the first-release lane descriptor must require its nullable predecessor slot"
+    );
+
+    let mut proposal_json = norito::json::to_value(&proposal).expect("serialize lane proposal");
+    proposal_json
+        .as_object_mut()
+        .expect("lane proposal JSON object")
+        .remove("payload_block_hint");
+    assert!(
+        norito::json::from_value::<LaneBlockProposalV1>(proposal_json).is_err(),
+        "the first-release lane proposal must require its nullable carrier-hint slot"
+    );
+
+    let qc = LaneBlockQcV1 {
+        body: proposal.vote_body(CertPhase::Prepare),
+        validator_set_hash_version: proposal.descriptor.validator_set_hash_version,
+        validator_set_hash: proposal.descriptor.validator_set_hash,
+        validator_set: proposal.descriptor.validator_set.clone(),
+        signers_bitmap: vec![0b0000_0111],
+        bls_aggregate_signature: vec![0xA5; 96],
+        payload_availability_qc: None,
+    };
+    let mut qc_json = norito::json::to_value(&qc).expect("serialize lane QC");
+    qc_json
+        .as_object_mut()
+        .expect("lane QC JSON object")
+        .remove("payload_availability_qc");
+    assert!(
+        norito::json::from_value::<LaneBlockQcV1>(qc_json).is_err(),
+        "the first-release lane QC must require its nullable availability slot"
+    );
+
+    let ownership = sample_lane_payload_ownership_with_replay_material();
+    for field in [
+        "previous_lane_block_descriptor_hash",
+        "lane_block_descriptor_hash",
+    ] {
+        let mut value =
+            norito::json::to_value(&ownership).expect("serialize lane payload ownership");
+        value
+            .as_object_mut()
+            .expect("lane payload ownership JSON object")
+            .remove(field);
+        assert!(
+            norito::json::from_value::<SumeragiLanePayloadOwnership>(value).is_err(),
+            "the first-release lane payload ownership must require {field}"
+        );
+    }
+
+    let mut vote_body = norito::json::to_value(&qc.body).expect("serialize lane vote body");
+    vote_body
+        .as_object_mut()
+        .expect("lane vote body JSON object")
+        .insert("pre_release_field".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<LaneBlockVoteBodyV1>(vote_body).is_err(),
+        "the first-release lane vote body must reject unknown fields"
+    );
+}
+
 #[test]
 fn lane_block_certificate_decodes_exactly_and_rejects_trailing_bytes() {
     let proposal = sample_lane_block_proposal();
@@ -1823,113 +2262,6 @@ fn sample_proposal() -> Proposal {
     Proposal {
         header: sample_consensus_header(),
         payload_hash: Hash::new(b"payload"),
-    }
-}
-fn sample_reconfig() -> Reconfig {
-    let peers = (0..2)
-        .map(|_| PeerId::new(checked_random_keypair().public_key().clone()))
-        .collect();
-    Reconfig {
-        new_roster: peers,
-        activation_height: 42,
-    }
-}
-fn sample_rbc_init() -> RbcInit {
-    let roster = sample_roster();
-    let roster_hash = roster_hash(&roster);
-    let chunk_digests = vec![[0x11; 32], [0x22; 32], [0x33; 32]];
-    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
-        .root()
-        .map(Hash::from)
-        .expect("chunk root");
-    let block_header = BlockHeader::new(
-        NonZeroU64::new(6).expect("block height must be non-zero"),
-        None,
-        None,
-        None,
-        0,
-        3,
-    );
-    let leader_key = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_, leader_private) = leader_key.into_parts();
-    let leader_signature = BlockSignature::new(
-        0,
-        SignatureOf::try_from_hash(&leader_private, block_header.hash())
-            .expect("checked RBC init leader fixture signature"),
-    );
-    RbcInit {
-        block_hash: block_header.hash(),
-        height: 6,
-        view: 3,
-        epoch: 1,
-        roster,
-        roster_hash,
-        total_chunks: 3,
-        encoding: RbcEncoding::Plain,
-        chunk_size_bytes: 128,
-        payload_size_bytes: 257,
-        data_shards: 0,
-        parity_shards: 0,
-        chunk_digests,
-        payload_hash: Hash::new(b"payload_hash"),
-        chunk_root,
-        block_header,
-        leader_signature,
-    }
-}
-fn sample_rbc_chunk() -> RbcChunk {
-    RbcChunk {
-        block_hash: dummy_hash(),
-        height: 6,
-        view: 3,
-        epoch: 1,
-        idx: 1,
-        bytes: vec![1, 2, 3, 4],
-    }
-}
-fn sample_rbc_init_request() -> RbcInitRequest {
-    RbcInitRequest {
-        block_hash: dummy_hash(),
-        height: 6,
-        view: 3,
-    }
-}
-fn sample_rbc_chunk_request() -> RbcChunkRequest {
-    RbcChunkRequest {
-        block_hash: dummy_hash(),
-        height: 6,
-        view: 3,
-        missing_indices: vec![0, 2, 5],
-    }
-}
-fn sample_rbc_ready() -> RbcReady {
-    let roster = sample_roster();
-    RbcReady {
-        block_hash: dummy_hash(),
-        height: 6,
-        view: 3,
-        epoch: 1,
-        roster_hash: roster_hash(&roster),
-        chunk_root: Hash::prehashed([0xAA; Hash::LENGTH]),
-        sender: 2,
-        signature: vec![0x10, 0x11],
-    }
-}
-fn sample_rbc_deliver() -> RbcDeliver {
-    let roster = sample_roster();
-    RbcDeliver {
-        block_hash: dummy_hash(),
-        height: 6,
-        view: 3,
-        epoch: 1,
-        roster_hash: roster_hash(&roster),
-        chunk_root: Hash::prehashed([0xAA; Hash::LENGTH]),
-        sender: 2,
-        signature: vec![0x21, 0x22],
-        ready_signatures: vec![RbcReadySignature {
-            sender: 1,
-            signature: vec![0x31, 0x32],
-        }],
     }
 }
 fn sample_vrf_commit() -> VrfCommit {
@@ -1995,24 +2327,11 @@ fn exec_witness_roundtrip_codec() {
     assert_eq!(w, dec);
 }
 #[test]
-fn rbc_repair_requests_roundtrip_codec() {
-    let init_request = sample_rbc_init_request();
-    let init_bytes = init_request.encode();
-    let init_decoded =
-        RbcInitRequest::decode(&mut &init_bytes[..]).expect("decode RBC init request");
-    assert_eq!(init_request, init_decoded);
-    let chunk_request = sample_rbc_chunk_request();
-    let chunk_bytes = chunk_request.encode();
-    let chunk_decoded =
-        RbcChunkRequest::decode(&mut &chunk_bytes[..]).expect("decode RBC chunk request");
-    assert_eq!(chunk_request, chunk_decoded);
-}
-#[test]
-fn evidence_roundtrip_codec() {
+fn retired_invalid_qc_evidence_fails_decode() {
     let roster = sample_roster();
-    let ev = Evidence {
-        kind: EvidenceKind::InvalidQc,
-        payload: EvidencePayload::InvalidQc {
+    let ev = RetiredEvidence {
+        kind: RetiredEvidenceKind::InvalidQc,
+        payload: RetiredEvidencePayload::InvalidQc {
             certificate: Qc {
                 phase: CertPhase::Commit,
                 subject_block_hash: dummy_hash(),
@@ -2037,14 +2356,12 @@ fn evidence_roundtrip_codec() {
         },
     };
     let bytes = ev.encode();
-    let dec = Evidence::decode(&mut &bytes[..]).expect("decode evidence");
-    assert_eq!(ev, dec);
+    Evidence::decode(&mut &bytes[..]).expect_err("retired invalid-QC evidence must fail decode");
 }
 #[test]
-fn censorship_evidence_roundtrip_codec() {
+fn retired_censorship_evidence_fails_decode() {
     let key_pair = checked_random_keypair();
     let payload = crate::transaction::TransactionSubmissionReceiptPayload {
-        tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
         entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
         signed_transaction_hash: None,
         submitted_at_ms: 10,
@@ -2053,23 +2370,22 @@ fn censorship_evidence_roundtrip_codec() {
     };
     let receipt = crate::transaction::TransactionSubmissionReceipt::try_sign(payload, &key_pair)
         .expect("checked censorship evidence receipt fixture signature");
-    let tx_hash = receipt.payload.tx_hash;
-    let ev = Evidence {
-        kind: EvidenceKind::Censorship,
-        payload: EvidencePayload::Censorship {
+    let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
+    let ev = RetiredEvidence {
+        kind: RetiredEvidenceKind::Censorship,
+        payload: RetiredEvidencePayload::Censorship {
             tx_hash,
             receipts: vec![receipt],
         },
     };
     let bytes = ev.encode();
-    let dec = Evidence::decode(&mut &bytes[..]).expect("decode censorship evidence");
-    assert_eq!(ev, dec);
+    Evidence::decode(&mut &bytes[..]).expect_err("retired censorship evidence must fail decode");
 }
 #[test]
-fn evidence_record_roundtrip() {
-    let ev = Evidence {
-        kind: EvidenceKind::DoublePrepare,
-        payload: EvidencePayload::DoubleVote {
+fn retired_evidence_record_fails_decode() {
+    let ev = RetiredEvidence {
+        kind: RetiredEvidenceKind::DoublePrepare,
+        payload: RetiredEvidencePayload::DoubleVote {
             v1: QcVote {
                 phase: CertPhase::Prepare,
                 block_hash: dummy_hash(),
@@ -2100,7 +2416,7 @@ fn evidence_record_roundtrip() {
             },
         },
     };
-    let rec = EvidenceRecord {
+    let rec = RetiredEvidenceRecord {
         evidence: ev,
         recorded_at_height: 11,
         recorded_at_view: 2,
@@ -2112,25 +2428,8 @@ fn evidence_record_roundtrip() {
         consensus_admitted_at_height: Some(11),
     };
     let bytes = rec.encode();
-    let dec = EvidenceRecord::decode(&mut &bytes[..]).expect("decode evidence record");
-    assert_eq!(rec, dec);
-}
-#[test]
-fn rbc_ready_decode_from_slice_matches_encode() {
-    let ready = RbcReady {
-        block_hash: dummy_hash(),
-        height: 5,
-        view: 1,
-        epoch: 0,
-        roster_hash: Hash::prehashed([0xAA; Hash::LENGTH]),
-        chunk_root: Hash::prehashed([0u8; Hash::LENGTH]),
-        sender: 2,
-        signature: vec![9, 9, 9],
-    };
-    let canonical = ready.encode();
-    let (decoded, used) = RbcReady::decode_from_slice(&canonical).expect("decode_from_slice ready");
-    assert_eq!(ready, decoded);
-    assert_eq!(used, canonical.len());
+    EvidenceRecord::decode(&mut &bytes[..])
+        .expect_err("records carrying retired evidence must fail decode");
 }
 #[test]
 fn lane_settlement_receipt_decode_from_slice_requires_canonical_bare_prefix() {
@@ -2373,6 +2672,5 @@ fn lane_payload_ownership_status_roundtrip_codec() {
     assert_eq!(used, encoded.len());
 }
 include!("consensus/quorum_policy_tests.rs");
-include!("consensus/rbc_roundtrip_tail_tests.rs");
 include!("consensus/runtime_diagnostics_tests.rs");
 include!("consensus/npos_diagnostics_tests.rs");

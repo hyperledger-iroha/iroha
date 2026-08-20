@@ -12,7 +12,9 @@ fresh-key NPoS validators for the canonical Taira chain, validates every peer
 configuration, starts the peers, and waits for all four nodes to become ready.
 It then submits one blocking signed `iroha tx ping`, requires all four committed
 heights to advance and converge, and checks that the generated MCP endpoint can
-initialize and list tools.
+initialize and list tools. The build uses the repository's stable local metadata
+and shared target cache, so unrelated worktree metadata does not force a cold
+rebuild.
 
 There is no release authority, source-closure ceremony, evidence archive,
 promotion state, 24-hour soak, host service installation, or predecessor

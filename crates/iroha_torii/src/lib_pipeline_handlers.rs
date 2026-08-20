@@ -1196,7 +1196,8 @@ fn certified_merge_pipeline_transactions(
     entry: &iroha_data_model::merge::MergeLedgerEntry,
 ) -> Result<
     Vec<(
-        HashOf<SignedTransaction>,
+        HashOf<TransactionEntrypoint>,
+        Option<HashOf<SignedTransaction>>,
         iroha_data_model::query::CommittedTransaction,
     )>,
     Error,
@@ -1212,25 +1213,42 @@ fn certified_merge_pipeline_transactions(
             "execution carrier references an entry without an execution batch",
         )
     })?;
-    let membership_hashes = iroha_core::state::merge_execution_committed_transaction_hashes(batch);
-    if transactions.len() != membership_hashes.len() {
+    let membership_identities = batch
+        .lanes
+        .iter()
+        .flat_map(|execution| {
+            execution.entrypoints.iter().map(|entrypoint| {
+                (
+                    entrypoint.hash(),
+                    signed_transaction_hash_for_entrypoint(entrypoint),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    if transactions.len() != membership_identities.len() {
         return Err(pipeline_status_projection_error(format!(
             "authenticated transcript has {} transactions but State membership has {} hashes",
             transactions.len(),
-            membership_hashes.len()
+            membership_identities.len()
         )));
     }
-    Ok(membership_hashes
+    Ok(membership_identities
         .into_iter()
         .rev()
         .zip(transactions)
+        .map(
+            |((entrypoint_hash, signed_transaction_hash), transaction)| {
+                (entrypoint_hash, signed_transaction_hash, transaction)
+            },
+        )
         .collect())
 }
 fn pipeline_status_from_state(
     app: &AppState,
     hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<PipelineStatusEntry>, Error> {
-    let Some(height) = app.state.committed_transaction_height(hash) else {
+    let entrypoint_hash = iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone());
+    let Some(height) = app.state.committed_entrypoint_height(&entrypoint_hash) else {
         return Ok(None);
     };
     let height_u64 = u64::try_from(height.get())
@@ -1245,9 +1263,7 @@ fn pipeline_status_from_state(
         if index >= block_ref.external_entrypoint_count() {
             break;
         }
-        let entrypoint_hash =
-            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()));
-        if entrypoint_hash != *hash {
+        if entrypoint.hash() != entrypoint_hash {
             continue;
         }
         let (kind, rejection) = match &result.0 {
@@ -1285,8 +1301,8 @@ fn pipeline_status_from_state(
     let transactions = certified_merge_pipeline_transactions(block_ref.hash(), reference, &entry)?;
     let transaction = transactions
         .iter()
-        .find(|(membership_hash, _)| membership_hash == hash)
-        .map(|(_, transaction)| transaction)
+        .find(|(membership_hash, _, _)| membership_hash == &entrypoint_hash)
+        .map(|(_, _, transaction)| transaction)
         .ok_or_else(|| {
             pipeline_status_projection_error(format!(
                 "transaction {hash} is indexed at merge carrier {} but its authenticated transcript does not contain it",
@@ -1332,14 +1348,20 @@ fn pipeline_status_local_entry_checked(
     }
     if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
         if entry.kind == PipelineStatusKind::Queued
-            && !app.queue.contains_pending_hash(hash.clone(), &app.state)
+            && !app.queue.contains_pending_hash(
+                iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone()),
+                &app.state,
+            )
         {
             app.pipeline_status_cache.remove_entry_by_hash(hash);
             return Ok(None);
         }
         return Ok(Some((entry, "cache")));
     }
-    if app.queue.contains_pending_hash(hash.clone(), &app.state) {
+    if app.queue.contains_pending_hash(
+        iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone()),
+        &app.state,
+    ) {
         let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
@@ -1476,11 +1498,9 @@ fn pipeline_transaction_details_response(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<PipelineTransactionDetailsResponse, Error> {
     use iroha_data_model::query::{CommittedTxFilters, dsl::CompoundPredicate};
-    let signed_hash =
-        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash.clone()));
     let block_height = app
         .state
-        .committed_transaction_height(&signed_hash)
+        .committed_entrypoint_height(&entrypoint_hash)
         .ok_or_else(pipeline_status_not_found_error)?;
     let state_view = app.state.view();
     let world = state_view.world();
@@ -1521,7 +1541,7 @@ fn pipeline_transaction_details_response(
     }
     let block_height = u64::try_from(block_height.get())
         .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
-    let hash = signed_hash.to_string();
+    let hash = entrypoint_hash.to_string();
     Ok(PipelineTransactionDetailsResponse {
         trigger_completions: trigger_completion_summaries_for_entrypoint_hash(
             app,
@@ -1648,7 +1668,13 @@ async fn handler_pipeline_transaction_status(
     #[cfg(feature = "app_api")]
     {
         let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
-        if let Some(route) = queue::routing_plan_hint(&hash).map(|plan| plan.coordinator_route()) {
+        let entrypoint_hash =
+            iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone());
+        if let Some(route) = app
+            .queue
+            .routing_plan_hint(&entrypoint_hash)
+            .map(|plan| plan.coordinator_route())
+        {
             let hinted = execute_torii_single_route_read(
                 &app,
                 route,

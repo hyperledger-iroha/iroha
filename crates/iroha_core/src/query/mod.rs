@@ -102,21 +102,6 @@ fn next_height_for_state(state: &mut crate::state::State) -> (NonZeroUsize, NonZ
     (nz_usize, nz_u64)
 }
 // --- Test utilities (non-consensus; for integration tests) ---
-/// Compute double-vote evidence from two votes (helper for tests).
-pub fn evidence_check_double_vote(
-    v1: &crate::sumeragi::consensus::Vote,
-    v2: &crate::sumeragi::consensus::Vote,
-) -> Option<crate::sumeragi::consensus::Evidence> {
-    crate::sumeragi::evidence::check_double_vote(v1, v2)
-}
-/// Insert evidence into the WSV-backed store (helper for tests).
-pub fn evidence_insert(
-    state: &crate::state::State,
-    ev: &crate::sumeragi::consensus::Evidence,
-    context: &crate::sumeragi::EvidenceValidationContext<'_>,
-) -> bool {
-    crate::sumeragi::evidence::persist_record(state, ev, context)
-}
 /// Insert a verifying key record directly into WSV for tests.
 pub fn insert_verifying_key_record_for_test(
     state: &mut crate::state::State,

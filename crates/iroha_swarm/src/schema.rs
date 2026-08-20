@@ -733,9 +733,8 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
             format!(
                 "{materialize}exec env -i PATH=/usr/local/bin:/usr/bin:/bin \
                  HOME=/opt/iroha USER=iroha \
-                 IROHA_BUILD_LINE={} iroha3d{sora} --config /config/peer.toml \
-                 --config-blake3 {config_blake3}",
-                runtime.build_line.as_str()
+                 iroha3d{sora} --config /config/peer.toml \
+                 --config-blake3 {config_blake3}"
             )
         },
     );

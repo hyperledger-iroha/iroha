@@ -1174,8 +1174,6 @@ fn local_proposal_intent_live_wal_sign_is_typed_dispatched_once_and_prepares_suc
     let local = prepared
         .project_local_proposal_ready()
         .expect("local validated carrier projects its exact runtime handoff");
-    drop(prepared);
-    drop(holder);
 
     let adapter_directory = TempDir::new().expect("temporary local ProposalIntent WAL");
     let wal_path = adapter_directory.path().join("safety.wal");
@@ -1217,6 +1215,22 @@ fn local_proposal_intent_live_wal_sign_is_typed_dispatched_once_and_prepares_suc
     runtime
         .arm_live_clocks(now)
         .expect("arm local ProposalIntent runtime clocks");
+    let local_publication = (
+        local
+            .command_identity()
+            .expect("local ProposalReady handoff retains its exact runtime identity"),
+        local.lifecycle_ordinal(),
+    );
+    assert!(matches!(
+        runtime
+            .preflight_ready_durable_validate_adapter_publication(
+                &prepared,
+                Some(local_publication),
+            )
+            .expect("preflight the exact local Ready Validate publication"),
+        ReadyDurableValidateAdapterPublicationKind::ValidatedInactive
+            | ReadyDurableValidateAdapterPublicationKind::ValidatedNoEffect
+    ));
     let published = local
         .publish_into_runtime(&mut runtime)
         .unwrap_or_else(|_| panic!("publish exact local-proposal runtime handoff"));

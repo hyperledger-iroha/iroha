@@ -1,0 +1,270 @@
+name: Promote Kagemusha V4 production release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kagemusha-v4-production-promotion
+  cancel-in-progress: false
+
+jobs:
+  controller-build:
+    runs-on: [self-hosted, macOS, ARM64, kagemusha-untrusted-build]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Build and qualify the inert authenticated-tool controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          ci/check_authenticated_tool_controller.sh
+          cargo build --locked --release -p iroha_kagami \
+            --bin iroha_authenticated_tool_controller --features dev-tools
+          stage="$RUNNER_TEMP/kagemusha-controller-handoff"
+          test ! -e "$stage"
+          mkdir -m 0700 "$stage"
+          install -m 0500 target/release/iroha_authenticated_tool_controller \
+            "$stage/iroha_authenticated_tool_controller"
+      - name: Upload the inert controller image
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kagemusha-controller-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kagemusha-controller-handoff/
+          if-no-files-found: error
+          retention-days: 1
+
+  production-promotion:
+    needs: controller-build
+    environment: kagemusha-v4-production
+    runs-on: [self-hosted, macOS, ARM64, kagemusha-production]
+    timeout-minutes: 180
+    steps:
+      - name: Download the controller image into quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: kagemusha-controller-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kagemusha-controller-quarantine
+      - name: Install, qualify, and run the protected promotion gate
+        shell: bash
+        env:
+          KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH }}
+          KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256 }}
+          KAGEMUSHA_PRODUCTION_READINESS_PYTHON: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_PYTHON }}
+          KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256 }}
+          KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT }}
+          KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256 }}
+          KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD }}
+          KAGEMUSHA_V4_RELEASE_POLICY_PATH: ${{ vars.KAGEMUSHA_V4_RELEASE_POLICY_PATH }}
+          KAGEMUSHA_V4_ARTIFACT_ROOT: ${{ vars.KAGEMUSHA_V4_ARTIFACT_ROOT }}
+          KAGEMUSHA_V4_KAGAMI_BIN: ${{ vars.KAGEMUSHA_V4_KAGAMI_BIN }}
+          KAGEMUSHA_V4_KAGAMI_SHA256: ${{ vars.KAGEMUSHA_V4_KAGAMI_SHA256 }}
+          KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN: ${{ vars.KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN }}
+          KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256: ${{ vars.KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256 }}
+          KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE: ${{ vars.KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE }}
+          KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256: ${{ vars.KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256 }}
+          KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH: ${{ vars.KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH }}
+          KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256: ${{ vars.KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256 }}
+          KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH: ${{ vars.KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH }}
+          KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_SHA256: ${{ vars.KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_SHA256 }}
+          KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION: ${{ vars.KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION }}
+          KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256: ${{ vars.KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256 }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION_SHA256: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION_SHA256 }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE_SHA256: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE_SHA256 }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS_SHA256: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS_SHA256 }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION_SHA256: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION_SHA256 }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY_SHA256: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY_SHA256 }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH_SHA256: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH_SHA256 }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH }}
+          KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH_SHA256: ${{ vars.KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH_SHA256 }}
+          KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH: ${{ vars.KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH }}
+          KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256: ${{ vars.KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256 }}
+          KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT: ${{ vars.KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT }}
+          KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID: ${{ vars.KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID }}
+          KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY: ${{ vars.KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY }}
+          KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY: ${{ vars.KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY }}
+          KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID: ${{ vars.KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID }}
+          KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY: ${{ vars.KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          quarantine="$RUNNER_TEMP/kagemusha-controller-quarantine"
+          controller_source="$quarantine/iroha_authenticated_tool_controller"
+          observed_inventory_sha256="$(
+            /usr/bin/find -s "$quarantine" -mindepth 1 -maxdepth 1 -print0 \
+              | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+          )"
+          expected_inventory_sha256="$(
+            printf '%s\0' "$controller_source" \
+              | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+          )"
+          test "$observed_inventory_sha256" = "$expected_inventory_sha256" || {
+            echo "controller handoff inventory is not exact" >&2
+            exit 1
+          }
+          test -f "$controller_source"
+          test ! -L "$controller_source"
+          read -r controller_source_links controller_source_size \
+            <<<"$(/usr/bin/stat -f '%l %z' "$controller_source")"
+          test "$controller_source_links" = 1
+          (( controller_source_size > 0 && controller_source_size <= 16 * 1024 * 1024 ))
+          require_root_custodied_directory_chain() {
+            local target="$1"
+            local remainder="${target#/}"
+            local current="/"
+            local component owner mode listing marker xattrs
+            [[ "$target" == /* && "$target" != "/" ]]
+            [[ "$target" != *//* && "$target" != */./* && "$target" != */../* ]]
+            while :; do
+              test -d "$current"
+              test ! -L "$current"
+              read -r owner mode <<<"$(/usr/bin/stat -f '%u %Lp' "$current")"
+              test "$owner" = 0
+              [[ "$mode" =~ ^[0-7]{3,4}$ ]]
+              (( (8#$mode & 0022) == 0 ))
+              listing="$(LC_ALL=C /bin/ls -lde "$current")"
+              read -r marker _ <<<"$listing"
+              [[ "$marker" != *+ ]]
+              xattrs="$(/usr/bin/xattr "$current")"
+              test -z "$xattrs"
+              [[ -n "$remainder" ]] || break
+              if [[ "$remainder" == */* ]]; then
+                component="${remainder%%/*}"
+                remainder="${remainder#*/}"
+              else
+                component="$remainder"
+                remainder=""
+              fi
+              [[ -n "$component" && "$component" != "." && "$component" != ".." ]]
+              current="${current%/}/$component"
+            done
+          }
+          [[ "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256" != "$(printf '0%.0s' {1..64})"
+          test "$(/usr/bin/shasum -a 256 "$controller_source" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"
+          [[ "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" == /* ]]
+          controller_parent="${KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN%/*}"
+          controller_name="${KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN##*/}"
+          test -n "$controller_name"
+          test "$(cd "$controller_parent" && pwd -P)" = "$controller_parent"
+          test "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" = "$controller_parent/$controller_name"
+          [[ "$controller_name" != "." && "$controller_name" != ".." ]]
+          require_root_custodied_directory_chain "$controller_parent"
+          controller_install_candidate="$controller_parent/.${controller_name}.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.new"
+          sudo -n /bin/test ! -d "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          sudo -n /bin/test ! -L "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          sudo -n /bin/test ! -e "$controller_install_candidate"
+          sudo -n /bin/test ! -L "$controller_install_candidate"
+          sudo -n /usr/bin/install -o root -g wheel -m 0555 "$controller_source" "$controller_install_candidate"
+          test "$(sudo -n /usr/bin/shasum -a 256 "$controller_install_candidate" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"
+          sudo -n /usr/bin/cmp "$controller_source" "$controller_install_candidate"
+          sudo -n /bin/mv -f -- "$controller_install_candidate" "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          test -f "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          test ! -L "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          read -r controller_uid controller_gid controller_links controller_size controller_mode \
+            <<<"$(/usr/bin/stat -f '%u %g %l %z %Lp' "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN")"
+          if [[ "$controller_uid" != 0 || "$controller_gid" != 0 \
+            || "$controller_links" != 1 || "$controller_mode" != 555 ]] \
+            || (( controller_size <= 0 )); then
+            echo "installed authenticated-tool controller identity is invalid" >&2
+            exit 1
+          fi
+          controller_listing="$(
+            LC_ALL=C /bin/ls -lde "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          )"
+          read -r controller_marker _ <<<"$controller_listing"
+          [[ "$controller_marker" != *+ ]]
+          test -z "$(/usr/bin/xattr "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN")"
+          require_root_custodied_directory_chain "$controller_parent"
+          test "$(sudo -n /usr/bin/shasum -a 256 "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"
+          sudo -n /usr/bin/cmp "$controller_source" "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          qualification_result="$(sudo -n /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin TMPDIR=/private/var/tmp "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" qualify-host-v1)"
+          test "$qualification_result" = "authenticated-tool-controller: macOS host qualification passed"
+          [[ "$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH" == /* ]]
+          [[ "$KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256" != "$(printf '0%.0s' {1..64})"
+          test "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256" != "$(printf '0%.0s' {1..64})"
+          test "$(sudo -n /usr/bin/shasum -a 256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256"
+          gate_launch_dir="$(sudo -n /usr/bin/mktemp -d /private/var/db/iroha-kagemusha-readiness-v1/gate-launch.XXXXXX)"
+          case "$gate_launch_dir" in
+            /private/var/db/iroha-kagemusha-readiness-v1/gate-launch.*) ;;
+            *) echo "authenticated gate snapshot escaped its fixed staging parent" >&2; exit 1 ;;
+          esac
+          gate_snapshot="$gate_launch_dir/check_kagemusha_production_readiness.sh"
+          cleanup_gate_snapshot() {
+            sudo -n /bin/rm -f -- "$gate_snapshot"
+            sudo -n /bin/rmdir -- "$gate_launch_dir"
+          }
+          trap cleanup_gate_snapshot EXIT
+          sudo -n /usr/bin/install -o root -g wheel -m 0555 "$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH" "$gate_snapshot"
+          test "$(sudo -n /usr/bin/shasum -a 256 "$gate_snapshot" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256"
+          sudo -n /usr/bin/env -i \
+            LANG=C LC_ALL=C PATH=/usr/bin:/bin TMPDIR=/private/var/tmp \
+            KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH="$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH" \
+            KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256="$KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256" \
+            KAGEMUSHA_PRODUCTION_READINESS_PYTHON="$KAGEMUSHA_PRODUCTION_READINESS_PYTHON" \
+            KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256="$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256" \
+            KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT="$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT" \
+            KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256="$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256" \
+            KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD="$KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD" \
+            KAGEMUSHA_V4_RELEASE_POLICY_PATH="$KAGEMUSHA_V4_RELEASE_POLICY_PATH" \
+            KAGEMUSHA_V4_ARTIFACT_ROOT="$KAGEMUSHA_V4_ARTIFACT_ROOT" \
+            KAGEMUSHA_V4_KAGAMI_BIN="$KAGEMUSHA_V4_KAGAMI_BIN" \
+            KAGEMUSHA_V4_KAGAMI_SHA256="$KAGEMUSHA_V4_KAGAMI_SHA256" \
+            KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN="$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" \
+            KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256="$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256" \
+            KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE="$KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE" \
+            KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256="$KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256" \
+            KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH="$KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH" \
+            KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256="$KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256" \
+            KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH="$KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH" \
+            KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_SHA256="$KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_SHA256" \
+            KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION="$KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION" \
+            KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256="$KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION="$KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION_SHA256="$KAGEMUSHA_BUILD_SOURCE_SEAL_AUTHORIZATION_SHA256" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE="$KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE_SHA256="$KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_SIGNATURE_SHA256" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS="$KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS_SHA256="$KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_ALLOWED_SIGNERS_SHA256" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION="$KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION_SHA256="$KAGEMUSHA_BUILD_SOURCE_SEAL_CONTROLLER_REVOCATION_SHA256" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY="$KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY_SHA256="$KAGEMUSHA_BUILD_SOURCE_SEAL_EXECUTION_POLICY_SHA256" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH="$KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH_SHA256="$KAGEMUSHA_BUILD_SOURCE_SEAL_RAW_UNIT_GRAPH_SHA256" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH="$KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH" \
+            KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH_SHA256="$KAGEMUSHA_BUILD_SOURCE_SEAL_NORMALIZED_UNIT_GRAPH_SHA256" \
+            KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH="$KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH" \
+            KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256="$KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256" \
+            KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT" \
+            KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID" \
+            KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY" \
+            KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY" \
+            KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID" \
+            KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY" \
+            "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" \
+              launch-kagemusha-readiness-v1 \
+              --expected-macos-build "$KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD" \
+              --gate-sha256 "$KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256" \
+              --gate-snapshot "$gate_snapshot" \
+              --gate-source "$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH" \
+              --python-runtime-root "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT" \
+              --python-runtime-tree-sha256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256" \
+              --python-sha256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256"

@@ -9,9 +9,9 @@ fn restored_carrierless_leader_wires_stay_dormant_until_exact_post_capacity_repl
         let fixture = restored_leader_wire_fixture(cut);
         let mut occurrence = 0_u64;
         loop {
-            let unrelated = InboundBlockMessage::new(
+            let unrelated = InboundBlockMessage::from_authenticated_peer(
                 v2_commit_certificate_request(occurrence, &fixture.validator),
-                Some(fixture.validator.clone()),
+                fixture.validator.clone(),
             );
             match fixture.ingress.try_push(unrelated) {
                 Ok(super::FairV2IngressPushDisposition::Enqueued) => {
@@ -28,10 +28,12 @@ fn restored_carrierless_leader_wires_stay_dormant_until_exact_post_capacity_repl
             "unrelated traffic must enter despite the dormant {cut:?} owner"
         );
         assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                fixture.message.clone(),
-                Some(fixture.validator.clone()),
-            )),
+            fixture
+                .ingress
+                .try_push(InboundBlockMessage::from_authenticated_peer(
+                    fixture.message.clone(),
+                    fixture.validator.clone(),
+                )),
             Err(super::FairV2IngressPushError::Full(_))
         ));
         {
@@ -66,10 +68,12 @@ fn restored_carrierless_leader_wires_stay_dormant_until_exact_post_capacity_repl
             .checked_add(1)
             .expect("fixture view has a successor");
         assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                newer,
-                Some(fixture.validator.clone()),
-            )),
+            fixture
+                .ingress
+                .try_push(InboundBlockMessage::from_authenticated_peer(
+                    newer,
+                    fixture.validator.clone(),
+                )),
             Err(super::FairV2IngressPushError::Full(_))
         ));
         assert!(
@@ -78,20 +82,24 @@ fn restored_carrierless_leader_wires_stay_dormant_until_exact_post_capacity_repl
         );
         assert!(
             matches!(
-                fixture.ingress.try_push(InboundBlockMessage::new(
-                    v2_commit_certificate_request(occurrence, &fixture.validator),
-                    Some(fixture.validator.clone()),
-                )),
+                fixture
+                    .ingress
+                    .try_push(InboundBlockMessage::from_authenticated_peer(
+                        v2_commit_certificate_request(occurrence, &fixture.validator),
+                        fixture.validator.clone(),
+                    )),
                 Ok(super::FairV2IngressPushDisposition::Enqueued)
             ),
             "unrelated traffic must still bypass the dormant {cut:?} slot"
         );
         assert!(fixture.ingress.try_recv_if(|_| true).is_some());
         assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                fixture.message.clone(),
-                Some(fixture.validator.clone()),
-            )),
+            fixture
+                .ingress
+                .try_push(InboundBlockMessage::from_authenticated_peer(
+                    fixture.message.clone(),
+                    fixture.validator.clone(),
+                )),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
         ));
         assert_eq!(
@@ -135,10 +143,12 @@ fn restored_carrierless_leader_wires_stay_dormant_until_exact_post_capacity_repl
             .expect("publish replay tombstone");
         assert!(
             matches!(
-                fixture.ingress.try_push(InboundBlockMessage::new(
-                    fixture.message,
-                    Some(fixture.validator),
-                )),
+                fixture
+                    .ingress
+                    .try_push(InboundBlockMessage::from_authenticated_peer(
+                        fixture.message,
+                        fixture.validator,
+                    )),
                 Ok(super::FairV2IngressPushDisposition::Coalesced)
             ),
             "the drained {cut:?} lifecycle cannot resurrect its old ingress stage"
@@ -170,10 +180,12 @@ fn durable_view_cut_retires_carrierless_leader_wire_without_exact_retry() {
         };
         proposal.round.view = next_view;
         assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                newer.clone(),
-                Some(fixture.validator.clone()),
-            )),
+            fixture
+                .ingress
+                .try_push(InboundBlockMessage::from_authenticated_peer(
+                    newer.clone(),
+                    fixture.validator.clone(),
+                )),
             Err(super::FairV2IngressPushError::Full(_))
         ));
         let next =
@@ -206,16 +218,21 @@ fn durable_view_cut_retires_carrierless_leader_wire_without_exact_retry() {
         assert_eq!(restore.last_admission_ordinal(), 7, "{cut:?}");
         assert_eq!(restore.scheduler_ordinal_high_watermark(), 41, "{cut:?}");
         assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                fixture.message,
-                Some(fixture.validator.clone()),
-            )),
+            fixture
+                .ingress
+                .try_push(InboundBlockMessage::from_authenticated_peer(
+                    fixture.message,
+                    fixture.validator.clone(),
+                )),
             Err(super::FairV2IngressPushError::Rejected(_))
         ));
         assert!(matches!(
             fixture
                 .ingress
-                .try_push(InboundBlockMessage::new(newer, Some(fixture.validator),)),
+                .try_push(InboundBlockMessage::from_authenticated_peer(
+                    newer,
+                    fixture.validator,
+                )),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
         ));
         let state = fixture.ingress.state.lock();
@@ -244,9 +261,9 @@ fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure
     let round = proposal.round;
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             message.clone(),
-            Some(validator.clone()),
+            validator.clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -303,14 +320,16 @@ fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure
     proposal.round.view = next_view;
     proposal.manifest.round.view = next_view;
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             replacement,
-            Some(validator.clone()),
+            validator.clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(message, Some(validator))),
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            message, validator
+        )),
         Err(super::FairV2IngressPushError::Rejected(_))
     ));
     let state = ingress.state.lock();
@@ -356,16 +375,16 @@ fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
         0
     );
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             message.clone(),
-            Some(validator.clone()),
+            validator.clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             message.clone(),
-            Some(validator.clone()),
+            validator.clone(),
         )),
         Ok(super::FairV2IngressPushDisposition::Coalesced)
     ));
@@ -379,9 +398,9 @@ fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
     };
     response.body.push(0xFF);
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             conflicting,
-            Some(validator.clone()),
+            validator.clone(),
         )),
         Err(super::FairV2IngressPushError::Rejected(_))
     ));
@@ -426,7 +445,9 @@ fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
         0
     );
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(message, Some(validator))),
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            message, validator
+        )),
         Ok(super::FairV2IngressPushDisposition::Coalesced)
     ));
 }
@@ -461,10 +482,12 @@ fn durable_decision_cut_retires_and_closes_carrierless_leader_wire_height() {
         .expect("fixture view has a successor");
     for message in [fixture.message, later] {
         assert!(matches!(
-            fixture.ingress.try_push(InboundBlockMessage::new(
-                message,
-                Some(fixture.validator.clone()),
-            )),
+            fixture
+                .ingress
+                .try_push(InboundBlockMessage::from_authenticated_peer(
+                    message,
+                    fixture.validator.clone(),
+                )),
             Err(super::FairV2IngressPushError::Rejected(_))
         ));
     }

@@ -87,7 +87,7 @@ impl Error {
             ),
             queue::Error::PlanJournalDurabilityIndeterminate { .. } => (
                 "queue_plan_journal_outcome_unknown",
-                "transaction admission outcome is unknown; reconcile by exact transaction hash before retrying",
+                "transaction admission outcome is unknown; reconcile by exact entrypoint hash before retrying",
             ),
         }
     }
@@ -114,24 +114,32 @@ impl Error {
             }),
             _ => None,
         };
-        let (tx_hash, hint) = match err {
+        let (entrypoint_hash, tx_hash, hint) = match err {
             queue::Error::PlanJournalDurabilityIndeterminate {
-                transaction_hash, ..
-            } => (
-                Some(transaction_hash.to_string()),
-                Some(
-                    "Query status by this exact signed transaction hash or resubmit byte-identical signed bytes; do not create a replacement transaction until the outcome is known."
-                        .to_owned(),
-                ),
-            ),
+                entrypoint_hash,
+                signed_transaction_hash,
+                ..
+            } => {
+                let hint = if signed_transaction_hash.is_some() {
+                    "Reconcile this exact entrypoint hash, then query status by the signed transaction hash or resubmit byte-identical signed bytes; do not create a replacement transaction until the outcome is known."
+                } else {
+                    "Reconcile this exact entrypoint hash; do not create a replacement transaction until the outcome is known."
+                };
+                (
+                    Some(entrypoint_hash.to_string()),
+                    signed_transaction_hash.as_ref().map(ToString::to_string),
+                    Some(hint.to_owned()),
+                )
+            }
             queue::Error::PlanJournalDurabilityRejected { .. } => (
+                None,
                 None,
                 Some(
                     "The transaction was not admitted; restore queue-plan journal health before retrying."
                         .to_owned(),
                 ),
             ),
-            _ => (None, None),
+            _ => (None, None, None),
         };
         ErrorEnvelope::new(code, message).with_details(ErrorDetails {
             reject_code: Some(reject_code.to_owned()),
@@ -147,6 +155,7 @@ impl Error {
             }),
             retry_after_seconds,
             fee,
+            entrypoint_hash,
             tx_hash,
             hint,
             ..Default::default()
@@ -223,12 +232,17 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             format!("transaction queue did not durably admit the transaction: {reason}"),
         ),
         queue::Error::PlanJournalDurabilityIndeterminate {
-            transaction_hash,
+            entrypoint_hash,
+            signed_transaction_hash,
             reason,
         } => (
             "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
             format!(
-                "transaction admission outcome is unknown for {transaction_hash}; reconcile that exact signed hash before retrying: {reason}"
+                "transaction admission outcome is unknown for entrypoint {entrypoint_hash}{}; reconcile that exact entrypoint before retrying: {reason}",
+                signed_transaction_hash
+                    .as_ref()
+                    .map(|hash| format!(" (signed transaction {hash})"))
+                    .unwrap_or_default()
             ),
         ),
     }

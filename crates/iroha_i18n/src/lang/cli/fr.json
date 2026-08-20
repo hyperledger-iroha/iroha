@@ -13,7 +13,6 @@
   "error.submit_transaction": "Failed to submit transaction",
   "error.submit_transaction_debug": "Failed to submit transaction: {transaction}",
   "label.hash": "Hash:",
-  "info.build_line": "Build line: {build_line}",
   "help.heading.usage": "Usage:",
   "help.heading.commands": "Commands:",
   "help.heading.options": "Options:",

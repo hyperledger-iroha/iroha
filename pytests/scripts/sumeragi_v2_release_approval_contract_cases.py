@@ -159,7 +159,7 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
             "offline-cargo-version",
             "offline-workspace-build",
             "g-unit-production-864",
-            "g-unit-focused-530",
+            "g-unit-focused-522",
             "offline-workspace-clippy",
             "offline-workspace-format",
             "offline-no-legacy-codec",
@@ -241,7 +241,7 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
     }
     expected_plan_digests = {
         "offline-toolchain-sdk": (
-            "b59301ed38ad1833fa11b70c899a6dbc45c1a7f339fc1320ef838c8d5f6c35e0"
+            "ec23b831d3c9359fc94952bbda3cccb92e84a39645bb14e5c19f130d01ded95b"
         ),
         "formal-proof-tools": (
             "eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb"

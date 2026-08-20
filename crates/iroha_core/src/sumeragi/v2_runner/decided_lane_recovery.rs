@@ -111,7 +111,7 @@ fn admit_kura_replica_advert_ingress(
             ));
         }
     };
-    let authenticated_via = inbound.via().cloned();
+    let authenticated_via = inbound.via().clone();
     let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
         V2RunnerError::Service(
             "Kura replica advert lost its fair-ingress ownership carrier".to_owned(),
@@ -135,8 +135,8 @@ fn admit_kura_replica_advert_ingress(
             "Kura replica advert changed message class after ownership validation".to_owned(),
         ));
     };
-    if sender.as_ref() != Some(&advertised_keeper)
-        || authenticated_via.as_ref() != Some(&advertised_keeper)
+    if sender != advertised_keeper
+        || authenticated_via != advertised_keeper
         || advert.keeper != advertised_keeper
         || !ingress_ownership.matches_reply_routes(reply_routes.as_ref())
     {
@@ -314,10 +314,6 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
                 "historical terminal-recovery route crossed the active height".to_owned(),
             ));
         }
-        let Some(sender) = sender else {
-            mark_leader_wire_volatile(self.receiver, &ingress_ownership)?;
-            return Ok(());
-        };
         let Some(reply_routes) = reply_routes else {
             mark_leader_wire_volatile(self.receiver, &ingress_ownership)?;
             return Ok(());

@@ -1,7 +1,7 @@
 const OPENAPI_CONTRACT_ASSET_VERSION: u64 = 1;
-const OPENAPI_CONTRACT_ASSET_LEN: usize = 14_006;
+const OPENAPI_CONTRACT_ASSET_LEN: usize = 14_912;
 const OPENAPI_CONTRACT_ASSET_SHA256: &str =
-    "0ae9398cc79d6316b4813adf97f24efbdf64a1f70e7e26834ca3cb7be0323be7";
+    "85ce59f16860d1ce0403d7b6fa424947e89df6a7b35ad21566300721383fd986";
 const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "evidence.audit.description",
     "evidence.audit.success",
@@ -34,6 +34,10 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "bridge.bundle.required",
     "block.header.required",
     "block.header.optional",
+    "ledger.state_finality.required",
+    "ledger.state_finality.retired",
+    "ledger.state_finality.retired_paths",
+    "ledger.state_finality.retired_schemas",
     "bridge.components",
     "bridge.retired",
     "fixture.header.required",
@@ -45,6 +49,7 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "status.absent",
     "native.receipt.required",
     "native.leg.required",
+    "native.proposal.required",
     "native.body.required",
     "hf.headers",
     "private.receipt.metadata",

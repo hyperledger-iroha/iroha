@@ -299,6 +299,7 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
             == receipt.coordinator_proposal_hash
         )
         for leg in receipt.legs:
+            assert leg.participant_proposal.payload_block_hint is None
             assert leg.participant_settlement_hash == expected_settlement_hashes[
                 (leg.lane_id, leg.dataspace_id)
             ]

@@ -1080,13 +1080,13 @@ the signed receipts and completion marker against that same commit and ledger
 digest.
 
 On the current mutable tree, the independent static release inventory contract
-contains 84 legs, 864/864 production tests across 43 modules, 530/530 G-UNIT
+contains 84 legs, 864/864 production tests across 43 modules, 522/522 G-UNIT
 rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
-`87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
-The grouped SDK closure is 1,400 paths at
-`7a2edcff4d7d5499790a681e7e6cdfe194663e8f86ab3cd041ccd995e1be159b`,
-and diagnostics is 1,402 paths at
-`645274e3750d407c22b4a165e7ed815c9193c26b1724b41b570b1a9d42fd671d`.
+`e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
+The grouped SDK closure is 1,399 paths at
+`4d9b205e962935852c69465e0c2f48224f4df93bd206c704df5d0478bd4ee510`,
+and diagnostics is 1,401 paths at
+`1044887ddfeb9a1ad16d5d266782317cb37b94878e5d2777b7eea8253aab75ae`.
 The newly declared Java typed-intent path remains untracked, so the exact
 tracked-source gate still awaits authorized staging. These are mutable-tree
 source inventories, not a sealed receipt.
@@ -1147,10 +1147,10 @@ claimed, and this historical focused evidence does not replace the complete
 release gates.
 
 The static release inventory contract now enumerates `864/864` production tests
-across 43 modules and `530/530` focused `G-UNIT` entries. Its canonical 531-line
+across 43 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
 TSV has
 SHA-256
-`e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474`.
+`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
 The separate canonical production module/test TSV has SHA-256
 `9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`;
 the newest rows bind the proposal-height namespace for exact retired attempts,
@@ -1169,7 +1169,7 @@ application witness. No incomplete lane session is transferred into the
 successor. The two new handoff rows instead bind independent Kura
 revalidation of already durable ordinary and record-backed autonomous
 historical output.
-The 324-entry core group additionally source-seals grouped Native prevote
+The 316-entry core group additionally source-seals grouped Native prevote
 budget rejection before Kura/WSV mutation, historical source-bundle
 authentication, crash-safe latest-index and prune-V2 recovery, cross-route
 manifest-barrier isolation, durable Native signing-boundary drift rejection,
@@ -1183,7 +1183,7 @@ symbols, three ordered checks, and 14 mutations with no pending structural
 source check. The reviewed Rust include topology contains 52 parents and 316
 direct entries; its canonical payload SHA-256 is
 `1688c7fe596fd8216c6705e66b7e8281dde732cf8e4ab4ce1faa6bee8d4cb137`.
-The release-inventory contract is statically reconciled at 91/864/530, and the
+The release-inventory contract is statically reconciled at 84/864/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker and static Apalache-runner contract remain under current-source
 validation. The fixed QueuePlan admission-registry TLC run currently exhausts
@@ -1195,16 +1195,16 @@ correspondence plus drain/restart/liveness evidence remain mandatory.
 
 The Rust-owned protocol-4 grouped fixture contains 56 negative controls and
 hashes to
-`87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`;
-its staged grouped and diagnostics suite-source manifests contain 1,400 and
-1,402 records respectively and hash to
-`7a2edcff4d7d5499790a681e7e6cdfe194663e8f86ab3cd041ccd995e1be159b`
+`e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`;
+its staged grouped and diagnostics suite-source manifests contain 1,399 and
+1,401 records respectively and hash to
+`4d9b205e962935852c69465e0c2f48224f4df93bd206c704df5d0478bd4ee510`
 and
-`645274e3750d407c22b4a165e7ed815c9193c26b1724b41b570b1a9d42fd671d`;
+`1044887ddfeb9a1ad16d5d266782317cb37b94878e5d2777b7eea8253aab75ae`;
 the synchronized 48-line wire TSV hashes to
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The current grouped harness inventories OpenAPI `7`, Python `63`, JavaScript
-`61`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
+`61`, Swift `5`, Kotlin `7`, and Java `6` tests. Previously recorded direct
 OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
 fixture and do not attest it; one archived aggregate source/distribution replay
 remains open under `G-SDK`. The release receipt must reproduce the exact staged
@@ -1215,7 +1215,7 @@ source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required unsupported-version-before-signing regression preserves the exact
-864-production-test and 530-G-UNIT-test counts. Rust's separated client test
+864-production-test and 522-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -1232,13 +1232,13 @@ multilane binding ledger keeps this as the
 `composed_state_action_relation_with_source_bound_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checker
-passes on the mutable tree. The exact 864-test production inventory, 530-test
+passes on the mutable tree. The exact 864-test production inventory, 522-test
 G-UNIT source inventory, 12 fail-closed layout tests, two receipt parser tests,
 and 12 Apalache-runner contract controls still require a final source-bound
 rerun. The ledger retains the
 distinct fifth layout-only Apalache result after the four refinement rows. The
-G-UNIT inventory has 531 TSV lines and SHA-256
-`e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474`.
+G-UNIT inventory has 523 TSV lines and SHA-256
+`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
 again and passes all 15 focused tests. No TLC or Apalache engine execution is
 claimed by those static checks, and formal correspondence between concrete
@@ -1287,24 +1287,24 @@ The remaining work is evidence-driven and must stay in order:
   projection rows; that is source inventory only. Its V2 inductive-safety,
   successor-isolation, and temporal-product obligations remain in the formal
   dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 530 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 522 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 56 negative controls,
   fixture SHA-256
-  `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`,
-  staged grouped/diagnostics suite-source manifests at exactly 1,400 and 1,402
+  `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`,
+  staged grouped/diagnostics suite-source manifests at exactly 1,399 and 1,401
   records with SHA-256 values
-  `7a2edcff4d7d5499790a681e7e6cdfe194663e8f86ab3cd041ccd995e1be159b`
+  `4d9b205e962935852c69465e0c2f48224f4df93bd206c704df5d0478bd4ee510`
   and
-  `645274e3750d407c22b4a165e7ed815c9193c26b1724b41b570b1a9d42fd671d`,
+  `1044887ddfeb9a1ad16d5d266782317cb37b94878e5d2777b7eea8253aab75ae`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
   `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
   The current harness inventories OpenAPI `7`, Python `63`, JavaScript `61`,
-  Swift `4`, Kotlin `6`, and Java `5` tests. Earlier direct subset results are
+  Swift `5`, Kotlin `7`, and Java `6` tests. Earlier direct subset results are
   not an archived all-surface replay and do not attest this
   corpus; the aggregate source/distribution harness remains required. The
   separate diagnostics harness inventories Rust `14`, Python `129`, JavaScript
@@ -27264,7 +27264,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 84 pre-network legs and their exact
-864-test inventory plus the separate exact 530-test G-UNIT inventory, the
+864-test inventory plus the separate exact 522-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the

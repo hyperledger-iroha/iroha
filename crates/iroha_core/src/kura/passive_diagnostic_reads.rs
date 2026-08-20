@@ -42,15 +42,18 @@ impl Kura {
         artifact: &LaneBlockApplicationReceiptArtifact,
         repair_missing_sidecar: bool,
     ) -> bool {
-        if artifact.application_block_height != artifact.artifact.ownership.proposal_height
-            || artifact.application_block_hash != artifact.artifact.proposal_block_hash
+        let Some(global_artifact) = artifact.source.global_artifact() else {
+            return false;
+        };
+        if artifact.application_block_height != global_artifact.ownership.proposal_height
+            || artifact.application_block_hash != global_artifact.proposal_block_hash
         {
             return false;
         }
         artifact.format == LaneBlockApplicationReceiptArtifactFormat::Current
             && self.lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
                 &artifact.proposal,
-                &artifact.artifact,
+                global_artifact,
                 repair_missing_sidecar,
             )
     }
@@ -131,7 +134,7 @@ impl Kura {
             descriptor.lane_block_height,
         )?;
         (input.proposal == preflight.proposal
-            && input.artifact == preflight.artifact
+            && input.source == preflight.source
             && input.entrypoint_hashes == preflight.entrypoint_hashes)
             .then_some(input)
     }
@@ -338,7 +341,7 @@ impl Kura {
             &entry,
             batch,
             execution,
-            Self::merge_lane_block_artifact(execution),
+            Self::merge_lane_block_execution_source(execution),
             carrier_height,
             carrier_hash,
         ) == *artifact

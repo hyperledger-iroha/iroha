@@ -742,7 +742,7 @@ fn pending_terminal_group_has_exact_queue_owner(
     let expected_keys = observation
         .ordered_keys()
         .iter()
-        .map(|key| (key.signed_transaction_hash, key))
+        .map(|key| (key.entrypoint_hash, key))
         .collect::<BTreeMap<_, _>>();
     if expected_keys.len() != observation.ordered_keys().len() {
         return Err(
@@ -753,12 +753,9 @@ fn pending_terminal_group_has_exact_queue_owner(
     let mut seen_owner_hashes = BTreeSet::new();
     for phase in &snapshot.ordered_owner_phases {
         let phase_identity = LaneQueueReservationGroupIdentityV1::from_key(&phase.key);
-        let expected = expected_keys
-            .get(&phase.key.signed_transaction_hash)
-            .copied();
+        let expected = expected_keys.get(&phase.key.entrypoint_hash).copied();
         if phase_identity == binding.identity {
-            if expected != Some(&phase.key)
-                || !seen_owner_hashes.insert(phase.key.signed_transaction_hash)
+            if expected != Some(&phase.key) || !seen_owner_hashes.insert(phase.key.entrypoint_hash)
             {
                 return Err(
                     "autonomous lifecycle terminal recovery conflicts with a same-identity Queue owner"
@@ -833,7 +830,7 @@ pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(
             }
             for key in observation.ordered_keys() {
                 if seen_transaction_hashes
-                    .insert(key.signed_transaction_hash, *key)
+                    .insert(key.entrypoint_hash, *key)
                     .is_some()
                     || !seen_entrypoint_hashes.insert(key.entrypoint_hash.clone())
                 {

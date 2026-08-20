@@ -1341,10 +1341,10 @@ certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
 `23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad`.
-Nine of those legs execute the separate 530-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 531 TSV lines and has SHA-256
-`e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474`.
-The 324-test core group includes grouped Native prevote-budget rejection before
+Nine of those legs execute the separate 522-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 523 TSV lines and has SHA-256
+`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
+The 316-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
@@ -1801,7 +1801,7 @@ bash scripts/run_sumeragi_v2_release_gates.sh --pr
 
 Before those longer scenarios, the PR gate inventories 864 exact production
 liveness tests and executes all 43 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 530-test
+profile additionally records nine G-UNIT legs executing a separate 522-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -2009,7 +2009,7 @@ unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 84-leg, 864-production-test corridor plus 530 G-UNIT tests; execution
+audited 84-leg, 864-production-test corridor plus 522 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2178,7 +2178,7 @@ respectively; the canonical ordered IDs are recorded in the
 [multilane rehearsal runbook](runbooks/nexus_multilane_rehearsal.md#protected-release-approval-contract)
 and source-bound by `sumeragi_v2_release_approval_contract.py`. The canonical
 ordered operation-record SHA-256 values, in the same class order, are
-`b59301ed38ad1833fa11b70c899a6dbc45c1a7f339fc1320ef838c8d5f6c35e0`,
+`ec23b831d3c9359fc94952bbda3cccb92e84a39645bb14e5c19f130d01ded95b`,
 `eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`,
 `a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`,
 and `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`.
@@ -2289,7 +2289,7 @@ without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
 receipt binds the 84 pre-network corridor legs and
-their exact 864-test production inventory, the separate 530-test G-UNIT
+their exact 864-test production inventory, the separate 522-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

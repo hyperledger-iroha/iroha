@@ -7753,23 +7753,6 @@ export class ToriiClient {
    */
 
   /**
-   * Fetch recent commit certificates (newest first) via `/v1/sumeragi/commit-certificates`.
-   */
-  async listSumeragiCommitCertificates() {
-    const response = await this._request("GET", "/v1/sumeragi/commit-certificates", {
-      headers: { Accept: this._acceptHeader() },
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "listSumeragiCommitCertificates",
-      ),
-    });
-    if (!response) {
-      throw new Error("sumeragi commit certificates endpoint returned no payload");
-    }
-    return response;
-  }
-
-  /**
    * Fetch consensus key lifecycle records (newest first) via `/v1/sumeragi/key-lifecycle`.
    */
   async listSumeragiKeyLifecycle() {
@@ -7901,9 +7884,9 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch the latest Highest/Locked QC snapshot (`GET /v1/sumeragi/qc`).
+   * Fetch the authoritative v2 PrepareQC references (`GET /v1/sumeragi/qc`).
    * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiSumeragiQcSnapshot>}
+   * @returns {Promise<ToriiSumeragiV2QcResponse>}
    */
   async getSumeragiQc(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiQc");
@@ -7916,66 +7899,14 @@ export class ToriiClient {
       ),
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sumeragi qc endpoint returned no payload");
-    }
-    return normalizeSumeragiQcSnapshot(payload);
-  }
-
-  /**
-   * Fetch a commit QC record for a block hash (`GET /v1/sumeragi/commit-qcs/{block_hash}`).
-   * @param {string} blockHashHex 32-byte block hash (hex; `0x`/`blake2b32:` prefixes accepted).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiSumeragiCommitQcRecord>}
-   */
-  async getSumeragiCommitQc(blockHashHex, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "getSumeragiCommitQc",
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+      "Sumeragi v2 QC response",
+      { signal },
     );
-    const normalizedHash = normalizeHex32String(
-      blockHashHex,
-      "getSumeragiCommitQc.blockHashHex",
-      { allowScheme: true },
-    );
-    const response = await this._request(
-      "GET",
-      `/v1/sumeragi/commit-qcs/${normalizedHash}`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        signal,
-        operatorSigningContext: requireOperatorSigningContext(
-          this._operatorSigningContext,
-          "getSumeragiCommitQc",
-        ),
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sumeragi commit_qc endpoint returned no payload");
-    }
-    return normalizeSumeragiCommitQcRecord(payload, "sumeragi commit_qc response");
-  }
-
-  /**
-   * Fetch per-phase latency telemetry (`GET /v1/sumeragi/phases`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiSumeragiPhasesSnapshot>}
-   */
-  async getSumeragiPhases(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getSumeragiPhases");
-    const response = await this._request("GET", "/v1/sumeragi/phases", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sumeragi phases endpoint returned no payload");
-    }
-    return normalizeSumeragiPhasesSnapshot(payload);
+    const { parseSumeragiV2QcResponse } = await import("./sumeragiTyped.js");
+    return parseSumeragiV2QcResponse(payload);
   }
 
   /**
@@ -8051,42 +7982,6 @@ export class ToriiClient {
       throw new Error("sumeragi params endpoint returned no payload");
     }
    return normalizeSumeragiParamsSnapshot(payload);
-  }
-
-  /**
-   * Fetch aggregated Sumeragi telemetry (`GET /v1/sumeragi/telemetry`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<Record<string, unknown>>}
-   */
-  async getSumeragiTelemetry(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "getSumeragiTelemetry",
-    );
-    const response = await this._request("GET", "/v1/sumeragi/telemetry", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "getSumeragiTelemetry",
-      ),
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sumeragi telemetry endpoint returned no payload");
-    }
-    return payload;
-  }
-
-  /**
-   * Fetch aggregated Sumeragi telemetry with typed output.
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<SumeragiTelemetrySnapshot>}
-   */
-  async getSumeragiTelemetryTyped(options = {}) {
-    const payload = await this.getSumeragiTelemetry(options);
-    return normalizeSumeragiTelemetrySnapshot(payload, "sumeragi telemetry");
   }
 
   /**
@@ -11383,7 +11278,7 @@ export class ToriiClient {
         if (responseStatusWithoutUserGetter(response) !== 202) throw new Error(`${context} expected HTTP status 202`);
         validateSorafsOrderbookSubmissionHeaders({
           contentType: this._getHeader(response, "content-type"), contentEncoding: this._getHeader(response, "content-encoding"),
-          txHash: this._getHeader(response, "x-iroha-transaction-hash"), entrypointHash: this._getHeader(response, "x-iroha-entrypoint-hash"),
+          entrypointHash: this._getHeader(response, "x-iroha-entrypoint-hash"),
           signedTransactionHash: this._getHeader(response, "x-iroha-signed-transaction-hash"),
         }, prepared.identity);
         const { bytes } = await this._readBoundedResponseBytes(response,
@@ -14741,64 +14636,6 @@ function parseLaneGovernance(payload) {
   });
 }
 
-function normalizeSumeragiCommitQcRecord(payload, context) {
-  const record = ensureRecord(payload, context);
-  const subject_block_hash = normalizeHex32String(
-    record.subject_block_hash,
-    `${context}.subject_block_hash`,
-    { allowScheme: true },
-  );
-  if (record.commit_qc == null) {
-    return Object.freeze({ subject_block_hash, commit_qc: null });
-  }
-  return Object.freeze({
-    subject_block_hash,
-    commit_qc: normalizeSumeragiCommitQcPayload(record.commit_qc, `${context}.commit_qc`),
-  });
-}
-
-function normalizeSumeragiCommitQcPayload(payload, context) {
-  const record = ensureRecord(payload, context);
-  return Object.freeze({
-    phase: requireNonEmptyString(record.phase, `${context}.phase`),
-    parent_state_root: normalizeHex32String(
-      record.parent_state_root,
-      `${context}.parent_state_root`,
-      { allowScheme: true },
-    ),
-    post_state_root: normalizeHex32String(
-      record.post_state_root,
-      `${context}.post_state_root`,
-      { allowScheme: true },
-    ),
-    height: coerceInteger(record.height, `${context}.height`),
-    view: coerceInteger(record.view, `${context}.view`),
-    epoch: coerceInteger(record.epoch, `${context}.epoch`),
-    mode_tag: requireNonEmptyString(record.mode_tag, `${context}.mode_tag`),
-    validator_set_hash: normalizeHex32String(
-      record.validator_set_hash,
-      `${context}.validator_set_hash`,
-      { allowScheme: true },
-    ),
-    validator_set_hash_version: coerceInteger(
-      record.validator_set_hash_version,
-      `${context}.validator_set_hash_version`,
-    ),
-    validator_set: normalizeStringArray(
-      record.validator_set,
-      `${context}.validator_set`,
-    ),
-    signers_bitmap: normalizeArbitraryHex(
-      record.signers_bitmap,
-      `${context}.signers_bitmap`,
-    ),
-    bls_aggregate_signature: normalizeArbitraryHex(
-      record.bls_aggregate_signature,
-      `${context}.bls_aggregate_signature`,
-    ),
-  });
-}
-
 function normalizeStringArray(payload, context) {
   if (!Array.isArray(payload)) {
     throw new TypeError(`${context} must be an array`);
@@ -14839,84 +14676,6 @@ function normalizeSumeragiPacemakerSnapshot(payload) {
       record.view_timeout_remaining_ms,
       "sumeragi pacemaker.view_timeout_remaining_ms",
     ),
-  };
-}
-
-function normalizeSumeragiQcSnapshot(payload) {
-  const record = ensureRecord(payload, "sumeragi qc response");
-  return {
-    highest_qc: normalizeSumeragiQcEntry(record.highest_qc, "sumeragi qc.highest_qc"),
-    locked_qc: normalizeSumeragiQcEntry(record.locked_qc, "sumeragi qc.locked_qc"),
-  };
-}
-
-function normalizeSumeragiQcEntry(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    height: coerceInteger(record.height, `${context}.height`),
-    view: coerceInteger(record.view, `${context}.view`),
-    subject_block_hash:
-      record.subject_block_hash == null
-        ? null
-        : requireNonEmptyString(record.subject_block_hash, `${context}.subject_block_hash`),
-  };
-}
-
-function normalizeSumeragiPhasesSnapshot(payload) {
-  const record = ensureRecord(payload, "sumeragi phases response");
-  return {
-    propose_ms: coerceInteger(record.propose_ms, "sumeragi phases.propose_ms"),
-    collect_da_ms: coerceInteger(record.collect_da_ms, "sumeragi phases.collect_da_ms"),
-    collect_prevote_ms: coerceInteger(record.collect_prevote_ms, "sumeragi phases.collect_prevote_ms"),
-    collect_precommit_ms: coerceInteger(
-      record.collect_precommit_ms,
-      "sumeragi phases.collect_precommit_ms",
-    ),
-    collect_aggregator_ms: coerceInteger(
-      record.collect_aggregator_ms,
-      "sumeragi phases.collect_aggregator_ms",
-    ),
-    commit_ms: coerceInteger(record.commit_ms, "sumeragi phases.commit_ms"),
-    pipeline_total_ms: coerceInteger(
-      record.pipeline_total_ms,
-      "sumeragi phases.pipeline_total_ms",
-    ),
-    collect_aggregator_gossip_total: coerceInteger(
-      record.collect_aggregator_gossip_total,
-      "sumeragi phases.collect_aggregator_gossip_total",
-    ),
-    block_created_dropped_by_lock_total: coerceInteger(
-      record.block_created_dropped_by_lock_total,
-      "sumeragi phases.block_created_dropped_by_lock_total",
-    ),
-    block_created_hint_mismatch_total: coerceInteger(
-      record.block_created_hint_mismatch_total,
-      "sumeragi phases.block_created_hint_mismatch_total",
-    ),
-    block_created_proposal_mismatch_total: coerceInteger(
-      record.block_created_proposal_mismatch_total,
-      "sumeragi phases.block_created_proposal_mismatch_total",
-    ),
-    ema_ms: normalizeSumeragiPhasesEma(record.ema_ms, "sumeragi phases.ema_ms"),
-  };
-}
-
-function normalizeSumeragiPhasesEma(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    propose_ms: coerceInteger(record.propose_ms, `${context}.propose_ms`),
-    collect_da_ms: coerceInteger(record.collect_da_ms, `${context}.collect_da_ms`),
-    collect_prevote_ms: coerceInteger(record.collect_prevote_ms, `${context}.collect_prevote_ms`),
-    collect_precommit_ms: coerceInteger(
-      record.collect_precommit_ms,
-      `${context}.collect_precommit_ms`,
-    ),
-    collect_aggregator_ms: coerceInteger(
-      record.collect_aggregator_ms,
-      `${context}.collect_aggregator_ms`,
-    ),
-    commit_ms: coerceInteger(record.commit_ms, `${context}.commit_ms`),
-    pipeline_total_ms: coerceInteger(record.pipeline_total_ms, `${context}.pipeline_total_ms`),
   };
 }
 
@@ -14978,174 +14737,6 @@ function normalizeSumeragiParamsSnapshot(payload) {
             "sumeragi params.mode_activation_height",
           ),
     chain_height: coerceInteger(record.chain_height, "sumeragi params.chain_height"),
-  };
-}
-
-function normalizeSumeragiTelemetrySnapshot(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    availability: normalizeSumeragiTelemetryAvailability(
-      record.availability,
-      `${context}.availability`,
-    ),
-    qc_latency_ms: normalizeSumeragiTelemetryQcLatencyList(
-      record.qc_latency_ms,
-      `${context}.qc_latency_ms`,
-    ),
-    rbc_backlog: normalizeSumeragiTelemetryRbcBacklog(
-      record.rbc_backlog,
-      `${context}.rbc_backlog`,
-    ),
-    vrf: normalizeSumeragiTelemetryVrfSummary(record.vrf, `${context}.vrf`),
-  };
-}
-
-function normalizeSumeragiTelemetryAvailability(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    total_votes_ingested: coerceStatusInt(
-      record.total_votes_ingested,
-      `${context}.total_votes_ingested`,
-    ),
-    collectors: normalizeSumeragiTelemetryAvailabilityCollectors(
-      record.collectors,
-      `${context}.collectors`,
-    ),
-  };
-}
-
-function normalizeSumeragiTelemetryAvailabilityCollectors(payload, context) {
-  if (payload == null) {
-    return [];
-  }
-  if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return payload.map((entry, index) =>
-    normalizeSumeragiTelemetryAvailabilityCollector(entry, `${context}[${index}]`),
-  );
-}
-
-function normalizeSumeragiTelemetryAvailabilityCollector(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    collector_idx: coerceStatusInt(record.collector_idx, `${context}.collector_idx`),
-    peer_id: requireNonEmptyString(record.peer_id, `${context}.peer_id`),
-    votes_ingested: coerceStatusInt(record.votes_ingested, `${context}.votes_ingested`),
-  };
-}
-
-function normalizeSumeragiTelemetryQcLatencyList(payload, context) {
-  if (payload == null) {
-    return [];
-  }
-  if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return payload.map((entry, index) =>
-    normalizeSumeragiTelemetryQcLatencyEntry(entry, `${context}[${index}]`),
-  );
-}
-
-function normalizeSumeragiTelemetryQcLatencyEntry(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    kind: requireNonEmptyString(record.kind, `${context}.kind`),
-    last_ms: coerceInteger(record.last_ms, `${context}.last_ms`),
-  };
-}
-
-function normalizeSumeragiTelemetryRbcBacklog(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    pending_sessions: coerceStatusInt(record.pending_sessions, `${context}.pending_sessions`),
-    total_missing_chunks: coerceStatusInt(
-      record.total_missing_chunks,
-      `${context}.total_missing_chunks`,
-    ),
-    max_missing_chunks: coerceStatusInt(
-      record.max_missing_chunks,
-      `${context}.max_missing_chunks`,
-    ),
-  };
-}
-
-function normalizeSumeragiTelemetryVrfSummary(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    found: requireBooleanLike(record.found, `${context}.found`),
-    epoch: coerceStatusInt(record.epoch, `${context}.epoch`),
-    finalized: requireBooleanLike(record.finalized, `${context}.finalized`),
-    seed_hex: optionalString(record.seed_hex, `${context}.seed_hex`),
-    epoch_length: coerceStatusInt(record.epoch_length, `${context}.epoch_length`),
-    commit_deadline_offset: coerceStatusInt(
-      record.commit_deadline_offset,
-      `${context}.commit_deadline_offset`,
-    ),
-    reveal_deadline_offset: coerceStatusInt(
-      record.reveal_deadline_offset,
-      `${context}.reveal_deadline_offset`,
-    ),
-    roster_len: coerceStatusInt(record.roster_len, `${context}.roster_len`),
-    updated_at_height: coerceStatusInt(
-      record.updated_at_height,
-      `${context}.updated_at_height`,
-    ),
-    participants_total: coerceStatusInt(
-      record.participants_total,
-      `${context}.participants_total`,
-    ),
-    commitments_total: coerceStatusInt(
-      record.commitments_total,
-      `${context}.commitments_total`,
-    ),
-    reveals_total: coerceStatusInt(record.reveals_total, `${context}.reveals_total`),
-    late_reveals_total: coerceStatusInt(
-      record.late_reveals_total,
-      `${context}.late_reveals_total`,
-    ),
-    committed_no_reveal: normalizeSumeragiTelemetryNumericArray(
-      record.committed_no_reveal,
-      `${context}.committed_no_reveal`,
-    ),
-    no_participation: normalizeSumeragiTelemetryNumericArray(
-      record.no_participation,
-      `${context}.no_participation`,
-    ),
-    late_reveals: normalizeSumeragiTelemetryVrfLateRevealList(
-      record.late_reveals,
-      `${context}.late_reveals`,
-    ),
-  };
-}
-
-function normalizeSumeragiTelemetryNumericArray(payload, context) {
-  if (payload == null) {
-    return [];
-  }
-  if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return payload.map((value, index) => coerceInteger(value, `${context}[${index}]`));
-}
-
-function normalizeSumeragiTelemetryVrfLateRevealList(payload, context) {
-  if (payload == null) {
-    return [];
-  }
-  if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return payload.map((entry, index) =>
-    normalizeSumeragiTelemetryVrfLateReveal(entry, `${context}[${index}]`),
-  );
-}
-
-function normalizeSumeragiTelemetryVrfLateReveal(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    signer: requireNonEmptyString(record.signer, `${context}.signer`),
-    noted_at_height: coerceStatusInt(record.noted_at_height, `${context}.noted_at_height`),
   };
 }
 
@@ -28226,6 +27817,24 @@ function normalizeDaIngestResponse(payload, context = "da ingest response") {
 
 function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
   const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(
+    record,
+    new Set([
+      "client_blob_id",
+      "lane_id",
+      "epoch",
+      "blob_hash",
+      "chunk_root",
+      "manifest_hash",
+      "storage_ticket",
+      "pdp_commitment",
+      "stripe_layout",
+      "queued_at_unix",
+      "rent_quote",
+      "operator_signature",
+    ]),
+    context,
+  );
   const clientBlobId = decodeDaDigestTuple(
     record.client_blob_id,
     32,
@@ -28252,25 +27861,30 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
     `${context}.storage_ticket`,
   );
   const stripeLayoutRecord = record.stripe_layout;
+  if (stripeLayoutRecord === null || stripeLayoutRecord === undefined) {
+    throw new TypeError(`${context}.stripe_layout is required`);
+  }
   const stripeLayout = (() => {
-    if (stripeLayoutRecord === null || stripeLayoutRecord === undefined) {
-      return { total_stripes: 0, shards_per_stripe: 0, row_parity_stripes: 0 };
-    }
     const layout = ensureRecord(stripeLayoutRecord, `${context}.stripe_layout`);
+    assertSupportedOptionKeys(
+      layout,
+      new Set(["total_stripes", "shards_per_stripe", "row_parity_stripes"]),
+      `${context}.stripe_layout`,
+    );
     const totalStripes = ToriiClient._normalizeUnsignedInteger(
-      layout.total_stripes ?? 0,
+      layout.total_stripes,
       `${context}.stripe_layout.total_stripes`,
-      { allowZero: true },
+      { allowZero: true, max: 0xffff_ffff },
     );
     const shardsPerStripe = ToriiClient._normalizeUnsignedInteger(
-      layout.shards_per_stripe ?? 0,
+      layout.shards_per_stripe,
       `${context}.stripe_layout.shards_per_stripe`,
-      { allowZero: true },
+      { allowZero: true, max: 0xffff_ffff },
     );
     const rowParityStripes = ToriiClient._normalizeUnsignedInteger(
-      layout.row_parity_stripes ?? 0,
+      layout.row_parity_stripes,
       `${context}.stripe_layout.row_parity_stripes`,
-      { allowZero: true },
+      { allowZero: true, max: 0xffff },
     );
     return {
       total_stripes: totalStripes,
@@ -28278,7 +27892,10 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
       row_parity_stripes: rowParityStripes,
     };
   })();
-  const pdpCommitment = record.pdp_commitment ?? null;
+  if (!Object.prototype.hasOwnProperty.call(record, "pdp_commitment")) {
+    throw new TypeError(`${context}.pdp_commitment is required and must be null or a base64 string`);
+  }
+  const pdpCommitment = record.pdp_commitment;
   let pdpCommitmentBytes = null;
   let pdpCommitmentB64 = null;
   if (pdpCommitment !== null && pdpCommitment !== undefined) {
@@ -28294,6 +27911,13 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
       throw new TypeError(`${context}.pdp_commitment must be a valid base64 string`);
     }
   }
+  if (record.rent_quote === null || record.rent_quote === undefined) {
+    throw new TypeError(`${context}.rent_quote is required`);
+  }
+  const rentQuote = normalizeDaRentQuote(
+    record.rent_quote,
+    `${context}.rent_quote`,
+  );
   return {
     client_blob_id_hex: bufferToUpperHex(clientBlobId),
     client_blob_id_bytes: clientBlobId,
@@ -28327,10 +27951,7 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
       record.operator_signature ?? "",
       `${context}.operator_signature`,
     ),
-    rent_quote: normalizeDaRentQuote(
-      record.rent_quote ?? null,
-      `${context}.rent_quote`,
-    ),
+    rent_quote: rentQuote,
   };
 }
 

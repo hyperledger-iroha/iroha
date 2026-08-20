@@ -426,7 +426,7 @@ fn capacity_blocked_retirement_archives_recovered_lane_history_intact() {
         .as_ref()
         .and_then(|batch| batch.lanes.first())
         .expect("merge-applied retirement lane execution");
-    let artifact = Kura::merge_lane_block_artifact(execution);
+    let artifact = crate::kura::LaneBlockArtifact::new(work.carrier.hash(), work.ownership.clone());
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(retiring_entry, &root);
     let payload = artifact
         .encode_framed()
@@ -440,7 +440,6 @@ fn capacity_blocked_retirement_archives_recovered_lane_history_intact() {
             "lane block artifact",
             FsyncMode::Always,
             None,
-            crate::kura::SidecarIndexOrigin::FirstWrite,
         ),
         "persist retiring lane artifact history",
     );
@@ -941,15 +940,15 @@ fn first_release_retirement_classifies_recovery_sync_failure_as_retryable() {
     let temp_index_path = index_path.with_extension("index.tmp");
     let payload: &[u8] = b"retryable ownership rewrite";
     fs::write(&temp_data_path, payload).expect("stage retryable ownership payload");
-    fs::write(
-        &temp_index_path,
-        SidecarIndexEntry {
+    let mut temp_index = SidecarIndexLayout::base_header(1).to_vec();
+    temp_index.extend_from_slice(
+        &SidecarIndexEntry {
             offset: 0,
             len: u64::try_from(payload.len()).expect("test payload length"),
         }
         .to_bytes(),
-    )
-    .expect("stage retryable ownership index");
+    );
+    fs::write(&temp_index_path, temp_index).expect("stage retryable ownership index");
     ProgressSidecarDurabilityFault::Data.inject();
     let error = kura
         .first_release_lane_retirement_admissible_for_test(
@@ -1373,7 +1372,7 @@ fn fake_stale_and_forked_payload_hints_cannot_bypass_scale_in_admission() {
     }
 }
 #[test]
-fn canonical_block_and_current_receipt_release_applied_participant_work() {
+fn canonical_sealed_reveal_block_and_current_receipt_release_applied_participant_work() {
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let (initial, extended) = retirement_test_configs();
@@ -1403,9 +1402,15 @@ fn canonical_block_and_current_receipt_release_applied_participant_work() {
         "geometry retirement committed participant work".to_owned(),
     )])
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-    let source_hash = transaction.hash();
-    let mut source_id = [0_u8; Hash::LENGTH];
-    source_id.copy_from_slice(source_hash.as_ref());
+    let mut inner_source_id = [0_u8; Hash::LENGTH];
+    inner_source_id.copy_from_slice(transaction.hash().as_ref());
+    let entrypoint = TransactionEntrypoint::SealedReveal(
+        iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+            Hash::new(b"geometry-retirement-sealed-reveal"),
+            transaction,
+            [0xA5; 32],
+        ),
+    );
     let parent: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
         .chain(0, None)
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
@@ -1413,7 +1418,7 @@ fn canonical_block_and_current_receipt_release_applied_participant_work() {
         .into();
     kura.store_block(Arc::new(parent.clone()))
         .expect("store pre-activation parent block");
-    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+    let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint));
     let mut block: SignedBlock = BlockBuilder::new(vec![accepted])
         .chain(0, Some(&parent))
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
@@ -1422,8 +1427,13 @@ fn canonical_block_and_current_receipt_release_applied_participant_work() {
     let entrypoint = block
         .external_entrypoints_cloned()
         .next()
-        .expect("committed external entrypoint");
+        .expect("committed sealed-reveal entrypoint");
     let entrypoint_hash = entrypoint.hash();
+    let source_id = crate::block::native_amx_source_id_from_entrypoint_hash(entrypoint_hash);
+    assert_ne!(
+        source_id, inner_source_id,
+        "the retirement receipt must identify the sealed reveal, not its inner transaction"
+    );
     let (mut proposal, ownership) = geometry_lane_proposal_and_ownership(
         LaneId::SINGLE,
         DataSpaceId::new(7),

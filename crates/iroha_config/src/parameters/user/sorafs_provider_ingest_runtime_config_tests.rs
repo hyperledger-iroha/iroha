@@ -87,7 +87,9 @@ fn enabled_policy_parses_without_credentials() {
     let parsed = valid_config()
         .parse(true, Some(&provider_id), &mut emitter)
         .expect("enabled provider-ingest policy");
-    assert!(emitter.into_result().is_ok());
+    emitter
+        .into_result()
+        .expect("valid provider-ingest policy must not emit errors");
     assert_eq!(parsed.scan_interval_ms, 1_000);
     assert_eq!(parsed.max_page_rows, 64);
     assert_eq!(parsed.max_pages_per_tick, 4);
@@ -130,7 +132,10 @@ fn enabled_policy_parses_without_credentials() {
     assert_eq!(parsed.checkpoint_store_policy_digest, [0xA7; 32]);
     assert_eq!(parsed.outbox.max_status_page_size, 256);
     assert_eq!(parsed.outbox.max_active_entries, 128);
-    assert_eq!(parsed.outbox.checkpoint_max_bytes.0, 160 * 1024 * 1024);
+    assert_eq!(
+        parsed.outbox.checkpoint_max_bytes.0,
+        defaults::sorafs::storage::provider_ingest_runtime::outbox::CHECKPOINT_MAX_BYTES.0,
+    );
     assert_eq!(parsed.outbox.checkpoint_operation_timeout_ms, 30_000);
     assert!(parsed.provider_attestation_journal.is_none());
 }
@@ -143,7 +148,9 @@ fn enabled_attestation_journal_projects_exact_policy_and_bindings() {
     let parsed = config
         .parse(true, Some(&provider_id()), &mut emitter)
         .expect("enabled provider-ingest policy with capture journal");
-    assert!(emitter.into_result().is_ok());
+    emitter
+        .into_result()
+        .expect("valid provider-ingest attestation journal must not emit errors");
     assert_eq!(
         parsed.provider_attestation_journal,
         Some(actual::SorafsProviderAttestationJournal {
@@ -353,7 +360,9 @@ fn attestation_journal_accepts_exact_checkpoint_minimum() {
     let parsed = config
         .parse(true, Some(&provider_id()), &mut emitter)
         .expect("exact checkpoint minimum is valid");
-    assert!(emitter.into_result().is_ok());
+    emitter
+        .into_result()
+        .expect("minimum valid checkpoint must not emit errors");
     assert_eq!(
         parsed
             .provider_attestation_journal
@@ -621,7 +630,9 @@ fn archive_policy_allows_zero_lag_but_rejects_absolute_or_dot_roots() {
         .parse(true, Some(&provider_id), &mut emitter)
         .expect("zero-lag archive policy");
     assert_eq!(parsed.finalized_archive.max_kura_tip_lag_blocks, 0);
-    assert!(emitter.into_result().is_ok());
+    emitter
+        .into_result()
+        .expect("zero-lag archive policy must not emit errors");
     for relative_root in [
         PathBuf::from("."),
         PathBuf::from("archive/../substituted"),

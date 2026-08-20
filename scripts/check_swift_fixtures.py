@@ -367,10 +367,11 @@ def validate_fee_payment(value: object, context: str, *, shared: bool) -> None:
     fee_value = value["value"]
     if not isinstance(fee_value, dict):
         raise ValueError(f"{context}.value must be an object")
-    actual = set(fee_value)
-    allowed = ({"charge_limits"}, {"charge_limits", "gas_limit"}) if shared else ({"charge_limits"},)
-    if actual not in allowed:
-        raise ValueError(f"{context}.value has invalid fields: {sorted(actual)}")
+    require_exact_fields(
+        fee_value,
+        frozenset({"charge_limits", "gas_limit"}),
+        f"{context}.value",
+    )
     limits = fee_value["charge_limits"]
     if not isinstance(limits, list):
         raise ValueError(f"{context}.value.charge_limits must be an array")
@@ -396,13 +397,16 @@ def validate_fee_payment(value: object, context: str, *, shared: bool) -> None:
             raise ValueError(f"{limit_context}.kind must be an object")
         require_exact_fields(kind, frozenset({"kind", "value"}), f"{limit_context}.kind")
         require_nonempty_string(kind["kind"], f"{limit_context}.kind.kind")
-    if "gas_limit" in fee_value:
+    gas_limit = fee_value["gas_limit"]
+    if gas_limit is not None:
         require_uint(
-            fee_value["gas_limit"],
+            gas_limit,
             f"{context}.value.gas_limit",
             minimum=1,
             maximum=2**64 - 1,
         )
+    if not shared and gas_limit is not None:
+        raise ValueError(f"{context}.value.gas_limit must be exactly null")
 
 
 @dataclass(frozen=True)

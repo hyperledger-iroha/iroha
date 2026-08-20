@@ -1,5 +1,6 @@
 [package]
 name = "iroha_schema"
+autotests = false
 
 edition.workspace = true
 version.workspace = true
@@ -19,3 +20,7 @@ impls = { workspace = true }
 
 [features]
 default = []
+
+[[test]]
+name = "schema"
+path = "tests/schema.rs"

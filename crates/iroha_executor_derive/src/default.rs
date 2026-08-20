@@ -1,4 +1,4 @@
-use crate::emitter_ext::EmitterExt;
+use crate::EmitterExt;
 use darling::{FromDeriveInput, FromMeta, ast::NestedMeta};
 use manyhow::{Emitter, ToTokensError, emit};
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -375,7 +375,7 @@ fn custom_field_idents(ast: &ExecutorData) -> Vec<&Ident> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emitter_ext::EmitterExt;
+    use crate::EmitterExt;
     use manyhow::Emitter;
     #[test]
     fn darling_result_integrates_with_emitter() {

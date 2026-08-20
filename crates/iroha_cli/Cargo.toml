@@ -58,28 +58,13 @@ path = "src/bin/account_literal_reencode.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
-name = "direct_asset_transfer"
-path = "src/bin/direct_asset_transfer.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
 name = "gov_instruction"
 path = "src/bin/gov_instruction.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
-name = "ivm_contract_call"
-path = "src/bin/ivm_contract_call.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
 name = "ivm_contract_deploy"
 path = "src/bin/ivm_contract_deploy.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
-name = "split_contract_deploy"
-path = "src/bin/split_contract_deploy.rs"
 required-features = ["dev-tools"]
 
 [[bin]]

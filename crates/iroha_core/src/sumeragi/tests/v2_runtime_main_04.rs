@@ -267,9 +267,9 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
     let message = signed_runtime_timeout_vote(&context, &keys, 0, 1);
     let source = context.roster[1].validator.clone();
     assert!(matches!(
-        leader_wire_ingress.try_push(InboundBlockMessage::new(
+        leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message.clone()),
-            Some(source),
+            source,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -457,7 +457,7 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
             .emitted_timeout_recovery_owner()
             .expect("the restored roster universe validates")
             .map(|owner| owner.lifecycle_ordinal()),
-        Some(timeout_ordinal),
+        Some(timeout_ordinal)
     );
     for signer in [1_u32, 2_u32] {
         let highest_prepare_qc = (signer == 2).then(|| {
@@ -479,9 +479,9 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
             .validator
             .clone();
         assert!(matches!(
-            leader_wire_ingress.try_push(InboundBlockMessage::new(
+            leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 BlockMessage::V2(message.clone()),
-                Some(source.clone()),
+                source.clone(),
             )),
             Ok(super::super::FairV2IngressPushDisposition::Enqueued)
         ));
@@ -549,9 +549,9 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
             "each distinct roster source increases the finite count once"
         );
         assert!(matches!(
-            leader_wire_ingress.try_push(InboundBlockMessage::new(
+            leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 BlockMessage::V2(message),
-                Some(source),
+                source,
             )),
             Ok(super::super::FairV2IngressPushDisposition::Coalesced)
         ));
@@ -606,9 +606,9 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
     let third_message = signed_runtime_timeout_vote(&context, &keys, 0, 3);
     let third_source = context.roster[3].validator.clone();
     assert!(matches!(
-        leader_wire_ingress.try_push(InboundBlockMessage::new(
+        leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(third_message),
-            Some(third_source),
+            third_source,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -819,9 +819,9 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
         .timeout_owner_physical_cut
         .expect("timeout freezes the restored receiver cut");
     assert!(matches!(
-        restored_ingress.try_push(InboundBlockMessage::new(
+        restored_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message.clone()),
-            Some(source),
+            source,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -947,16 +947,16 @@ fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() 
     );
     let mut source_substituted = retained.clone();
     let substituted_source = PeerId::from(KeyPair::random().public_key().clone());
-    source_substituted.direct[0].first.wire_key.origin = Some(substituted_source.clone());
-    source_substituted.direct[0].first.semantic_origin = Some(substituted_source.clone());
-    source_substituted.direct[0].first.authenticated_via = Some(substituted_source.clone());
+    source_substituted.direct[0].first.wire_key.origin = substituted_source.clone();
+    source_substituted.direct[0].first.semantic_origin = substituted_source.clone();
+    source_substituted.direct[0].first.authenticated_via = substituted_source.clone();
     source_substituted.direct[0].first.authenticated_source =
         super::super::FairV2IngressSource::Validator(substituted_source.clone());
     source_substituted.direct[0].first.semantic_owner_source =
         super::super::FairV2IngressSource::Validator(substituted_source.clone());
-    source_substituted.direct[0].latest.wire_key.origin = Some(substituted_source.clone());
-    source_substituted.direct[0].latest.semantic_origin = Some(substituted_source.clone());
-    source_substituted.direct[0].latest.authenticated_via = Some(substituted_source.clone());
+    source_substituted.direct[0].latest.wire_key.origin = substituted_source.clone();
+    source_substituted.direct[0].latest.semantic_origin = substituted_source.clone();
+    source_substituted.direct[0].latest.authenticated_via = substituted_source.clone();
     source_substituted.direct[0].latest.authenticated_source =
         super::super::FairV2IngressSource::Validator(substituted_source.clone());
     source_substituted.direct[0].latest.semantic_owner_source =

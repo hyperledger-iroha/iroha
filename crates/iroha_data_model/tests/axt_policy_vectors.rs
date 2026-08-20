@@ -8,7 +8,9 @@ use iroha_data_model::nexus::{
     AxtValidationError, DataSpaceId, GroupBinding, HandleBudget, HandleSubject, LaneId,
     RemoteSpendIntent, SpendOp, TouchManifest, UniversalAccountId, validate_descriptor,
 };
-use iroha_data_model::{NetworkId, block::BlockHeader};
+use iroha_data_model::{
+    NetworkId, asset::id::AssetDefinitionId, block::BlockHeader, domain::DomainId,
+};
 use iroha_primitives::numeric::Quantity;
 use ivm::axt;
 fn assert_bytes_match(name: &str, actual: &[u8], expected: &[u8]) {
@@ -129,6 +131,10 @@ fn sample_intent() -> RemoteSpendIntent {
     RemoteSpendIntent {
         asset_dsid: DataSpaceId::new(7),
         op: SpendOp {
+            asset_definition_id: AssetDefinitionId::derive_from_components(
+                DomainId::try_new("axt", "universal").expect("asset domain"),
+                "rose".parse().expect("asset name"),
+            ),
             kind: "transfer".into(),
             from: encoded_account(
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",

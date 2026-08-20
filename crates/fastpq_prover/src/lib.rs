@@ -40,15 +40,20 @@ pub mod packing;
 mod poseidon;
 mod poseidon_manifest;
 mod proof;
+mod semantics;
 pub mod trace;
 pub use axt_binding::{
     AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, AXT_FASTPQ_BINDING_METADATA_KEY,
-    AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY, AxtFastpqProofPayload, AxtVerifiedProof,
+    AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY, AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY,
+    AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY, AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY,
+    AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY, AxtFastpqProofPayload, AxtVerifiedProof,
     DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER, axt_proof_blob_from_bound_batch,
     axt_proof_envelope_from_bound_batch, batch_manifest_sha256, bind_axt_batch,
-    bind_axt_batch_with_committed_amount, canonicalize_binding, embedded_axt_binding,
-    encode_axt_fastpq_payload, transition_batch_from_model, transition_batch_to_model,
-    verify_axt_proof_envelope,
+    bind_axt_batch_with_committed_amount, bind_axt_batch_with_proof_metadata, canonicalize_binding,
+    embedded_axt_binding, encode_axt_fastpq_payload, set_axt_remote_spend_claims,
+    transition_batch_from_model, transition_batch_to_model, validate_axt_transfer_claim_binding,
+    verify_axt_bound_batch, verify_axt_proof_blob, verify_axt_proof_envelope,
+    verify_axt_proof_envelope_with_outer_metadata,
 };
 pub use backend::{
     Backend, BackendConfig, ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,
@@ -90,7 +95,10 @@ pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes, unpack_bytes};
 #[cfg(feature = "fastpq-gpu")]
 pub use poseidon::preflight_gpu_backend as preflight_poseidon_gpu_backend;
 pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
+#[cfg(any(test, feature = "dev-tools"))]
+pub use proof::verify_raw_statement;
 pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
+pub use semantics::{ProofSemantics, validate_batch_semantics};
 pub use trace::{
     ColumnDigests, PoseidonPipelinePolicy, RowUsage, Trace, TraceColumn, build_trace,
     clear_poseidon_gpu_event_observer, clear_poseidon_pipeline_observer, column_hashes,

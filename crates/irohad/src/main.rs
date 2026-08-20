@@ -80,7 +80,7 @@ use iroha_core::{
     panic_hook,
     peers_gossiper::{PeersGossiper, PeersGossiperHandle},
     query::store::LiveQueryStore,
-    queue::{ConfigLaneRouter, LaneRouter, Queue, SingleLaneRouter},
+    queue::{ConfigLaneRouter, LaneRouter, Queue},
     smartcontracts::isi::Registrable as _,
     snapshot::{
         SnapshotMaker, TryReadError as TryReadSnapshotError,
@@ -119,7 +119,6 @@ use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
-pub use iroha_version::BuildLine;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
 pub use runtime_provider_broker::{
@@ -650,9 +649,6 @@ fn init_global_metrics_handle(
 }
 fn nexus_topology_is_custom(nexus: &iroha_config::parameters::actual::Nexus) -> bool {
     nexus.uses_multilane_catalogs()
-}
-fn should_use_config_router(nexus: &iroha_config::parameters::actual::Nexus) -> bool {
-    nexus.enabled && nexus_topology_is_custom(nexus)
 }
 fn ensure_manifest_crypto_matches(
     manifest: &RawGenesisTransaction,
@@ -1889,6 +1885,7 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::LaneBlockNewViewVote(_)
                 | BlockMessage::LaneBlockNewViewCertificate(_) => IngressPolicy::critical(),
                 BlockMessage::LaneHistoricalRecoveryResponse(_) => IngressPolicy::bulk(),
+                BlockMessage::KuraReplicaAdvert(_) => IngressPolicy::limited(),
                 BlockMessage::V2(message) => {
                     use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
                     match &message.payload {
@@ -1909,16 +1906,10 @@ impl ConsensusIngressLimiter {
                         | ConsensusMessageV2Payload::VrfReveal(_) => IngressPolicy::critical(),
                     }
                 }
-                // All other block messages are decode-only v1 artifacts. The relay
-                // rejects them before ingress accounting; keeping this fallback
-                // separate prevents archival types from shaping live v2 limits.
-                _ => IngressPolicy::limited(),
             },
-            iroha_core::NetworkMessage::SumeragiControlFlow(_)
-            | iroha_core::NetworkMessage::LaneDrainVote(_)
+            iroha_core::NetworkMessage::LaneDrainVote(_)
             | iroha_core::NetworkMessage::NativeAmx(_) => IngressPolicy::critical(),
-            iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(_)
-            | iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
+            iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(_) => IngressPolicy::bulk(),
             iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
                 | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_) => {
@@ -2479,7 +2470,6 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
             | BlockMessage::LaneBlockCertificate(_)
             | BlockMessage::LaneHistoricalRecoveryRequest(_)
             | BlockMessage::LaneHistoricalRecoveryResponse(_) => Some(SumeragiRelayClass::Lane),
-            _ => None,
         },
         LaneRelay(_)
         | MergeCommitteeSignature(_)
@@ -2489,17 +2479,6 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
         | QueuePlanAdmissionCertificate(_) => Some(SumeragiRelayClass::Lane),
         _ => None,
     }
-}
-fn obsolete_sumeragi_relay_terminal_meta(
-    message: &iroha_core::NetworkMessage,
-) -> Option<(
-    &'static str,
-    Option<u64>,
-    Option<u64>,
-    SumeragiRelayTerminalOutcome,
-)> {
-    NetworkRelayShared::retired_sumeragi_message_meta(message)
-        .map(|(kind, height, view)| (kind, height, view, SumeragiRelayTerminalOutcome::Failed))
 }
 fn certified_merge_sidecar_ingress_reply_route(
     _message: &iroha_core::merge_sidecar::CertifiedMergeSidecarMessage,
@@ -2758,21 +2737,6 @@ impl NetworkRelayShared {
             }
             Some(reply_route) => reply_route,
         };
-        if let Some((kind, height, view, outcome)) = obsolete_sumeragi_relay_terminal_meta(&message)
-        {
-            iroha_logger::debug!(
-                %peer,
-                ?height,
-                ?view,
-                kind,
-                "rejecting retired Sumeragi message before retained ingress"
-            );
-            return Err(Box::new(PrepareSumeragiRelayResult::Terminal {
-                outcome,
-                retention_guard,
-                completion,
-            }));
-        }
         if !self.consensus_ingress_allows(&authenticated_via, &message, size_bytes) {
             return Err(Box::new(PrepareSumeragiRelayResult::Terminal {
                 outcome: SumeragiRelayTerminalOutcome::Failed,
@@ -3692,18 +3656,6 @@ async fn forward_relay_lane(
     fail_stop_on_close: bool,
 ) -> RelayIngressLoopExit {
     while let Some(msg) = receiver.recv().await {
-        if let Some((message_kind, height, view)) =
-            NetworkRelayShared::retired_sumeragi_message_meta(&msg.payload)
-        {
-            iroha_logger::debug!(
-                peer = %msg.peer,
-                ?height,
-                ?view,
-                message_kind,
-                "rejecting retired Sumeragi v1 message before relay preprocessing"
-            );
-            continue;
-        }
         if let Some(class) = sumeragi_relay_class(&msg.payload)
             && let Some(sumeragi_ingress) = sumeragi_ingress
         {
@@ -4135,7 +4087,6 @@ impl NetworkRelayShared {
         if !matches!(
             msg,
             SumeragiBlock(_)
-                | SumeragiControlFlow(_)
                 | LaneDrainVote(_)
                 | CertifiedMergeSidecar(_)
                 | QueuePlanAdmissionCertificate(_)
@@ -4163,7 +4114,6 @@ impl NetworkRelayShared {
         }
         let (kind, height, view) = match msg {
             SumeragiBlock(data) => Self::block_message_meta(data.as_ref().as_ref()),
-            SumeragiControlFlow(data) => Self::control_flow_meta(data.as_ref()),
             LaneDrainVote(vote) => (
                 "LaneDrainVote",
                 Some(vote.body.intent.close_global_height),
@@ -4247,16 +4197,6 @@ impl NetworkRelayShared {
         size_bytes: usize,
     ) -> bool {
         use iroha_core::NetworkMessage::*;
-        if let Some((kind, height, view)) = Self::retired_sumeragi_message_meta(&msg) {
-            iroha_logger::debug!(
-                %peer,
-                ?height,
-                ?view,
-                kind,
-                "rejecting retired Sumeragi v1 message before ingress accounting"
-            );
-            return false;
-        }
         if !self.consensus_ingress_allows(&authenticated_via, &msg, size_bytes) {
             return false;
         }
@@ -4281,7 +4221,6 @@ impl NetworkRelayShared {
         }
         match msg {
             SumeragiBlock(_)
-            | SumeragiControlFlow(_)
             | LaneRelay(_)
             | MergeCommitteeSignature(_)
             | LaneDrainVote(_)
@@ -4299,14 +4238,6 @@ impl NetworkRelayShared {
                 if let Err(err) = self.streaming.process_control_frame(&peer, frame.as_ref()) {
                     iroha_logger::warn!(%peer, ?err, "Failed to process streaming control frame");
                 }
-            }
-            BlockSync(_) => {
-                iroha_logger::debug!(
-                    %peer,
-                    via = %authenticated_via,
-                    "retired v1 block sync bypassed preprocessing; rejecting"
-                );
-                return false;
             }
             TransactionGossiper(data) => {
                 iroha_logger::debug!(
@@ -4368,22 +4299,6 @@ impl NetworkRelayShared {
                 | Topic::Other
         ) || matches!(msg, iroha_core::NetworkMessage::StreamingControl(_))
     }
-    fn retired_sumeragi_message_meta(
-        msg: &iroha_core::NetworkMessage,
-    ) -> Option<(&'static str, Option<u64>, Option<u64>)> {
-        match msg {
-            iroha_core::NetworkMessage::SumeragiBlock(block)
-                if !block.as_ref().as_ref().is_authoritative_v2_ingress() =>
-            {
-                Some(Self::block_message_meta(block.as_ref().as_ref()))
-            }
-            iroha_core::NetworkMessage::SumeragiControlFlow(message) => {
-                Some(Self::control_flow_meta(message.as_ref()))
-            }
-            iroha_core::NetworkMessage::BlockSync(_) => Some(("BlockSyncV1", None, None)),
-            _ => None,
-        }
-    }
     #[cfg(feature = "telemetry")]
     fn consensus_ingress_topic_label(msg: &iroha_core::NetworkMessage) -> Option<&'static str> {
         use iroha_p2p::network::message::Topic;
@@ -4401,26 +4316,6 @@ impl NetworkRelayShared {
     ) -> (&'static str, Option<u64>, Option<u64>) {
         use iroha_core::sumeragi::message::BlockMessage::*;
         match msg {
-            BlockCreated(_)
-            | BlockSyncUpdate(_)
-            | QcVote(_)
-            | Qc(_)
-            | VrfCommit(_)
-            | VrfReveal(_)
-            | ExecWitness(_)
-            | RbcInit(_)
-            | RbcInitRequest(_)
-            | RbcChunk(_)
-            | RbcChunkCompact(_)
-            | RbcChunkRequest(_)
-            | RbcReady(_)
-            | RbcDeliver(_)
-            | FetchBlockBody(_)
-            | BlockBodyResponse(_)
-            | CertifiedBlockFetch(_)
-            | FetchPendingBlock(_)
-            | ProposalHint(_)
-            | Proposal(_) => Self::legacy_block_message_meta(msg),
             LaneBlockProposal(_)
             | LaneExecutablePayload(_)
             | LaneBlockNewViewVote(_)
@@ -4432,97 +4327,6 @@ impl NetworkRelayShared {
             | LaneHistoricalRecoveryResponse(_) => Self::lane_block_message_meta(msg),
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
             V2(message) => Self::v2_block_message_meta(&message.payload),
-        }
-    }
-    fn legacy_block_message_meta(
-        msg: &iroha_core::sumeragi::message::BlockMessage,
-    ) -> (&'static str, Option<u64>, Option<u64>) {
-        use iroha_core::sumeragi::message::BlockMessage::*;
-        match msg {
-            BlockCreated(block) => {
-                let header = block.block.header();
-                (
-                    "BlockCreated",
-                    Some(header.height().get()),
-                    Some(header.view_change_index()),
-                )
-            }
-            BlockSyncUpdate(block) => {
-                let header = block.block.header();
-                (
-                    "BlockSyncUpdate",
-                    Some(header.height().get()),
-                    Some(header.view_change_index()),
-                )
-            }
-            QcVote(vote) => {
-                let label = match vote.phase {
-                    iroha_core::sumeragi::consensus::Phase::Prepare => "PrepareVote",
-                    iroha_core::sumeragi::consensus::Phase::Commit => "QcVote",
-                    iroha_core::sumeragi::consensus::Phase::NewView => "NewViewVote",
-                };
-                (label, Some(vote.height), Some(vote.view))
-            }
-            Qc(cert) => {
-                let label = match cert.phase {
-                    iroha_core::sumeragi::consensus::Phase::Prepare => "PrepareCert",
-                    iroha_core::sumeragi::consensus::Phase::Commit => "CommitCert",
-                    iroha_core::sumeragi::consensus::Phase::NewView => "NewViewCert",
-                };
-                (label, Some(cert.height), Some(cert.view))
-            }
-            VrfCommit(_) => ("VrfCommit", None, None),
-            VrfReveal(_) => ("VrfReveal", None, None),
-            ExecWitness(witness) => ("ExecWitness", Some(witness.height), Some(witness.view)),
-            RbcInit(init) => ("RbcInit", Some(init.height), Some(init.view)),
-            RbcInitRequest(request) => ("RbcInitRequest", Some(request.height), Some(request.view)),
-            RbcChunk(chunk) => ("RbcChunk", Some(chunk.height), Some(chunk.view)),
-            RbcChunkCompact(chunk) => (
-                "RbcChunk",
-                Some(u64::from(chunk.height)),
-                Some(u64::from(chunk.view)),
-            ),
-            RbcChunkRequest(request) => {
-                ("RbcChunkRequest", Some(request.height), Some(request.view))
-            }
-            RbcReady(ready) => ("RbcReady", Some(ready.height), Some(ready.view)),
-            RbcDeliver(deliver) => ("RbcDeliver", Some(deliver.height), Some(deliver.view)),
-            FetchBlockBody(request) => ("FetchBlockBody", Some(request.height), Some(request.view)),
-            BlockBodyResponse(response) => (
-                "BlockBodyResponse",
-                Some(response.height),
-                Some(response.view),
-            ),
-            CertifiedBlockFetch(fetch) => match fetch {
-                iroha_core::sumeragi::message::CertifiedBlockFetch::Request(request) => (
-                    "CertifiedBlockFetchRequest",
-                    Some(request.height),
-                    Some(request.view),
-                ),
-                iroha_core::sumeragi::message::CertifiedBlockFetch::Response(response) => (
-                    "CertifiedBlockFetchResponse",
-                    Some(response.height),
-                    Some(response.view),
-                ),
-                iroha_core::sumeragi::message::CertifiedBlockFetch::Proof(proof) => (
-                    "CertifiedBlockFetchProof",
-                    Some(proof.height),
-                    Some(proof.view),
-                ),
-                iroha_core::sumeragi::message::CertifiedBlockFetch::Body(body) => (
-                    "CertifiedBlockFetchBody",
-                    Some(body.height),
-                    Some(body.view),
-                ),
-            },
-            FetchPendingBlock(_request) => ("FetchPendingBlock", None, None),
-            ProposalHint(hint) => ("ProposalHint", Some(hint.height), Some(hint.view)),
-            Proposal(proposal) => (
-                "Proposal",
-                Some(proposal.header.height),
-                Some(proposal.header.view),
-            ),
-            _ => unreachable!("legacy metadata helper received a non-legacy block message"),
         }
     }
     fn lane_block_message_meta(
@@ -4693,14 +4497,6 @@ impl NetworkRelayShared {
             ConsensusMessageV2Payload::VrfReveal(_) => ("SumeragiV2VrfReveal", None, None),
         }
     }
-    fn control_flow_meta(
-        msg: &iroha_core::sumeragi::message::ControlFlow,
-    ) -> (&'static str, Option<u64>, Option<u64>) {
-        use iroha_core::sumeragi::message::ControlFlow::*;
-        match msg {
-            Evidence(_) => ("Evidence", None, None),
-        }
-    }
 }
 #[cfg(test)]
 mod network_relay_tests {
@@ -4708,8 +4504,8 @@ mod network_relay_tests {
         BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, InboundBlockMessage,
         IngressRateClass, LaneRelayMessage, LowPriorityIngressDropReason,
         LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig, SumeragiIngressDisposition,
-        SumeragiRelayClass, SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
-        sumeragi_ingress_terminal_outcome, sumeragi_relay_class,
+        SumeragiRelayClass, SumeragiRelayTerminalOutcome, sumeragi_ingress_terminal_outcome,
+        sumeragi_relay_class,
     };
     use iroha_core::{
         MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES, MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
@@ -5371,15 +5167,6 @@ mod network_relay_tests {
         );
     }
     #[test]
-    fn obsolete_sumeragi_relay_message_fails_closed() {
-        assert_eq!(
-            obsolete_sumeragi_relay_terminal_meta(&retired_vrf_commit_msg())
-                .map(|(_, _, _, outcome)| outcome),
-            Some(SumeragiRelayTerminalOutcome::Failed)
-        );
-        assert!(obsolete_sumeragi_relay_terminal_meta(&v2_vote_msg()).is_none());
-    }
-    #[test]
     fn obsolete_block_ingress_disposition_fails_closed() {
         let disposition = SumeragiIngressDisposition::<InboundBlockMessage>::Obsolete;
         assert_eq!(
@@ -5650,16 +5437,6 @@ mod network_relay_tests {
     }
     pub fn v2_vote_msg() -> iroha_core::NetworkMessage {
         sumeragi_msg(v2_vote_block_message())
-    }
-    fn retired_vrf_commit_msg() -> iroha_core::NetworkMessage {
-        sumeragi_msg(BlockMessage::VrfCommit(
-            iroha_data_model::block::consensus::VrfCommit {
-                epoch: 9,
-                commitment: [0x91; 32],
-                signer: 1,
-                bls_sig: vec![0x92],
-            },
-        ))
     }
     fn sample_lane_block_proposal() -> LaneBlockProposalV1 {
         let validator_set = vec![PeerId::new(KeyPair::random().public_key().clone())];
@@ -6646,11 +6423,8 @@ fn nexus_for_runtime_surfaces(state: &State) -> iroha_config::parameters::actual
 fn freeze_lane_manifests_for_startup_replay(
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Result<LaneManifestRegistryHandle, GovernanceGuardError> {
-    let registry = if nexus.enabled {
-        LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry)
-    } else {
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
-    };
+    let registry =
+        LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
     registry.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
     Ok(Arc::new(registry))
 }
@@ -6953,13 +6727,9 @@ mod snapshot_read_error_tests {
         };
         restored.autoscale.last_transition_height = 17;
         restored.autoscale.target_block_ms = NonZeroU64::new(777).expect("nonzero target");
-        let mut configured = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
+        let mut configured = iroha_config::parameters::actual::Nexus::default();
         configured.autoscale.target_block_ms = NonZeroU64::new(321).expect("nonzero target");
         let merged = nexus_config_for_startup_replay(configured, Some(&restored));
-        assert!(merged.enabled);
         assert_eq!(merged.lane_catalog, catalog);
         assert_eq!(merged.lane_config.entries().len(), 2);
         assert_eq!(merged.autoscale.last_transition_height, 17);
@@ -6971,14 +6741,10 @@ mod snapshot_read_error_tests {
         );
     }
     #[test]
-    fn startup_nexus_merge_uses_config_for_legacy_snapshot() {
-        let mut configured = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
+    fn startup_nexus_merge_uses_config_for_fresh_state() {
+        let mut configured = iroha_config::parameters::actual::Nexus::default();
         configured.autoscale.last_transition_height = 9;
         let merged = nexus_config_for_startup_replay(configured, None);
-        assert!(merged.enabled);
         assert_eq!(
             merged.lane_catalog,
             iroha_data_model::nexus::LaneCatalog::default()
@@ -6989,10 +6755,7 @@ mod snapshot_read_error_tests {
     fn runtime_surfaces_use_post_replay_lane_catalog() {
         use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
         use std::num::NonZeroU32;
-        let configured = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
+        let configured = iroha_config::parameters::actual::Nexus::default();
         let mut replayed = configured.clone();
         replayed.lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("non-zero lane count"),
@@ -7070,10 +6833,7 @@ mod snapshot_read_error_tests {
             vec![governed_lane],
         )
         .expect("single governed lane catalog");
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.lane_catalog = catalog.clone();
         nexus.configured_lane_catalog = catalog;
         let error = freeze_lane_manifests_for_startup_replay(&nexus)
@@ -7083,10 +6843,7 @@ mod snapshot_read_error_tests {
     #[test]
     fn post_replay_manifest_rebind_does_not_rescan_changed_sources() {
         let manifest_dir = tempfile::tempdir().expect("create manifest source directory");
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.registry.manifest_directory = Some(manifest_dir.path().to_path_buf());
         let frozen = freeze_lane_manifests_for_startup_replay(&nexus)
             .expect("ungoverned default lane is ready without a manifest");
@@ -7679,7 +7436,6 @@ impl Iroha {
                 telemetry_capabilities.expensive_metrics_enabled(),
                 &config.network.soranet_privacy,
             );
-            state.set_nexus_enabled(config.nexus.enabled);
             let streaming = if telemetry_capabilities.metrics_enabled() {
                 Some(StreamingTelemetry::new(
                     Arc::clone(&metrics),
@@ -7938,11 +7694,12 @@ impl Iroha {
                     .attach("snapshot lineage and typed imported-prefix authentication disagree"));
             }
         };
-        if config.nexus.enabled
+        if config.nexus.uses_multilane_catalogs()
             && signed_consensus_mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
         {
-            return Err(Report::new(StartError::InitKura)
-                .attach("Nexus requires the authenticated Sumeragi v2 mode to be NPoS"));
+            return Err(Report::new(StartError::InitKura).attach(
+                "custom Nexus lane topology requires the authenticated Sumeragi v2 mode to be NPoS",
+            ));
         }
         if !snapshot_bootstrap_active && block_count.0 > 0 {
             match kura
@@ -8106,15 +7863,11 @@ impl Iroha {
         // routes with the stale startup catalog and never installs state-side
         // manifest bindings for restored lanes.
         let runtime_nexus = nexus_for_runtime_surfaces(&state);
-        let router: Arc<dyn LaneRouter> = if should_use_config_router(&runtime_nexus) {
-            Arc::new(ConfigLaneRouter::new(
-                runtime_nexus.routing_policy.clone(),
-                runtime_nexus.dataspace_catalog.clone(),
-                runtime_nexus.lane_catalog.clone(),
-            ))
-        } else {
-            Arc::new(SingleLaneRouter::new())
-        };
+        let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
+            runtime_nexus.routing_policy.clone(),
+            runtime_nexus.dataspace_catalog.clone(),
+            runtime_nexus.lane_catalog.clone(),
+        ));
         let queue_limits = iroha_core::queue::QueueLimits::from_nexus(&runtime_nexus);
         let lane_catalog = Arc::new(runtime_nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(runtime_nexus.dataspace_catalog.clone());
@@ -8168,33 +7921,31 @@ impl Iroha {
         state
             .telemetry
             .set_lane_manifest_registry(Arc::clone(&lane_manifests));
-        if runtime_nexus.enabled {
-            for status in lane_manifests.missing_entries() {
-                iroha_logger::warn!(
-                    lane = %status.alias,
-                    "governance manifest missing; rejecting transactions routed to this lane until a manifest is provisioned"
-                );
-            }
-            #[cfg(feature = "telemetry")]
-            {
-                let queue_task = Arc::clone(&queue);
-                let telemetry_task = state.telemetry.clone();
-                let governance_task = Arc::clone(&governance_catalog);
-                let registry_cfg_task = registry_cfg.clone();
-                lane_manifest_task = Some((
-                    queue_task,
-                    telemetry_task,
-                    governance_task,
-                    registry_cfg_task,
-                ));
-            }
-            #[cfg(not(feature = "telemetry"))]
-            {
-                let queue_task = Arc::clone(&queue);
-                let governance_task = Arc::clone(&governance_catalog);
-                let registry_cfg_task = registry_cfg.clone();
-                lane_manifest_task = Some((queue_task, governance_task, registry_cfg_task));
-            }
+        for status in lane_manifests.missing_entries() {
+            iroha_logger::warn!(
+                lane = %status.alias,
+                "governance manifest missing; rejecting transactions routed to this lane until a manifest is provisioned"
+            );
+        }
+        #[cfg(feature = "telemetry")]
+        {
+            let queue_task = Arc::clone(&queue);
+            let telemetry_task = state.telemetry.clone();
+            let governance_task = Arc::clone(&governance_catalog);
+            let registry_cfg_task = registry_cfg.clone();
+            lane_manifest_task = Some((
+                queue_task,
+                telemetry_task,
+                governance_task,
+                registry_cfg_task,
+            ));
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            let queue_task = Arc::clone(&queue);
+            let governance_task = Arc::clone(&governance_catalog);
+            let registry_cfg_task = registry_cfg.clone();
+            lane_manifest_task = Some((queue_task, governance_task, registry_cfg_task));
         }
         // Independent lane producers transfer FIFO ownership before they
         // publish any payload bytes. Install and replay that durable ownership
@@ -10649,17 +10400,19 @@ mod genesis_key_tests {
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_genesis::GenesisBuilder;
     use std::path::PathBuf;
-    fn signed_genesis(keypair: &KeyPair) -> GenesisBlock {
-        GenesisBuilder::new_without_executor(
+    fn prepared_genesis_proposal(keypair: &KeyPair) -> GenesisBlock {
+        let proposal = GenesisBuilder::new_without_executor(
             ChainId::from("configured-genesis-trust-anchor-test"),
             PathBuf::from("."),
         )
         .build_raw()
         .build_and_sign(keypair)
-        .expect("build signed genesis")
+        .expect("build prepared genesis proposal");
+        assert!(proposal.0.is_resultless_proposal());
+        proposal
     }
-    fn signed_genesis_with_marker(keypair: &KeyPair, marker: &str) -> GenesisBlock {
-        GenesisBuilder::new_without_executor(
+    fn prepared_genesis_proposal_with_marker(keypair: &KeyPair, marker: &str) -> GenesisBlock {
+        let proposal = GenesisBuilder::new_without_executor(
             ChainId::from("configured-genesis-trust-anchor-test"),
             PathBuf::from("."),
         )
@@ -10669,15 +10422,21 @@ mod genesis_key_tests {
         ))
         .build_raw()
         .build_and_sign(keypair)
-        .expect("build marked signed genesis")
+        .expect("build marked prepared genesis proposal");
+        assert!(proposal.0.is_resultless_proposal());
+        proposal
     }
-    fn write_signed_genesis(path: &Path, genesis: &GenesisBlock) {
+    fn write_prepared_genesis_proposal(path: &Path, proposal: &GenesisBlock) {
+        assert!(proposal.0.is_resultless_proposal());
         let bytes = {
             let _registry_guard = instruction_registry_test_guard();
             init_genesis_instruction_registry();
-            genesis.0.encode_wire().expect("encode signed genesis")
+            proposal
+                .0
+                .encode_wire()
+                .expect("encode prepared genesis proposal")
         };
-        fs::write(path, bytes).expect("write signed genesis");
+        fs::write(path, bytes).expect("write prepared genesis proposal");
     }
     #[test]
     fn derives_genesis_pubkey_from_block_authority() {
@@ -10687,6 +10446,7 @@ mod genesis_key_tests {
         let genesis_block = manifest
             .build_and_sign(&keypair)
             .expect("build genesis block");
+        assert!(genesis_block.0.is_resultless_proposal());
         let derived =
             genesis_public_key_from_genesis_block(&genesis_block).expect("derive genesis pubkey");
         assert_eq!(&derived, keypair.public_key());
@@ -10701,7 +10461,7 @@ mod genesis_key_tests {
     #[test]
     fn resolved_genesis_trust_anchor_accepts_matching_block() {
         let keypair = KeyPair::random();
-        let genesis = signed_genesis(&keypair);
+        let genesis = prepared_genesis_proposal(&keypair);
         let anchor = ResolvedGenesisTrustAnchor {
             public_key: keypair.public_key().clone(),
             consensus_header_hash: genesis.0.hash(),
@@ -10713,7 +10473,7 @@ mod genesis_key_tests {
     #[test]
     fn resolved_genesis_trust_anchor_rejects_wrong_public_key() {
         let signer = KeyPair::random();
-        let genesis = signed_genesis(&signer);
+        let genesis = prepared_genesis_proposal(&signer);
         let anchor = ResolvedGenesisTrustAnchor {
             public_key: KeyPair::random().public_key().clone(),
             consensus_header_hash: genesis.0.hash(),
@@ -10727,29 +10487,12 @@ mod genesis_key_tests {
             "unexpected mismatch diagnostic: {error:?}"
         );
     }
-    #[test]
-    fn resolved_genesis_trust_anchor_rejects_wrong_hash() {
-        let keypair = KeyPair::random();
-        let genesis = signed_genesis(&keypair);
-        let wrong_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
-        assert_ne!(genesis.0.hash(), wrong_hash);
-        let anchor = ResolvedGenesisTrustAnchor {
-            public_key: keypair.public_key().clone(),
-            consensus_header_hash: wrong_hash,
-        };
-        let error = anchor
-            .verify(&genesis)
-            .expect_err("configured genesis hash mismatch must reject genesis");
-        assert!(matches!(error.current_context(), StartError::InitKura));
-        assert!(
-            format!("{error:?}").contains("does not match the resolved genesis trust-anchor hash"),
-            "unexpected mismatch diagnostic: {error:?}"
-        );
-    }
+    // Direct fragment preserves the genesis trust-anchor test path and source order.
+    include!("main/resolved_genesis_trust_anchor_wrong_hash_test.rs");
     #[test]
     fn startup_trust_root_requires_local_artifact_to_match_configured_hash() {
         let keypair = KeyPair::random();
-        let genesis = signed_genesis(&keypair);
+        let genesis = prepared_genesis_proposal(&keypair);
         let root = StartupTrustRoot::resolve(
             false,
             keypair.public_key(),
@@ -10766,14 +10509,15 @@ mod genesis_key_tests {
     #[test]
     fn normal_startup_loads_genesis_deferred_by_snapshot_policy() {
         let keypair = KeyPair::random();
-        let genesis = signed_genesis(&keypair);
+        let genesis = prepared_genesis_proposal(&keypair);
         let temp = tempfile::tempdir().expect("temporary directory");
-        let path = temp.path().join("genesis.nrt");
-        write_signed_genesis(&path, &genesis);
-        let signed_file = WithOrigin::inline(path);
-        let loaded = load_deferred_normal_startup_genesis(false, None, Some(&signed_file))
+        let path = temp.path().join("genesis.proposal.nrt");
+        write_prepared_genesis_proposal(&path, &genesis);
+        let proposal_file = WithOrigin::inline(path);
+        let loaded = load_deferred_normal_startup_genesis(false, None, Some(&proposal_file))
             .expect("normal startup reads the protected local artifact")
             .expect("normal startup loads a genesis block");
+        assert!(loaded.0.is_resultless_proposal());
         assert_eq!(loaded.0.hash(), genesis.0.hash());
     }
     #[test]
@@ -10799,7 +10543,7 @@ mod genesis_key_tests {
     #[test]
     fn resolver_rejects_config_and_local_hash_disagreement() {
         let keypair = KeyPair::random();
-        let genesis = signed_genesis(&keypair);
+        let genesis = prepared_genesis_proposal(&keypair);
         let configured_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB6; 32]));
         assert_ne!(configured_hash, genesis.0.hash());
@@ -10815,7 +10559,7 @@ mod genesis_key_tests {
     #[test]
     fn resolver_accepts_matching_config_and_local_hashes() {
         let keypair = KeyPair::random();
-        let genesis = signed_genesis(&keypair);
+        let genesis = prepared_genesis_proposal(&keypair);
         let root = StartupTrustRoot::resolve(
             false,
             keypair.public_key(),
@@ -10831,8 +10575,8 @@ mod genesis_key_tests {
     #[test]
     fn configured_anchor_rejects_alternate_same_key_same_chain_genesis_with_local_body() {
         let keypair = KeyPair::random();
-        let trusted = signed_genesis_with_marker(&keypair, "trusted genesis");
-        let alternate = signed_genesis_with_marker(&keypair, "alternate genesis");
+        let trusted = prepared_genesis_proposal_with_marker(&keypair, "trusted genesis");
+        let alternate = prepared_genesis_proposal_with_marker(&keypair, "alternate genesis");
         assert_ne!(trusted.0.hash(), alternate.0.hash());
         let root = StartupTrustRoot::resolve(
             false,
@@ -10856,8 +10600,8 @@ mod genesis_key_tests {
     #[test]
     fn configured_hash_anchor_rejects_alternate_same_key_same_chain_genesis() {
         let keypair = KeyPair::random();
-        let trusted = signed_genesis_with_marker(&keypair, "trusted genesis");
-        let alternate = signed_genesis_with_marker(&keypair, "alternate genesis");
+        let trusted = prepared_genesis_proposal_with_marker(&keypair, "trusted genesis");
+        let alternate = prepared_genesis_proposal_with_marker(&keypair, "alternate genesis");
         assert_ne!(trusted.0.hash(), alternate.0.hash());
         let root = StartupTrustRoot::resolve(false, keypair.public_key(), trusted.0.hash(), None)
             .expect("configured expected hash resolves an exact anchor");
@@ -10918,8 +10662,6 @@ pub enum ConfigError {
         /// Address that could not be bound.
         addr: SocketAddr,
     },
-    /// Multi-lane Nexus catalogs require the Nexus runtime to be enabled.
-    NexusMultilaneDisabled,
     /// Joining Sora profile is mandatory but missing.
     SoraProfileRequired,
     #[cfg(not(feature = "embedded-soracloud-runtime"))]
@@ -10979,10 +10721,6 @@ impl core::fmt::Display for ConfigError {
             Self::CannotBindAddress { addr } => {
                 write!(f, "Network error: cannot listen to address `{addr}`")
             }
-            Self::NexusMultilaneDisabled => write!(
-                f,
-                "`nexus.enabled` must be set to true when lane catalogs/dataspaces or routing rules are configured"
-            ),
             Self::SoraProfileRequired => {
                 write!(
                     f,
@@ -11150,28 +10888,15 @@ pub fn read_config_and_genesis(
         || config.torii.sorafs_discovery.discovery_enabled
         || config.torii.sorafs_repair.enabled
         || config.torii.sorafs_gc.enabled;
-    let nexus_requires_router = nexus_topology_is_custom(&config.nexus);
+    let nexus_topology_custom = nexus_topology_is_custom(&config.nexus);
     let nexus_lane_overrides = config.nexus.has_lane_overrides();
-    let requires_sora_profile = sorafs_enabled || nexus_requires_router || nexus_lane_overrides;
-    if nexus_requires_router && !config.nexus.enabled {
-        return Err(Report::new(ConfigError::NexusMultilaneDisabled).attach(
-            format!(
-                "Multi-lane catalogs or routing rules detected (lane_count = {}); set `nexus.enabled = true` in config or rerun with `--sora` to apply the Nexus profile",
-                config.nexus.lane_catalog.lane_count()
-            ),
-        ));
-    }
-    if nexus_lane_overrides && !config.nexus.enabled {
-        return Err(Report::new(ConfigError::NexusMultilaneDisabled).attach(
-            "Nexus lane/dataspace/routing overrides require `nexus.enabled = true`; Iroha 2 runs strictly single-lane",
-        ));
-    }
+    let requires_sora_profile = sorafs_enabled || nexus_topology_custom || nexus_lane_overrides;
     if !args.sora && requires_sora_profile {
         let mut sora_features = Vec::new();
         if sorafs_enabled {
             sora_features.push("SoraFS");
         }
-        if nexus_requires_router {
+        if nexus_topology_custom {
             sora_features.push("multi-lane routing");
         }
         if nexus_lane_overrides {
@@ -11338,9 +11063,6 @@ struct StorageBudgetFilesystemProbe {
 fn reconcile_nexus_storage_budget(
     config: &mut Config,
 ) -> ReportResult<Vec<StorageBudgetFilesystemProbe>, ConfigError> {
-    if !config.nexus.enabled {
-        return Ok(Vec::new());
-    }
     if config.nexus.storage.local_budget_bytes.is_some() {
         return probe_nexus_storage_filesystems(config);
     }
@@ -11550,7 +11272,7 @@ fn warn_if_nexus_storage_budget_exceeds_available(
     config: &Config,
     filesystems: &[StorageBudgetFilesystemProbe],
 ) {
-    if filesystems.is_empty() || !config.nexus.enabled {
+    if filesystems.is_empty() {
         return;
     }
     if filesystems
@@ -11998,8 +11720,8 @@ pub(crate) fn apply_ivm_acceleration_config(
     ivm::set_acceleration_config(ivm_cfg);
 }
 #[cfg(test)]
-mod build_line_tests {
-    use super::{resolve_build_line_from_env, *};
+mod config_tests {
+    use super::*;
     use iroha_config_base::toml::TomlSource;
     #[test]
     fn soracloud_runtime_manager_corridor_has_no_local_key_fallback() {
@@ -12087,8 +11809,8 @@ mod build_line_tests {
         );
     }
     use iroha_crypto::Hash;
-    use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId};
-    use std::{io::Write, num::NonZeroU32, path::Path};
+    use iroha_data_model::nexus::DataSpaceId;
+    use std::{io::Write, path::Path};
     use tempfile::NamedTempFile;
     use toml::Table;
     pub fn minimal_config_table() -> Table {
@@ -12117,7 +11839,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         )
         .expect("minimal config")
     }
-    pub fn multilane_config_table(enabled: bool) -> Table {
+    pub fn multilane_config_table() -> Table {
         toml::from_str(&format!(
             r#"chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
@@ -12139,7 +11861,6 @@ expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
 identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 [nexus]
-enabled = {enabled}
 lane_count = 2
 [[nexus.lane_catalog]]
 index = 0
@@ -12153,41 +11874,8 @@ metadata = {{}}
         ))
         .expect("multilane config")
     }
-    fn single_lane_override_config_table() -> Table {
-        toml::from_str(
-            r#"chain = "00000000-0000-0000-0000-000000000000"
-public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
-soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
-trusted_peers_pop = [
-  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
-]
-[network]
-address = "addr:127.0.0.1:1337#8F78"
-public_address = "addr:127.0.0.1:1337#8F78"
-[torii]
-address = "addr:127.0.0.1:8080#8942"
-[genesis]
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-[streaming]
-identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-[nexus]
-enabled = false
-lane_count = 1
-[[nexus.lane_catalog]]
-index = 0
-alias = "custom"
-description = "lane overrides should be rejected when nexus is disabled"
-metadata = {}
-"#,
-        )
-        .expect("single-lane override config")
-    }
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "43ec250ee2781bee657f89885a07a3d907da6e1d994ccb1e3ce21dfbae53f375";
+        "6c24bbb896e1270836d3fa4fbe71a35bedfefc6e5658f4e3e6bffae2c71269e5";
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
         Hash::new(bytes).to_string()
@@ -12224,21 +11912,6 @@ metadata = {}
         }
         Config::from_toml_source(TomlSource::inline(table))
             .expect("resolve signing profile for non-runtime inspection")
-    }
-    #[test]
-    fn build_line_env_override_takes_precedence() {
-        assert_eq!(
-            resolve_build_line_from_env(Some("iroha2".to_owned()), "iroha3d"),
-            BuildLine::Iroha2
-        );
-        assert_eq!(
-            resolve_build_line_from_env(Some("iroha3".to_owned()), "iroha3d"),
-            BuildLine::Iroha3
-        );
-        assert_eq!(
-            resolve_build_line_from_env(Some("unknown".to_owned()), "iroha3d"),
-            BuildLine::Iroha3
-        );
     }
     #[test]
     fn operator_signatures_allowlist_adds_node_key_when_enabled() {
@@ -12295,77 +11968,10 @@ metadata = {}
         );
     }
     #[test]
-    fn iroha2_disarms_soranet_streaming() {
+    fn sora_profile_installs_nexus_catalog() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
             .expect("default config");
-        config.streaming.soranet.enabled = true;
-        enforce_build_line(BuildLine::Iroha2, &mut config).expect("should sanitize");
-        assert!(!config.streaming.soranet.enabled);
-    }
-    #[test]
-    fn iroha2_disarms_nexus_flag_without_multilane() {
-        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-            .expect("default config");
-        config.nexus.enabled = true;
-        enforce_build_line(BuildLine::Iroha2, &mut config).expect("nexus flag should be disarmed");
-        assert!(!config.nexus.enabled);
-    }
-    #[test]
-    fn iroha2_disarms_sorafs_switches() {
-        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-            .expect("default config");
-        config.torii.sorafs_storage.enabled = true;
-        config.torii.sorafs_discovery.discovery_enabled = true;
-        enforce_build_line(BuildLine::Iroha2, &mut config).expect("should sanitize");
-        assert!(!config.torii.sorafs_storage.enabled);
-        assert!(!config.torii.sorafs_discovery.discovery_enabled);
-    }
-    #[test]
-    fn iroha2_rejects_multilane_catalog() {
-        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-            .expect("default config");
-        let catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("non-zero"),
-            vec![
-                LaneConfig::default(),
-                LaneConfig {
-                    id: LaneId::new(1),
-                    dataspace_id: DataSpaceId::UNIVERSAL,
-                    alias: "governance".to_string(),
-                    description: Some("governance lane".to_string()),
-                    ..LaneConfig::default()
-                },
-            ],
-        )
-        .expect("catalog");
-        config.nexus.lane_catalog = catalog.clone();
-        config.nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
-        let err = enforce_build_line(BuildLine::Iroha2, &mut config).expect_err("must fail");
-        let rendered = format!("{err:?}");
-        assert!(rendered.contains("Nexus"));
-    }
-    #[test]
-    fn iroha2_rejects_lane_overrides_without_nexus() {
-        let err = Config::from_toml_source(TomlSource::inline(single_lane_override_config_table()))
-            .expect_err("lane overrides should be rejected when nexus is disabled");
-        let rendered = format!("{err:?}");
-        assert!(
-            rendered.contains("nexus.enabled"),
-            "error should point at the required nexus flag: {rendered}"
-        );
-        assert!(
-            rendered.contains("single-lane"),
-            "error should mention single-lane boundary: {rendered}"
-        );
-    }
-    #[test]
-    fn sora_profile_enables_nexus_and_catalog() {
-        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-            .expect("default config");
-        assert!(config.nexus.enabled);
         config.apply_sora_profile();
-        assert!(config.nexus.enabled);
         assert_eq!(config.nexus.lane_catalog.lane_count().get(), 3);
         assert_eq!(config.nexus.lane_config.entries().len(), 3);
         let lane_aliases: Vec<_> = config
@@ -12394,23 +12000,15 @@ metadata = {}
             .collect();
         assert_eq!(dataspace_aliases, ["universal"]);
         assert!(nexus_topology_is_custom(&config.nexus));
-        assert!(should_use_config_router(&config.nexus));
     }
     #[test]
-    fn config_router_requires_enabled_flag() {
-        let err = Config::from_toml_source(TomlSource::inline(multilane_config_table(false)))
-            .expect_err("multilane config should be rejected without nexus flag");
-        assert!(
-            format!("{err:?}").contains("nexus.enabled"),
-            "missing nexus-enabled hint: {err:?}"
-        );
-        let config = Config::from_toml_source(TomlSource::inline(multilane_config_table(true)))
-            .expect("enabled multilane config");
+    fn multilane_configuration_installs_custom_nexus_topology() {
+        let config = Config::from_toml_source(TomlSource::inline(multilane_config_table()))
+            .expect("multilane config");
         assert!(nexus_topology_is_custom(&config.nexus));
-        assert!(should_use_config_router(&config.nexus));
     }
     #[test]
-    fn nexus_profile_defaults_enable_flag() {
+    fn nexus_profile_defaults_install_catalog() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/nexus/config.toml");
         assert!(
             Config::from_toml_source(
@@ -12420,10 +12018,8 @@ metadata = {}
             "the unprovisioned profile must not be a runnable node config"
         );
         let config = load_unprovisioned_profile_for_inspection(&path);
-        assert!(config.nexus.enabled);
         assert_eq!(config.nexus.dataspace_catalog.entries().len(), 1);
         assert!(nexus_topology_is_custom(&config.nexus));
-        assert!(should_use_config_router(&config.nexus));
         let lane_aliases: Vec<_> = config
             .nexus
             .lane_catalog
@@ -12448,7 +12044,7 @@ metadata = {}
         assert_eq!(hash, NEXUS_DEFAULTS_BLAKE2B);
     }
     #[test]
-    fn sora_flag_enables_nexus_profile() {
+    fn sora_flag_installs_nexus_profile() {
         let mut config_file = NamedTempFile::new().expect("create temp config");
         let toml_value = toml::Value::Table(minimal_config_table());
         config_file
@@ -12471,14 +12067,12 @@ metadata = {}
         let mut expected =
             Config::from_toml_source(TomlSource::inline(minimal_config_table())).expect("default");
         expected.apply_sora_profile();
-        assert!(config.nexus.enabled);
         assert_eq!(config.nexus.lane_catalog, expected.nexus.lane_catalog);
         assert_eq!(
             config.nexus.dataspace_catalog,
             expected.nexus.dataspace_catalog
         );
         assert_eq!(config.nexus.routing_policy, expected.nexus.routing_policy);
-        assert!(should_use_config_router(&config.nexus));
         let lane_aliases: Vec<_> = config
             .nexus
             .lane_catalog
@@ -12520,14 +12114,13 @@ metadata = {}
         ]);
         let (config, _) =
             read_config_and_genesis(&args).expect("parse config with explicit storage opt-out");
-        assert!(config.nexus.enabled);
         assert!(
             !config.torii.sorafs_storage.enabled,
             "--sora must not override an explicit operator storage opt-out"
         );
     }
     #[test]
-    fn single_lane_config_preserves_defaults_without_sora_flag() {
+    fn single_lane_config_keeps_canonical_nexus_topology_without_sora_flag() {
         let mut config_file = NamedTempFile::new().expect("create temp config");
         let toml_value = toml::Value::Table(minimal_config_table());
         config_file
@@ -12546,37 +12139,8 @@ metadata = {}
                 .expect("temp config path to string"),
         ]);
         let (config, _) = read_config_and_genesis(&args).expect("parse config without --sora");
-        assert!(config.nexus.enabled);
         assert_eq!(config.nexus.lane_catalog.lane_count().get(), 1);
         assert!(!nexus_topology_is_custom(&config.nexus));
-        assert!(!should_use_config_router(&config.nexus));
-    }
-    #[test]
-    fn multilane_config_requires_nexus_enabled_flag() {
-        let mut config_file = NamedTempFile::new().expect("create temp config");
-        let toml_value = toml::Value::Table(multilane_config_table(false));
-        config_file
-            .write_all(
-                toml::to_string(&toml_value)
-                    .expect("render config")
-                    .as_bytes(),
-            )
-            .expect("write config");
-        let args = parse_args_from([
-            "iroha3d",
-            "--config",
-            config_file
-                .path()
-                .to_str()
-                .expect("temp config path to string"),
-        ]);
-        let err =
-            read_config_and_genesis(&args).expect_err("must reject disabled multilane config");
-        let rendered = format!("{err:?}");
-        assert!(
-            rendered.contains("nexus.enabled"),
-            "missing nexus-enabled hint: {rendered}"
-        );
     }
 }
 #[cfg(test)]
@@ -13036,34 +12600,15 @@ fn configure_reports(args: &Args) {
     // neither devs nor users benefit from it
     Report::install_debug_hook::<Location>(|_, _| {});
 }
-const BUILD_LINE_ENV: &str = "IROHA_BUILD_LINE";
-fn resolve_build_line_from_env(env_value: Option<String>, bin_name: &str) -> BuildLine {
-    if let Some(val) = env_value {
-        match val.trim().to_ascii_lowercase().as_str() {
-            "iroha2" | "i2" | "2" => return BuildLine::Iroha2,
-            "iroha3" | "i3" | "3" => return BuildLine::Iroha3,
-            other => iroha_logger::warn!(
-                target: "config",
-                ?other,
-                "Ignoring invalid {BUILD_LINE_ENV} override (expected iroha2/iroha3); falling back to binary name"
-            ),
-        }
-    }
-    BuildLine::from_bin_name(bin_name)
-}
-/// Run the stock daemon launcher for one build line.
+/// Run the stock daemon launcher.
 ///
 /// The stock binaries resolve supported runtime-only bindings through a
 /// platform-fixed local broker running under the same effective service UID.
 /// The broker is not contacted when the validated configuration contains no
 /// runtime-provider bindings.
-pub fn main_entry(default_build_line: BuildLine) {
+pub fn main_entry() {
     let _ = std::hint::black_box(BUILD_SOURCE_ID);
-    let build_line = resolve_build_line_from_env(
-        env::var(BUILD_LINE_ENV).ok(),
-        default_build_line.daemon_bin(),
-    );
-    if let Err(report) = run_main(build_line, None, None) {
+    if let Err(report) = run_main(None, None) {
         eprintln!("{report:?}");
         std::process::exit(1);
     }
@@ -13081,14 +12626,9 @@ pub fn main_entry(default_build_line: BuildLine) {
 /// Returns a launcher error if configuration, provider resolution, subsystem
 /// startup, or supervised execution fails.
 pub fn run_with_runtime_provider_registry(
-    default_build_line: BuildLine,
     registry: &dyn IrohaRuntimeProviderRegistryV1,
 ) -> ReportResult<(), MainError> {
-    let build_line = resolve_build_line_from_env(
-        env::var(BUILD_LINE_ENV).ok(),
-        default_build_line.daemon_bin(),
-    );
-    run_main(build_line, Some(registry), None)
+    run_main(Some(registry), None)
 }
 /// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
@@ -13104,14 +12644,9 @@ pub fn run_with_runtime_provider_registry(
 ///
 /// Returns a launcher error if configuration, subsystem startup, or supervised execution fails.
 pub fn run_with_musubi_publication(
-    default_build_line: BuildLine,
     factory: Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
 ) -> ReportResult<(), MainError> {
-    let build_line = resolve_build_line_from_env(
-        env::var(BUILD_LINE_ENV).ok(),
-        default_build_line.daemon_bin(),
-    );
-    run_main(build_line, None, Some(factory))
+    run_main(None, Some(factory))
 }
 /// Run the standard CLI launcher with deployment-owned runtime providers and a private Musubi
 /// publication factory.
@@ -13129,15 +12664,10 @@ pub fn run_with_musubi_publication(
 /// Returns a launcher error if configuration, provider resolution, subsystem startup, or
 /// supervised execution fails.
 pub fn run_with_runtime_provider_registry_and_musubi_publication(
-    default_build_line: BuildLine,
     registry: &dyn IrohaRuntimeProviderRegistryV1,
     factory: Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
 ) -> ReportResult<(), MainError> {
-    let build_line = resolve_build_line_from_env(
-        env::var(BUILD_LINE_ENV).ok(),
-        default_build_line.daemon_bin(),
-    );
-    run_main(build_line, Some(registry), Some(factory))
+    run_main(Some(registry), Some(factory))
 }
 fn parse_fastpq_execution_mode(value: &str) -> Result<FastpqExecutionMode, String> {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -13363,7 +12893,6 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
 }
 #[expect(clippy::too_many_lines, reason = "ordered process startup boundary")]
 fn run_main(
-    build_line: BuildLine,
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
     musubi_publication_factory: Option<
         Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
@@ -13383,14 +12912,13 @@ fn run_main(
     // embedded `InstructionBox` values would panic with "instruction registry is not initialized".
     init_genesis_instruction_registry();
     init_query_registry();
-    let (mut config, genesis) =
+    let (config, genesis) =
         read_config_and_genesis(&args).change_context(MainError::Config).attach_with(|| {
             args.config.as_ref().map_or_else(
                 || "`--config` arg was not set, therefore configuration relies fully on environment variables".to_owned(),
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
-    enforce_build_line(build_line, &mut config)?;
     if args.startup.check_config {
         let qualification_seal_target = args
             .startup
@@ -13460,9 +12988,8 @@ fn run_main(
             .attach("failed to resolve deployment runtime-provider bindings")?;
     iroha_logger::info!(
         target: "config",
-        build_line = %build_line,
         protocol_version = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
-        "Resolved build line; Sumeragi v2 data availability is mandatory"
+        "Sumeragi v2 data availability is mandatory"
     );
     #[cfg(feature = "telemetry")]
     let fastpq_device_labels = FastpqDeviceLabels::from_config(&config.zk.fastpq);
@@ -14524,46 +14051,6 @@ fn validate_genesis_execution_offline(
     })?;
     Ok(())
 }
-fn enforce_build_line(build_line: BuildLine, config: &mut Config) -> ReportResult<(), MainError> {
-    if build_line.is_iroha3() {
-        return Ok(());
-    }
-    let mut disarmed = Vec::new();
-    if config.streaming.soranet.enabled {
-        config.streaming.soranet.enabled = false;
-        disarmed.push("streaming.soranet.enabled");
-    }
-    if config.torii.sorafs_storage.enabled {
-        config.torii.sorafs_storage.enabled = false;
-        disarmed.push("torii.sorafs_storage.enabled");
-    }
-    if config.torii.sorafs_discovery.discovery_enabled {
-        config.torii.sorafs_discovery.discovery_enabled = false;
-        disarmed.push("torii.sorafs_discovery.discovery_enabled");
-    }
-    let sora_features = config.uses_sora_features();
-    let mut fatal = Vec::new();
-    if sora_features {
-        fatal.push("Nexus/multi-dataspace/SoraFS runtime");
-    }
-    if config.nexus.enabled && !sora_features {
-        config.nexus.enabled = false;
-        disarmed.push("nexus.enabled");
-    }
-    if !fatal.is_empty() {
-        return Err(Report::new(MainError::Config).attach(format!(
-            "Iroha 2 build forbids Nexus/Sora features; disable the following: {}",
-            fatal.join(", ")
-        )));
-    }
-    if !disarmed.is_empty() {
-        eprintln!(
-            "Iroha 2 build disabled Sora-only features at startup: {}",
-            disarmed.join(", ")
-        );
-    }
-    Ok(())
-}
 fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 32]>, MainError> {
     let meta = decode_confidential_registry_meta(payload).map_err(|err| {
         Report::new(MainError::Config).attach(format!(
@@ -15165,7 +14652,7 @@ fn log_norito_banner(cfg: &Config) {
 }
 #[cfg(test)]
 mod tests {
-    use super::build_line_tests::{
+    use super::config_tests::{
         load_unprovisioned_profile_for_inspection, minimal_config_table, multilane_config_table,
     };
     #[allow(unused_imports)]
@@ -15875,19 +15362,19 @@ mod tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         assert!(
-            compact_source.contains("run_main(build_line,None,None)"),
+            compact_source.contains("run_main(None,None)"),
             "the stock launcher must not construct or start a private publication service"
         );
         assert!(
-            compact_source.contains("run_main(build_line,Some(registry),None)"),
+            compact_source.contains("run_main(Some(registry),None)"),
             "the existing custom registry launcher must preserve fail-closed publication defaults"
         );
         assert!(
-            compact_source.contains("run_main(build_line,None,Some(factory))"),
+            compact_source.contains("run_main(None,Some(factory))"),
             "the standalone publication launcher must not require an unrelated provider registry"
         );
         assert!(
-            compact_source.contains("run_main(build_line,Some(registry),Some(factory))"),
+            compact_source.contains("run_main(Some(registry),Some(factory))"),
             "the combined custom launcher must inject both deployment-owned dependencies and the late-bound publication factory"
         );
         let startup_source = compact_source
@@ -16783,16 +16270,17 @@ mod tests {
             ));
         }
         fn fill_real_inner_ingress(handle: &SumeragiHandle, capacity: usize) {
+            let sender = sample_peer().id().clone();
             for offset in 0..capacity {
                 let offset = u8::try_from(offset).expect("fixture offset fits u8");
                 assert!(matches!(
-                    handle.try_incoming_block_message_owned(InboundBlockMessage::new(
+                    handle.try_incoming_block_message_from_owned(
+                        sender.clone(),
                         indexed_v2_vote_block_message(
                             40 + u64::from(offset),
                             0x40_u8.checked_add(offset).expect("fixture marker fits u8"),
                         ),
-                        None,
-                    )),
+                    ),
                     SumeragiIngressDisposition::Accepted
                 ));
             }
@@ -18596,14 +18084,14 @@ mod tests {
             )]);
             let time_source = TimeSource::new_system();
             let mut voting_block = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
                 block,
                 &topology,
                 &genesis_account_id,
                 &time_source,
                 &state,
                 &mut voting_block,
-                false,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             )
             .unpack(|_| {});
             if let Err((block, error)) = result {
@@ -18798,7 +18286,7 @@ mod tests {
                 .split_once("fn validate_genesis_execution_offline(")
                 .expect("offline genesis validator")
                 .1
-                .split_once("fn enforce_build_line(")
+                .split_once("fn parse_confidential_registry_hash(")
                 .expect("end offline genesis validator")
                 .0;
             let install = check_path
@@ -19345,12 +18833,13 @@ mod tests {
             let genesis_key_pair = KeyPair::random();
             let raw = GenesisBuilder::new_without_executor(ChainId::from("chain"), ".").build_raw();
             iroha_genesis::init_instruction_registry();
-            let genesis = raw
+            let proposal = raw
                 .build_and_sign(&genesis_key_pair)
-                .expect("build genesis");
+                .expect("build prepared genesis proposal");
+            assert!(proposal.0.is_resultless_proposal());
             let mut config = config_factory(genesis_key_pair.public_key());
             iroha_config::base::toml::Writer::new(&mut config)
-                .write(["genesis", "file"], "./genesis/genesis.signed.nrt")
+                .write(["genesis", "file"], "./genesis/genesis.proposal.nrt")
                 .write(["kura", "store_dir"], "../storage")
                 .write(["snapshot", "store_dir"], "../snapshots")
                 .write(["dev_telemetry", "out_file"], "../logs/telemetry");
@@ -19360,10 +18849,10 @@ mod tests {
             let genesis_dir = config_dir.join("genesis");
             std::fs::create_dir_all(&genesis_dir)?;
             let config_path = config_dir.join("config.toml");
-            let genesis_path = genesis_dir.join("genesis.signed.nrt");
+            let genesis_path = genesis_dir.join("genesis.proposal.nrt");
             let executor_path = genesis_dir.join("executor.to");
             std::fs::write(&config_path, toml::to_string(&config)?)?;
-            std::fs::write(&genesis_path, genesis.0.encode_wire()?)?;
+            std::fs::write(&genesis_path, proposal.0.encode_wire()?)?;
             std::fs::write(&executor_path, "")?;
             let (config, _genesis) =
                 read_config_and_genesis(&config_test_args(config_path.clone(), None))
@@ -19429,23 +18918,24 @@ mod tests {
             let genesis_key_pair = KeyPair::random();
             let raw = GenesisBuilder::new_without_executor(ChainId::from("chain"), ".").build_raw();
             iroha_genesis::init_instruction_registry();
-            let genesis = raw
+            let proposal = raw
                 .build_and_sign(&genesis_key_pair)
-                .expect("build genesis");
+                .expect("build prepared genesis proposal");
+            assert!(proposal.0.is_resultless_proposal());
             let mut config = config_factory(genesis_key_pair.public_key());
             iroha_config::base::toml::Writer::new(&mut config)
-                .write(["genesis", "file"], "./genesis/genesis.signed.nrt")
+                .write(["genesis", "file"], "./genesis/genesis.proposal.nrt")
                 .write(["kura", "store_dir"], "../storage")
                 .write(["snapshot", "store_dir"], "../snapshots")
                 .write(["dev_telemetry", "out_file"], "../logs/telemetry");
             let dir = tempfile::tempdir()?;
-            let genesis_path = dir.path().join("config/genesis/genesis.signed.nrt");
+            let genesis_path = dir.path().join("config/genesis/genesis.proposal.nrt");
             let executor_path = dir.path().join("config/genesis/executor.to");
             let config_path = dir.path().join("config/config.toml");
             std::fs::create_dir(dir.path().join("config"))?;
             std::fs::create_dir(dir.path().join("config/genesis"))?;
             std::fs::write(config_path, toml::to_string(&config)?)?;
-            std::fs::write(genesis_path, genesis.0.encode_wire()?)?;
+            std::fs::write(genesis_path, proposal.0.encode_wire()?)?;
             std::fs::write(executor_path, "")?;
             let config_path = dir.path().join("config/config.toml");
             // When
@@ -19472,6 +18962,11 @@ mod tests {
             // Then
             // No need to check whether genesis.file is resolved - if not, genesis wouldn't be read
             assert!(genesis.is_some());
+            assert!(
+                genesis
+                    .as_ref()
+                    .is_some_and(|block| block.0.is_resultless_proposal())
+            );
             assert_eq!(
                 config.kura.store_dir.resolve_relative_path().absolutize()?,
                 dir.path().join("storage")
@@ -19513,10 +19008,7 @@ mod tests {
         }
         #[test]
         fn runtime_derived_budget_does_not_mutate_operator_configuration() -> eyre::Result<()> {
-            let (mut config, _dir, config_path) =
-                parse_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
-                })?;
+            let (mut config, _dir, config_path) = parse_config_with_overrides(|_, _| {})?;
             let original_config = std::fs::read_to_string(&config_path)?;
             assert!(config.nexus.storage.local_budget_bytes.is_none());
             assert!(config.nexus.storage.effective_local_budget_bytes.is_none());
@@ -19546,10 +19038,7 @@ mod tests {
         fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode()
         -> eyre::Result<()> {
             use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-            let (_parsed, _dir, config_path) =
-                parse_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
-                })?;
+            let (_parsed, _dir, config_path) = parse_config_with_overrides(|_, _| {})?;
             std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o400))?;
             let original_bytes = std::fs::read(&config_path)?;
             let original_metadata = std::fs::metadata(&config_path)?;
@@ -19588,7 +19077,6 @@ mod tests {
             let (config, _dir, config_path) =
                 parse_config_with_overrides(|table, _genesis_key| {
                     iroha_config::base::toml::Writer::new(table)
-                        .write(["nexus", "enabled"], true)
                         .write(["nexus", "storage", "local_budget_bytes"], 4_096_i64);
                 })?;
             assert_eq!(

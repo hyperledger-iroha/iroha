@@ -13,7 +13,6 @@
   "error.submit_transaction": "ٹرانزیکشن جمع کرانے میں ناکامی",
   "error.submit_transaction_debug": "ٹرانزیکشن جمع کرانے میں ناکامی: {transaction}",
   "label.hash": "ہیش:",
-  "info.build_line": "Build line: {build_line}",
   "help.heading.usage": "Usage:",
   "help.heading.commands": "Commands:",
   "help.heading.options": "Options:",

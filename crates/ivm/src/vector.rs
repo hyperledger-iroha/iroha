@@ -15,7 +15,7 @@ use objc2::Message;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2_foundation::NSUInteger;
 #[cfg(all(target_os = "macos", feature = "metal"))]
-use objc2_metal::{MTLCommandBuffer, MTLDevice};
+use objc2_metal::*;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
@@ -525,10 +525,80 @@ struct MetalState {
     ed25519_signature: Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>>,
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
+trait MetalBufferElement: Copy {}
+#[cfg(all(target_os = "macos", feature = "metal"))]
+impl MetalBufferElement for u8 {}
+#[cfg(all(target_os = "macos", feature = "metal"))]
+impl MetalBufferElement for u32 {}
+#[cfg(all(target_os = "macos", feature = "metal"))]
+impl MetalBufferElement for u64 {}
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
+fn metal_input_buffer<T: MetalBufferElement>(
+    device: &ProtocolObject<dyn MTLDevice>,
+    values: &[T],
+    byte_len: usize,
+) -> Option<Retained<ProtocolObject<dyn MTLBuffer>>> {
+    use core::ptr::NonNull;
+
+    debug_assert!(byte_len <= core::mem::size_of_val(values));
+    // SAFETY: slices always have a non-null aligned pointer, and the private
+    // marker is implemented only for initialized, padding-free primitives.
+    unsafe {
+        device.newBufferWithBytes_length_options(
+            NonNull::new_unchecked(values.as_ptr() as *mut core::ffi::c_void),
+            byte_len,
+            MTLResourceOptions::CPUCacheModeDefaultCache,
+        )
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
+fn metal_output_buffer(
+    device: &ProtocolObject<dyn MTLDevice>,
+    byte_len: usize,
+) -> Option<Retained<ProtocolObject<dyn MTLBuffer>>> {
+    device.newBufferWithLength_options(byte_len, MTLResourceOptions::StorageModeShared)
+}
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
+fn metal_dispatch(
+    queue: &ProtocolObject<dyn MTLCommandQueue>,
+    pipeline: &ProtocolObject<dyn MTLComputePipelineState>,
+    buffers: &[&ProtocolObject<dyn MTLBuffer>],
+    grid_width: NSUInteger,
+    threadgroup_width: NSUInteger,
+    context: &str,
+) -> Option<()> {
+    let command_buffer = queue.commandBuffer()?;
+    let encoder = command_buffer.computeCommandEncoder()?;
+    encoder.setComputePipelineState(pipeline);
+    for (index, buffer) in buffers.iter().copied().enumerate() {
+        unsafe {
+            encoder.setBuffer_offset_atIndex(Some(buffer), 0, index);
+        }
+    }
+    encoder.dispatchThreads_threadsPerThreadgroup(
+        MTLSize {
+            width: grid_width,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: threadgroup_width,
+            height: 1,
+            depth: 1,
+        },
+    );
+    encoder.endEncoding();
+    command_buffer.commit();
+    finalize_command_buffer(&command_buffer, context).then_some(())
+}
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
 impl MetalState {
     fn new() -> Option<Self> {
         use objc2_foundation::{NSString, ns_string};
-        use objc2_metal::*;
         let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
         let src = include_str!("assets/text_v1/metal_vadd64.metal");
@@ -553,7 +623,6 @@ impl MetalState {
             name: &str,
         ) -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>> {
             use objc2_foundation::NSString;
-            use objc2_metal::*;
             #[cfg(target_os = "macos")]
             BIT_PIPE_COMPILES.fetch_add(1, Ordering::SeqCst);
             let source = format!(
@@ -673,50 +742,19 @@ impl MetalState {
             let b = [4u32, 3, 2, 1];
             let expect = [5u32, 5, 5, 5];
             let add_ok = {
-                use core::ptr::NonNull;
-                use objc2_metal::*;
-                let buf_a = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(a.as_ptr() as *mut core::ffi::c_void),
-                        a.len() * core::mem::size_of::<u32>(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_b = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(b.as_ptr() as *mut core::ffi::c_void),
-                        b.len() * core::mem::size_of::<u32>(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_out = device.newBufferWithLength_options(
-                    a.len() * core::mem::size_of::<u32>(),
-                    MTLResourceOptions::StorageModeShared,
+                let buf_a =
+                    metal_input_buffer(&device, &a[..], a.len() * core::mem::size_of::<u32>())?;
+                let buf_b =
+                    metal_input_buffer(&device, &b[..], b.len() * core::mem::size_of::<u32>())?;
+                let buf_out = metal_output_buffer(&device, a.len() * core::mem::size_of::<u32>())?;
+                metal_dispatch(
+                    &queue,
+                    &vadd32,
+                    &[&buf_a, &buf_b, &buf_out],
+                    1,
+                    1,
+                    "metal self-test vadd32",
                 )?;
-                let cmd_buf = queue.commandBuffer()?;
-                let encoder = cmd_buf.computeCommandEncoder()?;
-                encoder.setComputePipelineState(&vadd32);
-                unsafe {
-                    encoder.setBuffer_offset_atIndex(Some(&buf_a), 0, 0);
-                    encoder.setBuffer_offset_atIndex(Some(&buf_b), 0, 1);
-                    encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-                }
-                let grid = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                let threads = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                encoder.endEncoding();
-                cmd_buf.commit();
-                if !finalize_command_buffer(&cmd_buf, "metal self-test vadd32") {
-                    return None;
-                }
                 let ptr = buf_out.contents().as_ptr() as *const u32;
                 let out_slice = unsafe { std::slice::from_raw_parts(ptr, 4) };
                 out_slice == expect
@@ -728,56 +766,25 @@ impl MetalState {
                 );
             }
             let add64_ok = {
-                use core::ptr::NonNull;
-                use objc2_metal::*;
                 let a = [0x0000_0000_ffff_ffff, (0x8000_0000u64 << 32) | 0x0000_0001];
                 let b = [
                     (0x0000_0001u64 << 32) | 0x0000_0001,
                     (0x7fff_ffffu64 << 32) | 0xffff_ffff,
                 ];
                 let expect = [a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1])];
-                let buf_a = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(a.as_ptr() as *mut core::ffi::c_void),
-                        a.len() * core::mem::size_of::<u64>(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_b = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(b.as_ptr() as *mut core::ffi::c_void),
-                        b.len() * core::mem::size_of::<u64>(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_out = device.newBufferWithLength_options(
-                    a.len() * core::mem::size_of::<u64>(),
-                    MTLResourceOptions::StorageModeShared,
+                let buf_a =
+                    metal_input_buffer(&device, &a[..], a.len() * core::mem::size_of::<u64>())?;
+                let buf_b =
+                    metal_input_buffer(&device, &b[..], b.len() * core::mem::size_of::<u64>())?;
+                let buf_out = metal_output_buffer(&device, a.len() * core::mem::size_of::<u64>())?;
+                metal_dispatch(
+                    &queue,
+                    &vadd64,
+                    &[&buf_a, &buf_b, &buf_out],
+                    1,
+                    1,
+                    "metal self-test vadd64",
                 )?;
-                let cmd_buf = queue.commandBuffer()?;
-                let encoder = cmd_buf.computeCommandEncoder()?;
-                encoder.setComputePipelineState(&vadd64);
-                unsafe {
-                    encoder.setBuffer_offset_atIndex(Some(&buf_a), 0, 0);
-                    encoder.setBuffer_offset_atIndex(Some(&buf_b), 0, 1);
-                    encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-                }
-                let grid = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                let threads = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                encoder.endEncoding();
-                cmd_buf.commit();
-                if !finalize_command_buffer(&cmd_buf, "metal self-test vadd64") {
-                    return None;
-                }
                 let ptr = buf_out.contents().as_ptr() as *const u64;
                 let out_slice = unsafe { std::slice::from_raw_parts(ptr, 2) };
                 out_slice == expect
@@ -789,53 +796,29 @@ impl MetalState {
                 );
             }
             let bit_ops_ok = {
-                use core::ptr::NonNull;
-                use objc2_metal::*;
                 let lhs = [0xffff_0000u32, 0x1234_5678, 0x0f0f_0f0f, 0xaaaa_5555];
                 let rhs = [0x00ff_ff00u32, 0xf0f0_f0f0, 0x3333_cccc, 0x5555_aaaa];
                 let run_bit = |pipeline, expect: [u32; 4], label: &str| -> Option<bool> {
-                    let buf_lhs = unsafe {
-                        device.newBufferWithBytes_length_options(
-                            NonNull::new_unchecked(lhs.as_ptr() as *mut core::ffi::c_void),
-                            lhs.len() * core::mem::size_of::<u32>(),
-                            MTLResourceOptions::CPUCacheModeDefaultCache,
-                        )?
-                    };
-                    let buf_rhs = unsafe {
-                        device.newBufferWithBytes_length_options(
-                            NonNull::new_unchecked(rhs.as_ptr() as *mut core::ffi::c_void),
-                            rhs.len() * core::mem::size_of::<u32>(),
-                            MTLResourceOptions::CPUCacheModeDefaultCache,
-                        )?
-                    };
-                    let buf_out = device.newBufferWithLength_options(
+                    let buf_lhs = metal_input_buffer(
+                        &device,
+                        &lhs[..],
                         lhs.len() * core::mem::size_of::<u32>(),
-                        MTLResourceOptions::StorageModeShared,
                     )?;
-                    let cmd_buf = queue.commandBuffer()?;
-                    let encoder = cmd_buf.computeCommandEncoder()?;
-                    encoder.setComputePipelineState(pipeline);
-                    unsafe {
-                        encoder.setBuffer_offset_atIndex(Some(&buf_lhs), 0, 0);
-                        encoder.setBuffer_offset_atIndex(Some(&buf_rhs), 0, 1);
-                        encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-                    }
-                    let grid = MTLSize {
-                        width: 1,
-                        height: 1,
-                        depth: 1,
-                    };
-                    let threads = MTLSize {
-                        width: 1,
-                        height: 1,
-                        depth: 1,
-                    };
-                    encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                    encoder.endEncoding();
-                    cmd_buf.commit();
-                    if !finalize_command_buffer(&cmd_buf, label) {
-                        return None;
-                    }
+                    let buf_rhs = metal_input_buffer(
+                        &device,
+                        &rhs[..],
+                        rhs.len() * core::mem::size_of::<u32>(),
+                    )?;
+                    let buf_out =
+                        metal_output_buffer(&device, lhs.len() * core::mem::size_of::<u32>())?;
+                    metal_dispatch(
+                        &queue,
+                        pipeline,
+                        &[&buf_lhs, &buf_rhs, &buf_out],
+                        1,
+                        1,
+                        label,
+                    )?;
                     let ptr = buf_out.contents().as_ptr() as *const u32;
                     let out_slice = unsafe { std::slice::from_raw_parts(ptr, 4) };
                     Some(out_slice == expect)
@@ -903,45 +886,20 @@ impl MetalState {
                 block[63] = 24;
                 sha256_compress_scalar_ref(&mut st_scalar, &block);
                 // Run through Metal pipeline
-                use core::ptr::NonNull;
-                use objc2_metal::*;
-                let buf_state = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(st_metal.as_ptr() as *mut core::ffi::c_void),
-                        st_metal.len() * core::mem::size_of::<u32>(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_block = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(block.as_ptr() as *mut core::ffi::c_void),
-                        block.len(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let cmd_buf = queue.commandBuffer()?;
-                let encoder = cmd_buf.computeCommandEncoder()?;
-                encoder.setComputePipelineState(&sha256);
-                unsafe {
-                    encoder.setBuffer_offset_atIndex(Some(&buf_state), 0, 0);
-                    encoder.setBuffer_offset_atIndex(Some(&buf_block), 0, 1);
-                }
-                let grid = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                let threads = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                encoder.endEncoding();
-                cmd_buf.commit();
-                if !finalize_command_buffer(&cmd_buf, "metal self-test sha256") {
-                    return None;
-                }
+                let buf_state = metal_input_buffer(
+                    &device,
+                    &st_metal[..],
+                    st_metal.len() * core::mem::size_of::<u32>(),
+                )?;
+                let buf_block = metal_input_buffer(&device, &block[..], block.len())?;
+                metal_dispatch(
+                    &queue,
+                    &sha256,
+                    &[&buf_state, &buf_block],
+                    1,
+                    1,
+                    "metal self-test sha256",
+                )?;
                 let ptr = buf_state.contents().as_ptr() as *const u32;
                 let out_slice = unsafe { std::slice::from_raw_parts(ptr, 8) };
                 st_metal.copy_from_slice(out_slice);
@@ -954,8 +912,6 @@ impl MetalState {
                 );
             }
             let sha_leaves_ok = {
-                use core::ptr::NonNull;
-                use objc2_metal::*;
                 let mut block_a = [0u8; 64];
                 block_a[0] = b'a';
                 block_a[1] = b'b';
@@ -998,40 +954,17 @@ impl MetalState {
                     .flat_map(|block| block.iter())
                     .copied()
                     .collect();
-                let buf_blocks = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(flat.as_ptr() as *mut core::ffi::c_void),
-                        flat.len(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_out = device.newBufferWithLength_options(
-                    blocks.len() * 8 * core::mem::size_of::<u32>(),
-                    MTLResourceOptions::StorageModeShared,
+                let buf_blocks = metal_input_buffer(&device, &flat[..], flat.len())?;
+                let buf_out =
+                    metal_output_buffer(&device, blocks.len() * 8 * core::mem::size_of::<u32>())?;
+                metal_dispatch(
+                    &queue,
+                    &sha256_leaves,
+                    &[&buf_blocks, &buf_out],
+                    blocks.len() as NSUInteger,
+                    1,
+                    "metal self-test sha256 leaves",
                 )?;
-                let cmd_buf = queue.commandBuffer()?;
-                let encoder = cmd_buf.computeCommandEncoder()?;
-                encoder.setComputePipelineState(&sha256_leaves);
-                unsafe {
-                    encoder.setBuffer_offset_atIndex(Some(&buf_blocks), 0, 0);
-                    encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 1);
-                }
-                let grid = MTLSize {
-                    width: blocks.len() as NSUInteger,
-                    height: 1,
-                    depth: 1,
-                };
-                let threads = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                encoder.endEncoding();
-                cmd_buf.commit();
-                if !finalize_command_buffer(&cmd_buf, "metal self-test sha256 leaves") {
-                    return None;
-                }
                 let words = unsafe {
                     std::slice::from_raw_parts(
                         buf_out.contents().as_ptr() as *const u32,
@@ -1058,8 +991,6 @@ impl MetalState {
             }
             // AES round quick check against CPU reference
             let aes_ok = {
-                use core::ptr::NonNull;
-                use objc2_metal::*;
                 let state = [
                     0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
                     0xdd, 0xee, 0xff,
@@ -1071,46 +1002,17 @@ impl MetalState {
                 let cpu_enc = crate::aes::aesenc_impl(state, rk);
                 let cpu_dec = crate::aes::aesdec_impl(cpu_enc, rk);
                 // Run AESENC
-                let buf_s = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(state.as_ptr() as *mut core::ffi::c_void),
-                        16,
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_k = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(rk.as_ptr() as *mut core::ffi::c_void),
-                        16,
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_out = device
-                    .newBufferWithLength_options(16, MTLResourceOptions::StorageModeShared)?;
-                let cmd_buf = queue.commandBuffer()?;
-                let enc = cmd_buf.computeCommandEncoder()?;
-                enc.setComputePipelineState(&aesenc);
-                unsafe {
-                    enc.setBuffer_offset_atIndex(Some(&buf_s), 0, 0);
-                    enc.setBuffer_offset_atIndex(Some(&buf_k), 0, 1);
-                    enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-                }
-                let grid = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                let threads = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                enc.endEncoding();
-                cmd_buf.commit();
-                if !finalize_command_buffer(&cmd_buf, "metal self-test aesenc") {
-                    return None;
-                }
+                let buf_s = metal_input_buffer(&device, &state[..], 16)?;
+                let buf_k = metal_input_buffer(&device, &rk[..], 16)?;
+                let buf_out = metal_output_buffer(&device, 16)?;
+                metal_dispatch(
+                    &queue,
+                    &aesenc,
+                    &[&buf_s, &buf_k, &buf_out],
+                    1,
+                    1,
+                    "metal self-test aesenc",
+                )?;
                 let mut enc_out = [0u8; 16];
                 unsafe {
                     let ptr = buf_out.contents().as_ptr() as *const u8;
@@ -1120,29 +1022,16 @@ impl MetalState {
                     false
                 } else {
                     // Run AESDEC on enc_out
-                    let buf_s2 = unsafe {
-                        device.newBufferWithBytes_length_options(
-                            NonNull::new_unchecked(enc_out.as_ptr() as *mut core::ffi::c_void),
-                            16,
-                            MTLResourceOptions::CPUCacheModeDefaultCache,
-                        )?
-                    };
-                    let buf_out2 = device
-                        .newBufferWithLength_options(16, MTLResourceOptions::StorageModeShared)?;
-                    let cmd_buf2 = queue.commandBuffer()?;
-                    let dec = cmd_buf2.computeCommandEncoder()?;
-                    dec.setComputePipelineState(&aesdec);
-                    unsafe {
-                        dec.setBuffer_offset_atIndex(Some(&buf_s2), 0, 0);
-                        dec.setBuffer_offset_atIndex(Some(&buf_k), 0, 1);
-                        dec.setBuffer_offset_atIndex(Some(&buf_out2), 0, 2);
-                    }
-                    dec.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                    dec.endEncoding();
-                    cmd_buf2.commit();
-                    if !finalize_command_buffer(&cmd_buf2, "metal self-test aesdec") {
-                        return None;
-                    }
+                    let buf_s2 = metal_input_buffer(&device, &enc_out[..], 16)?;
+                    let buf_out2 = metal_output_buffer(&device, 16)?;
+                    metal_dispatch(
+                        &queue,
+                        &aesdec,
+                        &[&buf_s2, &buf_k, &buf_out2],
+                        1,
+                        1,
+                        "metal self-test aesdec",
+                    )?;
                     let mut dec_out = [0u8; 16];
                     unsafe {
                         let ptr2 = buf_out2.contents().as_ptr() as *const u8;
@@ -1158,8 +1047,6 @@ impl MetalState {
                 );
             }
             let aes_batch_ok = {
-                use core::ptr::NonNull;
-                use objc2_metal::*;
                 let states = [
                     [
                         0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
@@ -1180,48 +1067,18 @@ impl MetalState {
                     .copied()
                     .collect();
                 let run_batch = |pipeline, expected: [[u8; 16]; 2], label: &str| -> Option<bool> {
-                    let buf_states = unsafe {
-                        device.newBufferWithBytes_length_options(
-                            NonNull::new_unchecked(flat_states.as_ptr() as *mut core::ffi::c_void),
-                            flat_states.len(),
-                            MTLResourceOptions::CPUCacheModeDefaultCache,
-                        )?
-                    };
-                    let buf_rk = unsafe {
-                        device.newBufferWithBytes_length_options(
-                            NonNull::new_unchecked(rk.as_ptr() as *mut core::ffi::c_void),
-                            16,
-                            MTLResourceOptions::CPUCacheModeDefaultCache,
-                        )?
-                    };
-                    let buf_out = device.newBufferWithLength_options(
-                        flat_states.len(),
-                        MTLResourceOptions::StorageModeShared,
+                    let buf_states =
+                        metal_input_buffer(&device, &flat_states[..], flat_states.len())?;
+                    let buf_rk = metal_input_buffer(&device, &rk[..], 16)?;
+                    let buf_out = metal_output_buffer(&device, flat_states.len())?;
+                    metal_dispatch(
+                        &queue,
+                        pipeline,
+                        &[&buf_states, &buf_rk, &buf_out],
+                        states.len() as NSUInteger,
+                        1,
+                        label,
                     )?;
-                    let cmd_buf = queue.commandBuffer()?;
-                    let encoder = cmd_buf.computeCommandEncoder()?;
-                    encoder.setComputePipelineState(pipeline);
-                    unsafe {
-                        encoder.setBuffer_offset_atIndex(Some(&buf_states), 0, 0);
-                        encoder.setBuffer_offset_atIndex(Some(&buf_rk), 0, 1);
-                        encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-                    }
-                    let grid = MTLSize {
-                        width: states.len() as NSUInteger,
-                        height: 1,
-                        depth: 1,
-                    };
-                    let threads = MTLSize {
-                        width: 1,
-                        height: 1,
-                        depth: 1,
-                    };
-                    encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                    encoder.endEncoding();
-                    cmd_buf.commit();
-                    if !finalize_command_buffer(&cmd_buf, label) {
-                        return None;
-                    }
                     let ptr = buf_out.contents().as_ptr() as *const u8;
                     let out_slice = unsafe { std::slice::from_raw_parts(ptr, flat_states.len()) };
                     let actual: Vec<[u8; 16]> = out_slice
@@ -1255,7 +1112,6 @@ impl MetalState {
             }
             // AES fused two-round quick check against CPU streaming
             let aes_fused_ok = {
-                use objc2_metal::*;
                 let state = [
                     0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
                     0xdd, 0xee, 0xff,
@@ -1275,7 +1131,6 @@ impl MetalState {
                     let r1 = crate::aes::aesdec_impl(cpu_enc2, rk1);
                     crate::aes::aesdec_impl(r1, rk2)
                 };
-                use core::ptr::NonNull;
                 let flat_states: [u8; 16] = state;
                 let rks: [u8; 32] = {
                     let mut buf = [0u8; 32];
@@ -1283,56 +1138,20 @@ impl MetalState {
                     buf[16..].copy_from_slice(&rk2);
                     buf
                 };
-                let buf_states = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(flat_states.as_ptr() as *mut core::ffi::c_void),
-                        16,
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_rks = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(rks.as_ptr() as *mut core::ffi::c_void),
-                        32,
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
+                let buf_states = metal_input_buffer(&device, &flat_states[..], 16)?;
+                let buf_rks = metal_input_buffer(&device, &rks[..], 32)?;
                 let n_buf = [2u32; 1];
-                let buf_n = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(n_buf.as_ptr() as *mut core::ffi::c_void),
-                        core::mem::size_of::<u32>(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_out = device
-                    .newBufferWithLength_options(16, MTLResourceOptions::StorageModeShared)?;
+                let buf_n = metal_input_buffer(&device, &n_buf[..], core::mem::size_of::<u32>())?;
+                let buf_out = metal_output_buffer(&device, 16)?;
                 // ENC 2 rounds
-                let cmd = queue.commandBuffer()?;
-                let enc = cmd.computeCommandEncoder()?;
-                enc.setComputePipelineState(&aesenc_rounds);
-                unsafe {
-                    enc.setBuffer_offset_atIndex(Some(&buf_states), 0, 0);
-                    enc.setBuffer_offset_atIndex(Some(&buf_rks), 0, 1);
-                    enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-                    enc.setBuffer_offset_atIndex(Some(&buf_n), 0, 3);
-                }
-                let grid = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                let threads = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                enc.endEncoding();
-                cmd.commit();
-                if !finalize_command_buffer(&cmd, "metal self-test aesenc rounds") {
-                    return None;
-                }
+                metal_dispatch(
+                    &queue,
+                    &aesenc_rounds,
+                    &[&buf_states, &buf_rks, &buf_out, &buf_n],
+                    1,
+                    1,
+                    "metal self-test aesenc rounds",
+                )?;
                 let mut enc2 = [0u8; 16];
                 unsafe {
                     let ptr = buf_out.contents().as_ptr() as *const u8;
@@ -1345,21 +1164,24 @@ impl MetalState {
                     let cmd2 = queue.commandBuffer()?;
                     let dec = cmd2.computeCommandEncoder()?;
                     dec.setComputePipelineState(&aesdec_rounds);
-                    let buf_states2 = unsafe {
-                        device.newBufferWithBytes_length_options(
-                            NonNull::new_unchecked(enc2.as_ptr() as *mut core::ffi::c_void),
-                            16,
-                            MTLResourceOptions::CPUCacheModeDefaultCache,
-                        )?
-                    };
-                    let buf_out2 = device
-                        .newBufferWithLength_options(16, MTLResourceOptions::StorageModeShared)?;
+                    let buf_states2 = metal_input_buffer(&device, &enc2[..], 16)?;
+                    let buf_out2 = metal_output_buffer(&device, 16)?;
                     unsafe {
                         dec.setBuffer_offset_atIndex(Some(&buf_states2), 0, 0);
                         dec.setBuffer_offset_atIndex(Some(&buf_rks), 0, 1);
                         dec.setBuffer_offset_atIndex(Some(&buf_out2), 0, 2);
                         dec.setBuffer_offset_atIndex(Some(&buf_n), 0, 3);
                     }
+                    let grid = MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    };
+                    let threads = MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    };
                     dec.dispatchThreads_threadsPerThreadgroup(grid, threads);
                     dec.endEncoding();
                     cmd2.commit();
@@ -1381,8 +1203,6 @@ impl MetalState {
                 );
             }
             let keccak_ok = {
-                use core::ptr::NonNull;
-                use objc2_metal::*;
                 let mut init = [0u64; 25];
                 for (i, value) in init.iter_mut().enumerate() {
                     *value = (i as u64) * 0x0101_0101_0101_0101u64;
@@ -1390,35 +1210,19 @@ impl MetalState {
                 let mut cpu_state = init;
                 crate::sha3::keccak_f1600_impl(&mut cpu_state);
                 let mut gpu_state = init;
-                let buf_state = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(gpu_state.as_mut_ptr() as *mut core::ffi::c_void),
-                        gpu_state.len() * core::mem::size_of::<u64>(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let cmd = queue.commandBuffer()?;
-                let enc = cmd.computeCommandEncoder()?;
-                enc.setComputePipelineState(&keccak);
-                unsafe {
-                    enc.setBuffer_offset_atIndex(Some(&buf_state), 0, 0);
-                }
-                let grid = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                let threads = MTLSize {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                };
-                enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                enc.endEncoding();
-                cmd.commit();
-                if !finalize_command_buffer(&cmd, "metal self-test keccak") {
-                    return None;
-                }
+                let buf_state = metal_input_buffer(
+                    &device,
+                    &gpu_state[..],
+                    gpu_state.len() * core::mem::size_of::<u64>(),
+                )?;
+                metal_dispatch(
+                    &queue,
+                    &keccak,
+                    &[&buf_state],
+                    1,
+                    1,
+                    "metal self-test keccak",
+                )?;
                 let ptr = buf_state.contents().as_ptr() as *const u64;
                 let out = unsafe { std::slice::from_raw_parts(ptr, 25) };
                 gpu_state.copy_from_slice(out);
@@ -1442,8 +1246,6 @@ impl MetalState {
                 );
             }
             let sha_pairs_ok = {
-                use core::ptr::NonNull;
-                use objc2_metal::*;
                 fn cpu_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
                     let mut state = [
                         0x6a09e667u32,
@@ -1492,40 +1294,17 @@ impl MetalState {
                     let has_leftover = (count & 1) != 0;
                     let mut next = vec![0u8; (pairs + if has_leftover { 1 } else { 0 }) * 32];
                     if pairs > 0 {
-                        let in_buf = unsafe {
-                            device.newBufferWithBytes_length_options(
-                                NonNull::new_unchecked(cur.as_ptr() as *mut core::ffi::c_void),
-                                cur.len(),
-                                MTLResourceOptions::CPUCacheModeDefaultCache,
-                            )?
-                        };
-                        let out_buf = device.newBufferWithLength_options(
-                            pairs * 8 * core::mem::size_of::<u32>(),
-                            MTLResourceOptions::StorageModeShared,
+                        let in_buf = metal_input_buffer(&device, &cur[..], cur.len())?;
+                        let out_buf =
+                            metal_output_buffer(&device, pairs * 8 * core::mem::size_of::<u32>())?;
+                        metal_dispatch(
+                            &queue,
+                            &sha256_pairs,
+                            &[&in_buf, &out_buf],
+                            pairs as NSUInteger,
+                            1,
+                            "metal self-test sha256 pairs",
                         )?;
-                        let cmd = queue.commandBuffer()?;
-                        let enc = cmd.computeCommandEncoder()?;
-                        enc.setComputePipelineState(&sha256_pairs);
-                        unsafe {
-                            enc.setBuffer_offset_atIndex(Some(&in_buf), 0, 0);
-                            enc.setBuffer_offset_atIndex(Some(&out_buf), 0, 1);
-                        }
-                        let grid = MTLSize {
-                            width: pairs as NSUInteger,
-                            height: 1,
-                            depth: 1,
-                        };
-                        let threads = MTLSize {
-                            width: 1,
-                            height: 1,
-                            depth: 1,
-                        };
-                        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                        enc.endEncoding();
-                        cmd.commit();
-                        if !finalize_command_buffer(&cmd, "metal self-test sha256 pairs") {
-                            return None;
-                        }
                         let words = unsafe {
                             std::slice::from_raw_parts(
                                 out_buf.contents().as_ptr() as *const u32,
@@ -1557,7 +1336,6 @@ impl MetalState {
                 );
             }
             let ed25519_ok = {
-                use core::ptr::NonNull;
                 use ed25519_dalek::{Signer, SigningKey};
                 let key = SigningKey::from_bytes(&[7u8; 32]);
                 let pk = key.verifying_key();
@@ -1574,65 +1352,21 @@ impl MetalState {
                 let flat_pks: Vec<u8> = pks.iter().flat_map(|p| p.iter()).copied().collect();
                 let flat_hrams: Vec<u8> = hrams.iter().flat_map(|h| h.iter()).copied().collect();
                 let count_buf = [sigs.len() as u32];
-                let buf_sigs = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(flat_sigs.as_ptr() as *mut core::ffi::c_void),
-                        flat_sigs.len(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_pks = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(flat_pks.as_ptr() as *mut core::ffi::c_void),
-                        flat_pks.len(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_hrams = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(flat_hrams.as_ptr() as *mut core::ffi::c_void),
-                        flat_hrams.len(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_count = unsafe {
-                    device.newBufferWithBytes_length_options(
-                        NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
-                        core::mem::size_of::<u32>(),
-                        MTLResourceOptions::CPUCacheModeDefaultCache,
-                    )?
-                };
-                let buf_out = device.newBufferWithLength_options(
-                    sigs.len(),
-                    MTLResourceOptions::StorageModeShared,
-                )?;
+                let buf_sigs = metal_input_buffer(&device, &flat_sigs[..], flat_sigs.len())?;
+                let buf_pks = metal_input_buffer(&device, &flat_pks[..], flat_pks.len())?;
+                let buf_hrams = metal_input_buffer(&device, &flat_hrams[..], flat_hrams.len())?;
+                let buf_count =
+                    metal_input_buffer(&device, &count_buf[..], core::mem::size_of::<u32>())?;
+                let buf_out = metal_output_buffer(&device, sigs.len())?;
                 if let Some(ref pipeline) = ed25519_signature {
-                    let cmd = queue.commandBuffer()?;
-                    let enc = cmd.computeCommandEncoder()?;
-                    enc.setComputePipelineState(pipeline);
-                    unsafe {
-                        enc.setBuffer_offset_atIndex(Some(&buf_sigs), 0, 0);
-                        enc.setBuffer_offset_atIndex(Some(&buf_pks), 0, 1);
-                        enc.setBuffer_offset_atIndex(Some(&buf_hrams), 0, 2);
-                        enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 3);
-                        enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 4);
-                    }
-                    let grid = MTLSize {
-                        width: sigs.len() as NSUInteger,
-                        height: 1,
-                        depth: 1,
-                    };
-                    let threads = MTLSize {
-                        width: pipeline.threadExecutionWidth(),
-                        height: 1,
-                        depth: 1,
-                    };
-                    enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                    enc.endEncoding();
-                    cmd.commit();
-                    if !finalize_command_buffer(&cmd, "metal self-test ed25519 batch") {
-                        return None;
-                    }
+                    metal_dispatch(
+                        &queue,
+                        pipeline,
+                        &[&buf_sigs, &buf_pks, &buf_hrams, &buf_count, &buf_out],
+                        sigs.len() as NSUInteger,
+                        pipeline.threadExecutionWidth(),
+                        "metal self-test ed25519 batch",
+                    )?;
                     let out = unsafe {
                         std::slice::from_raw_parts(
                             buf_out.contents().as_ptr() as *const u8,
@@ -1794,9 +1528,7 @@ fn metal_vadd64(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         with_metal_state(|ctx| {
             let mut in_a = [0u64; 2];
@@ -1805,48 +1537,26 @@ fn metal_vadd64(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
             in_a[1] = (a[2] as u64) | ((a[3] as u64) << 32);
             in_b[0] = (b[0] as u64) | ((b[1] as u64) << 32);
             in_b[1] = (b[2] as u64) | ((b[3] as u64) << 32);
-            let buf_a = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(in_a.as_ptr() as *mut core::ffi::c_void),
-                    in_a.len() * core::mem::size_of::<u64>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_b = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(in_b.as_ptr() as *mut core::ffi::c_void),
-                    in_b.len() * core::mem::size_of::<u64>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_out = ctx.device.newBufferWithLength_options(
+            let buf_a = metal_input_buffer(
+                &ctx.device,
+                &in_a[..],
                 in_a.len() * core::mem::size_of::<u64>(),
-                MTLResourceOptions::StorageModeShared,
             )?;
-            let cmd_buf = ctx.queue.commandBuffer()?;
-            let encoder = cmd_buf.computeCommandEncoder()?;
-            encoder.setComputePipelineState(&ctx.vadd64);
-            unsafe {
-                encoder.setBuffer_offset_atIndex(Some(&buf_a), 0, 0);
-                encoder.setBuffer_offset_atIndex(Some(&buf_b), 0, 1);
-                encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-            }
-            let grid = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            encoder.endEncoding();
-            cmd_buf.commit();
-            if !finalize_command_buffer(&cmd_buf, "metal vadd64") {
-                return None;
-            }
+            let buf_b = metal_input_buffer(
+                &ctx.device,
+                &in_b[..],
+                in_b.len() * core::mem::size_of::<u64>(),
+            )?;
+            let buf_out =
+                metal_output_buffer(&ctx.device, in_a.len() * core::mem::size_of::<u64>())?;
+            metal_dispatch(
+                &ctx.queue,
+                &ctx.vadd64,
+                &[&buf_a, &buf_b, &buf_out],
+                1,
+                1,
+                "metal vadd64",
+            )?;
             let ptr = buf_out.contents().as_ptr() as *const u64;
             let out_slice = unsafe { std::slice::from_raw_parts(ptr, 2) };
             let r0 = out_slice[0];
@@ -1871,53 +1581,22 @@ fn metal_vadd32(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         with_metal_state(|ctx| {
-            let buf_a = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(a.as_ptr() as *mut core::ffi::c_void),
-                    a.len() * core::mem::size_of::<u32>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_b = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(b.as_ptr() as *mut core::ffi::c_void),
-                    b.len() * core::mem::size_of::<u32>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_out = ctx.device.newBufferWithLength_options(
-                a.len() * core::mem::size_of::<u32>(),
-                MTLResourceOptions::StorageModeShared,
+            let buf_a =
+                metal_input_buffer(&ctx.device, &a[..], a.len() * core::mem::size_of::<u32>())?;
+            let buf_b =
+                metal_input_buffer(&ctx.device, &b[..], b.len() * core::mem::size_of::<u32>())?;
+            let buf_out = metal_output_buffer(&ctx.device, a.len() * core::mem::size_of::<u32>())?;
+            metal_dispatch(
+                &ctx.queue,
+                &ctx.vadd32,
+                &[&buf_a, &buf_b, &buf_out],
+                1,
+                1,
+                "metal vadd32",
             )?;
-            let cmd_buf = ctx.queue.commandBuffer()?;
-            let encoder = cmd_buf.computeCommandEncoder()?;
-            encoder.setComputePipelineState(&ctx.vadd32);
-            unsafe {
-                encoder.setBuffer_offset_atIndex(Some(&buf_a), 0, 0);
-                encoder.setBuffer_offset_atIndex(Some(&buf_b), 0, 1);
-                encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-            }
-            let grid = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            encoder.endEncoding();
-            cmd_buf.commit();
-            if !finalize_command_buffer(&cmd_buf, "metal vadd32") {
-                return None;
-            }
             let ptr = buf_out.contents().as_ptr() as *const u32;
             let out_slice = unsafe { std::slice::from_raw_parts(ptr, 4) };
             Some([out_slice[0], out_slice[1], out_slice[2], out_slice[3]])
@@ -1939,54 +1618,23 @@ fn metal_vbit_cached(
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         with_metal_state(|ctx| {
             let pipeline = select(ctx);
-            let buf_a = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(a.as_ptr() as *mut core::ffi::c_void),
-                    a.len() * core::mem::size_of::<u32>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_b = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(b.as_ptr() as *mut core::ffi::c_void),
-                    b.len() * core::mem::size_of::<u32>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_out = ctx.device.newBufferWithLength_options(
-                a.len() * core::mem::size_of::<u32>(),
-                MTLResourceOptions::StorageModeShared,
+            let buf_a =
+                metal_input_buffer(&ctx.device, &a[..], a.len() * core::mem::size_of::<u32>())?;
+            let buf_b =
+                metal_input_buffer(&ctx.device, &b[..], b.len() * core::mem::size_of::<u32>())?;
+            let buf_out = metal_output_buffer(&ctx.device, a.len() * core::mem::size_of::<u32>())?;
+            metal_dispatch(
+                &ctx.queue,
+                pipeline,
+                &[&buf_a, &buf_b, &buf_out],
+                1,
+                1,
+                "metal vector bit pipeline",
             )?;
-            let cmd_buf = ctx.queue.commandBuffer()?;
-            let encoder = cmd_buf.computeCommandEncoder()?;
-            encoder.setComputePipelineState(pipeline);
-            unsafe {
-                encoder.setBuffer_offset_atIndex(Some(&buf_a), 0, 0);
-                encoder.setBuffer_offset_atIndex(Some(&buf_b), 0, 1);
-                encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-            }
-            let grid = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            encoder.endEncoding();
-            cmd_buf.commit();
-            if !finalize_command_buffer(&cmd_buf, "metal vector bit pipeline") {
-                return None;
-            }
             let ptr = buf_out.contents().as_ptr() as *const u32;
             let out_slice = unsafe { std::slice::from_raw_parts(ptr, 4) };
             Some([out_slice[0], out_slice[1], out_slice[2], out_slice[3]])
@@ -2032,58 +1680,29 @@ fn metal_sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
     if !metal_runtime_allowed() {
         return false;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         with_metal_state(|ctx| {
-            let buf_state = unsafe {
-                match ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(state.as_ptr() as *mut core::ffi::c_void),
-                    state.len() * core::mem::size_of::<u32>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                ) {
-                    Some(buf) => buf,
-                    None => return false,
-                }
+            let Some(buf_state) = metal_input_buffer(
+                &ctx.device,
+                &state[..],
+                state.len() * core::mem::size_of::<u32>(),
+            ) else {
+                return false;
             };
-            let buf_block = unsafe {
-                match ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(block.as_ptr() as *mut core::ffi::c_void),
-                    block.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                ) {
-                    Some(buf) => buf,
-                    None => return false,
-                }
+            let Some(buf_block) = metal_input_buffer(&ctx.device, &block[..], block.len()) else {
+                return false;
             };
-            let cmd_buf = match ctx.queue.commandBuffer() {
-                Some(buf) => buf,
-                None => return false,
-            };
-            let encoder = match cmd_buf.computeCommandEncoder() {
-                Some(enc) => enc,
-                None => return false,
-            };
-            encoder.setComputePipelineState(&ctx.sha256);
-            unsafe {
-                encoder.setBuffer_offset_atIndex(Some(&buf_state), 0, 0);
-                encoder.setBuffer_offset_atIndex(Some(&buf_block), 0, 1);
-            }
-            let grid = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            encoder.endEncoding();
-            cmd_buf.commit();
-            if !finalize_command_buffer(&cmd_buf, "metal sha256 compress") {
+            if metal_dispatch(
+                &ctx.queue,
+                &ctx.sha256,
+                &[&buf_state, &buf_block],
+                1,
+                1,
+                "metal sha256 compress",
+            )
+            .is_none()
+            {
                 return false;
             }
             let ptr = buf_state.contents().as_ptr() as *const u32;
@@ -2103,9 +1722,7 @@ pub(crate) fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> 
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         with_metal_state_try(|ctx| {
             let n = blocks.len();
@@ -2113,40 +1730,16 @@ pub(crate) fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> 
                 return Some(Vec::new());
             }
             let flat: Vec<u8> = blocks.iter().flat_map(|b| b.iter()).copied().collect();
-            let buf_blocks = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(flat.as_ptr() as *mut core::ffi::c_void),
-                    flat.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_out = ctx.device.newBufferWithLength_options(
-                n * 8 * core::mem::size_of::<u32>(),
-                MTLResourceOptions::StorageModeShared,
+            let buf_blocks = metal_input_buffer(&ctx.device, &flat[..], flat.len())?;
+            let buf_out = metal_output_buffer(&ctx.device, n * 8 * core::mem::size_of::<u32>())?;
+            metal_dispatch(
+                &ctx.queue,
+                &ctx.sha256_leaves,
+                &[&buf_blocks, &buf_out],
+                n as NSUInteger,
+                1,
+                "metal sha256 leaves",
             )?;
-            let cmd_buf = ctx.queue.commandBuffer()?;
-            let encoder = cmd_buf.computeCommandEncoder()?;
-            encoder.setComputePipelineState(&ctx.sha256_leaves);
-            unsafe {
-                encoder.setBuffer_offset_atIndex(Some(&buf_blocks), 0, 0);
-                encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 1);
-            }
-            let grid = MTLSize {
-                width: n as NSUInteger,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            encoder.endEncoding();
-            cmd_buf.commit();
-            if !finalize_command_buffer(&cmd_buf, "metal sha256 leaves") {
-                return None;
-            }
             let ptr = buf_out.contents().as_ptr() as *const u32;
             let words = unsafe { std::slice::from_raw_parts(ptr, n * 8) };
             let mut out = Vec::with_capacity(n);
@@ -2174,9 +1767,7 @@ pub(crate) fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     if digests.is_empty() {
         return None;
     }
@@ -2193,40 +1784,17 @@ pub(crate) fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]
                 let mut next = vec![0u8; (pairs + if has_leftover { 1 } else { 0 }) * 32];
                 if pairs > 0 {
                     let pair_len = pairs * 64;
-                    let in_buf = unsafe {
-                        ctx.device.newBufferWithBytes_length_options(
-                            NonNull::new_unchecked(cur.as_ptr() as *mut core::ffi::c_void),
-                            pair_len,
-                            MTLResourceOptions::CPUCacheModeDefaultCache,
-                        )?
-                    };
-                    let out_buf = ctx.device.newBufferWithLength_options(
-                        pairs * 8 * core::mem::size_of::<u32>(),
-                        MTLResourceOptions::StorageModeShared,
+                    let in_buf = metal_input_buffer(&ctx.device, &cur[..], pair_len)?;
+                    let out_buf =
+                        metal_output_buffer(&ctx.device, pairs * 8 * core::mem::size_of::<u32>())?;
+                    metal_dispatch(
+                        &ctx.queue,
+                        &ctx.sha256_pairs,
+                        &[&in_buf, &out_buf],
+                        pairs as NSUInteger,
+                        1,
+                        "metal sha256 pairs reduce",
                     )?;
-                    let cmd_buf = ctx.queue.commandBuffer()?;
-                    let enc = cmd_buf.computeCommandEncoder()?;
-                    enc.setComputePipelineState(&ctx.sha256_pairs);
-                    unsafe {
-                        enc.setBuffer_offset_atIndex(Some(&in_buf), 0, 0);
-                        enc.setBuffer_offset_atIndex(Some(&out_buf), 0, 1);
-                    }
-                    let grid = MTLSize {
-                        width: pairs as NSUInteger,
-                        height: 1,
-                        depth: 1,
-                    };
-                    let threads = MTLSize {
-                        width: 1,
-                        height: 1,
-                        depth: 1,
-                    };
-                    enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-                    enc.endEncoding();
-                    cmd_buf.commit();
-                    if !finalize_command_buffer(&cmd_buf, "metal sha256 pairs reduce") {
-                        return None;
-                    }
                     let words = unsafe {
                         std::slice::from_raw_parts(
                             out_buf.contents().as_ptr() as *const u32,
@@ -2293,9 +1861,7 @@ pub(crate) fn metal_ed25519_verify_batch(
     if valid_count == 0 {
         return Some(vec![false; signatures.len()]);
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         with_metal_state_try(|ctx| {
             let n = valid_count;
@@ -2316,63 +1882,20 @@ pub(crate) fn metal_ed25519_verify_batch(
             }
             let count_buf = [n as u32];
             let pipeline = ctx.ed25519_signature.as_ref()?;
-            let buf_sigs = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(flat_sigs.as_ptr() as *mut core::ffi::c_void),
-                    flat_sigs.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_pks = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(flat_pks.as_ptr() as *mut core::ffi::c_void),
-                    flat_pks.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_hrams = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(flat_hrams.as_ptr() as *mut core::ffi::c_void),
-                    flat_hrams.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_count = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
-                    core::mem::size_of::<u32>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )?
-            };
-            let buf_out = ctx
-                .device
-                .newBufferWithLength_options(n, MTLResourceOptions::StorageModeShared)?;
-            let cmd = ctx.queue.commandBuffer()?;
-            let enc = cmd.computeCommandEncoder()?;
-            enc.setComputePipelineState(pipeline);
-            unsafe {
-                enc.setBuffer_offset_atIndex(Some(&buf_sigs), 0, 0);
-                enc.setBuffer_offset_atIndex(Some(&buf_pks), 0, 1);
-                enc.setBuffer_offset_atIndex(Some(&buf_hrams), 0, 2);
-                enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 3);
-                enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 4);
-            }
-            let grid = MTLSize {
-                width: n as NSUInteger,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: pipeline.threadExecutionWidth().max(1),
-                height: 1,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            enc.endEncoding();
-            cmd.commit();
-            if !finalize_command_buffer(&cmd, "metal ed25519 batch verify") {
-                return None;
-            }
+            let buf_sigs = metal_input_buffer(&ctx.device, &flat_sigs[..], flat_sigs.len())?;
+            let buf_pks = metal_input_buffer(&ctx.device, &flat_pks[..], flat_pks.len())?;
+            let buf_hrams = metal_input_buffer(&ctx.device, &flat_hrams[..], flat_hrams.len())?;
+            let buf_count =
+                metal_input_buffer(&ctx.device, &count_buf[..], core::mem::size_of::<u32>())?;
+            let buf_out = metal_output_buffer(&ctx.device, n)?;
+            metal_dispatch(
+                &ctx.queue,
+                pipeline,
+                &[&buf_sigs, &buf_pks, &buf_hrams, &buf_count, &buf_out],
+                n as NSUInteger,
+                pipeline.threadExecutionWidth().max(1),
+                "metal ed25519 batch verify",
+            )?;
             let out =
                 unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
             let mut merged = vec![false; signatures.len()];
@@ -2399,10 +1922,8 @@ fn metal_ed25519_run_kernel_for_tests(
     if signatures.is_empty() {
         return Some(Vec::new());
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
     use objc2_foundation::NSString;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
@@ -2419,62 +1940,19 @@ fn metal_ed25519_run_kernel_for_tests(
         let flat_pks: Vec<u8> = public_keys.iter().flat_map(|p| p.iter()).copied().collect();
         let flat_hrams: Vec<u8> = hrams.iter().flat_map(|h| h.iter()).copied().collect();
         let count_buf = [n as u32];
-        let buf_sigs = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_sigs.as_ptr() as *mut core::ffi::c_void),
-                flat_sigs.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_pks = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_pks.as_ptr() as *mut core::ffi::c_void),
-                flat_pks.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_hrams = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_hrams.as_ptr() as *mut core::ffi::c_void),
-                flat_hrams.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_count = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
-                core::mem::size_of::<u32>(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_out =
-            device.newBufferWithLength_options(n, MTLResourceOptions::StorageModeShared)?;
-        let cmd = queue.commandBuffer()?;
-        let enc = cmd.computeCommandEncoder()?;
-        enc.setComputePipelineState(&pipeline);
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(&buf_sigs), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(&buf_pks), 0, 1);
-            enc.setBuffer_offset_atIndex(Some(&buf_hrams), 0, 2);
-            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 3);
-            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 4);
-        }
-        let grid = MTLSize {
-            width: n as NSUInteger,
-            height: 1,
-            depth: 1,
-        };
-        let threads = MTLSize {
-            width: pipeline.threadExecutionWidth().max(1),
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-        enc.endEncoding();
-        cmd.commit();
-        if !finalize_command_buffer(&cmd, "metal ed25519 batch verify direct") {
-            return None;
-        }
+        let buf_sigs = metal_input_buffer(&device, &flat_sigs[..], flat_sigs.len())?;
+        let buf_pks = metal_input_buffer(&device, &flat_pks[..], flat_pks.len())?;
+        let buf_hrams = metal_input_buffer(&device, &flat_hrams[..], flat_hrams.len())?;
+        let buf_count = metal_input_buffer(&device, &count_buf[..], core::mem::size_of::<u32>())?;
+        let buf_out = metal_output_buffer(&device, n)?;
+        metal_dispatch(
+            &queue,
+            &pipeline,
+            &[&buf_sigs, &buf_pks, &buf_hrams, &buf_count, &buf_out],
+            n as NSUInteger,
+            pipeline.threadExecutionWidth().max(1),
+            "metal ed25519 batch verify direct",
+        )?;
         let out =
             unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
         Some(out.to_vec())
@@ -2507,10 +1985,8 @@ fn metal_ed25519_check_bytes_for_tests(
     if signatures.is_empty() {
         return Some(Vec::new());
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
     use objc2_foundation::NSString;
-    use objc2_metal::*;
     if signatures.len() != public_keys.len() || signatures.len() != hrams.len() {
         return None;
     }
@@ -2542,62 +2018,19 @@ fn metal_ed25519_check_bytes_for_tests(
             .copied()
             .collect();
         let count_buf = [n as u32];
-        let buf_sigs = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_sigs.as_ptr() as *mut core::ffi::c_void),
-                flat_sigs.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_pks = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_pks.as_ptr() as *mut core::ffi::c_void),
-                flat_pks.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_hrams = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_hrams.as_ptr() as *mut core::ffi::c_void),
-                flat_hrams.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_count = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
-                core::mem::size_of::<u32>(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_out =
-            device.newBufferWithLength_options(n * 32, MTLResourceOptions::StorageModeShared)?;
-        let cmd = queue.commandBuffer()?;
-        let enc = cmd.computeCommandEncoder()?;
-        enc.setComputePipelineState(&pipeline);
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(&buf_sigs), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(&buf_pks), 0, 1);
-            enc.setBuffer_offset_atIndex(Some(&buf_hrams), 0, 2);
-            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 3);
-            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 4);
-        }
-        let grid = MTLSize {
-            width: n as NSUInteger,
-            height: 1,
-            depth: 1,
-        };
-        let threads = MTLSize {
-            width: pipeline.threadExecutionWidth().max(1),
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-        enc.endEncoding();
-        cmd.commit();
-        if !finalize_command_buffer(&cmd, "metal ed25519 check bytes direct") {
-            return None;
-        }
+        let buf_sigs = metal_input_buffer(&device, &flat_sigs[..], flat_sigs.len())?;
+        let buf_pks = metal_input_buffer(&device, &flat_pks[..], flat_pks.len())?;
+        let buf_hrams = metal_input_buffer(&device, &flat_hrams[..], flat_hrams.len())?;
+        let buf_count = metal_input_buffer(&device, &count_buf[..], core::mem::size_of::<u32>())?;
+        let buf_out = metal_output_buffer(&device, n * 32)?;
+        metal_dispatch(
+            &queue,
+            &pipeline,
+            &[&buf_sigs, &buf_pks, &buf_hrams, &buf_count, &buf_out],
+            n as NSUInteger,
+            pipeline.threadExecutionWidth().max(1),
+            "metal ed25519 check bytes direct",
+        )?;
         let out =
             unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32) };
         Some(
@@ -2616,10 +2049,8 @@ fn metal_ed25519_field_roundtrip_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[u
     if inputs.is_empty() {
         return Some(Vec::new());
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
     use objc2_foundation::NSString;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
@@ -2638,46 +2069,17 @@ fn metal_ed25519_field_roundtrip_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[u
             .copied()
             .collect();
         let count_buf = [n as u32];
-        let buf_inputs = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_inputs.as_ptr() as *mut core::ffi::c_void),
-                flat_inputs.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_count = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
-                core::mem::size_of::<u32>(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_out =
-            device.newBufferWithLength_options(n * 32, MTLResourceOptions::StorageModeShared)?;
-        let cmd = queue.commandBuffer()?;
-        let enc = cmd.computeCommandEncoder()?;
-        enc.setComputePipelineState(&pipeline);
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(&buf_inputs), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 1);
-            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-        }
-        let grid = MTLSize {
-            width: n as NSUInteger,
-            height: 1,
-            depth: 1,
-        };
-        let threads = MTLSize {
-            width: pipeline.threadExecutionWidth().max(1),
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-        enc.endEncoding();
-        cmd.commit();
-        if !finalize_command_buffer(&cmd, "metal ed25519 field roundtrip direct") {
-            return None;
-        }
+        let buf_inputs = metal_input_buffer(&device, &flat_inputs[..], flat_inputs.len())?;
+        let buf_count = metal_input_buffer(&device, &count_buf[..], core::mem::size_of::<u32>())?;
+        let buf_out = metal_output_buffer(&device, n * 32)?;
+        metal_dispatch(
+            &queue,
+            &pipeline,
+            &[&buf_inputs, &buf_count, &buf_out],
+            n as NSUInteger,
+            pipeline.threadExecutionWidth().max(1),
+            "metal ed25519 field roundtrip direct",
+        )?;
         let out =
             unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32) };
         Some(
@@ -2698,10 +2100,8 @@ fn metal_ed25519_point_decompress_for_tests(
     if inputs.is_empty() {
         return Some((Vec::new(), Vec::new()));
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
     use objc2_foundation::NSString;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
@@ -2720,49 +2120,18 @@ fn metal_ed25519_point_decompress_for_tests(
             .copied()
             .collect();
         let count_buf = [n as u32];
-        let buf_inputs = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_inputs.as_ptr() as *mut core::ffi::c_void),
-                flat_inputs.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_count = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
-                core::mem::size_of::<u32>(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_status =
-            device.newBufferWithLength_options(n, MTLResourceOptions::StorageModeShared)?;
-        let buf_out =
-            device.newBufferWithLength_options(n * 32, MTLResourceOptions::StorageModeShared)?;
-        let cmd = queue.commandBuffer()?;
-        let enc = cmd.computeCommandEncoder()?;
-        enc.setComputePipelineState(&pipeline);
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(&buf_inputs), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 1);
-            enc.setBuffer_offset_atIndex(Some(&buf_status), 0, 2);
-            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 3);
-        }
-        let grid = MTLSize {
-            width: n as NSUInteger,
-            height: 1,
-            depth: 1,
-        };
-        let threads = MTLSize {
-            width: pipeline.threadExecutionWidth().max(1),
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-        enc.endEncoding();
-        cmd.commit();
-        if !finalize_command_buffer(&cmd, "metal ed25519 point decompress direct") {
-            return None;
-        }
+        let buf_inputs = metal_input_buffer(&device, &flat_inputs[..], flat_inputs.len())?;
+        let buf_count = metal_input_buffer(&device, &count_buf[..], core::mem::size_of::<u32>())?;
+        let buf_status = metal_output_buffer(&device, n)?;
+        let buf_out = metal_output_buffer(&device, n * 32)?;
+        metal_dispatch(
+            &queue,
+            &pipeline,
+            &[&buf_inputs, &buf_count, &buf_status, &buf_out],
+            n as NSUInteger,
+            pipeline.threadExecutionWidth().max(1),
+            "metal ed25519 point decompress direct",
+        )?;
         let statuses =
             unsafe { std::slice::from_raw_parts(buf_status.contents().as_ptr() as *const u8, n) };
         let out =
@@ -2784,52 +2153,20 @@ pub fn metal_aesenc_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         with_metal_state_try(|ctx| {
-            let buf_s = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(state.as_ptr() as *mut core::ffi::c_void),
-                    16,
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
-            let buf_k = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(rk.as_ptr() as *mut core::ffi::c_void),
-                    16,
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
-            let buf_out = ctx
-                .device
-                .newBufferWithLength_options(16, MTLResourceOptions::StorageModeShared)?;
-            let cmd_buf = ctx.queue.commandBuffer()?;
-            let enc = cmd_buf.computeCommandEncoder()?;
-            enc.setComputePipelineState(&ctx.aesenc);
-            unsafe {
-                enc.setBuffer_offset_atIndex(Some(&buf_s), 0, 0);
-                enc.setBuffer_offset_atIndex(Some(&buf_k), 0, 1);
-                enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-            }
-            let grid = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            enc.endEncoding();
-            cmd_buf.commit();
-            if !finalize_command_buffer(&cmd_buf, "metal aesenc round") {
-                return None;
-            }
+            let buf_s = metal_input_buffer(&ctx.device, &state[..], 16)?;
+            let buf_k = metal_input_buffer(&ctx.device, &rk[..], 16)?;
+            let buf_out = metal_output_buffer(&ctx.device, 16)?;
+            metal_dispatch(
+                &ctx.queue,
+                &ctx.aesenc,
+                &[&buf_s, &buf_k, &buf_out],
+                1,
+                1,
+                "metal aesenc round",
+            )?;
             let mut out = [0u8; 16];
             unsafe {
                 let ptr = buf_out.contents().as_ptr() as *const u8;
@@ -2850,52 +2187,20 @@ pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         with_metal_state_try(|ctx| {
-            let buf_s = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(state.as_ptr() as *mut core::ffi::c_void),
-                    16,
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
-            let buf_k = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(rk.as_ptr() as *mut core::ffi::c_void),
-                    16,
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
-            let buf_out = ctx
-                .device
-                .newBufferWithLength_options(16, MTLResourceOptions::StorageModeShared)?;
-            let cmd_buf = ctx.queue.commandBuffer()?;
-            let enc = cmd_buf.computeCommandEncoder()?;
-            enc.setComputePipelineState(&ctx.aesdec);
-            unsafe {
-                enc.setBuffer_offset_atIndex(Some(&buf_s), 0, 0);
-                enc.setBuffer_offset_atIndex(Some(&buf_k), 0, 1);
-                enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-            }
-            let grid = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            enc.endEncoding();
-            cmd_buf.commit();
-            if !finalize_command_buffer(&cmd_buf, "metal aesdec round") {
-                return None;
-            }
+            let buf_s = metal_input_buffer(&ctx.device, &state[..], 16)?;
+            let buf_k = metal_input_buffer(&ctx.device, &rk[..], 16)?;
+            let buf_out = metal_output_buffer(&ctx.device, 16)?;
+            metal_dispatch(
+                &ctx.queue,
+                &ctx.aesdec,
+                &[&buf_s, &buf_k, &buf_out],
+                1,
+                1,
+                "metal aesdec round",
+            )?;
             let mut out = [0u8; 16];
             unsafe {
                 let ptr = buf_out.contents().as_ptr() as *const u8;
@@ -2916,40 +2221,12 @@ pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
     if !metal_runtime_allowed() {
         return false;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     autoreleasepool(|_| {
         with_metal_state_try(|ctx| {
-            let buf = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(state.as_ptr() as *mut core::ffi::c_void),
-                    25 * core::mem::size_of::<u64>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
-            let cmd = ctx.queue.commandBuffer()?;
-            let enc = cmd.computeCommandEncoder()?;
-            enc.setComputePipelineState(&ctx.keccak);
-            unsafe {
-                enc.setBuffer_offset_atIndex(Some(&buf), 0, 0);
-            }
-            let grid = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            enc.endEncoding();
-            cmd.commit();
-            if !finalize_command_buffer(&cmd, "metal keccak_f1600") {
-                return None;
-            }
+            let buf =
+                metal_input_buffer(&ctx.device, &state[..], 25 * core::mem::size_of::<u64>())?;
+            metal_dispatch(&ctx.queue, &ctx.keccak, &[&buf], 1, 1, "metal keccak_f1600")?;
             let ptr = buf.contents().as_ptr() as *const u64;
             let out = unsafe { std::slice::from_raw_parts(ptr, 25) };
             state.copy_from_slice(out);
@@ -2969,57 +2246,25 @@ pub fn metal_aesenc_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     if states.is_empty() {
         return Some(Vec::new());
     }
     autoreleasepool(|_| {
         with_metal_state_try(|ctx| {
             let flat: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
-            let buf_states = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(flat.as_ptr() as *mut core::ffi::c_void),
-                    flat.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
-            let buf_rk = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(rk.as_ptr() as *mut core::ffi::c_void),
-                    16,
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
+            let buf_states = metal_input_buffer(&ctx.device, &flat[..], flat.len())?;
+            let buf_rk = metal_input_buffer(&ctx.device, &rk[..], 16)?;
             let mut out = vec![0u8; states.len() * 16];
-            let buf_out = ctx
-                .device
-                .newBufferWithLength_options(out.len(), MTLResourceOptions::StorageModeShared)?;
-            let cmd = ctx.queue.commandBuffer()?;
-            let enc = cmd.computeCommandEncoder()?;
-            enc.setComputePipelineState(&ctx.aesenc_batch);
-            unsafe {
-                enc.setBuffer_offset_atIndex(Some(&buf_states), 0, 0);
-                enc.setBuffer_offset_atIndex(Some(&buf_rk), 0, 1);
-                enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-            }
-            let grid = MTLSize {
-                width: states.len() as NSUInteger,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            enc.endEncoding();
-            cmd.commit();
-            if !finalize_command_buffer(&cmd, "metal aesenc batch") {
-                return None;
-            }
+            let buf_out = metal_output_buffer(&ctx.device, out.len())?;
+            metal_dispatch(
+                &ctx.queue,
+                &ctx.aesenc_batch,
+                &[&buf_states, &buf_rk, &buf_out],
+                states.len() as NSUInteger,
+                1,
+                "metal aesenc batch",
+            )?;
             unsafe {
                 let ptr = buf_out.contents().as_ptr() as *const u8;
                 core::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), out.len());
@@ -3045,57 +2290,25 @@ pub fn metal_aesdec_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     if states.is_empty() {
         return Some(Vec::new());
     }
     autoreleasepool(|_| {
         with_metal_state_try(|ctx| {
             let flat: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
-            let buf_states = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(flat.as_ptr() as *mut core::ffi::c_void),
-                    flat.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
-            let buf_rk = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(rk.as_ptr() as *mut core::ffi::c_void),
-                    16,
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
+            let buf_states = metal_input_buffer(&ctx.device, &flat[..], flat.len())?;
+            let buf_rk = metal_input_buffer(&ctx.device, &rk[..], 16)?;
             let mut out = vec![0u8; states.len() * 16];
-            let buf_out = ctx
-                .device
-                .newBufferWithLength_options(out.len(), MTLResourceOptions::StorageModeShared)?;
-            let cmd = ctx.queue.commandBuffer()?;
-            let enc = cmd.computeCommandEncoder()?;
-            enc.setComputePipelineState(&ctx.aesdec_batch);
-            unsafe {
-                enc.setBuffer_offset_atIndex(Some(&buf_states), 0, 0);
-                enc.setBuffer_offset_atIndex(Some(&buf_rk), 0, 1);
-                enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-            }
-            let grid = MTLSize {
-                width: states.len() as NSUInteger,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            enc.endEncoding();
-            cmd.commit();
-            if !finalize_command_buffer(&cmd, "metal aesdec batch") {
-                return None;
-            }
+            let buf_out = metal_output_buffer(&ctx.device, out.len())?;
+            metal_dispatch(
+                &ctx.queue,
+                &ctx.aesdec_batch,
+                &[&buf_states, &buf_rk, &buf_out],
+                states.len() as NSUInteger,
+                1,
+                "metal aesdec batch",
+            )?;
             unsafe {
                 let ptr = buf_out.contents().as_ptr() as *const u8;
                 core::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), out.len());
@@ -3123,9 +2336,7 @@ pub fn metal_aesenc_rounds_batch(
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     if states.is_empty() {
         return Some(Vec::new());
     }
@@ -3134,58 +2345,21 @@ pub fn metal_aesenc_rounds_batch(
         with_metal_state_try(|ctx| {
             let flat_states: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
             let flat_rks: Vec<u8> = round_keys.iter().flat_map(|b| b.iter()).copied().collect();
-            let buf_states = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(flat_states.as_ptr() as *mut core::ffi::c_void),
-                    flat_states.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
-            let buf_rks = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(flat_rks.as_ptr() as *mut core::ffi::c_void),
-                    flat_rks.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
+            let buf_states = metal_input_buffer(&ctx.device, &flat_states[..], flat_states.len())?;
+            let buf_rks = metal_input_buffer(&ctx.device, &flat_rks[..], flat_rks.len())?;
             let mut n_buf = [0u32; 1];
             n_buf[0] = nrounds;
-            let buf_n = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(n_buf.as_ptr() as *mut core::ffi::c_void),
-                    core::mem::size_of::<u32>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
+            let buf_n = metal_input_buffer(&ctx.device, &n_buf[..], core::mem::size_of::<u32>())?;
             let mut out = vec![0u8; states.len() * 16];
-            let buf_out = ctx
-                .device
-                .newBufferWithLength_options(out.len(), MTLResourceOptions::StorageModeShared)?;
-            let cmd = ctx.queue.commandBuffer()?;
-            let enc = cmd.computeCommandEncoder()?;
-            enc.setComputePipelineState(&ctx.aesenc_rounds);
-            unsafe {
-                enc.setBuffer_offset_atIndex(Some(&buf_states), 0, 0);
-                enc.setBuffer_offset_atIndex(Some(&buf_rks), 0, 1);
-                enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-                enc.setBuffer_offset_atIndex(Some(&buf_n), 0, 3);
-            }
-            let grid = MTLSize {
-                width: states.len() as NSUInteger,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            enc.endEncoding();
-            cmd.commit();
-            if !finalize_command_buffer(&cmd, "metal aesenc rounds batch") {
-                return None;
-            }
+            let buf_out = metal_output_buffer(&ctx.device, out.len())?;
+            metal_dispatch(
+                &ctx.queue,
+                &ctx.aesenc_rounds,
+                &[&buf_states, &buf_rks, &buf_out, &buf_n],
+                states.len() as NSUInteger,
+                1,
+                "metal aesenc rounds batch",
+            )?;
             unsafe {
                 let ptr = buf_out.contents().as_ptr() as *const u8;
                 core::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), out.len());
@@ -3217,9 +2391,7 @@ pub fn metal_aesdec_rounds_batch(
     if !metal_runtime_allowed() {
         return None;
     }
-    use core::ptr::NonNull;
     use objc2::rc::autoreleasepool;
-    use objc2_metal::*;
     if states.is_empty() {
         return Some(Vec::new());
     }
@@ -3228,58 +2400,21 @@ pub fn metal_aesdec_rounds_batch(
         with_metal_state_try(|ctx| {
             let flat_states: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
             let flat_rks: Vec<u8> = round_keys.iter().flat_map(|b| b.iter()).copied().collect();
-            let buf_states = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(flat_states.as_ptr() as *mut core::ffi::c_void),
-                    flat_states.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
-            let buf_rks = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(flat_rks.as_ptr() as *mut core::ffi::c_void),
-                    flat_rks.len(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
+            let buf_states = metal_input_buffer(&ctx.device, &flat_states[..], flat_states.len())?;
+            let buf_rks = metal_input_buffer(&ctx.device, &flat_rks[..], flat_rks.len())?;
             let mut n_buf = [0u32; 1];
             n_buf[0] = nrounds;
-            let buf_n = unsafe {
-                ctx.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(n_buf.as_ptr() as *mut core::ffi::c_void),
-                    core::mem::size_of::<u32>(),
-                    MTLResourceOptions::CPUCacheModeDefaultCache,
-                )
-            }?;
+            let buf_n = metal_input_buffer(&ctx.device, &n_buf[..], core::mem::size_of::<u32>())?;
             let mut out = vec![0u8; states.len() * 16];
-            let buf_out = ctx
-                .device
-                .newBufferWithLength_options(out.len(), MTLResourceOptions::StorageModeShared)?;
-            let cmd = ctx.queue.commandBuffer()?;
-            let enc = cmd.computeCommandEncoder()?;
-            enc.setComputePipelineState(&ctx.aesdec_rounds);
-            unsafe {
-                enc.setBuffer_offset_atIndex(Some(&buf_states), 0, 0);
-                enc.setBuffer_offset_atIndex(Some(&buf_rks), 0, 1);
-                enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-                enc.setBuffer_offset_atIndex(Some(&buf_n), 0, 3);
-            }
-            let grid = MTLSize {
-                width: states.len() as NSUInteger,
-                height: 1,
-                depth: 1,
-            };
-            let threads = MTLSize {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-            enc.endEncoding();
-            cmd.commit();
-            if !finalize_command_buffer(&cmd, "metal aesdec rounds batch") {
-                return None;
-            }
+            let buf_out = metal_output_buffer(&ctx.device, out.len())?;
+            metal_dispatch(
+                &ctx.queue,
+                &ctx.aesdec_rounds,
+                &[&buf_states, &buf_rks, &buf_out, &buf_n],
+                states.len() as NSUInteger,
+                1,
+                "metal aesdec rounds batch",
+            )?;
             unsafe {
                 let ptr = buf_out.contents().as_ptr() as *const u8;
                 core::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), out.len());
@@ -4181,53 +3316,41 @@ pub fn vadd32_auto(a: &[u32], b: &[u32]) -> Vec<u32> {
     let lanes = simd_lanes();
     assert_eq!(a.len(), lanes);
     assert_eq!(b.len(), lanes);
-    let mut out = vec![0u32; lanes];
-    vadd32_slice(a, b, &mut out);
-    out
+    vadd32_dyn(a, b)
 }
 /// Lane-wise 64-bit addition using the host SIMD width.
 pub fn vadd64_auto(a: &[u32], b: &[u32]) -> Vec<u32> {
     let lanes = simd_lanes();
     assert_eq!(a.len(), lanes);
     assert_eq!(b.len(), lanes);
-    let mut out = vec![0u32; lanes];
-    vadd64_slice(a, b, &mut out);
-    out
+    vadd64_dyn(a, b)
 }
 /// Bitwise AND using the host SIMD width.
 pub fn vand_auto(a: &[u32], b: &[u32]) -> Vec<u32> {
     let lanes = simd_lanes();
     assert_eq!(a.len(), lanes);
     assert_eq!(b.len(), lanes);
-    let mut out = vec![0u32; lanes];
-    vand_slice(a, b, &mut out);
-    out
+    vand_dyn(a, b)
 }
 /// Bitwise XOR using the host SIMD width.
 pub fn vxor_auto(a: &[u32], b: &[u32]) -> Vec<u32> {
     let lanes = simd_lanes();
     assert_eq!(a.len(), lanes);
     assert_eq!(b.len(), lanes);
-    let mut out = vec![0u32; lanes];
-    vxor_slice(a, b, &mut out);
-    out
+    vxor_dyn(a, b)
 }
 /// Bitwise OR using the host SIMD width.
 pub fn vor_auto(a: &[u32], b: &[u32]) -> Vec<u32> {
     let lanes = simd_lanes();
     assert_eq!(a.len(), lanes);
     assert_eq!(b.len(), lanes);
-    let mut out = vec![0u32; lanes];
-    vor_slice(a, b, &mut out);
-    out
+    vor_dyn(a, b)
 }
 /// Rotate each 32-bit lane left using the host SIMD width.
 pub fn vrot32_auto(a: &[u32], k: u32) -> Vec<u32> {
     let lanes = simd_lanes();
     assert_eq!(a.len(), lanes);
-    let mut out = vec![0u32; lanes];
-    vrot32_slice(a, k, &mut out);
-    out
+    vrot32_dyn(a, k)
 }
 /// Lane-wise 32-bit addition of two vectors.
 pub fn vadd32(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
@@ -4241,45 +3364,9 @@ pub fn vadd32(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     {
         return [res[0], res[1], res[2], res[3]];
     }
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        match simd_choice() {
-            SimdChoice::Avx512 | SimdChoice::Avx2 => {
-                use std::arch::x86_64::*;
-                let va = _mm256_castsi128_si256(_mm_loadu_si128(a.as_ptr() as *const __m128i));
-                let vb = _mm256_castsi128_si256(_mm_loadu_si128(b.as_ptr() as *const __m128i));
-                let vr = _mm256_add_epi32(va, vb);
-                let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
-            }
-            SimdChoice::Sse2 => {
-                use std::arch::x86_64::*;
-                let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
-                let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
-                let vr = _mm_add_epi32(va, vb);
-                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
-            }
-            _ => {}
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        if matches!(simd_choice(), SimdChoice::Neon) {
-            use std::arch::aarch64::*;
-            let va = vld1q_u32(a.as_ptr());
-            let vb = vld1q_u32(b.as_ptr());
-            let vr = vaddq_u32(va, vb);
-            let mut out = [0u32; 4];
-            vst1q_u32(out.as_mut_ptr(), vr);
-            return out;
-        }
-    }
-    [
-        a[0].wrapping_add(b[0]),
-        a[1].wrapping_add(b[1]),
-        a[2].wrapping_add(b[2]),
-        a[3].wrapping_add(b[3]),
-    ]
+    let mut out = [0; 4];
+    vadd32_slice(&a, &b, &mut out);
+    out
 }
 /// Lane-wise 64-bit addition (two lanes).
 pub fn vadd64(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
@@ -4310,55 +3397,9 @@ pub fn vadd64(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
             ];
         }
     }
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        match simd_choice() {
-            SimdChoice::Avx512 | SimdChoice::Avx2 => {
-                use std::arch::x86_64::*;
-                let va = _mm256_castsi128_si256(_mm_loadu_si128(a.as_ptr() as *const __m128i));
-                let vb = _mm256_castsi128_si256(_mm_loadu_si128(b.as_ptr() as *const __m128i));
-                let vr = _mm256_add_epi64(va, vb);
-                let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
-            }
-            SimdChoice::Sse2 => {
-                use std::arch::x86_64::*;
-                let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
-                let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
-                let vr = _mm_add_epi64(va, vb);
-                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
-            }
-            _ => {}
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        if matches!(simd_choice(), SimdChoice::Neon) {
-            use std::arch::aarch64::*;
-            // Treat pairs of u32 as u64 lanes via reinterpret
-            let va32 = vld1q_u32(a.as_ptr());
-            let vb32 = vld1q_u32(b.as_ptr());
-            let va64 = vreinterpretq_u64_u32(va32);
-            let vb64 = vreinterpretq_u64_u32(vb32);
-            let sum64 = vaddq_u64(va64, vb64);
-            let sum32 = vreinterpretq_u32_u64(sum64);
-            let mut out = [0u32; 4];
-            vst1q_u32(out.as_mut_ptr(), sum32);
-            return out;
-        }
-    }
-    let a0 = (a[0] as u64) | ((a[1] as u64) << 32);
-    let a1 = (a[2] as u64) | ((a[3] as u64) << 32);
-    let b0 = (b[0] as u64) | ((b[1] as u64) << 32);
-    let b1 = (b[2] as u64) | ((b[3] as u64) << 32);
-    let r0 = a0.wrapping_add(b0);
-    let r1 = a1.wrapping_add(b1);
-    [
-        (r0 & 0xffff_ffff) as u32,
-        (r0 >> 32) as u32,
-        (r1 & 0xffff_ffff) as u32,
-        (r1 >> 32) as u32,
-    ]
+    let mut out = [0; 4];
+    vadd64_slice(&a, &b, &mut out);
+    out
 }
 /// Bitwise AND of two vectors.
 pub fn vand(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
@@ -4372,40 +3413,9 @@ pub fn vand(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     {
         return [res[0], res[1], res[2], res[3]];
     }
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        match simd_choice() {
-            SimdChoice::Avx512 | SimdChoice::Avx2 => {
-                use std::arch::x86_64::*;
-                let va = _mm256_castsi128_si256(_mm_loadu_si128(a.as_ptr() as *const __m128i));
-                let vb = _mm256_castsi128_si256(_mm_loadu_si128(b.as_ptr() as *const __m128i));
-                let vr = _mm256_and_si256(va, vb);
-                let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
-            }
-            SimdChoice::Sse2 => {
-                use std::arch::x86_64::*;
-                let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
-                let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
-                let vr = _mm_and_si128(va, vb);
-                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
-            }
-            _ => {}
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        if matches!(simd_choice(), SimdChoice::Neon) {
-            use std::arch::aarch64::*;
-            let va = vld1q_u32(a.as_ptr());
-            let vb = vld1q_u32(b.as_ptr());
-            let vr = vandq_u32(va, vb);
-            let mut out = [0u32; 4];
-            vst1q_u32(out.as_mut_ptr(), vr);
-            return out;
-        }
-    }
-    [a[0] & b[0], a[1] & b[1], a[2] & b[2], a[3] & b[3]]
+    let mut out = [0; 4];
+    vand_slice(&a, &b, &mut out);
+    out
 }
 /// Bitwise XOR of two vectors.
 pub fn vxor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
@@ -4419,40 +3429,9 @@ pub fn vxor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     {
         return [res[0], res[1], res[2], res[3]];
     }
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        match simd_choice() {
-            SimdChoice::Avx512 | SimdChoice::Avx2 => {
-                use std::arch::x86_64::*;
-                let va = _mm256_castsi128_si256(_mm_loadu_si128(a.as_ptr() as *const __m128i));
-                let vb = _mm256_castsi128_si256(_mm_loadu_si128(b.as_ptr() as *const __m128i));
-                let vr = _mm256_xor_si256(va, vb);
-                let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
-            }
-            SimdChoice::Sse2 => {
-                use std::arch::x86_64::*;
-                let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
-                let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
-                let vr = _mm_xor_si128(va, vb);
-                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
-            }
-            _ => {}
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        if matches!(simd_choice(), SimdChoice::Neon) {
-            use std::arch::aarch64::*;
-            let va = vld1q_u32(a.as_ptr());
-            let vb = vld1q_u32(b.as_ptr());
-            let vr = veorq_u32(va, vb);
-            let mut out = [0u32; 4];
-            vst1q_u32(out.as_mut_ptr(), vr);
-            return out;
-        }
-    }
-    [a[0] ^ b[0], a[1] ^ b[1], a[2] ^ b[2], a[3] ^ b[3]]
+    let mut out = [0; 4];
+    vxor_slice(&a, &b, &mut out);
+    out
 }
 /// Bitwise OR of two vectors.
 pub fn vor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
@@ -4466,92 +3445,15 @@ pub fn vor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     {
         return [res[0], res[1], res[2], res[3]];
     }
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        match simd_choice() {
-            SimdChoice::Avx512 | SimdChoice::Avx2 => {
-                use std::arch::x86_64::*;
-                let va = _mm256_castsi128_si256(_mm_loadu_si128(a.as_ptr() as *const __m128i));
-                let vb = _mm256_castsi128_si256(_mm_loadu_si128(b.as_ptr() as *const __m128i));
-                let vr = _mm256_or_si256(va, vb);
-                let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
-            }
-            SimdChoice::Sse2 => {
-                use std::arch::x86_64::*;
-                let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
-                let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
-                let vr = _mm_or_si128(va, vb);
-                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
-            }
-            _ => {}
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        if matches!(simd_choice(), SimdChoice::Neon) {
-            use std::arch::aarch64::*;
-            let va = vld1q_u32(a.as_ptr());
-            let vb = vld1q_u32(b.as_ptr());
-            let vr = vorrq_u32(va, vb);
-            let mut out = [0u32; 4];
-            vst1q_u32(out.as_mut_ptr(), vr);
-            return out;
-        }
-    }
-    [a[0] | b[0], a[1] | b[1], a[2] | b[2], a[3] | b[3]]
+    let mut out = [0; 4];
+    vor_slice(&a, &b, &mut out);
+    out
 }
 /// Rotate each 32-bit lane left by `k` bits.
 pub fn vrot32(a: [u32; 4], k: u32) -> [u32; 4] {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        let k = k & 31;
-        match simd_choice() {
-            SimdChoice::Avx512 | SimdChoice::Avx2 => {
-                use std::arch::x86_64::*;
-                let va = _mm256_castsi128_si256(_mm_loadu_si128(a.as_ptr() as *const __m128i));
-                let sh = _mm_cvtsi32_si128(k as i32);
-                let left = _mm256_sll_epi32(va, sh);
-                let right = _mm256_srl_epi32(va, _mm_cvtsi32_si128((32 - k) as i32));
-                let vr = _mm256_or_si256(left, right);
-                let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
-            }
-            SimdChoice::Sse2 => {
-                use std::arch::x86_64::*;
-                let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
-                let sh = _mm_cvtsi32_si128(k as i32);
-                let left = _mm_sll_epi32(va, sh);
-                let right = _mm_srl_epi32(va, _mm_cvtsi32_si128((32 - k) as i32));
-                let vr = _mm_or_si128(left, right);
-                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
-            }
-            _ => {}
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        let k = k & 31;
-        if matches!(simd_choice(), SimdChoice::Neon) {
-            use std::arch::aarch64::*;
-            let va = vld1q_u32(a.as_ptr());
-            let sh_left = vdupq_n_s32(k as i32);
-            // Negative shift count performs logical right-shift for unsigned lanes
-            let sh_right = vdupq_n_s32(-((32 - k) as i32));
-            let left = vshlq_u32(va, sh_left);
-            let right = vshlq_u32(va, sh_right);
-            let vr = vorrq_u32(left, right);
-            let mut out = [0u32; 4];
-            vst1q_u32(out.as_mut_ptr(), vr);
-            return out;
-        }
-    }
-    [
-        a[0].rotate_left(k),
-        a[1].rotate_left(k),
-        a[2].rotate_left(k),
-        a[3].rotate_left(k),
-    ]
+    let mut out = [0; 4];
+    vrot32_slice(&a, k, &mut out);
+    out
 }
 // Expose a small toggle to force-enable/disable Metal in tests and tooling.
 #[cfg(all(target_os = "macos", feature = "metal"))]

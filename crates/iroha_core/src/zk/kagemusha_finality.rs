@@ -803,6 +803,8 @@ mod tests {
             authenticated_source_seal_projection_sha256: [0x53; 32],
             reviewed_cargo_binary_sha256: [0x54; 32],
             reviewed_rustc_binary_sha256: [0x55; 32],
+            generator_binary_sha256: [0x56; 32],
+            sealed_candidate_build_report_sha256: [0x57; 32],
             network_id,
             asset: asset.clone(),
             asset_scale: 2,

@@ -11,6 +11,7 @@ fn monitor_bin() -> Option<PathBuf> {
 }
 #[test]
 fn status_limit_warning_is_rendered() {
+    let _serial = crate::serial_guard();
     let Some(addr) = spawn_oversized_status_stub() else {
         eprintln!("skipping status_limit_warning_is_rendered: no stub addr");
         return;

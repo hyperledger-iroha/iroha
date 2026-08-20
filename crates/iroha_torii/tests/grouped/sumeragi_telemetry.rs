@@ -14,8 +14,6 @@ mod sse_proof_envelope_hash;
 mod sse_proof_rejected_fields;
 #[path = "../sse_proof_verified_fields.rs"]
 mod sse_proof_verified_fields;
-#[path = "../sumeragi_commit_qc_endpoints.rs"]
-mod sumeragi_commit_qc_endpoints;
 #[path = "../sumeragi_evidence_count_endpoint.rs"]
 mod sumeragi_evidence_count_endpoint;
 #[path = "../sumeragi_evidence_list_endpoint.rs"]
@@ -26,8 +24,6 @@ mod sumeragi_leader_endpoint;
 mod sumeragi_pacemaker_endpoint;
 #[path = "../sumeragi_params_endpoint.rs"]
 mod sumeragi_params_endpoint;
-#[path = "../sumeragi_phases_endpoint.rs"]
-mod sumeragi_phases_endpoint;
 #[path = "../sumeragi_qc_endpoint.rs"]
 mod sumeragi_qc_endpoint;
 #[path = "../sumeragi_status_endpoint.rs"]
@@ -38,8 +34,6 @@ mod sumeragi_status_sse;
 mod sumeragi_status_sse_profile_gate;
 #[path = "../sumeragi_tel_subrouter_smoke.rs"]
 mod sumeragi_tel_subrouter_smoke;
-#[path = "../sumeragi_telemetry_endpoints.rs"]
-mod sumeragi_telemetry_endpoints;
 #[path = "../sumeragi_vrf_penalties_endpoint.rs"]
 mod sumeragi_vrf_penalties_endpoint;
 #[path = "../telemetry_gating.rs"]

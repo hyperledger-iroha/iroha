@@ -13767,8 +13767,8 @@ mod kagemusha_bridge_tests {
     const KAGEMUSHA_V4_GUARD_FD_ENV: &str = "IROHA_KAGEMUSHA_V4_GUARD_FD";
     const CURRENT_TAIRA_NETWORK_ID: &str =
         "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
-    // The runtime alias is exactly `sbd#cbsi`; offline wire objects carry its typed ID.
-    const CBSI_SBD_ASSET_DEFINITION_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+    // The runtime alias is exactly `ds#boi.is`; offline wire objects carry its typed ID.
+    const CBSI_DS_ASSET_DEFINITION_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
     /// Live phase channel inherited from the Kagemusha resource supervisor.
     #[derive(Debug)]
     struct KagemushaV4GuardChannel {
@@ -14113,17 +14113,17 @@ mod kagemusha_bridge_tests {
             profile.validate().expect("valid lightweight profile");
             (profile, frames)
         }
-        let generation = "sbd-streaming-install-v4";
+        let generation = "ds-streaming-install-v4";
         let (step_eq, mut framed_artifacts) = profile_and_frames(generation, Parity::StepEq, 0x31);
         let (step_ep, step_ep_frames) = profile_and_frames(generation, Parity::StepEp, 0x61);
         framed_artifacts.extend(step_ep_frames);
-        let benchmark_evidence = b"SBD streaming installer benchmark evidence".to_vec();
+        let benchmark_evidence = b"DS streaming installer benchmark evidence".to_vec();
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("offline domain"),
-            "sbd".parse().expect("SBD asset name"),
+            "ds".parse().expect("DS asset name"),
         );
         let source_commit = "0123456789abcdef0123456789abcdef01234567";
-        let source_tree_sha256 = digest(b"SBD streaming installer source tree");
+        let source_tree_sha256 = digest(b"DS streaming installer source tree");
         let (reviewed_source_closure, reviewed_source_closure_descriptor_sha256) =
             reviewed_source_closure_v1(source_commit, source_tree_sha256, 0x21);
         let mut manifest = KagemushaRecursiveSpendArtifactManifestV4 {
@@ -14139,14 +14139,18 @@ mod kagemusha_bridge_tests {
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
             authenticated_source_seal_projection_sha256: digest(
-                b"SBD streaming installer source-seal projection",
+                b"DS streaming installer source-seal projection",
             ),
-            reviewed_cargo_binary_sha256: digest(b"SBD streaming installer reviewed Cargo"),
-            reviewed_rustc_binary_sha256: digest(b"SBD streaming installer reviewed rustc"),
+            reviewed_cargo_binary_sha256: digest(b"DS streaming installer reviewed Cargo"),
+            reviewed_rustc_binary_sha256: digest(b"DS streaming installer reviewed rustc"),
+            generator_binary_sha256: digest(b"DS streaming installer generator"),
+            sealed_candidate_build_report_sha256: digest(
+                b"DS streaming installer sealed build report",
+            ),
             network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
                 iroha_data_model::block::BlockHeader,
             >::from_untyped_unchecked(Hash::new(
-                b"sbd-streaming-install-test-network",
+                b"ds-streaming-install-test-network",
             ))),
             asset,
             asset_scale: 2,
@@ -14155,22 +14159,22 @@ mod kagemusha_bridge_tests {
             max_proof_bytes: 512,
             generation_memory_limit_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
             generation_memory_enforcement_profile: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
-            qualification_receipt_sha256: digest(b"SBD streaming installer qualification receipt"),
+            qualification_receipt_sha256: digest(b"DS streaming installer qualification receipt"),
             qualified_candidate_sha256: [0; 32],
             profiles: vec![step_eq, step_ep],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
                 size_bytes: 64,
-                sha256: digest(b"SBD streaming installer finality roster"),
+                sha256: digest(b"DS streaming installer finality roster"),
                 artifact_generation: generation.to_owned(),
                 circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
                 purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
                 artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
                 required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             },
-            benchmark_evidence_sha256: digest(b"SBD benchmark placeholder"),
-            cryptographic_review_sha256: digest(b"SBD review placeholder"),
-            release_attestation_sha256: digest(b"SBD attestation placeholder"),
+            benchmark_evidence_sha256: digest(b"DS benchmark placeholder"),
+            cryptographic_review_sha256: digest(b"DS review placeholder"),
+            release_attestation_sha256: digest(b"DS attestation placeholder"),
         };
         let mut candidate_manifest = manifest.clone();
         candidate_manifest.qualification_receipt_sha256 = [0; 32];
@@ -14202,7 +14206,7 @@ mod kagemusha_bridge_tests {
         let policy = KagemushaRecursiveSpendReleasePolicyV1 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
-            policy_id: "sbd-streaming-install-policy-v1".to_owned(),
+            policy_id: "ds-streaming-install-policy-v1".to_owned(),
             roles: roles
                 .iter()
                 .zip(&key_pairs)
@@ -14219,14 +14223,14 @@ mod kagemusha_bridge_tests {
             &candidate,
             manifest.qualification_receipt_sha256,
             manifest.qualified_candidate_sha256,
-            digest(b"SBD streaming installer review report"),
+            digest(b"DS streaming installer review report"),
             [
-                digest(b"SBD streaming constraint review"),
-                digest(b"SBD streaming recursion review"),
-                digest(b"SBD streaming public input review"),
-                digest(b"SBD streaming artifact review"),
-                digest(b"SBD streaming replay review"),
-                digest(b"SBD streaming parser review"),
+                digest(b"DS streaming constraint review"),
+                digest(b"DS streaming recursion review"),
+                digest(b"DS streaming public input review"),
+                digest(b"DS streaming artifact review"),
+                digest(b"DS streaming replay review"),
+                digest(b"DS streaming parser review"),
             ],
         )
         .expect("approve lightweight candidate review");
@@ -14787,12 +14791,12 @@ mod kagemusha_bridge_tests {
         let network_id = CURRENT_TAIRA_NETWORK_ID
             .parse::<NetworkId>()
             .expect("current Taira NetworkId");
-        let sbd_asset = CBSI_SBD_ASSET_DEFINITION_ID
+        let ds_asset = CBSI_DS_ASSET_DEFINITION_ID
             .parse::<AssetDefinitionId>()
-            .expect("canonical SBD asset definition");
+            .expect("canonical DS asset definition");
         let request = peer_split_recipient_request_for_asset_v4(
             &network_id,
-            &sbd_asset,
+            &ds_asset,
             KagemushaScaledAmountV2::new(625, 2).expect("receiver-offer amount"),
             0xE1,
         );
@@ -14920,7 +14924,7 @@ mod kagemusha_bridge_tests {
             OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES,
         };
         let one = realistic_recipient_receive_offer_v2(1);
-        assert_eq!(one.request.asset.to_string(), CBSI_SBD_ASSET_DEFINITION_ID);
+        assert_eq!(one.request.asset.to_string(), CBSI_DS_ASSET_DEFINITION_ID);
         assert_eq!(one.lineage.selector.network_id, one.request.network_id);
         assert_eq!(one.lineage.selector.asset, one.request.asset);
         let one_bytes = norito::to_bytes(&one).expect("encode one-proof offer");
@@ -14966,7 +14970,7 @@ mod kagemusha_bridge_tests {
                 trusted.height,
                 *trusted.context_id().0.as_ref(),
             )
-            .expect("one request-independent lineage verifies a fresh SBD amount request");
+            .expect("one request-independent lineage verifies a fresh DS amount request");
         assert_eq!(
             norito::to_bytes(&one.lineage).expect("encode offer lineage"),
             decode_hex_fixture(include_str!(
@@ -16951,7 +16955,7 @@ mod kagemusha_bridge_tests {
         let fresh_recipient_opening = peer_split_recipient_opening_for_request_seed_v4(0xE2);
         let network_id = receiver_offer.lineage.selector.network_id;
         let asset = receiver_offer.lineage.selector.asset.clone();
-        assert_eq!(asset.to_string(), CBSI_SBD_ASSET_DEFINITION_ID);
+        assert_eq!(asset.to_string(), CBSI_DS_ASSET_DEFINITION_ID);
         assert_eq!(fresh_recipient_request.network_id, network_id);
         assert_eq!(fresh_recipient_request.asset, asset);
         let configured_taira_roster =
@@ -17038,7 +17042,7 @@ mod kagemusha_bridge_tests {
             u32::try_from(live_pair.len()).is_ok_and(|bytes| bytes < max_recursive_pair_bytes),
             "recursive release ceiling must exceed the initialization sample"
         );
-        eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 fixture:artifacts-generated");
+        eprintln!("KAGEMUSHA_DS_PRODUCTION_STAGE_V1 fixture:artifacts-generated");
         assert_eq!(generated_frames.len(), 8, "all exact release roles emitted");
         generated_frames.sort_by_key(|(parity, kind, _, _)| {
             let parity_rank = match parity {
@@ -17089,6 +17093,10 @@ mod kagemusha_bridge_tests {
             ),
             reviewed_cargo_binary_sha256: digest(b"production gate reviewed Cargo binary"),
             reviewed_rustc_binary_sha256: digest(b"production gate reviewed rustc binary"),
+            generator_binary_sha256: digest(b"production gate generator binary"),
+            sealed_candidate_build_report_sha256: digest(
+                b"production gate sealed build report",
+            ),
             network_id,
             asset,
             asset_scale: 2,
@@ -17230,6 +17238,8 @@ mod kagemusha_bridge_tests {
                 .authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: manifest.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: manifest.sealed_candidate_build_report_sha256,
             candidate_sha256: candidate.sha256().expect("candidate digest"),
             qualification_receipt_sha256: manifest.qualification_receipt_sha256,
             qualified_candidate_sha256: manifest.qualified_candidate_sha256,
@@ -17293,7 +17303,7 @@ mod kagemusha_bridge_tests {
             .expect("production top-up roster window");
         let height = anchor.finalized_height;
         let parent_context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"production SBD acceptance parent context",
+            b"production DS acceptance parent context",
         )));
         let context = HeightContext {
             network_id: topup_roster.network_id,
@@ -17318,19 +17328,19 @@ mod kagemusha_bridge_tests {
                 phase: GlobalPhase::Commit,
                 subject: BlockSubject {
                     parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
-                        b"production SBD acceptance grandparent",
+                        b"production DS acceptance grandparent",
                     ))),
                     block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                        b"production SBD acceptance parent block",
+                        b"production DS acceptance parent block",
                     )),
-                    payload_hash: Hash::new(b"production SBD acceptance parent payload"),
+                    payload_hash: Hash::new(b"production DS acceptance parent payload"),
                 },
                 execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
-                    Hash::new(b"production SBD acceptance parent parent state"),
-                    Hash::new(b"production SBD acceptance parent post state"),
-                    Hash::new(b"production SBD acceptance parent ordinary writes"),
+                    Hash::new(b"production DS acceptance parent parent state"),
+                    Hash::new(b"production DS acceptance parent post state"),
+                    Hash::new(b"production DS acceptance parent ordinary writes"),
                     1,
-                    Hash::new(b"production SBD acceptance parent executed wire"),
+                    Hash::new(b"production DS acceptance parent executed wire"),
                 ),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0x44; 96],
@@ -17338,7 +17348,7 @@ mod kagemusha_bridge_tests {
             roster: window.validator_set.clone(),
             quorum: DualQuorum::from_roster(&window.validator_set)
                 .expect("production top-up finality quorum"),
-            nexus_amx_context_hash: Hash::new(b"production SBD acceptance nexus"),
+            nexus_amx_context_hash: Hash::new(b"production DS acceptance nexus"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::ReedSolomon16,
@@ -17358,27 +17368,27 @@ mod kagemusha_bridge_tests {
                 anchor.topup_operation_id,
                 anchor.anchor_digest,
             )
-            .expect("single finalized production SBD top-up commitment");
+            .expect("single finalized production DS top-up commitment");
         let subject = BlockSubject {
             parent_block_hash: context
                 .parent_commit_qc
                 .as_ref()
                 .map(|parent| parent.subject.block_hash),
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                b"production SBD acceptance finalized block",
+                b"production DS acceptance finalized block",
             )),
-            payload_hash: Hash::new(b"production SBD acceptance finalized payload"),
+            payload_hash: Hash::new(b"production DS acceptance finalized payload"),
         };
         let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
-            Hash::new(b"production SBD acceptance parent state"),
+            Hash::new(b"production DS acceptance parent state"),
             commitment.post_state_root,
             commitment.ordinary_writes_root,
             Some(commitment.topup_anchor_root),
             1,
             1,
-            Hash::new(b"production SBD acceptance finalized executed wire"),
+            Hash::new(b"production DS acceptance finalized executed wire"),
         )
-        .expect("production SBD execution commitment");
+        .expect("production DS execution commitment");
         let round = ConsensusRound {
             context_id: context.id(),
             height,
@@ -17395,7 +17405,7 @@ mod kagemusha_bridge_tests {
         };
         let preimage = certificate
             .signer_preimage(&context, 0)
-            .expect("production SBD Commit vote preimage");
+            .expect("production DS Commit vote preimage");
         let signatures = certificate
             .signers
             .iter()
@@ -17406,7 +17416,7 @@ mod kagemusha_bridge_tests {
                     .private_key(),
                     &preimage,
                 )
-                .expect("sign production SBD Commit vote")
+                .expect("sign production DS Commit vote")
                 .payload()
                 .to_vec()
             })
@@ -17414,7 +17424,7 @@ mod kagemusha_bridge_tests {
         certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
             &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
         )
-        .expect("aggregate production SBD Commit votes");
+        .expect("aggregate production DS Commit votes");
         let pops = window
             .validator_set_pops
             .iter()
@@ -17422,7 +17432,7 @@ mod kagemusha_bridge_tests {
             .collect::<Vec<_>>();
         V2FinalityArtifact::new(context.clone(), subject, certificate.clone(), pops)
             .verify()
-            .expect("production SBD live finality artifact");
+            .expect("production DS live finality artifact");
         let projection = KagemushaTopUpFinalityHeightContextV2 {
             context_id: context.id(),
             network_id: context.network_id,
@@ -17441,7 +17451,7 @@ mod kagemusha_bridge_tests {
         };
         let proof = KagemushaTopUpFinalityProofV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
-            anchor: anchor.compact_ref().expect("production SBD compact anchor"),
+            anchor: anchor.compact_ref().expect("production DS compact anchor"),
             commit_qc: KagemushaTopUpFinalityCompactQcV2 {
                 height_context: projection,
                 certificate,
@@ -17450,7 +17460,7 @@ mod kagemusha_bridge_tests {
         };
         proof
             .validate_structure()
-            .expect("production SBD top-up finality proof structure");
+            .expect("production DS top-up finality proof structure");
         proof
     }
     /// Exercise a genuine step-1 -> step-2 recursion with the exact installed
@@ -17805,7 +17815,7 @@ mod kagemusha_bridge_tests {
         eprintln!("KAGEMUSHA_TAIRA_RELEASE_STAGE_V4 release-key-step-count:verified");
     }
     #[cfg(feature = "privacy-production-enabled")]
-    fn production_sbd_offline_readiness_v4(
+    fn production_ds_offline_readiness_v4(
         fixture: &ProductionReleaseFixtureV4,
         installed: &KagemushaRecursiveSpendInstalledArtifactSetV4,
     ) -> iroha_torii_shared::offline_api::OfflineReadiness {
@@ -17915,7 +17925,7 @@ mod kagemusha_bridge_tests {
             asset_scale: Some(fixture.manifest.asset_scale),
             evaluated_block_height: 43,
             evaluated_block_hash: hex::encode(<[u8; 32]>::from(Hash::new(
-                b"production SBD acceptance readiness block 43",
+                b"production DS acceptance readiness block 43",
             ))),
             active_transfer_verifier: Some(transfer),
             active_topup_shield_verifier: Some(topup),
@@ -17948,7 +17958,7 @@ mod kagemusha_bridge_tests {
             blockers: Vec::new(),
         };
         let projected = java_kagemusha_project_readiness_v4_fields(readiness.clone())
-            .expect("production SBD readiness must satisfy the exact mobile projection");
+            .expect("production DS readiness must satisfy the exact mobile projection");
         assert_eq!(
             projected.first().map(Vec::as_slice),
             Some(iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.as_bytes()),
@@ -17957,7 +17967,7 @@ mod kagemusha_bridge_tests {
         readiness
     }
     #[cfg(feature = "privacy-production-enabled")]
-    struct ProductionSbdAcceptanceLifecycleV1 {
+    struct ProductionDsAcceptanceLifecycleV1 {
         artifact_binding: iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
         sender_opening: KagemushaNoteOpeningV2,
         topup_zero_frontier: KagemushaOutputMembershipFrontierV4,
@@ -17983,10 +17993,10 @@ mod kagemusha_bridge_tests {
         offline_readiness: iroha_torii_shared::offline_api::OfflineReadiness,
     }
     #[cfg(feature = "privacy-production-enabled")]
-    fn production_sbd_acceptance_lifecycle_v1(
+    fn production_ds_acceptance_lifecycle_v1(
         fixture: &ProductionReleaseFixtureV4,
         installed: &KagemushaRecursiveSpendInstalledArtifactSetV4,
-    ) -> ProductionSbdAcceptanceLifecycleV1 {
+    ) -> ProductionDsAcceptanceLifecycleV1 {
         use iroha_core::zk::{
             ZK_BACKEND_HALO2_IPA,
             confidential_v2::{confidential_transfer_v2_vk_box, kagemusha_topup_shield_v2_vk_box},
@@ -18010,7 +18020,7 @@ mod kagemusha_bridge_tests {
         };
         artifact_binding
             .validate()
-            .expect("production SBD artifact binding");
+            .expect("production DS artifact binding");
         let initial_zero_path = confidential_v2::compute_confidential_merkle_path_v2(&[], 0)
             .expect("empty confidential next-zero path");
         let (siblings, directions, _witness_nodes, root) = initial_zero_path.into_parts();
@@ -18025,25 +18035,24 @@ mod kagemusha_bridge_tests {
         };
         topup_zero_frontier
             .validate()
-            .expect("production SBD top-up frontier");
+            .expect("production DS top-up frontier");
         let sender_opening = KagemushaNoteOpeningV2 {
             spend_key: [0x91; 32],
             rho: [0x92; 32],
             diversifier: confidential_v2::derive_confidential_diversifier_v2(
-                b"production-sbd-acceptance-sender-opening-v1",
+                b"production-ds-acceptance-sender-opening-v1",
             ),
         };
         let payer = sample_account(0x90);
         let topup_operation_id = [0x93; 32];
-        let topup_amount = KagemushaScaledAmountV2::new(1_000, 2)
-            .expect("production SBD acceptance top-up amount");
+        let topup_amount =
+            KagemushaScaledAmountV2::new(1_000, 2).expect("production DS acceptance top-up amount");
         let shield_verifier_id = VerifyingKeyId::new(
             ZK_BACKEND_HALO2_IPA,
             KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
         );
         let shield_verifier_commitment = hash_vk(
-            &kagemusha_topup_shield_v2_vk_box()
-                .expect("production SBD top-up shield verifying key"),
+            &kagemusha_topup_shield_v2_vk_box().expect("production DS top-up shield verifying key"),
         );
         let topup_build = KagemushaTopUpShieldBuildRequestV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
@@ -18067,16 +18076,16 @@ mod kagemusha_bridge_tests {
             Zeroizing::new(norito::to_bytes(&topup_build).expect("encode top-up shield request"));
         let topup_unsigned =
             kagemusha_topup_shield_build_unsigned_from_archive_v4(&topup_build_archive)
-                .expect("build genuine production SBD top-up shield");
+                .expect("build genuine production DS top-up shield");
         topup_unsigned
             .validate_public_binding()
-            .expect("production SBD top-up unsigned binding");
+            .expect("production DS top-up unsigned binding");
         let topup_output_membership = kagemusha_output_membership_paths_from_frontier_v4(
             &topup_zero_frontier,
             Some(topup_unsigned.current_note.note_commitment),
             None,
         )
-        .expect("derive production SBD init membership paths");
+        .expect("derive production DS init membership paths");
         assert_eq!(
             topup_output_membership.initial_root,
             topup_unsigned.shield_evidence.initial_root
@@ -18107,7 +18116,7 @@ mod kagemusha_bridge_tests {
             anchor_digest: [0; 32],
         }
         .finalize_digest()
-        .expect("finalize production SBD top-up anchor");
+        .expect("finalize production DS top-up anchor");
         let topup_finality_proof = production_topup_finality_proof_v2(
             &fixture.manifest,
             &fixture.topup_roster,
@@ -18116,7 +18125,7 @@ mod kagemusha_bridge_tests {
         );
         installed
             .verify_topup_finality(&topup_finality_proof, &fixture.topup_roster, &topup_anchor)
-            .expect("verify production SBD top-up against installed release");
+            .expect("verify production DS top-up against installed release");
         let init_local = KagemushaRecursiveSpendInitLocalRequestV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
             request: KagemushaRecursiveSpendInitRequestV4 {
@@ -18130,7 +18139,7 @@ mod kagemusha_bridge_tests {
         };
         init_local
             .validate_shape()
-            .expect("production SBD init bridge shape");
+            .expect("production DS init bridge shape");
         let mut wrong_anchor_digest = init_local.clone();
         wrong_anchor_digest.request.topup_anchor.anchor_digest[0] ^= 1;
         wrong_anchor_digest
@@ -18156,7 +18165,7 @@ mod kagemusha_bridge_tests {
             .withdraws_at_height = missing_roster_window.request.topup_anchor.finalized_height;
         assert!(missing_roster_window.validate_shape().is_err());
         let init_archive =
-            Zeroizing::new(norito::to_bytes(&init_local).expect("encode production SBD init"));
+            Zeroizing::new(norito::to_bytes(&init_local).expect("encode production DS init"));
         let mut init_ptr = ptr::null_mut();
         let mut init_len = 0;
         assert_eq!(
@@ -18169,7 +18178,7 @@ mod kagemusha_bridge_tests {
                 )
             },
             0,
-            "production C ABI must initialize finalized SBD cash"
+            "production C ABI must initialize finalized DS cash"
         );
         let init_result_bytes =
             unsafe { slice::from_raw_parts(init_ptr, init_len as usize) }.to_vec();
@@ -18177,10 +18186,10 @@ mod kagemusha_bridge_tests {
         let init_result = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4,
         >(&init_result_bytes)
-        .expect("decode production SBD init result");
+        .expect("decode production DS init result");
         init_result
             .validate_for_request(&init_local.request)
-            .expect("production SBD init result binding");
+            .expect("production DS init result binding");
         assert_eq!(
             init_result.bundle.statement.proof_step_count, 1,
             "the installed release key must prove the initial recursive step"
@@ -18190,7 +18199,7 @@ mod kagemusha_bridge_tests {
             "initialization must not consume an offline peer hop"
         );
         let change_amount =
-            KagemushaScaledAmountV2::new(300, 2).expect("production SBD acceptance change amount");
+            KagemushaScaledAmountV2::new(300, 2).expect("production DS acceptance change amount");
         let append_operation_id = [0x96; 32];
         let change_preparation = prepare_kagemusha_peer_split_change_opening_v4(
             std::slice::from_ref(&init_result.bundle),
@@ -18200,7 +18209,7 @@ mod kagemusha_bridge_tests {
             &append_operation_id,
             &[0x95; 32],
         )
-        .expect("prepare domain-separated production SBD sender change");
+        .expect("prepare domain-separated production DS sender change");
         let change_opening = change_preparation.opening.clone();
         let change_note = change_preparation.output.clone();
         assert_ne!(
@@ -18211,7 +18220,7 @@ mod kagemusha_bridge_tests {
             &init_result.bundle,
             &init_result.membership_witness,
         )
-        .expect("derive post-init production SBD frontier");
+        .expect("derive post-init production DS frontier");
         let append_output_membership = kagemusha_output_membership_paths_from_frontier_v4(
             &append_frontier,
             Some(
@@ -18222,12 +18231,12 @@ mod kagemusha_bridge_tests {
             ),
             Some(change_note.note_commitment),
         )
-        .expect("derive production SBD peer split membership paths");
+        .expect("derive production DS peer split membership paths");
         let transfer_verifier_id =
             VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2);
         let transfer_verifier_commitment = hash_vk(
             &confidential_transfer_v2_vk_box()
-                .expect("production SBD confidential transfer verifying key"),
+                .expect("production DS confidential transfer verifying key"),
         );
         let append_local = KagemushaRecursiveSpendAppendLocalRequestV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
@@ -18247,21 +18256,21 @@ mod kagemusha_bridge_tests {
         };
         append_local
             .validate_for_recipient_request(&fixture.fresh_recipient_request, 1_900_000_001_000)
-            .expect("prepared production SBD change must pass append validation");
+            .expect("prepared production DS change must pass append validation");
         let mut legacy_same_key_append = append_local.clone();
         legacy_same_key_append
             .change_opening
             .as_mut()
-            .expect("production SBD change opening")
+            .expect("production DS change opening")
             .spend_key = sender_opening.spend_key;
         assert!(
             legacy_same_key_append.validate_shape().is_err(),
             "ABI21 append must reject legacy input-key reuse for peer change"
         );
         let append_archive =
-            Zeroizing::new(norito::to_bytes(&append_local).expect("encode production SBD append"));
+            Zeroizing::new(norito::to_bytes(&append_local).expect("encode production DS append"));
         let fresh_request_archive = norito::to_bytes(&fixture.fresh_recipient_request)
-            .expect("encode fresh production SBD receiver request");
+            .expect("encode fresh production DS receiver request");
         let mut split_ptr = ptr::null_mut();
         let mut split_len = 0;
         assert_eq!(
@@ -18277,7 +18286,7 @@ mod kagemusha_bridge_tests {
                 )
             },
             0,
-            "production C ABI must generate the genuine SBD peer payment"
+            "production C ABI must generate the genuine DS peer payment"
         );
         let split_result_bytes =
             unsafe { slice::from_raw_parts(split_ptr, split_len as usize) }.to_vec();
@@ -18285,10 +18294,10 @@ mod kagemusha_bridge_tests {
         let split_result = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendSplitResultV4,
         >(&split_result_bytes)
-        .expect("decode production SBD split result");
+        .expect("decode production DS split result");
         split_result
             .validate_public_binding()
-            .expect("production SBD split result binding");
+            .expect("production DS split result binding");
         assert_eq!(
             split_result.recipient_bundle.statement.proof_step_count, 2,
             "the same installed release key must prove a second recursive step"
@@ -18302,7 +18311,7 @@ mod kagemusha_bridge_tests {
             split_result
                 .change_bundle
                 .as_ref()
-                .expect("production SBD sender change")
+                .expect("production DS sender change")
                 .statement
                 .current_note
                 .amount
@@ -18310,7 +18319,7 @@ mod kagemusha_bridge_tests {
             300
         );
         let peer_payment = KagemushaRecursiveSpendPeerPaymentV4::from_split_result(&split_result)
-            .expect("project production SBD recipient payment");
+            .expect("project production DS recipient payment");
         let redeem_shape = KagemushaRecursiveSpendRedeemLocalRequestV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
             bundle: peer_payment.recipient_bundle.clone(),
@@ -18331,7 +18340,7 @@ mod kagemusha_bridge_tests {
         };
         redeem_shape
             .validate_shape()
-            .expect("production SBD redeem bridge shape");
+            .expect("production DS redeem bridge shape");
         let finalized_height = redeem_shape.topup_provenance.topup_finality_evidence[0]
             .topup_anchor
             .finalized_height;
@@ -18351,7 +18360,7 @@ mod kagemusha_bridge_tests {
             },
         };
         let verify_archive =
-            norito::to_bytes(&verify_local).expect("encode production SBD receiver verification");
+            norito::to_bytes(&verify_local).expect("encode production DS receiver verification");
         let mut verify_ptr = ptr::null_mut();
         let mut verify_len = 0;
         assert_eq!(
@@ -18364,7 +18373,7 @@ mod kagemusha_bridge_tests {
                 )
             },
             0,
-            "production C ABI must terminally verify the received SBD payment"
+            "production C ABI must terminally verify the received DS payment"
         );
         let verify_result_bytes =
             unsafe { slice::from_raw_parts(verify_ptr, verify_len as usize) }.to_vec();
@@ -18372,38 +18381,38 @@ mod kagemusha_bridge_tests {
         let verify_result = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4,
         >(&verify_result_bytes)
-        .expect("decode production SBD verify result");
+        .expect("decode production DS verify result");
         verify_result
             .validate_public_binding()
-            .expect("production SBD verify result binding");
+            .expect("production DS verify result binding");
         let terminal_verifier = installed
             .runtime_verifier()
             .expect("construct installed production terminal verifier");
         terminal_verifier
             .verify_bundle_v4(&init_result.bundle)
-            .expect("terminally verify production SBD initialized branch");
+            .expect("terminally verify production DS initialized branch");
         terminal_verifier
             .verify_bundle_v4(&peer_payment.recipient_bundle)
-            .expect("terminally verify production SBD recipient branch");
+            .expect("terminally verify production DS recipient branch");
         terminal_verifier
             .verify_bundle_v4(
                 split_result
                     .change_bundle
                     .as_ref()
-                    .expect("production SBD change bundle"),
+                    .expect("production DS change bundle"),
             )
-            .expect("terminally verify production SBD sender change branch");
+            .expect("terminally verify production DS sender change branch");
         let acknowledgement_payload = kagemusha_receiver_acknowledgement_payload_v2(
             &fixture.fresh_recipient_request,
             &peer_payment,
             1_900_000_002_000,
         )
-        .expect("build production SBD receiver ACK payload");
+        .expect("build production DS receiver ACK payload");
         let receiver_signing_key = p256_signing_key();
         let acknowledgement_signature: p256::ecdsa::Signature = receiver_signing_key.sign(
             &acknowledgement_payload
                 .signing_bytes()
-                .expect("production SBD ACK signing bytes"),
+                .expect("production DS ACK signing bytes"),
         );
         let acknowledgement_signature = acknowledgement_signature
             .normalize_s()
@@ -18412,27 +18421,27 @@ mod kagemusha_bridge_tests {
         let acknowledgement = KagemushaReceiverAcknowledgementV2 {
             payload: acknowledgement_payload.clone(),
             signature: KagemushaDeviceSignatureV2::from_raw_bytes(&acknowledgement_signature_raw)
-                .expect("production SBD low-S receiver signature"),
+                .expect("production DS low-S receiver signature"),
         };
         let acknowledgement_archive = acknowledgement
             .canonical_archive_for_payment_v4(
                 &fixture.fresh_recipient_request,
                 &peer_payment.recipient_bundle,
             )
-            .expect("canonical production SBD ACK archive");
+            .expect("canonical production DS ACK archive");
         let acknowledgement_verify_result = acknowledgement
             .verified_result_v4(
                 &fixture.fresh_recipient_request,
                 &peer_payment.recipient_bundle,
             )
-            .expect("verify production SBD receiver ACK");
+            .expect("verify production DS receiver ACK");
         acknowledgement_verify_result
             .validate_public_binding()
-            .expect("production SBD ACK result binding");
+            .expect("production DS ACK result binding");
         let acknowledgement_payload_archive = norito::to_bytes(&acknowledgement_payload)
-            .expect("encode production SBD ACK payload for ABI");
-        let payment_archive = norito::to_bytes(&peer_payment)
-            .expect("encode production SBD peer payment for ACK ABI");
+            .expect("encode production DS ACK payload for ABI");
+        let payment_archive =
+            norito::to_bytes(&peer_payment).expect("encode production DS peer payment for ACK ABI");
         let mut ack_create_ptr = ptr::null_mut();
         let mut ack_create_len = 0;
         assert_eq!(
@@ -18451,7 +18460,7 @@ mod kagemusha_bridge_tests {
                 )
             },
             0,
-            "production ACK ABI must create the persisted SBD acknowledgement"
+            "production ACK ABI must create the persisted DS acknowledgement"
         );
         let ack_create_bytes =
             unsafe { slice::from_raw_parts(ack_create_ptr, ack_create_len as usize) }.to_vec();
@@ -18473,7 +18482,7 @@ mod kagemusha_bridge_tests {
                 )
             },
             0,
-            "production ACK ABI must verify the persisted SBD acceptance"
+            "production ACK ABI must verify the persisted DS acceptance"
         );
         let ack_verify_bytes =
             unsafe { slice::from_raw_parts(ack_verify_ptr, ack_verify_len as usize) }.to_vec();
@@ -18485,8 +18494,8 @@ mod kagemusha_bridge_tests {
             .expect("decode production ACK ABI result"),
             acknowledgement_verify_result
         );
-        let offline_readiness = production_sbd_offline_readiness_v4(fixture, installed);
-        ProductionSbdAcceptanceLifecycleV1 {
+        let offline_readiness = production_ds_offline_readiness_v4(fixture, installed);
+        ProductionDsAcceptanceLifecycleV1 {
             artifact_binding,
             sender_opening,
             topup_zero_frontier,
@@ -18510,7 +18519,7 @@ mod kagemusha_bridge_tests {
             offline_readiness,
         }
     }
-    fn production_sbd_acceptance_file_secret_v1(kind: &str, declared_secret: bool) -> bool {
+    fn production_ds_acceptance_file_secret_v1(kind: &str, declared_secret: bool) -> bool {
         if kind == "recursive_init_result_v4" {
             assert!(
                 declared_secret,
@@ -18521,13 +18530,13 @@ mod kagemusha_bridge_tests {
     }
     #[cfg(feature = "privacy-production-enabled")]
     #[derive(Clone, Debug, PartialEq, Eq)]
-    struct ProductionSbdAcceptanceExpectedFileV1 {
+    struct ProductionDsAcceptanceExpectedFileV1 {
         path: String,
         size: u64,
         sha256: [u8; 32],
     }
     #[cfg(feature = "privacy-production-enabled")]
-    impl ProductionSbdAcceptanceExpectedFileV1 {
+    impl ProductionDsAcceptanceExpectedFileV1 {
         fn from_bytes(path: &str, bytes: &[u8]) -> Self {
             Self {
                 path: path.to_owned(),
@@ -18541,14 +18550,14 @@ mod kagemusha_bridge_tests {
     }
     #[cfg(all(feature = "privacy-production-enabled", unix))]
     #[derive(Debug)]
-    struct ProductionSbdAcceptanceBundleRootV1 {
+    struct ProductionDsAcceptanceBundleRootV1 {
         path: std::path::PathBuf,
         directory: File,
         device: u64,
         inode: u64,
     }
     #[cfg(all(feature = "privacy-production-enabled", unix))]
-    impl ProductionSbdAcceptanceBundleRootV1 {
+    impl ProductionDsAcceptanceBundleRootV1 {
         fn normalized_absolute_components(
             path: &std::path::Path,
         ) -> std::io::Result<Vec<std::ffi::OsString>> {
@@ -18932,9 +18941,9 @@ mod kagemusha_bridge_tests {
             Ok(names)
         }
         fn expected_inventory(
-            expected: &[ProductionSbdAcceptanceExpectedFileV1],
+            expected: &[ProductionDsAcceptanceExpectedFileV1],
         ) -> std::io::Result<(
-            std::collections::BTreeMap<std::path::PathBuf, &ProductionSbdAcceptanceExpectedFileV1>,
+            std::collections::BTreeMap<std::path::PathBuf, &ProductionDsAcceptanceExpectedFileV1>,
             std::collections::BTreeSet<std::path::PathBuf>,
         )> {
             let mut files = std::collections::BTreeMap::new();
@@ -18964,7 +18973,7 @@ mod kagemusha_bridge_tests {
         fn verify_expected_file(
             directory: &File,
             name: &std::ffi::OsStr,
-            expected: &ProductionSbdAcceptanceExpectedFileV1,
+            expected: &ProductionDsAcceptanceExpectedFileV1,
         ) -> std::io::Result<()> {
             use std::{io::Read as _, os::unix::fs::MetadataExt as _};
             let mut file = Self::open_child_file(directory, name)?;
@@ -19022,7 +19031,7 @@ mod kagemusha_bridge_tests {
             prefix: &std::path::Path,
             expected_files: &std::collections::BTreeMap<
                 std::path::PathBuf,
-                &ProductionSbdAcceptanceExpectedFileV1,
+                &ProductionDsAcceptanceExpectedFileV1,
             >,
             expected_directories: &std::collections::BTreeSet<std::path::PathBuf>,
             seen_files: &mut std::collections::BTreeSet<std::path::PathBuf>,
@@ -19079,10 +19088,7 @@ mod kagemusha_bridge_tests {
             // directory last so its complete set of entries is crash-durable.
             directory.sync_all()
         }
-        fn finish(
-            &self,
-            expected: &[ProductionSbdAcceptanceExpectedFileV1],
-        ) -> std::io::Result<()> {
+        fn finish(&self, expected: &[ProductionDsAcceptanceExpectedFileV1]) -> std::io::Result<()> {
             let (expected_files, expected_directories) = Self::expected_inventory(expected)?;
             let mut seen_files = std::collections::BTreeSet::new();
             let mut seen_directories = std::collections::BTreeSet::new();
@@ -19118,11 +19124,11 @@ mod kagemusha_bridge_tests {
     }
     #[cfg(all(feature = "privacy-production-enabled", not(unix)))]
     #[derive(Debug)]
-    struct ProductionSbdAcceptanceBundleRootV1 {
+    struct ProductionDsAcceptanceBundleRootV1 {
         path: std::path::PathBuf,
     }
     #[cfg(all(feature = "privacy-production-enabled", not(unix)))]
-    impl ProductionSbdAcceptanceBundleRootV1 {
+    impl ProductionDsAcceptanceBundleRootV1 {
         fn create(_path: std::path::PathBuf) -> std::io::Result<Self> {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -19143,7 +19149,7 @@ mod kagemusha_bridge_tests {
         }
         fn finish(
             &self,
-            _expected: &[ProductionSbdAcceptanceExpectedFileV1],
+            _expected: &[ProductionDsAcceptanceExpectedFileV1],
         ) -> std::io::Result<()> {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -19178,7 +19184,7 @@ mod kagemusha_bridge_tests {
             output_path.is_absolute(),
             "{TAIRA_RELEASE_CATALOG_DIR_ENV_V4} must select an absolute owner-private directory"
         );
-        let output = ProductionSbdAcceptanceBundleRootV1::create(output_path.clone())
+        let output = ProductionDsAcceptanceBundleRootV1::create(output_path.clone())
             .unwrap_or_else(|error| {
                 panic!(
                     "{TAIRA_RELEASE_CATALOG_DIR_ENV_V4} must be normalized, symlink-free, and absent or empty: {error}"
@@ -19195,7 +19201,7 @@ mod kagemusha_bridge_tests {
             output
                 .write_private_file(&relative, bytes)
                 .unwrap_or_else(|error| panic!("write Taira release file `{relative}`: {error}"));
-            expected.push(ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+            expected.push(ProductionDsAcceptanceExpectedFileV1::from_bytes(
                 &relative, bytes,
             ));
         };
@@ -19292,7 +19298,7 @@ mod kagemusha_bridge_tests {
                 .seek(SeekFrom::Start(0))
                 .expect("restore Taira artifact cursor");
             destination.sync_all().expect("sync Taira artifact");
-            expected.push(ProductionSbdAcceptanceExpectedFileV1 {
+            expected.push(ProductionDsAcceptanceExpectedFileV1 {
                 path: relative,
                 size: descriptor.size_bytes,
                 sha256: descriptor.sha256,
@@ -19305,15 +19311,15 @@ mod kagemusha_bridge_tests {
         output_path
     }
     #[cfg(feature = "privacy-production-enabled")]
-    fn export_production_sbd_acceptance_bundle_v1(
+    fn export_production_ds_acceptance_bundle_v1(
         fixture: &ProductionReleaseFixtureV4,
-        lifecycle: &ProductionSbdAcceptanceLifecycleV1,
+        lifecycle: &ProductionDsAcceptanceLifecycleV1,
     ) -> Option<std::path::PathBuf> {
         use std::{
             io::{Read as _, Seek as _, SeekFrom, Write as _},
             path::{Path, PathBuf},
         };
-        const ENV: &str = "IROHA_KAGEMUSHA_SBD_ACCEPTANCE_BUNDLE_DIR";
+        const ENV: &str = "IROHA_KAGEMUSHA_DS_ACCEPTANCE_BUNDLE_DIR";
         enum FilePayload<'a> {
             Bytes(Vec<u8>),
             Artifact(&'a Mutex<File>),
@@ -19342,7 +19348,7 @@ mod kagemusha_bridge_tests {
                     size: u64::try_from(bytes.len()).expect("acceptance file size fits u64"),
                     sha256: Sha256::digest(&bytes).into(),
                     payload: FilePayload::Bytes(bytes),
-                    secret: production_sbd_acceptance_file_secret_v1(kind, secret),
+                    secret: production_ds_acceptance_file_secret_v1(kind, secret),
                 }
             }
             fn artifact(
@@ -19385,7 +19391,7 @@ mod kagemusha_bridge_tests {
             output
         }
         fn write_private_artifact_file(
-            root: &ProductionSbdAcceptanceBundleRootV1,
+            root: &ProductionDsAcceptanceBundleRootV1,
             relative: &str,
             source: &Mutex<File>,
             expected_size: u64,
@@ -19393,7 +19399,7 @@ mod kagemusha_bridge_tests {
         ) {
             let mut destination = root
                 .create_private_file(relative)
-                .expect("create unmixed production SBD acceptance artifact");
+                .expect("create unmixed production DS acceptance artifact");
             let mut source = source.lock().expect("production artifact file lock");
             assert!(kagemusha_recursive_spend_file_is_read_only_v4(&source));
             assert_eq!(
@@ -19434,14 +19440,14 @@ mod kagemusha_bridge_tests {
                 .expect("restore production artifact export cursor");
             destination
                 .sync_all()
-                .expect("durably write production SBD acceptance artifact");
+                .expect("durably write production DS acceptance artifact");
         }
         let output = std::env::var_os(ENV).map(PathBuf::from)?;
         assert!(
             output.is_absolute(),
             "{ENV} must select an absolute owner-private directory"
         );
-        let output = ProductionSbdAcceptanceBundleRootV1::create(output).unwrap_or_else(|error| {
+        let output = ProductionDsAcceptanceBundleRootV1::create(output).unwrap_or_else(|error| {
             panic!(
                 "{ENV} must be a normalized, symlink-free, absent-or-empty owner-private directory: {error}"
             )
@@ -19601,7 +19607,7 @@ mod kagemusha_bridge_tests {
                 .receiver_offer
                 .publisher_checkpoint_envelope
                 .as_deref()
-                .expect("production SBD checkpoint envelope"),
+                .expect("production DS checkpoint envelope"),
             false
         );
         let publisher_key = receiver_offer_publisher_key_pair_v1();
@@ -19821,17 +19827,17 @@ mod kagemusha_bridge_tests {
                 hex::encode(file.sha256),
                 file.secret,
             )
-            .expect("write production SBD acceptance inventory");
+            .expect("write production DS acceptance inventory");
         }
         let previous_request_digest = fixture
             .receiver_offer
             .request
             .digest()
-            .expect("reference SBD request digest");
+            .expect("reference DS request digest");
         let fresh_request_digest = fixture
             .fresh_recipient_request
             .digest()
-            .expect("fresh SBD request digest");
+            .expect("fresh DS request digest");
         assert_ne!(previous_request_digest, fresh_request_digest);
         assert_ne!(
             fixture.receiver_offer.request.request_id,
@@ -19845,16 +19851,16 @@ mod kagemusha_bridge_tests {
             .offline_readiness
             .artifact_set
             .as_ref()
-            .expect("production SBD readiness artifact set");
+            .expect("production DS readiness artifact set");
         let readiness_transfer = lifecycle
             .offline_readiness
             .active_transfer_verifier
             .as_ref()
-            .expect("production SBD readiness transfer verifier");
+            .expect("production DS readiness transfer verifier");
         let manifest = format!(
             concat!(
                 "{{",
-                "\"schema\":\"iroha.kagemusha-sbd-mobile-acceptance-bundle\",",
+                "\"schema\":\"iroha.kagemusha-ds-mobile-acceptance-bundle\",",
                 "\"bundle_version\":1,",
                 "\"trust_scope\":\"self-issued-deterministic-host-mobile-acceptance\",",
                 "\"shipping_release_provenance\":false,",
@@ -19862,7 +19868,7 @@ mod kagemusha_bridge_tests {
                 "\"bridge_abi_version\":{},",
                 "\"wire_version\":4,",
                 "\"network_id\":{},",
-                "\"canonical_sbd_asset_definition_id\":{},",
+                "\"canonical_ds_asset_definition_id\":{},",
                 "\"asset_scale\":2,",
                 "\"evaluated_block_height\":43,",
                 "\"evaluated_block_hash_hex\":{},",
@@ -19944,7 +19950,7 @@ mod kagemusha_bridge_tests {
             readiness_transfer.activation_height,
             readiness_transfer
                 .withdrawal_height
-                .expect("production SBD transfer verifier withdrawal"),
+                .expect("production DS transfer verifier withdrawal"),
             hex::encode(fixture.receiver_offer.request.request_id),
             hex::encode(previous_request_digest),
             hex::encode(fixture.fresh_recipient_request.request_id),
@@ -19957,17 +19963,17 @@ mod kagemusha_bridge_tests {
         );
         let mut completed_inventory = files
             .iter()
-            .map(|file| ProductionSbdAcceptanceExpectedFileV1 {
+            .map(|file| ProductionDsAcceptanceExpectedFileV1 {
                 path: file.path.clone(),
                 size: file.size,
                 sha256: file.sha256,
             })
             .collect::<Vec<_>>();
-        completed_inventory.push(ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+        completed_inventory.push(ProductionDsAcceptanceExpectedFileV1::from_bytes(
             "bundle-v1.json",
             manifest.as_bytes(),
         ));
-        completed_inventory.push(ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+        completed_inventory.push(ProductionDsAcceptanceExpectedFileV1::from_bytes(
             "bundle-v1.sha256",
             manifest_sha256.as_bytes(),
         ));
@@ -19975,7 +19981,7 @@ mod kagemusha_bridge_tests {
             match &file.payload {
                 FilePayload::Bytes(bytes) => output
                     .write_private_file(&file.path, bytes)
-                    .expect("write production SBD acceptance file"),
+                    .expect("write production DS acceptance file"),
                 FilePayload::Artifact(source) => {
                     write_private_artifact_file(&output, &file.path, source, file.size, file.sha256)
                 }
@@ -19983,29 +19989,29 @@ mod kagemusha_bridge_tests {
         }
         output
             .write_private_file("bundle-v1.json", manifest.as_bytes())
-            .expect("write production SBD acceptance manifest");
+            .expect("write production DS acceptance manifest");
         output
             .write_private_file("bundle-v1.sha256", manifest_sha256.as_bytes())
-            .expect("write production SBD acceptance manifest digest");
+            .expect("write production DS acceptance manifest digest");
         output
             .finish(&completed_inventory)
-            .expect("finish symlink-free production SBD acceptance export");
+            .expect("finish symlink-free production DS acceptance export");
         Some(output.path().to_owned())
     }
     #[cfg(feature = "privacy-production-enabled")]
-    fn run_large_stack_production_sbd_acceptance_test(test: impl FnOnce() + Send + 'static) {
+    fn run_large_stack_production_ds_acceptance_test(test: impl FnOnce() + Send + 'static) {
         let handle = std::thread::Builder::new()
-            .name("kagemusha-sbd-production-acceptance".to_owned())
+            .name("kagemusha-ds-production-acceptance".to_owned())
             .stack_size(64 * 1024 * 1024)
             .spawn(test)
-            .expect("spawn Kagemusha SBD production acceptance thread");
+            .expect("spawn Kagemusha DS production acceptance thread");
         if let Err(payload) = handle.join() {
             std::panic::resume_unwind(payload);
         }
     }
     #[cfg(feature = "privacy-production-enabled")]
-    fn production_sbd_acceptance_test_body_v1(mut resource_guard: KagemushaV4GuardChannel) {
-        eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 fixture:begin");
+    fn production_ds_acceptance_test_body_v1(mut resource_guard: KagemushaV4GuardChannel) {
+        eprintln!("KAGEMUSHA_DS_PRODUCTION_STAGE_V1 fixture:begin");
         *kagemusha_recursive_spend_installed_artifact_set_registry_v4()
             .lock()
             .expect("installed release registry") = None;
@@ -20020,7 +20026,7 @@ mod kagemusha_bridge_tests {
         resource_guard
             .write_phase("bridge.production-acceptance.artifact-generation.complete")
             .expect("write post-generation resource-supervisor phase");
-        eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 fixture:complete");
+        eprintln!("KAGEMUSHA_DS_PRODUCTION_STAGE_V1 fixture:complete");
         let manifest_bytes = norito::to_bytes(&fixture.manifest).expect("encode manifest");
         let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_bytes).into();
         assert_eq!(fixture.promotion_record.manifest_sha256, manifest_sha256);
@@ -20136,7 +20142,7 @@ mod kagemusha_bridge_tests {
             0,
             "the exact signed eight-role release must install"
         );
-        eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 artifact-install:complete");
+        eprintln!("KAGEMUSHA_DS_PRODUCTION_STAGE_V1 artifact-install:complete");
         let mut capabilities_ptr = ptr::null_mut();
         let mut capabilities_len = 0;
         assert_eq!(
@@ -20166,7 +20172,7 @@ mod kagemusha_bridge_tests {
             .verify_release_qualification_pair_v4(&fixture.live_pair)
             .expect("execute and terminally verify both genuine Eq/Ep proof branches");
         drop(verifier);
-        eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 qualification-pair:verified");
+        eprintln!("KAGEMUSHA_DS_PRODUCTION_STAGE_V1 qualification-pair:verified");
         if fixture.taira_release_catalog {
             resource_guard
                 .write_phase("bridge.taira-release.release-key-step-count.begin")
@@ -20197,8 +20203,8 @@ mod kagemusha_bridge_tests {
                 .expect("write Taira release completion resource-supervisor phase");
             return;
         }
-        let lifecycle = production_sbd_acceptance_lifecycle_v1(&fixture, installed.as_ref());
-        eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 lifecycle:complete");
+        let lifecycle = production_ds_acceptance_lifecycle_v1(&fixture, installed.as_ref());
+        eprintln!("KAGEMUSHA_DS_PRODUCTION_STAGE_V1 lifecycle:complete");
         assert!(lifecycle.verify_result.valid);
         assert_eq!(
             lifecycle
@@ -20220,12 +20226,12 @@ mod kagemusha_bridge_tests {
             700
         );
         assert!(lifecycle.acknowledgement_verify_result.valid);
-        if let Some(path) = export_production_sbd_acceptance_bundle_v1(&fixture, &lifecycle) {
+        if let Some(path) = export_production_ds_acceptance_bundle_v1(&fixture, &lifecycle) {
             eprintln!(
-                "wrote complete production SBD mobile acceptance bundle to {}",
+                "wrote complete production DS mobile acceptance bundle to {}",
                 path.display()
             );
-            eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 bundle:exported");
+            eprintln!("KAGEMUSHA_DS_PRODUCTION_STAGE_V1 bundle:exported");
         }
         assert_eq!(
             unsafe {
@@ -20236,8 +20242,8 @@ mod kagemusha_bridge_tests {
             },
             0
         );
-        eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 uninstall:complete");
-        eprintln!("KAGEMUSHA_SBD_PRODUCTION_ACCEPTANCE_V1_COMPLETED");
+        eprintln!("KAGEMUSHA_DS_PRODUCTION_STAGE_V1 uninstall:complete");
+        eprintln!("KAGEMUSHA_DS_PRODUCTION_ACCEPTANCE_V1_COMPLETED");
         resource_guard
             .write_phase("bridge.production-acceptance.complete")
             .expect("write completion resource-supervisor phase");
@@ -20249,8 +20255,8 @@ mod kagemusha_bridge_tests {
         let resource_guard =
             KagemushaV4GuardChannel::require("bridge.production-acceptance.admitted")
                 .unwrap_or_else(|error| panic!("{error}"));
-        run_large_stack_production_sbd_acceptance_test(move || {
-            production_sbd_acceptance_test_body_v1(resource_guard);
+        run_large_stack_production_ds_acceptance_test(move || {
+            production_ds_acceptance_test_body_v1(resource_guard);
         });
     }
     #[test]
@@ -20260,7 +20266,7 @@ mod kagemusha_bridge_tests {
             .split_once("fn production_release_key_step_count_regression_v1(")
             .expect("Taira release-key regression")
             .1
-            .split_once("fn production_sbd_offline_readiness_v4(")
+            .split_once("fn production_ds_offline_readiness_v4(")
             .expect("end of Taira release-key regression")
             .0;
         for required in [
@@ -20292,7 +20298,7 @@ mod kagemusha_bridge_tests {
             "both recursive bundles must reuse one parsed installed verifier"
         );
         let body = source
-            .split_once("fn production_sbd_acceptance_test_body_v1(")
+            .split_once("fn production_ds_acceptance_test_body_v1(")
             .expect("production acceptance body")
             .1
             .split_once(
@@ -20432,10 +20438,10 @@ mod kagemusha_bridge_tests {
             .expect("end of production release fixture")
             .0;
         let exporter = source
-            .split_once("fn export_production_sbd_acceptance_bundle_v1")
+            .split_once("fn export_production_ds_acceptance_bundle_v1")
             .expect("production acceptance exporter")
             .1
-            .split_once("fn run_large_stack_production_sbd_acceptance_test")
+            .split_once("fn run_large_stack_production_ds_acceptance_test")
             .expect("end of production acceptance exporter")
             .0;
         assert!(fixture.contains("file: Mutex<File>"));
@@ -20449,12 +20455,12 @@ mod kagemusha_bridge_tests {
     }
     #[test]
     fn recursive_spend_v4_acceptance_inventory_marks_init_result_secret() {
-        assert!(production_sbd_acceptance_file_secret_v1(
+        assert!(production_ds_acceptance_file_secret_v1(
             "recursive_init_result_v4",
             true
         ));
         assert!(
-            std::panic::catch_unwind(|| production_sbd_acceptance_file_secret_v1(
+            std::panic::catch_unwind(|| production_ds_acceptance_file_secret_v1(
                 "recursive_init_result_v4",
                 false
             ))
@@ -20462,10 +20468,10 @@ mod kagemusha_bridge_tests {
             "the inventory builder must fail closed if the embedded membership witness is public"
         );
         let exporter = bridge_source()
-            .split_once("fn export_production_sbd_acceptance_bundle_v1")
+            .split_once("fn export_production_ds_acceptance_bundle_v1")
             .expect("production acceptance exporter")
             .1
-            .split_once("fn run_large_stack_production_sbd_acceptance_test")
+            .split_once("fn run_large_stack_production_ds_acceptance_test")
             .expect("end of production acceptance exporter")
             .0;
         let init_result_entry = exporter
@@ -20496,7 +20502,7 @@ mod kagemusha_bridge_tests {
         std::fs::create_dir(&target).expect("create real bundle target");
         let linked_root = base.join("linked-bundle");
         symlink(&target, &linked_root).expect("create final-root symlink");
-        ProductionSbdAcceptanceBundleRootV1::create(linked_root)
+        ProductionDsAcceptanceBundleRootV1::create(linked_root)
             .expect_err("the final acceptance bundle root must not be a symlink");
         assert!(
             target
@@ -20515,7 +20521,7 @@ mod kagemusha_bridge_tests {
         std::fs::create_dir(&target_ancestor).expect("create real ancestor");
         let linked_ancestor = base.join("linked-ancestor");
         symlink(&target_ancestor, &linked_ancestor).expect("create ancestor symlink");
-        ProductionSbdAcceptanceBundleRootV1::create(linked_ancestor.join("bundle"))
+        ProductionDsAcceptanceBundleRootV1::create(linked_ancestor.join("bundle"))
             .expect_err("every acceptance bundle ancestor must be symlink-free");
         assert!(!target_ancestor.join("bundle").exists());
     }
@@ -20526,14 +20532,14 @@ mod kagemusha_bridge_tests {
         let (_temporary, base) = canonical_acceptance_export_test_root();
         let non_normalized =
             std::path::PathBuf::from(format!("{}/./not-normalized", base.display()));
-        ProductionSbdAcceptanceBundleRootV1::create(non_normalized)
+        ProductionDsAcceptanceBundleRootV1::create(non_normalized)
             .expect_err("non-normalized output roots must fail closed");
         let root_path = base.join("bundle");
-        let root = ProductionSbdAcceptanceBundleRootV1::create(root_path.clone())
+        let root = ProductionDsAcceptanceBundleRootV1::create(root_path.clone())
             .expect("create symlink-free acceptance root");
         root.write_private_file("sender/payload.norito", b"private payload")
             .expect("write descriptor-relative private payload");
-        root.finish(&[ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+        root.finish(&[ProductionDsAcceptanceExpectedFileV1::from_bytes(
             "sender/payload.norito",
             b"private payload",
         )])
@@ -20570,12 +20576,12 @@ mod kagemusha_bridge_tests {
     ) {
         let (_temporary, base) = canonical_acceptance_export_test_root();
         let root_path = base.join("bundle");
-        let root = ProductionSbdAcceptanceBundleRootV1::create(root_path.clone())
+        let root = ProductionDsAcceptanceBundleRootV1::create(root_path.clone())
             .expect("create adversarial acceptance root");
         root.write_private_file("sender/payload.norito", b"private payload")
             .expect("write adversarial acceptance payload");
         mutate(&root_path);
-        let expected = [ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+        let expected = [ProductionDsAcceptanceExpectedFileV1::from_bytes(
             "sender/payload.norito",
             b"private payload",
         )];
@@ -29348,9 +29354,9 @@ mod tests {
             .expect("Taira recipient");
         let network_id = NETWORK_ID.as_bytes();
         let receiver_device_id = b"receiver-device";
-        // The ABI receives the exact deployed typed ID resolved from the `sbd#cbsi` selector.
+        // The ABI receives the exact deployed typed ID resolved from the `ds#boi.is` selector.
         let asset = AssetDefinitionId::parse_address_literal("7ZepsJTHCVLKsrFFNZGSRGZgvBhv")
-            .expect("deployed typed SBD definition ID")
+            .expect("deployed typed DS definition ID")
             .to_string()
             .into_bytes();
         assert_eq!(asset, b"7ZepsJTHCVLKsrFFNZGSRGZgvBhv");

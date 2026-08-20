@@ -70,15 +70,15 @@ def test_release_manifest_regeneration_is_byte_identical(tmp_path: Path) -> None
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir()
     files = {
-        "iroha2-1.0.0-linux.tar.zst": b"deterministic release bytes",
-        "iroha2-1.0.0-linux.tar.zst.sha256": b"sidecar\n",
-        "iroha2-1.0.0-manifest.json": b'{"builder":"deterministic"}\n',
+        "iroha3-1.0.0-linux.tar.zst": b"deterministic release bytes",
+        "iroha3-1.0.0-linux.tar.zst.sha256": b"sidecar\n",
+        "iroha3-1.0.0-manifest.json": b'{"builder":"deterministic"}\n',
     }
     write_inventory(artifacts, files)
     specs = [
-        "iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:iroha2-1.0.0-linux.tar.zst",
-        "iroha2:x86_64-unknown-linux-gnu:checksum:sha256:iroha2-1.0.0-linux.tar.zst.sha256",
-        "iroha2:x86_64-unknown-linux-gnu:builder-manifest:json:iroha2-1.0.0-manifest.json",
+        "iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:iroha3-1.0.0-linux.tar.zst",
+        "iroha3:x86_64-unknown-linux-gnu:checksum:sha256:iroha3-1.0.0-linux.tar.zst.sha256",
+        "iroha3:x86_64-unknown-linux-gnu:builder-manifest:json:iroha3-1.0.0-manifest.json",
     ]
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"
@@ -120,7 +120,7 @@ def test_release_manifest_rejects_malformed_checksum_inventory(
         command(
             artifacts,
             tmp_path / "manifest.json",
-            ["iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
+            ["iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
         ),
         capture_output=True,
         text=True,
@@ -144,7 +144,7 @@ def test_release_manifest_rejects_duplicate_checksum_rows(tmp_path: Path) -> Non
         command(
             artifacts,
             tmp_path / "manifest.json",
-            ["iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
+            ["iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
         ),
         capture_output=True,
         text=True,
@@ -162,10 +162,10 @@ def test_release_manifest_rejects_non_closed_file_sets(
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir()
     files = {"artifact.tar.zst": b"bytes"}
-    specs = ["iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"]
+    specs = ["iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"]
     if mode == "missing":
         specs.append(
-            "iroha2:x86_64-unknown-linux-gnu:builder-manifest:json:missing.json"
+            "iroha3:x86_64-unknown-linux-gnu:builder-manifest:json:missing.json"
         )
     else:
         files["stale.json"] = b"stale"
@@ -192,7 +192,7 @@ def test_release_manifest_rejects_checksum_hash_mismatch(tmp_path: Path) -> None
         command(
             artifacts,
             tmp_path / "manifest.json",
-            ["iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
+            ["iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
         ),
         capture_output=True,
         text=True,
@@ -228,7 +228,7 @@ def test_release_manifest_rejects_unsafe_artifacts(
         command(
             artifacts,
             tmp_path / "manifest.json",
-            ["iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
+            ["iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
         ),
         capture_output=True,
         text=True,
@@ -241,11 +241,11 @@ def test_release_manifest_rejects_unsafe_artifacts(
 @pytest.mark.parametrize(
     "spec",
     (
-        "iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:../artifact.tar.zst",
-        "iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:/artifact.tar.zst",
-        r"iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:dir\\artifact.tar.zst",
+        "iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:../artifact.tar.zst",
+        "iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:/artifact.tar.zst",
+        r"iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:dir\\artifact.tar.zst",
         "unknown:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst",
-        "iroha2:x86_64-unknown-linux-gnu:bundle:json:artifact.tar.zst",
+        "iroha3:x86_64-unknown-linux-gnu:bundle:json:artifact.tar.zst",
     ),
 )
 def test_release_manifest_rejects_invalid_artifact_descriptors(
@@ -274,7 +274,7 @@ def test_release_manifest_output_is_exclusive(tmp_path: Path) -> None:
         command(
             artifacts,
             output,
-            ["iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
+            ["iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
         ),
         capture_output=True,
         text=True,
@@ -295,7 +295,7 @@ def test_release_manifest_rejects_output_inside_artifact_root(
         command(
             artifacts,
             output,
-            ["iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
+            ["iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
         ),
         capture_output=True,
         text=True,
@@ -319,7 +319,7 @@ def test_release_manifest_rejects_output_parent_aliasing_artifact_root(
         command(
             artifacts,
             output,
-            ["iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
+            ["iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
         ),
         capture_output=True,
         text=True,
@@ -341,7 +341,7 @@ def test_release_manifest_rejects_non_full_canonical_commit(
     args = command(
         artifacts,
         tmp_path / "manifest.json",
-        ["iroha2:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
+        ["iroha3:x86_64-unknown-linux-gnu:bundle:tar.zst:artifact.tar.zst"],
     )
     args[args.index("--commit") + 1] = commit
     result = subprocess.run(

@@ -1,6 +1,6 @@
 use super::{SignedBlock, execution_context::BlockExecutionContextBundle, header::BlockHeader};
 use crate::{
-    consensus::{NposConsensusEffects, PreviousRosterEvidence},
+    consensus::NposConsensusEffects,
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -21,10 +21,7 @@ use std::{cmp::Ordering, collections::BTreeMap, fmt, vec::Vec};
 #[model]
 mod model {
     use super::*;
-    use crate::{
-        consensus::{NposConsensusEffects, PreviousRosterEvidence},
-        da::commitment::DaCommitmentBundle,
-    };
+    use crate::{consensus::NposConsensusEffects, da::commitment::DaCommitmentBundle};
     /// Core contents of a block.
     #[derive(Debug, Clone, Encode, IntoSchema, Decode)]
     #[cfg_attr(
@@ -35,46 +32,25 @@ mod model {
     pub(crate) struct BlockPayload {
         /// Essential metadata for a block in the chain.
         pub header: BlockHeader,
-        /// Legacy in-memory cache of signed external transactions.
-        ///
-        /// New V1 wire stores external transaction entrypoints once in
-        /// [`Self::external_entrypoints`]; this vector is kept for constructors
-        /// and older in-process call sites only.
-        #[norito(skip)]
-        pub transactions: Vec<SignedTransaction>,
-        /// External transaction entrypoints in consensus order.
-        ///
-        /// Older blocks omit this field and reconstruct the order from the legacy
-        /// signed-transaction payload vector.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Vec::is_empty")]
+        /// Canonical external transaction entrypoints in consensus order.
         pub external_entrypoints: Vec<TransactionEntrypoint>,
         /// Optional DA commitment bundle embedded in this block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub da_commitments: Option<DaCommitmentBundle>,
         /// Optional DA proof policy bundle embedded in this block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub da_proof_policies: Option<DaProofPolicyBundle>,
         /// Optional DA pin intent bundle embedded in this block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub da_pin_intents: Option<DaPinIntentBundle>,
-        /// Optional previous-height roster evidence embedded in this block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
-        pub previous_roster_evidence: Option<PreviousRosterEvidence>,
         /// Deterministic `NPoS` effects embedded in this block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub npos_consensus_effects: Option<NposConsensusEffects>,
         /// Durable execution context for external entrypoints.
         ///
         /// New committed blocks include this context so replay does not need to
         /// re-derive route-dependent execution inputs from the current WSV.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(required)]
         pub execution_context: Option<BlockExecutionContextBundle>,
     }
     /// Secondary block state resulting from execution.
@@ -84,11 +60,6 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct BlockResult {
-        /// Legacy in-memory copy of external transaction entrypoints.
-        ///
-        /// New V1 wire stores these on [`BlockPayload`] only.
-        #[norito(skip)]
-        pub external_entrypoints: Vec<TransactionEntrypoint>,
         /// Time-triggered entrypoints, forming the second half of the transaction entrypoints.
         pub time_triggers: Vec<TimeTriggerEntrypoint>,
         /// Merkle tree over the transaction entrypoints (external transactions followed by time triggers).
@@ -101,49 +72,23 @@ mod model {
         ///
         /// This includes external transactions, time triggers, and deterministic internal
         /// fragments folded into a block execution result.
-        #[norito(default)]
         pub committed_fragment_count: u64,
         /// FASTPQ transfer transcripts grouped by transaction entrypoint hash.
         pub fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
         /// Completed AXT envelopes recorded while executing the block.
-        #[norito(default)]
         pub axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
         /// Trigger completion events recorded while executing the block.
-        #[norito(default)]
         pub trigger_completions: Vec<TriggerCompletedEvent>,
         /// Canonical AXT policy snapshot used while executing the block.
         pub axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
         /// Canonically ordered post-execution lane effects authenticated by the global `CommitQC`.
         ///
-        /// This required V1 field stays last so its absence cannot alias a defaulted extension.
+        /// Every V1 result field is required; this field stays last to make truncated layouts fail
+        /// closed.
         pub lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
     }
 }
 pub use self::model::{BlockPayload, BlockResult};
-impl BlockPayload {
-    /// Hydrate the legacy signed-transaction cache from explicit external entrypoints.
-    ///
-    /// New block wire stores external transaction entrypoints in `external_entrypoints`; the
-    /// `transactions` vector is skipped by Norito and exists only for legacy in-process callers.
-    /// Call this after decoding payload bytes only when that legacy cache is explicitly needed.
-    pub fn hydrate_legacy_transaction_cache_from_entrypoints(&mut self) -> usize {
-        if !self.transactions.is_empty() || self.external_entrypoints.is_empty() {
-            return self.transactions.len();
-        }
-        self.transactions = self
-            .external_entrypoints
-            .iter()
-            .filter_map(|entrypoint| match entrypoint {
-                TransactionEntrypoint::External(tx) => Some(tx.clone()),
-                TransactionEntrypoint::SealedReveal(reveal) => {
-                    Some(reveal.signed_transaction().clone())
-                }
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
-            })
-            .collect();
-        self.transactions.len()
-    }
-}
 impl PartialEq for BlockPayload {
     fn eq(&self, other: &Self) -> bool {
         self.header == other.header
@@ -152,7 +97,6 @@ impl PartialEq for BlockPayload {
             && self.da_commitments == other.da_commitments
             && self.da_proof_policies == other.da_proof_policies
             && self.da_pin_intents == other.da_pin_intents
-            && self.previous_roster_evidence == other.previous_roster_evidence
             && self.npos_consensus_effects == other.npos_consensus_effects
     }
 }
@@ -175,7 +119,6 @@ impl Ord for BlockPayload {
             &self.da_commitments,
             &self.da_proof_policies,
             &self.da_pin_intents,
-            &self.previous_roster_evidence,
             &self_npos_effects_hash,
         )
             .cmp(&(
@@ -185,7 +128,6 @@ impl Ord for BlockPayload {
                 &other.da_commitments,
                 &other.da_proof_policies,
                 &other.da_pin_intents,
-                &other.previous_roster_evidence,
                 &other_npos_effects_hash,
             ))
     }
@@ -249,28 +191,15 @@ impl fmt::Display for BlockResult {
     }
 }
 impl SignedBlock {
-    /// Borrow external entrypoints in execution order when the block stores them explicitly.
-    ///
-    /// Older in-memory blocks may only carry the legacy signed-transaction vector; callers should
-    /// fall back to [`Self::external_transactions`] in that case.
+    /// Borrow canonical external entrypoints in execution order.
     #[inline]
-    pub fn external_entrypoints_slice(&self) -> Option<&[TransactionEntrypoint]> {
-        if self.payload.external_entrypoints.is_empty() {
-            self.result.as_ref().and_then(|result| {
-                (!result.external_entrypoints.is_empty())
-                    .then_some(result.external_entrypoints.as_slice())
-            })
-        } else {
-            Some(self.payload.external_entrypoints.as_slice())
-        }
+    pub fn external_entrypoints_slice(&self) -> &[TransactionEntrypoint] {
+        self.payload.external_entrypoints.as_slice()
     }
     /// Number of external entrypoints (signed or authority-free) recorded in the block.
     #[inline]
     pub fn external_entrypoint_count(&self) -> usize {
-        self.external_entrypoints_slice().map_or(
-            self.payload.transactions.len(),
-            <[TransactionEntrypoint]>::len,
-        )
+        self.payload.external_entrypoints.len()
     }
     /// Return error for the transaction index
     pub fn error(&self, tx: usize) -> Option<&TransactionRejectionReason> {
@@ -297,7 +226,7 @@ impl SignedBlock {
     pub fn external_entrypoints_cloned(
         &self,
     ) -> impl ExactSizeIterator<Item = TransactionEntrypoint> + DoubleEndedIterator + '_ {
-        ExternalEntrypointIterator::new(self)
+        self.payload.external_entrypoints.iter().cloned()
     }
     /// Borrow one signed external transaction and return its canonical entrypoint hash.
     ///
@@ -308,24 +237,16 @@ impl SignedBlock {
         &self,
         index: usize,
     ) -> Option<(HashOf<TransactionEntrypoint>, &SignedTransaction)> {
-        self.external_entrypoints_slice().map_or_else(
-            || {
-                let transaction = self.payload.transactions.get(index)?;
-                Some((transaction.hash_as_entrypoint(), transaction))
-            },
-            |entries| {
-                let entrypoint = entries.get(index)?;
-                let hash = entrypoint.hash();
-                let transaction = match entrypoint {
-                    TransactionEntrypoint::External(transaction) => transaction,
-                    TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
-                    TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                        return None;
-                    }
-                };
-                Some((hash, transaction))
-            },
-        )
+        let entrypoint = self.payload.external_entrypoints.get(index)?;
+        let hash = entrypoint.hash();
+        let transaction = match entrypoint {
+            TransactionEntrypoint::External(transaction) => transaction,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                return None;
+            }
+        };
+        Some((hash, transaction))
     }
     /// Borrow one signed external transaction by canonical entrypoint index.
     ///
@@ -333,19 +254,11 @@ impl SignedBlock {
     /// useful to continue streaming an entrypoint after its hash has already been retained.
     #[inline]
     pub fn external_signed_transaction_ref_at(&self, index: usize) -> Option<&SignedTransaction> {
-        self.external_entrypoints_slice().map_or_else(
-            || self.payload.transactions.get(index),
-            |entries| match entries.get(index)? {
-                TransactionEntrypoint::External(transaction) => Some(transaction),
-                TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
-            },
-        )
-    }
-    /// Block transactions, the underlying vector
-    #[inline]
-    pub fn transactions_vec(&self) -> &Vec<SignedTransaction> {
-        &self.payload.transactions
+        match self.payload.external_entrypoints.get(index)? {
+            TransactionEntrypoint::External(transaction) => Some(transaction),
+            TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+        }
     }
     /// Durable execution context embedded in this block, if any.
     #[inline]
@@ -398,17 +311,6 @@ impl SignedBlock {
         self.payload.da_pin_intents = intents;
         self.payload.header.set_da_pin_intents_hash(hash);
     }
-    /// Optional previous-height roster evidence embedded in this block.
-    #[inline]
-    pub fn previous_roster_evidence(&self) -> Option<&PreviousRosterEvidence> {
-        self.payload.previous_roster_evidence.as_ref()
-    }
-    /// Set or clear previous-height roster evidence and update the header hash accordingly.
-    pub fn set_previous_roster_evidence(&mut self, evidence: Option<PreviousRosterEvidence>) {
-        let hash = evidence.as_ref().map(HashOf::new);
-        self.payload.previous_roster_evidence = evidence;
-        self.payload.header.set_prev_roster_evidence_hash(hash);
-    }
     /// Deterministic `NPoS` effects embedded in this block.
     #[inline]
     pub fn npos_consensus_effects(&self) -> Option<&NposConsensusEffects> {
@@ -433,7 +335,6 @@ impl SignedBlock {
             .collect::<MerkleTree<TransactionEntrypoint>>();
         self.payload.header.merkle_root = merkle.root();
         if let Some(result) = self.result.as_mut() {
-            result.external_entrypoints.clear();
             result.merkle = entrypoints
                 .iter()
                 .map(TransactionEntrypoint::hash)
@@ -476,9 +377,6 @@ impl SignedBlock {
             .as_ref()
             .is_some_and(|bundle| !bundle.is_empty())
         {
-            return false;
-        }
-        if self.payload.previous_roster_evidence.is_some() {
             return false;
         }
         if self
@@ -711,61 +609,36 @@ impl SignedBlock {
             .filter_map(|(i, result)| result.as_ref().err().map(|err| (i as u64, err)))
     }
 }
-#[derive(Clone, Copy)]
-enum ExternalTransactionSource<'a> {
-    Legacy(&'a [SignedTransaction]),
-    Entrypoints(&'a [TransactionEntrypoint]),
-}
 struct ExternalTransactionIterator<'a> {
-    source: ExternalTransactionSource<'a>,
+    entrypoints: &'a [TransactionEntrypoint],
     front: usize,
     back: usize,
     remaining: usize,
 }
 impl<'a> ExternalTransactionIterator<'a> {
     fn new(block: &'a SignedBlock) -> Self {
-        let (source, len, remaining) = block.external_entrypoints_slice().map_or_else(
-            || {
-                let transactions = block.payload.transactions.as_slice();
-                (
-                    ExternalTransactionSource::Legacy(transactions),
-                    transactions.len(),
-                    transactions.len(),
+        let entrypoints = block.external_entrypoints_slice();
+        let remaining = entrypoints
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    TransactionEntrypoint::External(_) | TransactionEntrypoint::SealedReveal(_)
                 )
-            },
-            |entries| {
-                let remaining = entries
-                    .iter()
-                    .filter(|entry| {
-                        matches!(
-                            entry,
-                            TransactionEntrypoint::External(_)
-                                | TransactionEntrypoint::SealedReveal(_)
-                        )
-                    })
-                    .count();
-                (
-                    ExternalTransactionSource::Entrypoints(entries),
-                    entries.len(),
-                    remaining,
-                )
-            },
-        );
+            })
+            .count();
         Self {
-            source,
+            entrypoints,
             front: 0,
-            back: len,
+            back: entrypoints.len(),
             remaining,
         }
     }
     fn transaction_at(&self, index: usize) -> Option<&'a SignedTransaction> {
-        match self.source {
-            ExternalTransactionSource::Legacy(transactions) => transactions.get(index),
-            ExternalTransactionSource::Entrypoints(entries) => match entries.get(index)? {
-                TransactionEntrypoint::External(transaction) => Some(transaction),
-                TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
-            },
+        match self.entrypoints.get(index)? {
+            TransactionEntrypoint::External(transaction) => Some(transaction),
+            TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
 }
@@ -800,76 +673,8 @@ impl ExactSizeIterator for ExternalTransactionIterator<'_> {
         self.remaining
     }
 }
-#[derive(Clone, Copy)]
-enum ExternalEntrypointSource<'a> {
-    Legacy(&'a [SignedTransaction]),
-    Entrypoints(&'a [TransactionEntrypoint]),
-}
-struct ExternalEntrypointIterator<'a> {
-    source: ExternalEntrypointSource<'a>,
-    front: usize,
-    back: usize,
-}
-impl<'a> ExternalEntrypointIterator<'a> {
-    fn new(block: &'a SignedBlock) -> Self {
-        let (source, len) = block.external_entrypoints_slice().map_or_else(
-            || {
-                let transactions = block.payload.transactions.as_slice();
-                (
-                    ExternalEntrypointSource::Legacy(transactions),
-                    transactions.len(),
-                )
-            },
-            |entries| {
-                (
-                    ExternalEntrypointSource::Entrypoints(entries),
-                    entries.len(),
-                )
-            },
-        );
-        Self {
-            source,
-            front: 0,
-            back: len,
-        }
-    }
-    fn entrypoint_at(&self, index: usize) -> Option<TransactionEntrypoint> {
-        match self.source {
-            ExternalEntrypointSource::Legacy(transactions) => transactions
-                .get(index)
-                .cloned()
-                .map(TransactionEntrypoint::from),
-            ExternalEntrypointSource::Entrypoints(entries) => entries.get(index).cloned(),
-        }
-    }
-}
-impl Iterator for ExternalEntrypointIterator<'_> {
-    type Item = TransactionEntrypoint;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.front >= self.back {
-            return None;
-        }
-        let idx = self.front;
-        self.front += 1;
-        self.entrypoint_at(idx)
-    }
-}
-impl DoubleEndedIterator for ExternalEntrypointIterator<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front >= self.back {
-            return None;
-        }
-        self.back -= 1;
-        self.entrypoint_at(self.back)
-    }
-}
-impl ExactSizeIterator for ExternalEntrypointIterator<'_> {
-    fn len(&self) -> usize {
-        self.back.saturating_sub(self.front)
-    }
-}
 struct EntrypointIterator<'a> {
-    external: ExternalEntrypointIterator<'a>,
+    external: core::iter::Cloned<std::slice::Iter<'a, TransactionEntrypoint>>,
     time_triggers: Option<std::slice::Iter<'a, TimeTriggerEntrypoint>>,
 }
 impl Iterator for EntrypointIterator<'_> {
@@ -909,7 +714,7 @@ impl ExactSizeIterator for EntrypointIterator<'_> {
 impl<'a> EntrypointIterator<'a> {
     fn new(block: &'a SignedBlock) -> Self {
         Self {
-            external: ExternalEntrypointIterator::new(block),
+            external: block.external_entrypoints_slice().iter().cloned(),
             time_triggers: block
                 .result
                 .as_ref()

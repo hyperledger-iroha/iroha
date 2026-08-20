@@ -289,11 +289,21 @@ fn v5_k17_shape_capture_requires_the_production_degree() {
         lookup_bits: Some(16),
         num_instance_columns: 1,
     };
-    let captured = kagemusha_k17_capture_required_shape_v5("StepEqLive", &required)
-        .expect("reviewed populated role shape");
-    assert_eq!(captured.k, 17);
-    assert_eq!(captured.lookup_bits, Some(16));
-    assert_eq!(captured.widths().expect("captured widths"), (175, 19));
+    for role in ["StepEqLive", "StepEpLive"] {
+        let captured = kagemusha_k17_capture_required_shape_v5(role, &required)
+            .expect("reviewed populated role shape");
+        assert_eq!(captured.role, role);
+        assert_eq!(captured.k, 17);
+        assert_eq!(captured.lookup_bits, Some(16));
+        assert_eq!(captured.widths().expect("captured widths"), (175, 19));
+    }
+    for role in ["StepEq live", "StepEp live"] {
+        assert!(
+            kagemusha_k17_capture_required_shape_v5(role, &required)
+                .expect_err("noncanonical live role must fail the active probe")
+                .contains("unknown role")
+        );
+    }
     let mut stale = required;
     stale.k = 16;
     stale.lookup_bits = Some(15);
@@ -724,6 +734,408 @@ fn v6_audit_inventory_probe_exits_before_the_first_populated_circuit() {
     assert!(wrapper.contains("KagemushaK17ShapeProbeScopeV5::enter()"));
     assert!(wrapper.contains("populated_step_circuits=0"));
 }
+#[test]
+fn serialized_v7_is_the_only_operator_visible_audit_candidate() {
+    const RETIRED: &str = concat!("probe-compact-k17-", "ipa-audit-bridge");
+    let binary = include_str!("../../bin/kagemusha_recursive_spend_v4_memory_benchmark.rs");
+    let wrapper = include_str!("../../../../../scripts/run_kagemusha_v4_generation_benchmark.py");
+    let facade = include_str!("../kagemusha_v2.rs");
+    assert!(!binary.contains(RETIRED));
+    assert!(!wrapper.contains(RETIRED));
+    assert!(!facade.contains("run_kagemusha_k17_ipa_audit_bridge_probe_v7"));
+
+    let selected = include_str!("serialized_audit_bridge_v7.rs");
+    assert!(selected.contains("KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7: bool = false"));
+    assert!(selected.contains("if !KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7"));
+}
+#[test]
+fn serialized_v7_native_vector_has_one_reviewed_freeze_seam() {
+    let vector = include_str!("serialized_audit_vector_v7.rs");
+    let serialized = include_str!("../kagemusha_serialized_audit_v7.rs");
+    assert_eq!(
+        vector.matches("impl<F: ff::PrimeField> super::kagemusha_serialized_audit_v7::KagemushaNativeAuditVectorSourceV7<F>").count(),
+        1,
+        "the compiler provenance capability must have one reviewed implementation"
+    );
+    assert_eq!(
+        vector
+            .matches("KagemushaFrozenNativeAuditVectorV7::from_reviewed_source(")
+            .count(),
+        1,
+        "the canonical assigned vector builder must own the only production freeze call"
+    );
+    assert_eq!(
+        vector
+            .matches("KagemushaReviewedNativeAuditSourceV7(elements)")
+            .count(),
+        1,
+        "the exact pre-audit vector must be frozen directly at the builder tail"
+    );
+    assert_eq!(
+        serialized
+            .matches("pub(super) fn from_reviewed_source<S>(")
+            .count(),
+        1,
+        "the frozen-vector constructor must not be duplicated"
+    );
+}
+
+#[test]
+fn serialized_v7_absent_parent_canonicalizes_the_full_parsed_instance() {
+    let source = include_str!("serialized_audit_builder_v7.rs");
+    let induction = source
+        .split_once("fn constrain_kagemusha_serialized_parent_induction_v7")
+        .expect("serialized parent-induction function")
+        .1
+        .split_once("fn constrain_kagemusha_serialized_challenge_and_native_evaluation_v7")
+        .expect("end of serialized parent-induction function")
+        .0;
+    assert!(induction.contains("for value in &parent.instance_cells"));
+    assert!(induction.contains("Existing(parent.present), Existing(*value)"));
+    assert!(induction.contains("ctx.constrain_equal(&selected, value)"));
+    assert!(
+        induction
+            .find("for value in &parent.instance_cells")
+            .expect("full parent-column zeroing")
+            < induction
+                .find("slots.push(KagemushaAssignedParentSlotV7")
+                .expect("transitive parent tuple construction"),
+        "all 70 parsed cells must be canonicalized before the digest tuple is assembled"
+    );
+}
+
+#[test]
+fn serialized_v7_atomic_acceptance_terminally_decides_both_openings() {
+    let source = include_str!("serialized_audit_builder_v7.rs");
+    let verifier = source
+        .split_once("fn verify_kagemusha_serialized_atomic_pair_v7")
+        .expect("serialized atomic verifier")
+        .1
+        .split_once("fn verify_kagemusha_serialized_null_parent_pair_v7")
+        .expect("end of serialized atomic verifier")
+        .0;
+    assert_eq!(
+        verifier
+            .matches("verify_and_decide_eq_accumulation_v4")
+            .count(),
+        1
+    );
+    assert_eq!(
+        verifier
+            .matches("verify_and_decide_ep_accumulation_v4")
+            .count(),
+        1
+    );
+    assert_eq!(
+        verifier
+            .matches("KagemushaIpaAccumulationProofV4::initialization(manifest.k)")
+            .count(),
+        2
+    );
+    let challenge_check = verifier
+        .find("public challenge is not commitment-derived")
+        .expect("commitment-derived challenge check");
+    let eq_decision = verifier
+        .find("verify_and_decide_eq_accumulation_v4")
+        .expect("terminal Eq decision");
+    let ep_decision = verifier
+        .find("verify_and_decide_ep_accumulation_v4")
+        .expect("terminal Ep decision");
+    let success = verifier
+        .rfind("Ok(KagemushaSerializedVerifiedPairV7")
+        .expect("atomic success");
+    assert!(challenge_check < eq_decision && eq_decision < ep_decision && ep_decision < success);
+}
+
+#[test]
+fn serialized_v7_precommit_invariance_straddles_streamed_key_custody() {
+    let source = include_str!("serialized_audit_builder_v7.rs");
+    let creator = source
+        .split_once("fn create_kagemusha_serialized_atomic_pair_once_v7")
+        .expect("serialized atomic creator")
+        .1;
+    assert_eq!(
+        creator.matches(".serialized_jobs.precommitment(").count(),
+        4,
+        "both placeholder and final populated passes must be precommitted for both parities"
+    );
+    assert_eq!(
+        creator
+            .matches(".serialized_jobs.capacity_profile()?")
+            .count(),
+        4,
+        "both parity counts must be captured in the placeholder pass and recaptured in the final pass"
+    );
+
+    for (parity, label) in [("eq", "Eq"), ("ep", "Ep")] {
+        let placeholder_pass = creator
+            .find(&format!("let (step_{parity}_commitment,"))
+            .expect("placeholder populated precommitment pass");
+        let key_load = creator
+            .find(&format!(
+                "let step_{parity}_prepared_key = load_step_{parity}_proving_key()?;"
+            ))
+            .expect("bounded parity proving-key preparation");
+        let final_build = creator
+            .find(&format!(
+                "let (step_{parity}_circuit, step_{parity}_instances) = build_step_{parity}(join)?;"
+            ))
+            .expect("final populated circuit build");
+        let final_precommit = creator
+            .find(&format!("let step_{parity}_final_commitment ="))
+            .expect("final populated precommitment");
+        let instance_snapshot = creator
+            .find(&format!("let step_{parity}_final_cells ="))
+            .expect("final 70-cell instance snapshot");
+        let instance_invariance = creator
+            .find(&format!(
+                "&step_{parity}_placeholder_cells,\n        &step_{parity}_final_cells"
+            ))
+            .expect("placeholder/final instance invariance");
+        let count_recapture = creator
+            .find(&format!(
+                "Kagemusha V7 {label} placeholder/final serialized counts drifted"
+            ))
+            .expect("placeholder/final count recapture");
+        let invariant = creator
+            .find(&format!(
+                "Kagemusha V7 {label} placeholder/final precommitment invariance failed"
+            ))
+            .expect("placeholder/final invariance failure");
+        assert!(placeholder_pass < key_load);
+        assert!(key_load < final_build);
+        assert!(final_build < count_recapture);
+        assert!(final_build < instance_snapshot);
+        assert!(instance_snapshot < instance_invariance);
+        assert!(count_recapture < final_precommit);
+        assert!(final_precommit < invariant);
+        assert!(key_load < invariant);
+        assert!(key_load < instance_invariance);
+        let placeholder_precommit_block = &creator[placeholder_pass..key_load];
+        assert!(placeholder_precommit_block.contains(&format!("step_{parity}_params,")));
+        assert!(
+            placeholder_precommit_block
+                .contains(&format!("step_{parity}_precommit_verifying_key,"))
+        );
+        assert!(placeholder_precommit_block.contains(&format!(
+            "iroha_crypto::rng_from_seed_slice(&step_{parity}_seed.0)"
+        )));
+        let final_precommit_block = &creator[final_precommit..invariant];
+        assert!(final_precommit_block.contains(&format!(
+            "step_{parity}_params,\n        step_{parity}_precommit_verifying_key"
+        )));
+        assert!(final_precommit_block.contains(&format!(
+            "iroha_crypto::rng_from_seed_slice(&step_{parity}_seed.0)"
+        )));
+        assert_eq!(
+            creator
+                .matches(&format!(
+                    "iroha_crypto::rng_from_seed_slice(&step_{parity}_seed.0)"
+                ))
+                .count(),
+            2,
+            "placeholder and final precommitments must reuse exactly one role seed"
+        );
+        let proof = creator
+            .find(&format!(
+                "let (step_{parity}_proof, step_{parity}_verifying_key) ="
+            ))
+            .expect("parity proof creation");
+        assert!(invariant < proof);
+        assert!(creator[proof..].contains(&format!("step_{parity}_prepared_key.key")));
+    }
+}
+
+#[test]
+fn serialized_v7_selected_commitment_uses_vk_authenticated_geometry() {
+    let source = include_str!("serialized_audit_builder_v7.rs");
+    let geometry = source
+        .split_once("fn validate_kagemusha_serialized_vk_geometry_v7")
+        .expect("serialized verifying-key geometry validator")
+        .1
+        .split_once("fn succinct_verify_kagemusha_serialized_eq_v7")
+        .expect("end of serialized verifying-key geometry validator")
+        .0;
+    for required in [
+        "actual_phases.as_slice() != expected_phases.as_slice()",
+        "u32::try_from(actual_rank).ok() != Some(expected_rank)",
+        "!selected_is_permuted_advice",
+        "constraints.permutation().get_columns().len()",
+        "constraints.blinding_factors()",
+        "actual_proof_bytes != expected_proof_bytes",
+    ] {
+        assert!(
+            geometry.contains(required),
+            "verifying-key geometry validator omitted `{required}`"
+        );
+    }
+
+    for (function, next, parity) in [
+        (
+            "fn succinct_verify_kagemusha_serialized_eq_v7",
+            "fn succinct_verify_kagemusha_serialized_ep_v7",
+            "StepEq",
+        ),
+        (
+            "fn succinct_verify_kagemusha_serialized_ep_v7",
+            "fn kagemusha_serialized_instance_u128_v7",
+            "StepEp",
+        ),
+    ] {
+        let verifier = source
+            .split_once(function)
+            .expect("serialized parity verifier")
+            .1
+            .split_once(next)
+            .expect("end of serialized parity verifier")
+            .0;
+        let authentication = verifier
+            .find("validate_kagemusha_serialized_vk_geometry_v7(")
+            .expect("actual verifying-key geometry authentication");
+        let parity_binding = verifier
+            .find(&format!("KagemushaPastaCycleParityV1::{parity}"))
+            .expect("geometry parity binding");
+        let selection = verifier
+            .find("kagemusha_selected_advice_commitment_v7(")
+            .expect("selected advice commitment extraction");
+        assert!(authentication < parity_binding && parity_binding < selection);
+    }
+}
+
+#[test]
+fn serialized_v7_uses_the_active_probe_live_roles_for_both_public_modes() {
+    let builder = include_str!("serialized_audit_builder_v7.rs");
+    let adapter = include_str!("../kagemusha_recursion_adapter.rs");
+    let active_matcher = adapter
+        .split_once("let shape_probe_role = if kagemusha_k17_shape_probe_is_active_v5()")
+        .expect("active populated-shape probe matcher")
+        .1
+        .split_once("if let Some(role) = shape_probe_role")
+        .expect("end of active populated-shape probe matcher")
+        .0;
+    for role in ["StepEqLive", "StepEpLive"] {
+        assert_eq!(
+            builder.matches(&format!("\"{role}\"")).count(),
+            1,
+            "V7 must submit exactly one canonical {role} populated-graph role"
+        );
+        assert!(
+            active_matcher.contains(&format!("\"{role}\" => \"{role}\"")),
+            "the active probe must accept the exact V7 {role} key"
+        );
+    }
+    for rejected in [
+        "\"StepEq live\"",
+        "\"StepEp live\"",
+        "\"StepEqNullParent\"",
+        "\"StepEpNullParent\"",
+    ] {
+        assert!(
+            !builder.contains(rejected),
+            "V7 must not submit the noncanonical active-probe role {rejected}"
+        );
+    }
+}
+
+#[test]
+fn serialized_v7_release_driver_pins_guard_worker_and_complete_carrier() {
+    let source = include_str!("serialized_audit_release_proof_v7.rs");
+    let execute = source
+        .split_once("fn execute_kagemusha_serialized_release_proof_v7()")
+        .expect("zero-argument V7 release-proof entry point")
+        .1;
+    let guard = execute
+        .find("start_kagemusha_generation_memory_guard_v4(Some(")
+        .expect("explicit V7 release-proof memory guard");
+    let reviewed_limit = execute
+        .find("KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5")
+        .expect("explicit reviewed 56-GiB guard request");
+    let pool = execute
+        .find("rayon::ThreadPoolBuilder::new()")
+        .expect("source-pinned V7 Rayon pool");
+    let one_worker = execute
+        .find(".num_threads(KAGEMUSHA_GENERATION_RAYON_THREADS_V5)")
+        .expect("one-worker production thread count");
+    let install = execute
+        .find("pool.install(move || execute_kagemusha_serialized_release_proof_in_pool_v7")
+        .expect("complete heavy lifecycle installed in the bounded pool");
+    let prepare = execute
+        .find("prepare_kagemusha_serialized_release_material_v7(")
+        .expect("heavy Params/keygen lifecycle");
+    assert!(guard < reviewed_limit && reviewed_limit < pool);
+    assert!(pool < one_worker && one_worker < install && install < prepare);
+    assert!(
+        !source.contains(".effective_memory_limit_bytes()\n        .min("),
+        "V7 must report the guard's actual effective limit without a local clamp"
+    );
+
+    let wire = source
+        .split_once("struct KagemushaSerializedReleaseCarrierWireV7")
+        .expect("canonical V7 carrier wire")
+        .1
+        .split_once("impl KagemushaSerializedReleaseCarrierWireV7")
+        .expect("end of canonical V7 carrier wire")
+        .0;
+    for field in [
+        "step_eq_instances: Vec<u128>",
+        "step_ep_instances: Vec<u128>",
+        "step_eq_proof_bytes: Vec<u8>",
+        "step_ep_proof_bytes: Vec<u8>",
+        "step_eq_lineage: KagemushaIpaAccumulatorWireV4",
+        "step_ep_lineage: KagemushaIpaAccumulatorWireV4",
+        "step_eq_post_proof_fold: KagemushaIpaAccumulationProofV4",
+        "step_ep_post_proof_fold: KagemushaIpaAccumulationProofV4",
+    ] {
+        assert!(wire.contains(field), "canonical carrier omitted `{field}`");
+    }
+    assert!(source.contains("norito::encode_canonical(&wire)"));
+    assert!(source.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4"));
+    assert!(source.contains("canonical_carrier_bytes"));
+    assert!(source.contains("raw_proof_pair_bytes"));
+    assert!(source.contains("carrier host/public instance splice detected"));
+    let bundle_identity = source
+        .split_once("fn kagemusha_serialized_carrier_bundle_digest_v7(")
+        .expect("V7 complete previous-bundle identity")
+        .1
+        .split_once("fn prepare_kagemusha_serialized_case_recursions_v7(")
+        .expect("end of V7 complete previous-bundle identity")
+        .0;
+    assert!(bundle_identity.contains("validate_kagemusha_serialized_release_carrier_seal_v7("));
+    assert!(bundle_identity.contains("Ok(carrier.canonical_sha256)"));
+    let recursion = source
+        .split_once("fn prepare_kagemusha_serialized_case_recursions_v7(")
+        .expect("V7 authenticated parent-slot recursion")
+        .1
+        .split_once("fn assert_kagemusha_serialized_live_mutations_fail_v7(")
+        .expect("end of V7 authenticated parent-slot recursion")
+        .0;
+    assert!(recursion.contains("kagemusha_serialized_parent_slots_digest_v7("));
+    let null_wire = source
+        .split_once("struct KagemushaSerializedNullCarrierWireV7")
+        .expect("canonical final NullParent carrier")
+        .1
+        .split_once("impl KagemushaSerializedNullCarrierWireV7")
+        .expect("end of canonical final NullParent carrier")
+        .0;
+    for field in [
+        "step_eq_instances: Vec<u128>",
+        "step_ep_instances: Vec<u128>",
+        "step_eq_proof_bytes: Vec<u8>",
+        "step_ep_proof_bytes: Vec<u8>",
+        "step_eq_current: KagemushaIpaAccumulatorWireV4",
+        "step_ep_current: KagemushaIpaAccumulatorWireV4",
+        "step_eq_post_proof_fold: KagemushaIpaAccumulationProofV4",
+        "step_ep_post_proof_fold: KagemushaIpaAccumulationProofV4",
+        "step_eq_branch_merge_fold: KagemushaIpaAccumulationProofV4",
+        "step_ep_branch_merge_fold: KagemushaIpaAccumulationProofV4",
+    ] {
+        assert!(null_wire.contains(field), "null carrier omitted `{field}`");
+    }
+    assert!(source.contains("null_carrier_bytes"));
+    assert!(source.contains("null_carrier_sha256"));
+    assert!(!source.contains("KAGEMUSHA_SERIALIZED_PAIR_BYTES_V7"));
+}
+
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 #[test]
 fn v5_candidate_spool_identity_rejects_wrong_bindings() {
@@ -1358,45 +1770,49 @@ fn v4_memory_monitor_refuses_an_initial_sample_over_the_ceiling() {
     assert!(error.contains("already exceeds"));
 }
 #[test]
-fn macos_resource_probe_parsers_are_strict_and_bounded() {
-    assert!(std::path::Path::new(KAGEMUSHA_MACOS_SYSCTL_V4).is_absolute());
-    assert!(std::path::Path::new(KAGEMUSHA_MACOS_FOOTPRINT_V4).is_absolute());
+fn macos_native_resource_value_validation_is_strict() {
     assert_eq!(
-        parse_kagemusha_macos_physical_memory_bytes_v4(b"137438953472\n")
-            .expect("canonical macOS physical memory"),
+        validate_kagemusha_macos_native_resource_value_v4(
+            137_438_953_472,
+            std::mem::size_of::<u64>(),
+            std::mem::size_of::<u64>(),
+            "physical-memory",
+        )
+        .expect("canonical macOS physical memory"),
         137_438_953_472
     );
-    for malformed in [b"0\n".as_slice(), b"128 GiB\n", b"not-a-number\n"] {
-        assert!(
-            parse_kagemusha_macos_physical_memory_bytes_v4(malformed).is_err(),
-            "malformed physical-memory sample must fail closed"
-        );
-    }
-    let sample =
-        b"Auxiliary data:\n    phys_footprint: 1802600 B\n    phys_footprint_peak: 1900000 B\n";
-    assert_eq!(
-        parse_kagemusha_macos_physical_footprint_bytes_v4(sample)
-            .expect("canonical macOS physical footprint"),
-        1_802_600
+    assert!(
+        validate_kagemusha_macos_native_resource_value_v4(
+            0,
+            std::mem::size_of::<u64>(),
+            std::mem::size_of::<u64>(),
+            "physical-memory",
+        )
+        .is_err(),
+        "zero native resource values must fail closed"
     );
-    for malformed in [
-        b"Auxiliary data:\n".as_slice(),
-        b"phys_footprint: 0 B\n",
-        b"phys_footprint: 1.8 MiB\n",
-        b"phys_footprint: 1 B\nphys_footprint: 2 B\n",
-    ] {
-        assert!(
-            parse_kagemusha_macos_physical_footprint_bytes_v4(malformed).is_err(),
-            "malformed physical-footprint sample must fail closed"
-        );
-    }
+    assert!(
+        validate_kagemusha_macos_native_resource_value_v4(
+            1,
+            std::mem::size_of::<u32>(),
+            std::mem::size_of::<u64>(),
+            "physical-memory",
+        )
+        .is_err(),
+        "ABI-size drift must fail closed"
+    );
 }
 #[cfg(target_os = "macos")]
 #[test]
-fn macos_resource_probes_use_pinned_system_tools() {
-    assert!(kagemusha_physical_memory_bytes_v4().expect("macOS physical-memory probe") > 0);
+fn macos_native_resource_queries_match_the_public_abi() {
+    assert_eq!(
+        std::mem::size_of::<KagemushaMacosRusageInfoV0>(),
+        96,
+        "rusage_info_v0 ABI drift"
+    );
+    assert!(kagemusha_physical_memory_bytes_v4().expect("macOS physical-memory query") > 0);
     assert!(
-        kagemusha_process_physical_footprint_bytes_v4().expect("macOS physical-footprint probe")
+        kagemusha_process_physical_footprint_bytes_v4().expect("macOS physical-footprint query")
             > 0
     );
 }

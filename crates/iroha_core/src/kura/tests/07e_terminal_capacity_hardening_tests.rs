@@ -1174,7 +1174,7 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
                 &merge_entry,
                 batch,
                 execution,
-                Kura::merge_lane_block_artifact(execution),
+                Kura::merge_lane_block_execution_source(execution),
                 carrier_height,
                 carrier_hash,
             );
@@ -1546,7 +1546,7 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     let lane_entry = lane_config.primary();
     let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
     let entrypoint = offline_top_up_entrypoint_for_index([0xD2; 32], [0xD3; 32]);
-    let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+
     let proposal = merge_entry_with_indexed_entrypoint(entrypoint.clone())
         .execution_batch
         .as_ref()
@@ -1562,7 +1562,6 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     ));
     let reservation = LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: accepted.hash(),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new(
             b"merge-terminal-queue-plan-admission-binding",

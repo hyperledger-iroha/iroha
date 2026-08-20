@@ -1808,7 +1808,7 @@ where
     }
     /// Convert one assigned outer-field value below `2^bit_len` into the exact
     /// non-native scalar integer used by the reciprocal Poseidon sponge.
-    fn assigned_native_as_scalar_integer(
+    pub(super) fn assigned_native_as_scalar_integer(
         &self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
         value: AssignedValue<Outer<C>>,

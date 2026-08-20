@@ -48,12 +48,12 @@ fn transactions_without_consensus_handshake_metadata(
                 iroha_data_model::transaction::TransactionBuilder::decode_genesis_payload(
                     &canonical_payload,
                 )
-                .expect("cached genesis transaction payload must decode canonically")
+                .expect("canonical genesis transaction payload must decode")
                 .with_instructions(filtered);
             Some(
                 builder
                     .try_sign(genesis_key_pair.private_key())
-                    .expect("re-sign cached genesis transaction after handshake normalization"),
+                    .expect("re-sign canonical genesis transaction after handshake normalization"),
             )
         })
         .collect()

@@ -117,7 +117,6 @@ fn rendered_nexus_topology(spec: &ProfileSpec) -> &'static str {
     match spec.slug {
         "iroha3-taira" => {
             r#"[nexus]
-enabled = true
 lane_count = 7
 
 [[nexus.lane_catalog]]
@@ -331,7 +330,6 @@ instruction = "smartcontract::deploy"
         }
         "iroha3-nexus" => {
             r#"[nexus]
-enabled = true
 lane_count = 3
 
 [[nexus.lane_catalog]]
@@ -380,7 +378,6 @@ instruction = "smartcontract::deploy"
         }
         _ => {
             r#"[nexus]
-enabled = true
 lane_count = 3
 "#
         }

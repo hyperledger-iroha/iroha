@@ -226,8 +226,7 @@ fn kura_config(root: &Path) -> KuraConfig {
         merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Always,
         fsync_interval: FSYNC_INTERVAL,
-        block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        lane_history_retention: LANE_HISTORY_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
@@ -1576,6 +1575,7 @@ fn certified_geometry_lane_block_for_proposal(
 }
 struct MergeAppliedRetirementWork {
     certified: CertifiedLaneBlockArtifact,
+    ownership: SumeragiLanePayloadOwnership,
     entry: MergeLedgerEntry,
     carrier: Arc<SignedBlock>,
     release: LaneGeometryMergeRelease,
@@ -1599,7 +1599,7 @@ fn install_merge_applied_retirement_work(
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let entrypoint = TransactionEntrypoint::External(transaction);
     let entrypoint_hash = entrypoint.hash();
-    let (proposal, _) = geometry_lane_proposal_and_ownership(
+    let (proposal, ownership) = geometry_lane_proposal_and_ownership(
         lane_id,
         dataspace_id,
         lane_incarnation,
@@ -1798,6 +1798,7 @@ fn install_merge_applied_retirement_work(
         .expect("derive merge-applied retirement release");
     MergeAppliedRetirementWork {
         certified,
+        ownership,
         entry,
         carrier,
         release,
@@ -2039,11 +2040,10 @@ fn autonomous_retirement_payload_for_routes(
         "geometry retirement payload".to_owned(),
     )])
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-    let source_hash = transaction.hash();
-    let mut source_id = [0_u8; Hash::LENGTH];
-    source_id.copy_from_slice(source_hash.as_ref());
     let entrypoint = TransactionEntrypoint::External(transaction);
     let entrypoint_hash = entrypoint.hash();
+    let mut source_id = [0_u8; Hash::LENGTH];
+    source_id.copy_from_slice(entrypoint_hash.as_ref());
     let coordinator =
         crate::queue::RoutingDecision::new(coordinator_lane_id, coordinator_dataspace_id);
     let participant = crate::queue::RouteLeg::new(
@@ -2075,7 +2075,6 @@ fn autonomous_retirement_payload_for_routes(
     );
     let reservation = crate::queue::LaneQueueReservationKeyV2 {
         version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: source_hash,
         entrypoint_hash,
         queue_plan_admission_binding_hash: Hash::new(
             b"geometry-retirement-queue-plan-admission-binding",

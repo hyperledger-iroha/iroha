@@ -20,7 +20,7 @@ MAX_REGION_LINES = ORIGINAL_GOVERNED_LINES - MINIMUM_RUST_LINE_SAVING
 
 REGION_START = "    #[derive(Clone, Copy)]\n    enum LaneRelayRejectionCase"
 REGION_END = "    #[test]\n    async fn nft"
-REGION_SHA256 = "761b4c5af27cae7f2f9b9e73bf73f972a2792f5722d99275a66bb13092fb8cc0"
+REGION_SHA256 = "96e7ae783dba8fdfb4bddcc9db70eab636f6f8aa93f1bd4e53153a5758c418c5"
 POSITIVE_START = (
     "    #[test]\n"
     "    async fn register_verified_lane_relay_instruction_box_is_registered"
@@ -32,7 +32,6 @@ POSITIVE_END = (
 POSITIVE_SHA256 = "26a280831e3456fe060b1e9fb9662bdb3af38b15dd9aee2ab67611da9813f749"
 
 EXPECTED_CASES = (
-    ("register_verified_lane_relay_rejects_when_nexus_disabled", "NexusDisabled"),
     ("register_verified_lane_relay_rejects_unknown_lane_id", "UnknownLaneId"),
     (
         "register_verified_lane_relay_rejects_stale_geometry_lane_id",
@@ -153,10 +152,6 @@ EXPECTED_CASES = (
 )
 
 EXPECTED_ERRORS = {
-    "NexusDisabled": (
-        "disabled nexus must reject verified lane relay registration",
-        "requires nexus.enabled=true",
-    ),
     "UnknownLaneId": ("unknown lane id must be rejected", "unknown lane id 4"),
     "StaleGeometryLaneId": (
         "stale derived geometry must not register verified relay state",
@@ -282,7 +277,6 @@ EXPECTED_ERRORS = {
 }
 
 EXPECTED_PROOF_SEEDS = {
-    "NexusDisabled": "register-lane-relay-nexus-disabled",
     "UnknownLaneId": "register-lane-relay-unknown-lane",
     "StaleGeometryLaneId": "register-lane-relay-stale-geometry-lane",
     "LaneDataspaceMismatch": "register-lane-relay-lane-dsid-mismatch",
@@ -315,7 +309,6 @@ EXPECTED_PROOF_SEEDS = {
 }
 
 REQUIRED_RUNNER_TOKENS = (
-    "state_transaction.nexus.enabled = false",
     "test must seed derived geometry for the removed lane",
     "test must keep the stale lane out of the authoritative catalog",
     "payload: vec![0xFF, 0x00, 0xFE]",
@@ -557,7 +550,7 @@ def validate_source(source: str) -> None:
     expectation_item = _matching_brace(region, "fn expectation")
     for variant, expected_literals in EXPECTED_ERRORS.items():
         arm_match = re.search(
-            rf"Case::{re.escape(variant)}\s*=>\s*\((.*?)\n\s*\),",
+            rf"Case::{re.escape(variant)}\s*=>\s*(?:\{{\s*)?\((.*?)\)",
             expectation_item,
             re.DOTALL,
         )
@@ -568,7 +561,7 @@ def validate_source(source: str) -> None:
             raise GuardError(f"{variant}: error context/fragments changed or reordered")
     compact_expectation = re.sub(r"\s+", "", expectation_item)
     kind_contract = (
-        "Case::NexusDisabled|Case::ConflictingExistingState=>InvariantViolation,"
+        "Case::ConflictingExistingState=>InvariantViolation,"
         "_=>InvalidParameter,"
     )
     if kind_contract not in compact_expectation:

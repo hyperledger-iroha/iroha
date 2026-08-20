@@ -381,7 +381,7 @@ fn consuming_replacement_returns_previous_only_after_precommit_failure() {
     let generation = previous.generation_id().to_owned();
     let failure = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
-        .nexus_enabled(true)
+        .nexus_lane_count(2)
         .build_replacing(previous)
         .expect_err("invalid replacement must fail before publication");
     let (_error, previous) = failure.into_parts();
@@ -1407,7 +1407,6 @@ fn managed_peer_path_validation_rejects_runtime_root_redirects() {
 #[test]
 fn normalize_peer_config_overrides_sets_lane_count_and_local_services() {
     let mut nexus = toml::Table::new();
-    nexus.insert("enabled".into(), toml::Value::Boolean(true));
     let mut lane0 = toml::Table::new();
     lane0.insert("alias".into(), toml::Value::String("core".into()));
     lane0.insert("index".into(), toml::Value::Integer(0));
@@ -1428,6 +1427,7 @@ fn normalize_peer_config_overrides_sets_lane_count_and_local_services() {
         nexus.get("lane_count").and_then(toml::Value::as_integer),
         Some(2)
     );
+    assert!(!nexus.contains_key("enabled"));
     assert!(sumeragi.is_none());
     let torii = torii.expect("torii config");
     let mcp = torii
@@ -1444,26 +1444,8 @@ fn normalize_peer_config_overrides_sets_lane_count_and_local_services() {
     ));
 }
 #[test]
-fn normalize_peer_config_overrides_rejects_disabled_nexus_with_lanes() {
-    let mut nexus = toml::Table::new();
-    nexus.insert("enabled".into(), toml::Value::Boolean(false));
-    nexus.insert("lane_count".into(), toml::Value::Integer(3));
-    let mut nexus = Some(nexus);
-    let mut sumeragi = None;
-    let mut torii = None;
-    let err = normalize_peer_config_overrides(&mut nexus, &mut sumeragi, &mut torii)
-        .expect_err("disabled nexus should fail");
-    match err {
-        SupervisorError::Config(message) => assert!(
-            message.contains("nexus.enabled = false"),
-            "unexpected error: {message}"
-        ),
-        other => panic!("expected SupervisorError::Config, got {other:?}"),
-    }
-}
-#[test]
-fn supervisor_defaults_nexus_disabled_for_local_permissioned_profiles() {
-    if !ports_available("supervisor_defaults_nexus_disabled_for_local_permissioned_profiles") {
+fn supervisor_omits_retired_nexus_availability_switch() {
+    if !ports_available("supervisor_omits_retired_nexus_availability_switch") {
         return;
     }
     let _env = env_lock().lock().expect("env lock");
@@ -1473,17 +1455,25 @@ fn supervisor_defaults_nexus_disabled_for_local_permissioned_profiles() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-    let nexus = supervisor
-        .nexus_config_overrides()
-        .expect("default nexus overrides");
-    assert!(matches!(
-        nexus.get("enabled"),
-        Some(toml::Value::Boolean(false))
-    ));
+    assert!(supervisor.nexus_config_overrides().is_none());
 }
 #[test]
-fn supervisor_rejects_enabled_nexus_without_npos_consensus() {
-    if !ports_available("supervisor_rejects_enabled_nexus_without_npos_consensus") {
+fn supervisor_allows_canonical_nexus_with_permissioned_consensus() {
+    if !ports_available("supervisor_allows_canonical_nexus_with_permissioned_consensus") {
+        return;
+    }
+    let _env = env_lock().lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let _stub = KagamiStub::install(temp.path());
+    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+        .data_root(temp.path())
+        .build()
+        .expect("canonical one-lane Nexus is valid with permissioned consensus");
+    assert!(supervisor.nexus_config_overrides().is_none());
+}
+#[test]
+fn supervisor_rejects_custom_nexus_topology_without_npos_consensus() {
+    if !ports_available("supervisor_rejects_custom_nexus_topology_without_npos_consensus") {
         return;
     }
     let _env = env_lock().lock().expect("env lock");
@@ -1491,12 +1481,13 @@ fn supervisor_rejects_enabled_nexus_without_npos_consensus() {
     let _stub = KagamiStub::install(temp.path());
     let err = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
-        .nexus_enabled(true)
+        .nexus_lane_count(2)
         .build()
-        .expect_err("permissioned localnet should reject nexus");
+        .expect_err("custom lane topology must require NPoS consensus");
     match err {
         SupervisorError::Config(message) => assert!(
-            message.contains("NPoS signed-genesis consensus mode"),
+            message.contains("custom Nexus lane topology")
+                && message.contains("NPoS signed-genesis consensus mode"),
             "unexpected error: {message}"
         ),
         other => panic!("expected SupervisorError::Config, got {other:?}"),
@@ -1511,7 +1502,6 @@ fn supervisor_exposes_config_overrides() {
     let temp = tempfile::tempdir().expect("temp dir");
     let _stub = KagamiStub::install(temp.path());
     let mut nexus = toml::Table::new();
-    nexus.insert("enabled".into(), toml::Value::Boolean(true));
     let mut sumeragi = toml::Table::new();
     let mut queues = toml::Table::new();
     queues.insert("commands".into(), toml::Value::Integer(1024));
@@ -1532,10 +1522,7 @@ fn supervisor_exposes_config_overrides() {
     let nexus = supervisor
         .nexus_config_overrides()
         .expect("nexus overrides");
-    assert!(matches!(
-        nexus.get("enabled"),
-        Some(toml::Value::Boolean(true))
-    ));
+    assert!(!nexus.contains_key("enabled"));
     assert_eq!(
         supervisor
             .sumeragi_config_overrides()
@@ -1563,7 +1550,6 @@ fn lane_slug_sanitizes_alias() {
 fn lane_path_comments_include_default_aliases_for_multilane() {
     let temp = tempfile::tempdir().expect("temp dir");
     let mut nexus = toml::Table::new();
-    nexus.insert("enabled".into(), toml::Value::Boolean(true));
     nexus.insert("lane_count".into(), toml::Value::Integer(3));
     let comments = lane_path_comments(temp.path(), Some(&nexus));
     assert!(
@@ -1591,7 +1577,6 @@ fn peer_spec_writes_nexus_and_always_on_da_storage() {
     let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
     let genesis = test_genesis_material(&paths);
     let mut nexus = toml::Table::new();
-    nexus.insert("enabled".into(), toml::Value::Boolean(true));
     nexus.insert("lane_count".into(), toml::Value::Integer(1));
     let overrides = PeerConfigOverrides {
         nexus: Some(nexus),
@@ -1607,10 +1592,7 @@ fn peer_spec_writes_nexus_and_always_on_da_storage() {
         .get("nexus")
         .and_then(toml::Value::as_table)
         .expect("nexus table");
-    assert!(matches!(
-        nexus.get("enabled"),
-        Some(toml::Value::Boolean(true))
-    ));
+    assert!(!nexus.contains_key("enabled"));
     let torii = value
         .get("torii")
         .and_then(toml::Value::as_table)
@@ -2267,7 +2249,6 @@ fn peer_spec_config_header_includes_lane_paths() {
     lane1.insert("alias".into(), toml::Value::String("Gov+Ops".into()));
     lane1.insert("index".into(), toml::Value::Integer(1));
     let mut nexus = toml::Table::new();
-    nexus.insert("enabled".into(), toml::Value::Boolean(true));
     nexus.insert("lane_count".into(), toml::Value::Integer(2));
     nexus.insert(
         "lane_catalog".into(),

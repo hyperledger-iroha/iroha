@@ -1,6 +1,5 @@
-// Detached executor note: Keep this handler minimal and side‑effect free; only record
-// deltas. Prefer performing complex checks during merge in `StateBlock::merge_into`.
-// Extend cautiously when adding new ISIs (Peer, Parameters, ExecuteTrigger, etc.).
+// Detached executor note: Keep this handler minimal and side-effect free; record only deltas.
+// Perform complex checks during `StateBlock::merge_into`; extend cautiously for new ISIs.
 //! Structures and impls related to processing Iroha Virtual Machine (IVM) runtime executors.
 #[cfg(feature = "zk-preverify")]
 use crate::zk::PreverifyResult;
@@ -1205,54 +1204,23 @@ fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
 }
 fn should_charge_pipeline_gas_asset(
     skip_nexus_fee: bool,
-    nexus_enabled: bool,
     nexus_fees: &NexusFees,
     gas_asset_opt: &Option<String>,
 ) -> bool {
-    !skip_nexus_fee
-        && gas_asset_opt.is_some()
-        && (!nexus_enabled || nexus_fees.per_gas_unit_fee.is_zero())
+    !skip_nexus_fee && gas_asset_opt.is_some() && nexus_fees.per_gas_unit_fee.is_zero()
 }
 fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
     let hex = value.strip_prefix("0x").unwrap_or(value);
     hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
-fn account_literal_matches(
-    world: &impl WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    literal: &str,
-    expected: &AccountId,
-    now_ms: u64,
-) -> bool {
-    if let Ok(canonical) = AccountId::canonicalize(literal)
-        && expected
-            .canonical_i105()
-            .ok()
-            .as_deref()
-            .is_some_and(|expected| expected == canonical)
-    {
-        return true;
-    }
-    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
-        .as_ref()
-        .is_some_and(|account| account == expected)
-}
 fn successful_claim_fee_authority_allowed(
-    world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
     authority: &AccountId,
-    now_ms: u64,
 ) -> bool {
     nexus
         .fees
         .successful_claim_fee_exempt_authorities
-        .iter()
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|literal| !literal.is_empty())
-        .any(|literal| {
-            account_literal_matches(world, world.dataspace_catalog(), literal, authority, now_ms)
-        })
+        .contains(authority)
 }
 fn successful_claim_fee_exempt_instructions(
     world: &impl WorldReadOnly,
@@ -1262,7 +1230,7 @@ fn successful_claim_fee_exempt_instructions(
     instructions: &[InstructionBox],
     observation_time_ms: u64,
 ) -> bool {
-    if !successful_claim_fee_authority_allowed(world, nexus, authority, observation_time_ms) {
+    if !successful_claim_fee_authority_allowed(nexus, authority) {
         return false;
     }
     let Some(claim_tx_hash) = metadata_string(metadata, SORA_V2_CLAIM_TX_HASH_METADATA_KEY) else {
@@ -3785,8 +3753,7 @@ fn pipeline_gas_component_enabled(
     nexus: &iroha_config::parameters::actual::Nexus,
     pipeline: &Pipeline,
 ) -> bool {
-    !pipeline.gas.accepted_assets.is_empty()
-        && (!nexus.enabled || nexus.fees.per_gas_unit_fee.is_zero())
+    !pipeline.gas.accepted_assets.is_empty() && nexus.fees.per_gas_unit_fee.is_zero()
 }
 fn resolve_pipeline_gas_quote_asset(
     world: &impl WorldReadOnly,
@@ -3941,34 +3908,31 @@ fn evaluate_nexus_fee_admission_payload(
 ) -> Result<FeeAdmissionQuote, NexusFeeAdmissionError> {
     let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission_payload(payload)?;
     let mut charges = Vec::with_capacity(2);
-    if nexus.enabled {
-        let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
-            .map_err(validation_fail_to_nexus_fee_admission_error)?;
-        if !fee.is_zero()
-            && nexus.fees.settlement_mode
-                == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
-            && payload.fee_payment.sponsor_program().is_none()
-        {
-            reject_authority_lane_relay_burn_fee(&payload.authority)?;
-        }
-        let asset_definition_id = crate::block::parse_asset_definition_literal_with_world(
-            world,
-            &nexus.fees.fee_asset_id,
-            observation_time_ms,
+    let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
+        .map_err(validation_fail_to_nexus_fee_admission_error)?;
+    if !fee.is_zero()
+        && nexus.fees.settlement_mode
+            == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
+        && payload.fee_payment.sponsor_program().is_none()
+    {
+        reject_authority_lane_relay_burn_fee(&payload.authority)?;
+    }
+    let asset_definition_id = crate::block::parse_asset_definition_literal_with_world(
+        world,
+        &nexus.fees.fee_asset_id,
+        observation_time_ms,
+    )
+    .ok_or_else(|| {
+        NexusFeeAdmissionError::ConfigInvalid(
+            "invalid Nexus fee asset; expected a registered canonical asset definition".to_owned(),
         )
-        .ok_or_else(|| {
-            NexusFeeAdmissionError::ConfigInvalid(
-                "invalid Nexus fee asset; expected a registered canonical asset definition"
-                    .to_owned(),
-            )
-        })?;
-        if !fee.is_zero() {
-            charges.push(FeeChargeBound {
-                kind: FeeChargeKind::Nexus,
-                asset_definition_id,
-                max_bound: fee,
-            });
-        }
+    })?;
+    if !fee.is_zero() {
+        charges.push(FeeChargeBound {
+            kind: FeeChargeKind::Nexus,
+            asset_definition_id,
+            max_bound: fee,
+        });
     }
     if pipeline_gas_component_enabled(nexus, pipeline) && gas_used > 0 {
         let (asset_definition_id, _definition, units_per_gas) =
@@ -4283,20 +4247,16 @@ pub(crate) fn validate_transaction_fee_admission(
         return Ok(());
     }
     Executor::refresh_gas_from_parameters(state_transaction)?;
-    if state_transaction.nexus.enabled
-        || pipeline_gas_component_enabled(&state_transaction.nexus, &state_transaction.pipeline)
-    {
-        quote_nexus_fee_admission(
-            &state_transaction.world,
-            &state_transaction.nexus,
-            &state_transaction.pipeline,
-            transaction,
-            state_transaction.block_unix_timestamp_ms(),
-            state_transaction.block_height(),
-            state_transaction.current_dataspace_id,
-        )
-        .map_err(nexus_fee_admission_error_to_validation_fail)?;
-    }
+    quote_nexus_fee_admission(
+        &state_transaction.world,
+        &state_transaction.nexus,
+        &state_transaction.pipeline,
+        transaction,
+        state_transaction.block_unix_timestamp_ms(),
+        state_transaction.block_height(),
+        state_transaction.current_dataspace_id,
+    )
+    .map_err(nexus_fee_admission_error_to_validation_fail)?;
     Ok(())
 }
 /// Charge gas and Nexus fees for a transaction that was applied via overlay execution paths.
@@ -4452,7 +4412,6 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
     };
     if should_charge_pipeline_gas_asset(
         skip_nexus_fee,
-        state_transaction.nexus.enabled,
         &state_transaction.nexus.fees,
         &gas_asset_opt,
     ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -5061,9 +5020,6 @@ impl Executor {
         instruction_count: usize,
         gas_used: u64,
     ) -> Result<(), ValidationFail> {
-        if !state_transaction.nexus.enabled {
-            return Ok(());
-        }
         let cfg = state_transaction.nexus.fees.clone();
         let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
         if fee.is_zero() {
@@ -5656,7 +5612,6 @@ impl Executor {
         // 5) Charge gas fees when configured and the transaction specified a gas asset.
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
-            state_transaction.nexus.enabled,
             &state_transaction.nexus.fees,
             &gas_asset_opt,
         ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -5980,7 +5935,6 @@ impl Executor {
         Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
-            state_transaction.nexus.enabled,
             &state_transaction.nexus.fees,
             &gas_asset_opt,
         ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -6056,13 +6010,7 @@ impl Executor {
             );
         // Quote against the exact governed gas snapshot execution will charge.
         Self::refresh_gas_from_parameters(state_transaction)?;
-        if !skip_nexus_fee
-            && (state_transaction.nexus.enabled
-                || pipeline_gas_component_enabled(
-                    &state_transaction.nexus,
-                    &state_transaction.pipeline,
-                ))
-        {
+        if !skip_nexus_fee {
             quote_nexus_fee_admission(
                 &state_transaction.world,
                 &state_transaction.nexus,
@@ -6742,7 +6690,6 @@ impl Executor {
                         Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
                         if should_charge_pipeline_gas_asset(
                             skip_nexus_fee,
-                            state_transaction.nexus.enabled,
                             &state_transaction.nexus.fees,
                             &gas_asset_opt,
                         ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -6921,7 +6868,6 @@ impl Executor {
                 // Charge gas fees: if a gas asset was provided and accepted by policy.
                 if should_charge_pipeline_gas_asset(
                     skip_nexus_fee,
-                    state_transaction.nexus.enabled,
                     &state_transaction.nexus.fees,
                     &gas_asset_opt,
                 ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -13891,7 +13837,6 @@ mod tests {
     ) {
         state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         state_transaction.tx_call_hash = Some(Hash::new(b"sponsored-pipeline-fee-call"));
-        state_transaction.nexus.enabled = true;
         state_transaction.nexus.fees.per_gas_unit_fee = Quantity::zero();
         state_transaction
             .nexus
@@ -13904,7 +13849,6 @@ mod tests {
         state_transaction: &mut StateTransaction<'_, '_>,
         fee_asset: &AssetDefinitionId,
     ) {
-        state_transaction.nexus.enabled = true;
         state_transaction.nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
         state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
@@ -14789,35 +14733,21 @@ mod tests {
         nexus_fees.per_gas_unit_fee = Quantity::zero();
         assert!(should_charge_pipeline_gas_asset(
             false,
-            true,
             &nexus_fees,
             &gas_asset
         ));
         nexus_fees.per_gas_unit_fee = "0.001".parse().expect("valid gas fee");
         assert!(!should_charge_pipeline_gas_asset(
             false,
-            true,
-            &nexus_fees,
-            &gas_asset
-        ));
-        assert!(should_charge_pipeline_gas_asset(
-            false,
-            false,
             &nexus_fees,
             &gas_asset
         ));
         assert!(!should_charge_pipeline_gas_asset(
             true,
-            true,
             &nexus_fees,
             &gas_asset
         ));
-        assert!(!should_charge_pipeline_gas_asset(
-            false,
-            false,
-            &nexus_fees,
-            &None
-        ));
+        assert!(!should_charge_pipeline_gas_asset(false, &nexus_fees, &None));
     }
     fn multi_component_fee_quote_fixture() -> (
         World,
@@ -14873,7 +14803,6 @@ mod tests {
         seed_test_asset_supply(&mut world, &nexus_asset);
         seed_test_asset_supply(&mut world, &gas_asset);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(2_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -14994,7 +14923,10 @@ mod tests {
             None,
         );
         let authority_literal = payload.authority.to_string();
-        nexus.fees.successful_claim_fee_exempt_authorities = vec![authority_literal.clone()];
+        nexus
+            .fees
+            .successful_claim_fee_exempt_authorities
+            .insert(payload.authority.clone());
         nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
         payload.metadata.insert(
@@ -15015,6 +14947,23 @@ mod tests {
         ))]
         .into();
         assert_receipt_mode_fee_exempt_draft(world, &nexus, &pipeline, payload);
+    }
+    #[test]
+    fn successful_claim_fee_exemption_uses_exact_account_identity() {
+        let (_, mut nexus, _, payload) = multi_component_fee_quote_fixture();
+        let authority = payload.authority;
+        let (other_authority, _) = gen_account_in("fee_quote_other");
+
+        assert!(!successful_claim_fee_authority_allowed(&nexus, &authority));
+        nexus
+            .fees
+            .successful_claim_fee_exempt_authorities
+            .insert(authority.clone());
+        assert!(successful_claim_fee_authority_allowed(&nexus, &authority));
+        assert!(!successful_claim_fee_authority_allowed(
+            &nexus,
+            &other_authority
+        ));
     }
     #[test]
     fn fee_quote_discovers_pipeline_gas_and_matches_strict_signed_payload_quote() {
@@ -15110,7 +15059,6 @@ mod tests {
         let tx_hash = transaction.hash();
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_tx = block.transaction();
-        state_tx.nexus.enabled = true;
         state_tx.nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
         state_tx.nexus.fees.fee_asset_id = fee_asset.canonical_address();
@@ -15194,7 +15142,6 @@ mod tests {
         let tx_hash = transaction.hash();
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
-        state_transaction.nexus.enabled = true;
         state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
         state_transaction.nexus.fees.base_fee = Quantity::from(2_u32);
         state_transaction.nexus.fees.per_byte_fee = Quantity::zero();
@@ -15338,6 +15285,7 @@ mod tests {
                 verifier_version: "v1".to_owned(),
                 target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
                 effect_binding: None,
+                remote_spend_intent_commitments: Vec::new(),
             },
         )
     }

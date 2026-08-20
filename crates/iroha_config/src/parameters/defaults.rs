@@ -696,10 +696,8 @@ pub mod kura {
     pub const STORE_DIR: &str = "./storage";
     /// Number of blocks cached in memory to accelerate lookups.
     pub const BLOCKS_IN_MEMORY: NonZeroUsize = nonzero!(1024_usize);
-    /// Number of recent roster records retained for block-sync validation.
-    pub const BLOCK_SYNC_ROSTER_RETENTION: NonZeroUsize = nonzero!(7_200_usize);
-    /// Number of recent roster sidecars retained alongside the block store.
-    pub const ROSTER_SIDECAR_RETENTION: NonZeroUsize = nonzero!(512_usize);
+    /// Number of recent lane-history entries retained alongside the block store.
+    pub const LANE_HISTORY_RETENTION: NonZeroUsize = nonzero!(512_usize);
     /// Distinct remote peers that must advertise a canonical block before local body eviction.
     pub const EVICTION_REQUIRED_REPLICAS: NonZeroUsize = nonzero!(3_usize);
     /// Number of authenticated historical advert keys retained immediately before the protected
@@ -1451,7 +1449,7 @@ pub mod sorafs {
                 /// Hard production ceiling for one canonical outbox checkpoint.
                 pub const CHECKPOINT_MAX_BYTES_LIMIT: u64 = 192 * 1024 * 1024;
                 /// Maximum canonical outbox checkpoint size.
-                pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(160 * 1024 * 1024);
+                pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(192 * 1024 * 1024);
                 /// Deadline for one external sealed-checkpoint operation.
                 pub const CHECKPOINT_OPERATION_TIMEOUT_MS: u64 = 30_000;
                 /// Source-claim lease duration.
@@ -2891,7 +2889,7 @@ pub mod torii {
     pub fn iso_bridge_structured_address_mode() -> String {
         ISO_BRIDGE_STRUCTURED_ADDRESS_MODE.to_owned()
     }
-    /// SoraFS discovery disabled by default (iroha2 builds).
+    /// SoraFS discovery disabled by default.
     pub const SORAFS_DISCOVERY_ENABLED: bool = false;
     /// Maximum number of admitted provider replay high-water marks persisted by Torii.
     pub const SORAFS_DISCOVERY_REPLAY_MAX_ENTRIES: NonZeroUsize = nonzero!(65_536usize);
@@ -3082,8 +3080,6 @@ pub mod torii {
 }
 /// Nexus lane/data-space defaults.
 pub mod nexus {
-    /// Enable multilane (Nexus/Iroha3) consensus by default.
-    pub const ENABLED: bool = true;
     use super::*;
     /// AXT policy and runtime defaults.
     pub mod axt {
@@ -3106,7 +3102,7 @@ pub mod nexus {
         /// Maximum allowed replay retention window (slots) to bound in-memory state.
         pub const REPLAY_RETENTION_SLOTS_MAX: u64 = 4_096;
     }
-    /// Storage budget defaults for Nexus-enabled nodes.
+    /// Storage budget defaults for Nexus nodes.
     pub mod storage {
         use iroha_config_base::util::Bytes;
         /// Filesystem capacity reserved as runtime storage headroom (basis points).
@@ -3833,20 +3829,17 @@ pub mod sumeragi {
     ///
     /// Every admitted validator owns five protected positions (general source,
     /// ordinary progress, certified fence escape, timeout vote, and transport completion), while
-    /// each configured authenticated non-validator source owns three positions, and
-    /// anonymous traffic owns two further positions.
+    /// each configured authenticated non-validator source owns three positions.
     /// Deriving the default from the protocol roster ceiling keeps the queue
     /// count allocation representable for every legal height context; byte
     /// quotas remain explicitly roster-scaled by deployment generators.
     pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(
-        5 * MAX_VALIDATORS_PER_HEIGHT
-            + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
-            + 2
+        5 * MAX_VALIDATORS_PER_HEIGHT + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
     );
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
     ///
-    /// Seven default per-source quotas cover a four-validator roster, two
-    /// independently authenticated non-validator lanes, and the anonymous lane.
+    /// Seven default per-source quotas leave room for the two configured
+    /// authenticated non-validator lanes and up to five validator lanes.
     pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(231_usize * 1024 * 1024);
     /// Per-ingress-source canonical outer-ingress wire-byte partition. The
     /// default contains disjoint maximum ordinary-envelope, certified-fence-escape,

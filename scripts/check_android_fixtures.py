@@ -187,6 +187,29 @@ def validate_contract_call(contract_call: object, context: str) -> None:
         raise ValueError(f"{context}.arguments must be null or an array of bytes")
 
 
+def validate_fee_payment(value: object, context: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be an object")
+    require_exact_fields(value, frozenset({"payer", "value"}), context)
+    payer = value["payer"]
+    if payer not in {"authority", "sponsor"}:
+        raise ValueError(f"{context}.payer must be authority or sponsor")
+    fee_value = value["value"]
+    if not isinstance(fee_value, dict):
+        raise ValueError(f"{context}.value must be an object")
+    fields = {"charge_limits", "gas_limit"}
+    if payer == "sponsor":
+        fields.update({"program_id", "program_revision"})
+    require_exact_fields(fee_value, frozenset(fields), f"{context}.value")
+    if not isinstance(fee_value["charge_limits"], list):
+        raise ValueError(f"{context}.value.charge_limits must be an array")
+    gas_limit = fee_value["gas_limit"]
+    if gas_limit is not None and (
+        isinstance(gas_limit, bool) or not isinstance(gas_limit, int) or gas_limit <= 0
+    ):
+        raise ValueError(f"{context}.value.gas_limit must be null or a positive integer")
+
+
 def validate_payload_descriptor(entry: dict, name: str, path: Path) -> None:
     payload = entry.get("payload")
     if not isinstance(payload, dict):
@@ -195,8 +218,9 @@ def validate_payload_descriptor(entry: dict, name: str, path: Path) -> None:
     validate_transaction_metadata(entry, f"fixture entry {name} in {path}")
     validate_transaction_metadata(payload, f"fixture entry {name} payload in {path}")
     validate_executable(payload["executable"], f"fixture entry {name} executable")
-    if not isinstance(payload["fee_payment"], dict):
-        raise ValueError(f"fixture entry {name} fee_payment must be an object")
+    validate_fee_payment(
+        payload["fee_payment"], f"fixture entry {name} fee_payment"
+    )
     if not isinstance(payload["metadata"], dict):
         raise ValueError(f"fixture entry {name} metadata must be an object")
     for field in (

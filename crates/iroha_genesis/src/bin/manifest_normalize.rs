@@ -23,15 +23,20 @@ fn main() -> Result<()> {
     }
     drop(normalized);
     let signer = normalization_signer()?;
-    let block = RawGenesisTransaction::from_path(&path)?.build_and_sign(&signer)?;
+    let proposal = RawGenesisTransaction::from_path(&path)?.build_and_sign(&signer)?;
+    if !proposal.0.is_resultless_proposal() {
+        return Err(eyre!(
+            "raw manifest signing must produce a resultless proposal"
+        ));
+    }
     println!(
-        "event=manifest_normalize stage=signed_block path={} batches={}",
+        "event=manifest_normalize stage=signed_proposal path={} batches={}",
         path.display(),
-        block.0.external_transactions().len()
+        proposal.0.external_transactions().len()
     );
-    for (batch_idx, tx) in block.0.external_transactions().enumerate() {
+    for (batch_idx, tx) in proposal.0.external_transactions().enumerate() {
         if let Executable::Instructions(batch) = tx.instructions() {
-            print_batch("signed_block", batch_idx, batch);
+            print_batch("signed_proposal", batch_idx, batch);
         }
     }
     Ok(())

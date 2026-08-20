@@ -140,6 +140,7 @@ chain finality.
 ## Mobile production acceptance bundle
 
 The deterministic Android/iOS restart and no-network acceptance bundle,
-including its authenticated SBD release, finalized top-up, initialized sender
-branch, fresh receiver request, and assertion-only payment/ACK outputs, is
-specified in [Kagemusha SBD mobile acceptance bundle](kagemusha_sbd_mobile_acceptance_bundle.md).
+including its authenticated Digital Shekel (DS) release, finalized top-up,
+initialized sender branch, fresh receiver request, and assertion-only
+payment/ACK outputs, is specified in the
+[Kagemusha Digital Shekel mobile acceptance bundle](kagemusha_ds_mobile_acceptance_bundle.md).

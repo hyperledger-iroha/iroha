@@ -162,7 +162,6 @@ fn parse_cli_nexus_config_sets_table() {
     fs::write(
         &config_path,
         r#"
-enabled = true
 lane_count = 2
 "#,
     )
@@ -173,24 +172,16 @@ lane_count = 2
     ];
     let parsed = parse_cli_overrides_from(args).expect("parse CLI");
     let nexus = parsed.overrides.nexus_config.expect("nexus config");
-    assert!(matches!(
-        nexus.get("enabled"),
-        Some(toml::Value::Boolean(true))
-    ));
+    assert!(!nexus.contains_key("enabled"));
     assert_eq!(
         nexus.get("lane_count").and_then(toml::Value::as_integer),
         Some(2)
     );
 }
 #[test]
-fn parse_cli_nexus_flags_set_overrides() {
-    let args = vec![
-        OsString::from("--enable-nexus"),
-        OsString::from("--nexus-lane-count"),
-        OsString::from("3"),
-    ];
+fn parse_cli_nexus_lane_count_sets_override() {
+    let args = vec![OsString::from("--nexus-lane-count"), OsString::from("3")];
     let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-    assert_eq!(parsed.overrides.nexus_enabled, Some(true));
     assert_eq!(parsed.overrides.nexus_lane_count, Some(3));
 }
 #[test]

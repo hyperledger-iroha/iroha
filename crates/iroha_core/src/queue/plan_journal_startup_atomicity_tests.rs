@@ -8,12 +8,7 @@ fn queue_plan_journal_replays_matching_plan_after_restart() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = false;
-    state
-        .set_nexus(nexus)
-        .expect("apply disabled Nexus state for canonical single-lane route test");
-    install_single_validator_topology_for_queue_test(&state, 0xA7);
+    install_single_validator_topology_for_queue_test(&mut state, 0xA7);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: LaneId::SINGLE,
@@ -29,7 +24,7 @@ fn queue_plan_journal_replays_matching_plan_after_restart() {
     );
     let tx = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &tx);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     let plan = queue.route_plan_with_state(&tx, &state).expect("route");
     let payload = tx.entrypoint_bytes();
     queue
@@ -91,12 +86,7 @@ fn queue_plan_startup_receipt_failure_precedes_atomic_publication() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = false;
-    state
-        .set_nexus(nexus)
-        .expect("apply disabled Nexus state for canonical single-lane route test");
-    install_single_validator_topology_for_queue_test(&state, 0xD7);
+    install_single_validator_topology_for_queue_test(&mut state, 0xD7);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: LaneId::SINGLE,
@@ -113,7 +103,7 @@ fn queue_plan_startup_receipt_failure_precedes_atomic_publication() {
         .expect("install journal");
     let tx = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &tx);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     let plan = queue.route_plan_with_state(&tx, &state).expect("route");
     queue
         .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
@@ -178,12 +168,7 @@ fn queue_plan_startup_receipt_failure_after_terminal_cleanup_retries_as_empty_st
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = false;
-    state
-        .set_nexus(nexus)
-        .expect("apply disabled Nexus state for canonical single-lane route test");
-    install_single_validator_topology_for_queue_test(&state, 0xD8);
+    install_single_validator_topology_for_queue_test(&mut state, 0xD8);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: LaneId::SINGLE,
@@ -200,7 +185,7 @@ fn queue_plan_startup_receipt_failure_after_terminal_cleanup_retries_as_empty_st
         .expect("install journal");
     let tx = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &tx);
-    let hash = tx.hash();
+    let hash = tx.hash_as_entrypoint();
     let plan = queue.route_plan_with_state(&tx, &state).expect("route");
     queue
         .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
@@ -273,12 +258,7 @@ fn queue_plan_startup_receipt_failure_after_mixed_terminal_cleanup_replays_live_
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = false;
-    state
-        .set_nexus(nexus)
-        .expect("apply disabled Nexus state for canonical single-lane route test");
-    install_single_validator_topology_for_queue_test(&state, 0xD9);
+    install_single_validator_topology_for_queue_test(&mut state, 0xD9);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: LaneId::SINGLE,
@@ -297,8 +277,8 @@ fn queue_plan_startup_receipt_failure_after_mixed_terminal_cleanup_replays_live_
     let live = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &terminal);
     register_accepted_tx_authority_for_queue_test(&mut state, &live);
-    let terminal_hash = terminal.hash();
-    let live_hash = live.hash();
+    let terminal_hash = terminal.hash_as_entrypoint();
+    let live_hash = live.hash_as_entrypoint();
     let terminal_plan = queue
         .route_plan_with_state(&terminal, &state)
         .expect("route terminal transaction");

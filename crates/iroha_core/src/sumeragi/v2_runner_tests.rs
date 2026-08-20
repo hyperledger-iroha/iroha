@@ -1,5 +1,5 @@
 //! Integration-heavy unit cases for the Sumeragi v2 runner.
-use super::super::FairV2IngressPushError;
+use super::super::{FairV2IngressPushError, authenticated_peer_for_test};
 use super::*;
 use crate::{
     NetworkMessage,

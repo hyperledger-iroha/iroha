@@ -5,9 +5,9 @@
 //! required local payload or strict manifest evidence is available.
 //!
 //! When the local node lacks required payload data it requests the missing data
-//! from peers and retries once it arrives. Reliable broadcast remains a transport
-//! and recovery mechanism for payload distribution (e.g., when a peer misses
-//! `BlockCreated`).
+//! from peers and retries once it arrives. Sumeragi v2 uses the signed RS16
+//! `PayloadManifest`/`PayloadChunk` transport and certified-body recovery; the
+//! retired global-RBC message family is not a fallback path.
 use iroha_data_model::nexus::LaneId;
 /// Outcome of the data-availability evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -12,4 +12,5 @@ pub(crate) mod tests_runtime_handlers {
     include!("lib_runtime_handlers/sccp_auth_helpers.rs");
     include!("lib_runtime_handlers/part_9.rs");
     include!("lib_runtime_handlers/part_10.rs");
+    include!("lib_runtime_handlers/part_11_canonical_history.rs");
 }

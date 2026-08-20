@@ -65,7 +65,7 @@ summary: Response plan for the unified settlement router buffer thresholds and c
 
 ### Step 3 — Execute Sponsor/MM Top-Up
 
-1. Identify the reserve from `metadata.settlement.buffer_account` / `buffer_asset` (via the `lane_governance` payload).
+1. Identify the exact reserve account and asset from the lane's typed `settlement_buffer` policy (via the Nexus lifecycle payload).
 2. Determine refill amount:  
    `needed = (capacity * target_ratio) - current_headroom`, where `target_ratio` defaults to 0.9 (90 %).
 3. Issue a deterministic `TransferAsset` using your approved tooling (for example, submit a signed envelope via `iroha_cli transaction submit --file refill.json` or trigger the sponsor automation pipeline). Always include metadata describing the lane, reason, and ticket ID.

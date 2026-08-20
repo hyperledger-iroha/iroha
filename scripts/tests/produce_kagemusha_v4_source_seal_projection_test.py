@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -49,13 +50,7 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
         self.graph = self.write("unit-graph.json", canonical(self.graph_value))
         self.raw_graph = self.write(
             "raw-unit-graph.json",
-            canonical(
-                {
-                    "fixture": "synthetic protocol shape; not Cargo evidence",
-                    "units": 3,
-                    "version": 1,
-                }
-            ),
+            canonical(self.raw_unit_graph()),
         )
         self.execution_policy_value = self.make_execution_policy()
         self.execution_policy = self.write(
@@ -132,6 +127,57 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_isolated_snapshot_launcher_imports_only_explicit_package_root(self) -> None:
+        """`python -I` can execute the privately snapshotted package closure."""
+
+        repository = Path(__file__).parents[2]
+        package_root = self.root / "authenticated-package"
+        closure = (
+            "scripts/run_kagemusha_source_projection_snapshot.py",
+            "scripts/produce_kagemusha_v4_source_seal_projection.py",
+            "scripts/build_kagemusha_v4_candidate_bundle.py",
+            "scripts/profile_cargo_build.py",
+            "scripts/kagemusha_source_tree_seal.py",
+            "scripts/formal/run_sumeragi_v2_tlapm_guard.py",
+        )
+        for relative in closure:
+            target = package_root / relative
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            target.write_bytes((repository / relative).read_bytes())
+            target.chmod(0o400)
+        launcher = package_root / closure[0]
+        hostile_site = self.root / "hostile-site"
+        hostile_site.mkdir()
+        hostile_marker = self.root / "hostile-site-imported"
+        (hostile_site / "sitecustomize.py").write_text(
+            f"from pathlib import Path\nPath({str(hostile_marker)!r}).touch()\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                str(launcher),
+                str(package_root),
+                "--help",
+            ],
+            cwd=Path("/"),
+            env={
+                "HOME": "/var/empty",
+                "PATH": "/usr/bin:/bin",
+                "PYTHONPATH": str(hostile_site),
+            },
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            close_fds=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        self.assertIn(b"authenticated Kagemusha V4 source projection", completed.stdout)
+        self.assertFalse(hostile_marker.exists())
+
     def write(self, name: str, payload: bytes) -> Path:
         """Write one owner-controlled fixture input."""
 
@@ -178,23 +224,102 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
     def make_execution_policy(self) -> dict[str, object]:
         """Return the exact V1 controller policy for the synthetic fixtures."""
 
+        tree_identity = {
+            "bytes": 4096,
+            "files": 4,
+            "records": 6,
+            "sha256": "7" * 64,
+        }
+        build_inputs = {
+                "cargo_home": {
+                    "roots": ["git", "registry"],
+                    "tree": dict(tree_identity),
+                },
+                "cargo_toolchain": {
+                    "cargo_relative_path": "bin/cargo",
+                    "tree": {**tree_identity, "sha256": "d" * 64},
+                },
+                "developer_dir": {
+                    "path": "/private/var/db/kagemusha/Xcode/Developer",
+                    "tree": {**tree_identity, "sha256": "8" * 64},
+                },
+                "host_tools": [
+                    {
+                        "binary_sha256": f"{index + 1:064x}",
+                        "binary_size_bytes": 4096 + index,
+                        "path": path,
+                        "resolved_path": path,
+                    }
+                    for index, path in enumerate(builder.REQUIRED_HOST_TOOL_PATHS)
+                ],
+                "platform": "darwin",
+                "python_runtime": {
+                    "interpreter_path": (
+                        "/private/var/db/iroha-kagemusha-python-runtime-v1/"
+                        "python-3.13.7/bin/python3"
+                    ),
+                    "interpreter_sha256": "6" * 64,
+                    "root": (
+                        "/private/var/db/iroha-kagemusha-python-runtime-v1/"
+                        "python-3.13.7"
+                    ),
+                    "tree_sha256": "a" * 64,
+                },
+                "rust_toolchain": {
+                    "rustc_relative_path": "bin/rustc",
+                    "tree": {**tree_identity, "sha256": "b" * 64},
+                },
+                "runtime_identity": {
+                    "account_name": builder.RUNTIME_ACCOUNT_NAME,
+                    "gid": 65_534,
+                    "group_name": builder.RUNTIME_GROUP_NAME,
+                    "policy": builder.RUNTIME_IDENTITY_POLICY,
+                    "uid": 65_534,
+                },
+                "sandbox": {
+                    "backend": "macos-seatbelt-v1",
+                    "os_build": "25F84",
+                    "profile_schema": (
+                        "iroha.kagemusha.sealed_candidate_build_seatbelt.v1"
+                    ),
+                    "qualification": [
+                        "deny-ambient-read-v1",
+                        "deny-ambient-write-v1",
+                        "deny-network-v1",
+                        "deny-unlisted-exec-v1",
+                        "fresh-cargo-rustc-link-v1",
+                    ],
+                    "xcode_build": "17C52",
+                },
+                "schema": builder.BUILD_INPUT_CLOSURE_SCHEMA,
+                "sdkroot": {
+                    "path": (
+                        "/private/var/db/kagemusha/Xcode/Developer/Platforms/"
+                        "MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk"
+                    ),
+                    "tree": {**tree_identity, "sha256": "c" * 64},
+                },
+            }
         return {
+            "build_inputs": build_inputs,
             "cargo": {
                 "binary_sha256": "4" * 64,
                 "binary_size_bytes": 12_345_678,
+                "capabilities": ["cargo-nightly-unit-graph-v1"],
                 "version_argv": ["<DIRECT_CARGO>", "-Vv"],
                 "version_stdout_lines": [
-                    "cargo 1.93.1 (fixture 2026-01-01)",
-                    "release: 1.93.1",
+                    producer.PINNED_CARGO_VERSION_LINE,
+                    "release: 1.93.0-nightly",
                     "host: aarch64-apple-darwin",
                 ],
             },
             "rustc": {
                 "binary_sha256": "5" * 64,
                 "binary_size_bytes": 23_456_789,
+                "capabilities": [],
                 "version_argv": ["<DIRECT_RUSTC>", "-Vv"],
                 "version_stdout_lines": [
-                    "rustc 1.93.1 (fixture 2026-01-01)",
+                    producer.PINNED_RUSTC_VERSION_LINE,
                     "release: 1.93.1",
                     "host: aarch64-apple-darwin",
                 ],
@@ -205,6 +330,21 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
                 "capture_environment": dict(
                     producer.UNIT_GRAPH_CAPTURE_ENVIRONMENT
                 ),
+                "capture_receipt": {
+                    "build_inputs_sha256": hashlib.sha256(
+                        canonical(build_inputs)
+                    ).hexdigest(),
+                    "cargo_binary_sha256": "4" * 64,
+                    "exit_status": 0,
+                    "raw_stdout_sha256": digest(self.raw_graph),
+                    "raw_stdout_size_bytes": self.raw_graph.stat().st_size,
+                    "rustc_binary_sha256": "5" * 64,
+                    "schema": producer.CAPTURE_RECEIPT_SCHEMA,
+                    "source_commit": "a" * 40,
+                    "source_tree_sha256": "b" * 64,
+                    "stderr_sha256": hashlib.sha256(b"").hexdigest(),
+                    "stderr_size_bytes": 0,
+                },
                 "normalization": builder.SOURCE_SEAL_UNIT_GRAPH_NORMALIZATION,
                 "normalized_sha256": digest(self.graph),
                 "normalized_size_bytes": self.graph.stat().st_size,
@@ -230,7 +370,11 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
                     "pkg_id": "dependency 1.0.0 (registry+https://example.test/index)",
                     "platform": builder.SOURCE_SEAL_TARGET,
                     "profile": self.profile(),
-                    "target": self.target("lib", "dependency", "src/lib.rs"),
+                    "target": self.target(
+                        "lib",
+                        "dependency",
+                        "<SOURCE_CACHE>/registry/src/example.test/dependency-1.0.0/src/lib.rs",
+                    ),
                 },
                 {
                     "dependencies": [],
@@ -240,7 +384,9 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
                     "platform": None,
                     "profile": self.profile(),
                     "target": self.target(
-                        "custom-build", "build-script-build", "build.rs"
+                        "custom-build",
+                        "build-script-build",
+                        "<SOURCE_CACHE>/registry/src/example.test/dependency-1.0.0/build.rs",
                     ),
                 },
                 {
@@ -260,7 +406,10 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
                     ],
                     "features": list(builder.SOURCE_SEAL_RESOLVED_FEATURES),
                     "mode": "build",
-                    "pkg_id": "iroha_core 3.0.0 (path+file://<PACKAGE_ROOT>)",
+                    "pkg_id": (
+                        "iroha_core 3.0.0 "
+                        "(path+file://<SOURCE_ROOT>/crates/iroha_core)"
+                    ),
                     "platform": builder.SOURCE_SEAL_TARGET,
                     "profile": self.profile(),
                     "target": {
@@ -275,6 +424,25 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
             ],
             "version": 1,
         }
+
+    def raw_unit_graph(self) -> dict[str, object]:
+        """Expand normalized placeholders to synthetic controller capture paths."""
+
+        raw = copy.deepcopy(self.graph_value)
+        dependency_prefix = (
+            "/private/controller/cargo-home/registry/src/example.test/"
+            "dependency-1.0.0/"
+        )
+        raw["units"][0]["target"]["src_path"] = f"{dependency_prefix}src/lib.rs"
+        raw["units"][1]["target"]["src_path"] = f"{dependency_prefix}build.rs"
+        package_root = "/private/controller/source/crates/iroha_core"
+        raw["units"][2]["pkg_id"] = (
+            f"iroha_core 3.0.0 (path+file://{package_root})"
+        )
+        raw["units"][2]["target"]["src_path"] = (
+            f"{package_root}/src/bin/kagemusha_recursive_spend_v4_bundle.rs"
+        )
+        return raw
 
     def resign(self, namespace: str = producer.SIGNATURE_NAMESPACE) -> None:
         """Canonically encode and sign the current controller authorization."""
@@ -365,6 +533,31 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
             environment["KAGEMUSHA_BUILD_UNIT_GRAPH_SHA256"],
             digest(self.graph),
         )
+        self.assertEqual(
+            environment["KAGEMUSHA_BUILD_UNIT_GRAPH_RAW_SHA256"],
+            digest(self.raw_graph),
+        )
+        self.assertEqual(
+            environment["KAGEMUSHA_BUILD_REVIEWED_CARGO_BINARY_SHA256"],
+            "4" * 64,
+        )
+        self.assertEqual(
+            environment["KAGEMUSHA_BUILD_REVIEWED_RUSTC_BINARY_SHA256"],
+            "5" * 64,
+        )
+        self.assertEqual(
+            production.projection["outer_policy"]["toolchain"],
+            {
+                "cargo": {
+                    "binary_sha256": "4" * 64,
+                    "binary_size_bytes": 12_345_678,
+                },
+                "rustc": {
+                    "binary_sha256": "5" * 64,
+                    "binary_size_bytes": 23_456_789,
+                },
+            },
+        )
         output = self.root / "projection.json"
         producer._write_new_private_file(output, production.projection_bytes)
         self.assertEqual(output.read_bytes(), production.projection_bytes)
@@ -412,6 +605,25 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
         ):
             self.construct()
 
+    def test_controller_cannot_sign_a_normalized_graph_not_derived_from_raw(self) -> None:
+        """Fresh artifact pins cannot bypass deterministic raw normalization."""
+
+        graph = copy.deepcopy(self.graph_value)
+        graph["units"][0]["target"]["src_path"] = (
+            "<SOURCE_CACHE>/registry/src/example.test/dependency-1.0.0/src/other.rs"
+        )
+        self.graph.write_bytes(canonical(graph))
+        policy = copy.deepcopy(self.execution_policy_value)
+        policy["unit_graph"]["normalized_sha256"] = digest(self.graph)
+        policy["unit_graph"]["normalized_size_bytes"] = self.graph.stat().st_size
+        self.execution_policy.write_bytes(canonical(policy))
+
+        with self.assertRaisesRegex(
+            producer.ProjectionProductionError,
+            "differs from the deterministic raw capture normalization",
+        ):
+            self.construct()
+
     def test_fresh_projection_pin_cannot_authorize_substituted_bytes(self) -> None:
         production = self.construct()
         supplied = self.write("supplied-projection.json", production.projection_bytes)
@@ -427,6 +639,83 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
             producer.verify_reconstructed_projection(
                 production, supplied, digest(supplied)
             )
+
+    def test_stale_projection_cannot_survive_a_new_signed_policy(self) -> None:
+        """A once-valid projection is not reusable after controller reauthorization."""
+
+        stale_production = self.construct()
+        stale = self.write("stale-projection.json", stale_production.projection_bytes)
+        updated_policy = copy.deepcopy(self.execution_policy_value)
+        updated_policy["cargo"]["binary_sha256"] = "6" * 64
+        updated_policy["unit_graph"]["capture_receipt"][
+            "cargo_binary_sha256"
+        ] = "6" * 64
+        self.execution_policy_value = updated_policy
+        self.execution_policy.write_bytes(canonical(updated_policy))
+        self.authorization_value["execution_policy_sha256"] = digest(
+            self.execution_policy
+        )
+        self.resign()
+        current_production = self.construct()
+
+        with self.assertRaisesRegex(
+            producer.ProjectionProductionError,
+            "differs from deterministic reconstruction",
+        ):
+            producer.verify_reconstructed_projection(
+                current_production, stale, digest(stale)
+            )
+
+    def test_verify_rejects_an_incomplete_controller_input_set(self) -> None:
+        """Verification cannot fall back to a claimed projection summary."""
+
+        projection = self.write("projection.json", self.construct().projection_bytes)
+        arguments = [
+            "verify",
+            "--root",
+            str(self.root),
+            "--reviewed-source-closure",
+            str(self.closure),
+            "--reviewed-source-closure-sha256",
+            digest(self.closure),
+            "--authorization",
+            str(self.authorization),
+            "--authorization-sha256",
+            digest(self.authorization),
+            "--controller-signature",
+            str(self.signature),
+            # Deliberately omit --controller-signature-sha256.
+            "--controller-allowed-signers",
+            str(self.allowed_signers),
+            "--controller-allowed-signers-sha256",
+            digest(self.allowed_signers),
+            "--controller-revocation",
+            str(self.revocation),
+            "--controller-revocation-sha256",
+            digest(self.revocation),
+            "--execution-policy",
+            str(self.execution_policy),
+            "--execution-policy-sha256",
+            digest(self.execution_policy),
+            "--raw-unit-graph",
+            str(self.raw_graph),
+            "--raw-unit-graph-sha256",
+            digest(self.raw_graph),
+            "--unit-graph",
+            str(self.graph),
+            "--unit-graph-sha256",
+            digest(self.graph),
+            "--projection",
+            str(projection),
+            "--projection-sha256",
+            digest(projection),
+        ]
+
+        with self.assertRaisesRegex(
+            producer.ProjectionProductionError,
+            "verify require every controller authorization input and pin",
+        ):
+            producer.main(arguments)
 
     def test_modified_authorization_is_rejected_without_controller_resign(self) -> None:
         self.authorization_value["source_commit"] = "d" * 40
@@ -450,6 +739,7 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
     def test_modified_execution_policy_is_rejected_with_a_fresh_file_pin(self) -> None:
         policy = copy.deepcopy(self.execution_policy_value)
         policy["cargo"]["binary_sha256"] = "6" * 64
+        policy["unit_graph"]["capture_receipt"]["cargo_binary_sha256"] = "6" * 64
         self.execution_policy.write_bytes(canonical(policy))
 
         with self.assertRaisesRegex(
@@ -486,7 +776,26 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
         mutations.append((normalization, "unit-graph normalization differs"))
         cargo_version = copy.deepcopy(self.execution_policy_value)
         cargo_version["cargo"]["version_stdout_lines"][0] = "cargo 1.92.0"
-        mutations.append((cargo_version, "version is not Cargo toolchain 1.93"))
+        mutations.append((cargo_version, "version is not the exact pinned build"))
+        cargo_patch_version = copy.deepcopy(self.execution_policy_value)
+        cargo_patch_version["cargo"]["version_stdout_lines"][0] = "cargo 1.93.2"
+        mutations.append(
+            (cargo_patch_version, "version is not the exact pinned build")
+        )
+        rustc_patch_version = copy.deepcopy(self.execution_policy_value)
+        rustc_patch_version["rustc"]["version_stdout_lines"][0] = "rustc 1.93.0"
+        mutations.append(
+            (rustc_patch_version, "version is not the exact pinned build")
+        )
+        stock_stable_cargo = copy.deepcopy(self.execution_policy_value)
+        stock_stable_cargo["cargo"]["version_stdout_lines"] = [
+            "cargo 1.93.1 (083ac5135 2025-12-15)",
+            "release: 1.93.1",
+            "host: aarch64-apple-darwin",
+        ]
+        mutations.append(
+            (stock_stable_cargo, "version is not the exact pinned build")
+        )
 
         for policy, diagnostic in mutations:
             with self.subTest(diagnostic=diagnostic):

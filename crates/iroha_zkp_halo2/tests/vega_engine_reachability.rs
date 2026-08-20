@@ -1,4 +1,6 @@
 //! Source-level release guard for the public Vega proof boundary.
+#[path = "vega_microsoft_cross_conformance.rs"]
+mod vega_microsoft_cross_conformance;
 const ENGINE_SOURCE: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/vega/engine.rs"));
 const FACADE_SOURCE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/vega.rs"));

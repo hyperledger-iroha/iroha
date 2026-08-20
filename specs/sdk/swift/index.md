@@ -428,12 +428,14 @@ for `noSubmit` artifact preparation. Its digest binds the exact `NetworkId`,
 canonical owner controller bytes, lane/epoch/sequence, canonical payload BLAKE3
 commitment and length, and the complete request-content commitment. Metadata
 entries accept raw `Data` values with visibility/encryption flags so the JSON
-matches Torii’s Norito schema.
+matches Torii’s Norito schema. The builder always emits `compression` and the
+nullable `norito_manifest` slot; absence is represented by explicit `null`.
 
 `submitDaBlob` returns `ToriiDaIngestSubmitResult` which exposes the acceptance status, the optional
 `ToriiDaIngestReceipt` (decoded digests, queued timestamp, operator signature, `rentQuote` micro values),
 the `sora-pdp-commitment` response header, and the signing artefacts (client blob id, payload hash, signer, signature)
-that were sent to Torii.
+that were sent to Torii. Receipt decoding requires the current PDP, stripe-layout,
+and rent slots and rejects unknown receipt or stripe fields.
 
 ## Hardware Acceleration
 

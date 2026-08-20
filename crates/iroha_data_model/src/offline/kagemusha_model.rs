@@ -872,6 +872,12 @@ mod model {
         /// SHA-256 of the reviewed rustc binary that built the sealed candidate executable.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_rustc_binary_sha256: [u8; 32],
+        /// SHA-256 of the exact sealed generator executable admitted by the launcher.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub generator_binary_sha256: [u8; 32],
+        /// SHA-256 of the canonical sealed double-build report authenticating that executable.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub sealed_candidate_build_report_sha256: [u8; 32],
         /// Exact network for which the release was built.
         pub network_id: NetworkId,
         /// Asset definition for which the release was built.
@@ -1040,6 +1046,12 @@ mod model {
         /// Reviewed rustc binary digest copied from the candidate manifest.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub(super) reviewed_rustc_binary_sha256: [u8; 32],
+        /// Generator executable digest copied from the candidate manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub(super) generator_binary_sha256: [u8; 32],
+        /// Sealed double-build report digest copied from the candidate manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub(super) sealed_candidate_build_report_sha256: [u8; 32],
         /// Exact in-process physical-memory ceiling committed by the candidate.
         pub(super) generation_memory_limit_bytes: u64,
         /// Exact mandatory in-process memory enforcement profile.
@@ -1091,6 +1103,12 @@ mod model {
         /// Exact reviewed rustc binary digest copied from the candidate.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_rustc_binary_sha256: [u8; 32],
+        /// Exact generator executable digest copied from the candidate.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub generator_binary_sha256: [u8; 32],
+        /// Exact sealed double-build report digest copied from the candidate.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub sealed_candidate_build_report_sha256: [u8; 32],
         /// Exact network for which the reviewed candidate was built.
         pub network_id: NetworkId,
         /// Asset definition for which the reviewed candidate was built.
@@ -1238,6 +1256,12 @@ mod model {
         /// Exact reviewed rustc binary digest copied from the manifest.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_rustc_binary_sha256: [u8; 32],
+        /// Exact generator executable digest copied from the V4 manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub generator_binary_sha256: [u8; 32],
+        /// Exact sealed double-build report digest copied from the V4 manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub sealed_candidate_build_report_sha256: [u8; 32],
         /// Digest of the signed physical-device evidence file.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub benchmark_evidence_sha256: [u8; 32],
@@ -1332,6 +1356,12 @@ mod model {
         /// Reviewed rustc binary selected by the promoted release.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_rustc_binary_sha256: [u8; 32],
+        /// Generator executable selected by the promoted release.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub generator_binary_sha256: [u8; 32],
+        /// Canonical sealed double-build report selected by the promoted release.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub sealed_candidate_build_report_sha256: [u8; 32],
         /// SHA-256 of the immutable pre-evidence candidate record.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub candidate_sha256: [u8; 32],

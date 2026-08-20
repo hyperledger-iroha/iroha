@@ -65,7 +65,7 @@ fn remove_committed_hashes_clears_expiry_tracking() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.as_ref().hash();
+    let hash = tx.as_ref().hash_as_entrypoint();
     queue.push(tx, state.view()).expect("push succeeds");
     assert!(
         queue.expiry_ring_members.contains_key(&hash),
@@ -113,7 +113,7 @@ async fn custom_expired_transaction_is_rejected() {
     .with_instructions(instructions);
     tx.set_ttl(Duration::from_millis(TTL_MS));
     let tx = tx.sign(alice_keypair.private_key());
-    let tx_hash = tx.hash();
+    let signed_tx_hash = tx.hash();
     let tx = {
         let crypto_cfg = state.crypto();
         AcceptedTransaction::accept_with_time_source(
@@ -137,7 +137,7 @@ async fn custom_expired_transaction_is_rejected() {
     assert_eq!(
         queued_tx_event,
         TransactionEvent {
-            hash: tx_hash,
+            hash: signed_tx_hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -157,7 +157,7 @@ async fn custom_expired_transaction_is_rejected() {
     assert_eq!(
         expired_tx_event,
         TransactionEvent {
-            hash: tx_hash,
+            hash: signed_tx_hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -273,7 +273,7 @@ fn block_selection_culls_expired_inflight_entry_while_fifo_has_live_work() {
     assert!(expired_on_pop.is_empty());
     time_handle.advance(Duration::from_millis(6));
     let live_tx = accepted_tx_by_someone(&time_source);
-    let live_hash = live_tx.as_ref().hash();
+    let live_hash = live_tx.as_ref().hash_as_entrypoint();
     queue
         .push(live_tx, state.view())
         .expect("live transaction push succeeds");
@@ -281,7 +281,7 @@ fn block_selection_culls_expired_inflight_entry_while_fifo_has_live_work() {
     let mut selected = Vec::new();
     queue.get_transactions_for_block_with_state(state.as_ref(), nonzero!(1_usize), &mut selected);
     assert_eq!(selected.len(), 1);
-    assert_eq!(selected[0].as_ref().hash(), live_hash);
+    assert_eq!(selected[0].as_ref().hash_as_entrypoint(), live_hash);
     assert_eq!(
         queue.active_len(),
         1,

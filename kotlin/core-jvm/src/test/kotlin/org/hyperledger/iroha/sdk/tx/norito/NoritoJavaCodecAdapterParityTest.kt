@@ -100,13 +100,13 @@ class NoritoJavaCodecAdapterParityTest {
     }
 
     @Test
-    fun `signed Taira SBD transfer preserves exact authority and destination`() {
+    fun `signed Taira DS transfer preserves exact authority and destination`() {
         val authority = sampleAuthority(0x39)
         val destination = sampleAuthority(0x3A)
         assertEquals(SccpV1.TAIRA_I105_DISCRIMINANT_V1, AccountAddress.detectI105Discriminant(authority))
         assertEquals(SccpV1.TAIRA_I105_DISCRIMINANT_V1, AccountAddress.detectI105Discriminant(destination))
         val transfer = TransferWirePayloadEncoder.encodeAssetTransfer(
-            "$SBD_ASSET_DEFINITION_ID#$authority",
+            "$DS_ASSET_DEFINITION_ID#$authority",
             "10",
             destination,
         )
@@ -136,7 +136,7 @@ class NoritoJavaCodecAdapterParityTest {
                 wirePayload.payloadBytes,
                 SccpV1.TAIRA_I105_DISCRIMINANT_V1,
             )
-        assertEquals("$SBD_ASSET_DEFINITION_ID#$authority", decodedTransfer.assetId)
+        assertEquals("$DS_ASSET_DEFINITION_ID#$authority", decodedTransfer.assetId)
         assertEquals(destination, decodedTransfer.destinationAccountId)
     }
 
@@ -628,7 +628,7 @@ class NoritoJavaCodecAdapterParityTest {
         .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
 
     companion object {
-        private const val SBD_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+        private const val DS_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
         private const val CONTRACT_ADDRESS =
             "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
         private val TEST_NETWORK_ID = NetworkId.parse(

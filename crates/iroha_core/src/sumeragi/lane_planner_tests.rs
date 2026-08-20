@@ -42,7 +42,6 @@ mod tests {
     fn nexus_with_routing(routing_policy: LaneRoutingPolicy, lane_catalog: LaneCatalog) -> Nexus {
         let lane_config = ActualLaneConfig::from_catalog(&lane_catalog);
         Nexus {
-            enabled: true,
             routing_policy,
             lane_catalog,
             lane_config,
@@ -670,6 +669,21 @@ mod tests {
         assert!(!proposal_lookahead_enabled(&nexus, 1));
     }
     #[test]
+    fn single_route_keeps_narrow_proposal_lookahead() {
+        let custom_lane = LaneId::new(1);
+        let nexus = nexus_with_routing(
+            LaneRoutingPolicy {
+                default_lane: custom_lane,
+                ..default_routing_policy()
+            },
+            lane_catalog_from_configs(vec![sidecar_lane_config(custom_lane)]),
+        );
+        assert!(
+            !proposal_lookahead_enabled(&nexus, 1),
+            "one routable lane must keep the narrow proposal scan"
+        );
+    }
+    #[test]
     fn proposal_lookahead_enables_for_explicit_rule_lane() {
         let routing_policy = LaneRoutingPolicy {
             rules: vec![LaneRoutingRule {
@@ -702,28 +716,6 @@ mod tests {
         nexus.autoscale.max_lanes = NonZeroU32::new(4).expect("nonzero max");
         assert!(!proposal_lookahead_enabled(&nexus, 6));
         assert!(proposal_lookahead_enabled(&nexus, 7));
-    }
-    #[test]
-    fn proposal_lookahead_fails_closed_when_nexus_is_disabled() {
-        let routing_policy = LaneRoutingPolicy {
-            rules: vec![LaneRoutingRule {
-                lane: LaneId::new(1),
-                dataspace: Some(DataSpaceId::UNIVERSAL),
-                matcher: LaneRoutingMatcher {
-                    account: Some("alice".to_string()),
-                    instruction: None,
-                    description: None,
-                },
-            }],
-            ..default_routing_policy()
-        };
-        let lane_catalog = lane_catalog_from_configs(vec![
-            default_lane_config(),
-            sidecar_lane_config(LaneId::new(1)),
-        ]);
-        let mut nexus = nexus_with_routing(routing_policy, lane_catalog);
-        nexus.enabled = false;
-        assert!(!proposal_lookahead_enabled(&nexus, 1));
     }
     #[test]
     fn proposal_fetch_cap_widens_only_for_schedulable_multilane_routes() {
@@ -1200,18 +1192,20 @@ mod tests {
             },
         ]);
         let lane1_authority = vec![test_peer(3), test_peer(1), test_peer(2)];
-        let shared_validators = vec![test_peer(9), test_peer(10), test_peer(11)];
         let mut requested = Vec::new();
         let committees = plan_lane_consensus_committees_with_authority(
             &routing,
             &schedule,
-            Some(&shared_validators),
             |lane_id, dataspace_id| {
                 requested.push((lane_id, dataspace_id));
                 if lane_id == LaneId::new(1) {
-                    lane1_authority.clone()
+                    Ok(lane1_authority.clone())
                 } else {
-                    Vec::new()
+                    Err(crate::state::LaneAuthorityError::InactiveRoute {
+                        lane_id,
+                        dataspace_id,
+                        authority_height: 1,
+                    })
                 }
             },
         )
@@ -1227,52 +1221,20 @@ mod tests {
         let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22)]);
         let schedule = accepted_schedule(&[0, 1]);
         assert_eq!(
-            plan_lane_consensus_committees_with_authority(
-                &routing,
-                &schedule,
-                None,
-                |lane_id, _| {
-                    if lane_id == LaneId::new(1) {
-                        vec![test_peer(1), test_peer(2), test_peer(3)]
-                    } else {
-                        Vec::new()
-                    }
+            plan_lane_consensus_committees_with_authority(&routing, &schedule, |lane_id, _| {
+                if lane_id == LaneId::new(1) {
+                    Ok(vec![test_peer(1), test_peer(2), test_peer(3)])
+                } else {
+                    Err(crate::state::LaneAuthorityError::InactiveRoute {
+                        lane_id,
+                        dataspace_id: DataSpaceId::new(22),
+                        authority_height: 1,
+                    })
                 }
-            ),
+            }),
             Err(LaneConsensusDomainError::MissingLaneCommittee {
                 lane_id: LaneId::new(2),
             })
-        );
-    }
-    #[test]
-    fn lane_consensus_committees_use_explicit_shared_domain_roster() {
-        let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22)]);
-        let schedule = accepted_schedule(&[0, 1]);
-        let shared_validators = vec![test_peer(4), test_peer(5), test_peer(6)];
-        let committees = plan_lane_consensus_committees_with_authority(
-            &routing,
-            &schedule,
-            Some(&shared_validators),
-            |_, _| Vec::new(),
-        )
-        .expect("shared-domain committees");
-        assert_eq!(
-            committees
-                .iter()
-                .map(|committee| (
-                    committee.lane_id,
-                    committee.dataspace_id,
-                    committee.validators.clone()
-                ))
-                .collect::<Vec<_>>(),
-            vec![
-                (
-                    LaneId::new(1),
-                    DataSpaceId::new(11),
-                    shared_validators.clone()
-                ),
-                (LaneId::new(2), DataSpaceId::new(22), shared_validators),
-            ]
         );
     }
     #[test]
@@ -2247,9 +2209,8 @@ mod tests {
         );
     }
     #[test]
-    fn disabled_nexus_relay_route_requires_canonical_single_lane_coordinates() {
-        let mut nexus = Nexus::default();
-        nexus.enabled = false;
+    fn default_relay_route_requires_canonical_single_lane_coordinates() {
+        let nexus = Nexus::default();
         assert!(v2_relay_route_is_active(
             &nexus,
             LaneId::SINGLE,

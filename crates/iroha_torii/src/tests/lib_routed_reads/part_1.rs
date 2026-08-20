@@ -64,7 +64,6 @@ pub(super) fn configure_corrupt_inactive_autoscale_range_route_for_test(
     ])
     .expect("dataspace catalog");
     let mut nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_catalog,
         dataspace_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
@@ -112,7 +111,6 @@ pub(super) fn configure_future_created_autoscale_route_for_test(
     )
     .expect("future-created lane catalog");
     let mut nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
     };

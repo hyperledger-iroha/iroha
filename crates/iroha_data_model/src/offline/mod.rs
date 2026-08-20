@@ -4451,6 +4451,8 @@ mod kagemusha_v4_artifact_contract_tests {
             authenticated_source_seal_projection_sha256: digest(b"v4 source projection"),
             reviewed_cargo_binary_sha256: digest(b"v4 reviewed cargo"),
             reviewed_rustc_binary_sha256: digest(b"v4 reviewed rustc"),
+            generator_binary_sha256: digest(b"v4 sealed generator"),
+            sealed_candidate_build_report_sha256: digest(b"v4 sealed build report"),
             network_id: kagemusha_test_network_id("v4-artifact-test-network"),
             asset: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("test domain"),
@@ -4850,6 +4852,9 @@ mod kagemusha_v4_artifact_contract_tests {
                 .authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256: finalized_manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: finalized_manifest.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: finalized_manifest.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: finalized_manifest
+                .sealed_candidate_build_report_sha256,
             candidate_sha256,
             qualification_receipt_sha256: finalized_manifest.qualification_receipt_sha256,
             qualified_candidate_sha256: finalized_manifest.qualified_candidate_sha256,

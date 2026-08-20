@@ -198,8 +198,8 @@ fn fair_v2_ingress_queue_gate_verdict(
     let timeout_control_dependency = leader_wire_barrier.is_some_and(|owner| {
         fair_v2_ingress_timeout_control_advances_owner(&owner.token, &entry.inbound)
     });
-    let authenticated_certified_fence_escape = !matches!(source, FairV2IngressSource::Anonymous)
-        && fair_v2_ingress_is_certified_fence_escape(&entry.inbound);
+    let authenticated_certified_fence_escape =
+        fair_v2_ingress_is_certified_fence_escape(&entry.inbound);
     let certified_fence_escape_dependency = authenticated_certified_fence_escape
         && leader_wire_barrier.is_some_and(|owner| {
             fair_v2_ingress_certified_fence_escape_advances_owner(&owner.token, &entry.inbound)

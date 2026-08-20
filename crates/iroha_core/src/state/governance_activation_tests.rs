@@ -94,6 +94,7 @@ fn fee_sponsor_activation_lease(
             verifier_version: "v1".to_owned(),
             target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
             effect_binding: None,
+            remote_spend_intent_commitments: Vec::new(),
         },
     )
 }

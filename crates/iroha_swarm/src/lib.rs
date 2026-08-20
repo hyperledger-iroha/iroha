@@ -174,8 +174,6 @@ pub struct PreparedValidator {
     pub pop: Vec<u8>,
     /// Launch this validator with the explicit Sora/Nexus profile switch.
     pub requires_sora_profile: bool,
-    /// Build-line policy already used to admit the prepared manifest.
-    pub build_line: PreparedBuildLine,
     /// Container-safe effective TOML preserving the admitted consensus policy.
     ///
     /// The file is mounted as a Compose secret and therefore does not expose
@@ -190,22 +188,6 @@ pub struct PreparedValidator {
     pub runtime_files: Vec<PreparedRuntimeFile>,
     /// File-backed private runtime inputs that must not appear in Compose YAML.
     pub secret_files: Vec<PreparedSecretFile>,
-}
-/// Build-line policy for an admitted prepared deployment.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PreparedBuildLine {
-    /// Iroha 2 self-hosted policy.
-    Iroha2,
-    /// Iroha 3 / Nexus policy.
-    Iroha3,
-}
-impl PreparedBuildLine {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Iroha2 => "iroha2",
-            Self::Iroha3 => "iroha3",
-        }
-    }
 }
 /// One byte-exact runtime file materialized through a Compose config.
 #[derive(Debug)]
@@ -275,7 +257,6 @@ struct PreparedRuntimeConfig {
     compose_name_prefix: String,
     source: path::RelativePath,
     blake3: [u8; 32],
-    build_line: PreparedBuildLine,
     files: Vec<PreparedRuntimeSource>,
     secrets: Vec<PreparedSecretSource>,
     requires_sora_profile: bool,
@@ -556,7 +537,6 @@ impl PeerSettings {
                 compose_name_prefix,
                 source,
                 blake3: validator.runtime_config_blake3,
-                build_line: validator.build_line,
                 files: runtime_files,
                 secrets: secret_files,
                 requires_sora_profile: validator.requires_sora_profile,
@@ -712,9 +692,8 @@ mod tests {
     #![allow(clippy::too_many_lines, clippy::needless_raw_string_hashes)]
     use crate::{
         GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-        GENERATED_SUMERAGI_BODY_SOURCE_BYTES, PeerSettings, PreparedBuildLine,
-        PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile, PreparedValidator,
-        Swarm, base64_standard,
+        GENERATED_SUMERAGI_BODY_SOURCE_BYTES, PeerSettings, PreparedGenesisArtifacts,
+        PreparedRuntimeFile, PreparedSecretFile, PreparedValidator, Swarm, base64_standard,
         peer::{self, PeerOverride},
     };
     const IMAGE: &str = "hyperledger/iroha:dev";
@@ -910,7 +889,6 @@ mod tests {
             soranet_transport_public_key: soranet_transport_key_pair.0,
             pop,
             requires_sora_profile: false,
-            build_line: PreparedBuildLine::Iroha3,
             runtime_config_path: std::path::PathBuf::from(format!("peer{index}.runtime.toml")),
             runtime_config_blake3: [u8::try_from(index).expect("test index fits u8"); 32],
             runtime_files: Vec::new(),
@@ -1766,7 +1744,6 @@ mod tests {
         assert_eq!(output.matches("read_only: true").count(), 4);
         assert_eq!(output.matches("--config /config/peer.toml").count(), 4);
         assert_eq!(output.matches("exec env -i").count(), 4);
-        assert_eq!(output.matches("IROHA_BUILD_LINE=iroha3").count(), 4);
         assert_eq!(output.matches("--config-blake3 ").count(), 4);
         assert_eq!(output.matches("target: /config/peer.toml").count(), 4);
         assert_eq!(output.matches("target: /run/secrets/iroha_peer").count(), 4);
