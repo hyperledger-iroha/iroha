@@ -1,14 +1,9 @@
 # Copy this file to a user-local path such as
 # `configs/soranexus/taira/validator_roster.local.toml`, replace every
 # placeholder, and keep the populated file out of the repo. Keep the matching
-# validator private keys plus the shared onboarding/faucet authority and
-# streaming identity keys in `validator_secrets.local.toml`, not here.
-#
-# Then render one config.toml per validator:
-#   python3 scripts/render_taira_validator_bundle.py \
-#     --roster configs/soranexus/taira/validator_roster.local.toml \
-#     --secrets configs/soranexus/taira/validator_secrets.local.toml \
-#     --output-dir dist/taira-validators
+# validator private keys and shared authorities in your runtime secret store,
+# not here. This roster is retained only as the topology input for the edge
+# nginx renderer; it is not a validator deployment source.
 #
 # For the shared nginx edge on one machine, keep `edge_torii_upstream`
 # aligned with the live Torii listener ports and render the edge config from

@@ -314,7 +314,7 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "statically link a reviewed deployment-owned",
         "Do not add credential, private-key, token, plugin, test-provider, or socket",
         "The expected executable digest must come",
-        "Both checked-in Linux consumer dependencies are mandatory",
+        "The checked-in Linux Governance DAG consumer dependency is mandatory",
         "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
         "/private/var/iroha/run/runtime-provider-broker-v1.sock",
         "mode-0600 instance lock",
@@ -336,16 +336,6 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
             "ExecStart=/usr/local/libexec/iroha-runtime-provider-broker-v1 "
             "--catalog /etc/iroha/runtime-provider-broker/catalog.norito"
         ),
-    ),
-    (
-        "configs/sorafs/runtime_provider_broker/systemd/"
-        "taira-irohad.service.d/20-runtime-provider-broker-v1.conf"
-    ): (
-        "Requires=iroha-runtime-provider-broker-v1.service",
-        "After=iroha-runtime-provider-broker-v1.service",
-        "User=iroha",
-        "Group=iroha",
-        "ReadOnlyPaths=/run/iroha-runtime-provider-broker-v1",
     ),
     (
         "configs/sorafs/runtime_provider_broker/systemd/"

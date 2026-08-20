@@ -63,7 +63,8 @@ use super::{
         LifecycleLedgerV1, LifecycleWorkRegistryHolder, LiveValidateApplyRegistryReservation,
         LiveValidateApplyWorkProjectionPermit, LiveValidateReportRegistryReservation,
         LiveValidateReportWorkProjectionPermit, LiveValidateSignRegistryReservation,
-        LiveValidateSignWorkProjectionPermit, OpenedRecoveredWalValidateLedger,
+        LiveValidateSignWorkProjectionPermit, LocalProposalIntentReplayEvidenceV1,
+        OpenedRecoveredWalValidateLedger, PendingLiveWalSignAdmissionV1,
         PersistedRecoveredWalValidateLedger, PreparedLiveValidateApplyRegistryWork,
         PreparedLiveValidateReportRegistryWork, PreparedLiveValidateSignRegistryWork,
         ProductionLifecycleOwnerV1, ProductionOpenedRecoveredWalSignLifecycleCut,
@@ -3176,212 +3177,62 @@ pub(super) enum ExactLiveWalPersistedContinuationCause {
         effect: AdapterEffect,
     },
 }
-/// Exact process-local pair of authenticated artifacts proving equivocation.
+/// One-shot adapter/runtime handoff for an initial local Proposal Sign.
 ///
-/// The variants are deliberately closed over the three signed consensus
-/// message classes which can equivocate. Offender, round, and kind are derived
-/// from the pair and cannot be supplied independently.
-#[allow(variant_size_differences, clippy::large_enum_variant)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum AdapterEquivocationEvidence {
-    /// Two different proposals signed by one round leader.
-    Proposal(SealedEquivocationPair<wire::Proposal>),
-    /// Two different vote statements signed in one phase and round.
-    Vote(SealedEquivocationPair<wire::Vote>),
-    /// Two different high-QC claims signed for one timeout round.
-    TimeoutVote(SealedEquivocationPair<wire::TimeoutVote>),
+/// The complete live WAL seal remains private. The cloneable effect is kept
+/// only as an equality coordinate for the exact returned adapter batch; it
+/// does not replace the seal's locator-derived pending owner.
+#[must_use = "a live ProposalIntent Sign WAL handoff must enter lifecycle admission"]
+pub(crate) struct LiveProposalIntentWalSignHandoffV1 {
+    effect: AdapterEffect,
+    persisted: SealedLiveWalPersistedEffectV1,
 }
-/// An authenticated same-class conflict whose constructor is sealed inside
-/// the adapter module.
-///
-/// Sibling production modules may inspect or clone an already-minted carrier,
-/// but cannot replace either signed artifact or manufacture a new pair from
-/// structurally valid, unauthenticated wire values.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SealedEquivocationPair<T> {
-    first: T,
-    second: T,
-}
-impl<T> SealedEquivocationPair<T> {
-    fn new(first: T, second: T) -> Self {
-        Self { first, second }
+impl LiveProposalIntentWalSignHandoffV1 {
+    fn from_exact(
+        effect: AdapterEffect,
+        persisted: SealedLiveWalPersistedEffectV1,
+    ) -> Option<Self> {
+        persisted
+            .exactly_binds_payload_free_proposal_sign(&effect)
+            .then_some(Self { effect, persisted })
     }
-}
-impl AdapterEquivocationEvidence {
-    fn proposal(first: wire::Proposal, second: wire::Proposal) -> Self {
-        Self::Proposal(SealedEquivocationPair::new(first, second))
+    fn exactly_matches_effects(&self, effects: &[AdapterEffect]) -> bool {
+        effects == core::slice::from_ref(&self.effect)
+            && self
+                .persisted
+                .exactly_binds_payload_free_proposal_sign(&self.effect)
     }
-    fn vote(first: wire::Vote, second: wire::Vote) -> Self {
-        Self::Vote(SealedEquivocationPair::new(first, second))
-    }
-    fn timeout_vote(first: wire::TimeoutVote, second: wire::TimeoutVote) -> Self {
-        Self::TimeoutVote(SealedEquivocationPair::new(first, second))
-    }
-    /// Return the conflicting message class derived from the pair variant.
-    pub(crate) const fn kind(&self) -> reducer::EquivocationKind {
-        match self {
-            Self::Proposal(_) => reducer::EquivocationKind::Proposal,
-            Self::Vote(_) => reducer::EquivocationKind::Vote,
-            Self::TimeoutVote(_) => reducer::EquivocationKind::Timeout,
-        }
-    }
-    /// Return the offending validator index derived from the first artifact.
-    pub(crate) const fn offender_index(&self) -> wire::ValidatorIndex {
-        match self {
-            Self::Proposal(pair) => pair.first.proposer,
-            Self::Vote(pair) => pair.first.signer,
-            Self::TimeoutVote(pair) => pair.first.signer,
-        }
-    }
-    /// Return the common conflict round derived from the first artifact.
-    pub(crate) const fn round(&self) -> wire::ConsensusRound {
-        match self {
-            Self::Proposal(pair) => pair.first.round,
-            Self::Vote(pair) => pair.first.round,
-            Self::TimeoutVote(pair) => pair.first.round,
-        }
-    }
-    /// Return the complete signed artifacts in observation order.
-    pub(crate) fn signed_artifact_pair(&self) -> (Vec<u8>, Vec<u8>) {
-        match self {
-            Self::Proposal(pair) => (pair.first.encode(), pair.second.encode()),
-            Self::Vote(pair) => (pair.first.encode(), pair.second.encode()),
-            Self::TimeoutVote(pair) => (pair.first.encode(), pair.second.encode()),
-        }
-    }
-    /// Return the unsigned conflicting statements in canonical pair order.
-    pub(crate) fn canonical_unsigned_statement_pair(&self) -> (Vec<u8>, Vec<u8>) {
-        let (mut first, mut second) = match self {
-            Self::Proposal(pair) => (
-                pair.first.signature_preimage(),
-                pair.second.signature_preimage(),
-            ),
-            Self::Vote(pair) => (
-                pair.first.signature_preimage(),
-                pair.second.signature_preimage(),
-            ),
-            Self::TimeoutVote(pair) => (
-                pair.first.signature_preimage(),
-                pair.second.signature_preimage(),
-            ),
-        };
-        if second < first {
-            core::mem::swap(&mut first, &mut second);
-        }
-        (first, second)
-    }
-    /// Project the sealed authenticated pair into the canonical persisted wire form.
-    pub(crate) fn to_wire(&self) -> wire::SumeragiV2Equivocation {
-        let conflict = match self {
-            Self::Proposal(pair) => wire::SumeragiV2Equivocation::Proposal {
-                first: pair.first.clone(),
-                second: pair.second.clone(),
-            },
-            Self::Vote(pair) => wire::SumeragiV2Equivocation::PhaseVote {
-                first: pair.first.clone(),
-                second: pair.second.clone(),
-            },
-            Self::TimeoutVote(pair) => wire::SumeragiV2Equivocation::TimeoutVote {
-                first: pair.first.clone(),
-                second: pair.second.clone(),
-            },
-        };
-        super::evidence::canonicalize_v2_conflict(&conflict)
-    }
-    /// Recheck the sealed pair's structural contract against one frozen height
-    /// context.
+
+    /// Atomically join the post-fsync WAL owner to its retained local lineage.
     ///
-    /// Cryptographic authentication is the minting precondition enforced by
-    /// [`SumeragiV2Adapter::authenticate`]. This defense-in-depth check cannot
-    /// be used as a substitute for that boundary.
-    pub(crate) fn validate_structure(&self, context: &wire::HeightContext) -> Result<(), String> {
-        let conflict = match self {
-            Self::Proposal(pair) => {
-                let first = &pair.first;
-                let second = &pair.second;
-                first
-                    .validate(context)
-                    .map_err(|error| format!("first proposal is invalid: {error}"))?;
-                second
-                    .validate(context)
-                    .map_err(|error| format!("second proposal is invalid: {error}"))?;
-                first.round == second.round
-                    && first.proposer == second.proposer
-                    && first.signature_preimage() != second.signature_preimage()
+    /// Failure returns both move-only inputs intact. The returned admission
+    /// keeps the WAL-derived pending owner; the local pending is companion
+    /// provenance only.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn join_local_proposal(
+        self,
+        companion: LocalProposalIntentReplayEvidenceV1,
+    ) -> Result<PendingLiveWalSignAdmissionV1, (Self, LocalProposalIntentReplayEvidenceV1)> {
+        let exact = matches!(
+            &self.effect,
+            AdapterEffect::Sign {
+                request: SignRequest::Proposal(_),
+                ..
             }
-            Self::Vote(pair) => {
-                let first = &pair.first;
-                let second = &pair.second;
-                first
-                    .validate(context)
-                    .map_err(|error| format!("first vote is invalid: {error}"))?;
-                second
-                    .validate(context)
-                    .map_err(|error| format!("second vote is invalid: {error}"))?;
-                first.round == second.round
-                    && first.phase == second.phase
-                    && first.signer == second.signer
-                    && first.signature_preimage() != second.signature_preimage()
-            }
-            Self::TimeoutVote(pair) => {
-                let first = &pair.first;
-                let second = &pair.second;
-                first
-                    .validate(context)
-                    .map_err(|error| format!("first timeout vote is invalid: {error}"))?;
-                second
-                    .validate(context)
-                    .map_err(|error| format!("second timeout vote is invalid: {error}"))?;
-                first.round == second.round
-                    && first.signer == second.signer
-                    && first.signature_preimage() != second.signature_preimage()
-            }
-        };
-        conflict
-            .then_some(())
-            .ok_or_else(|| "authenticated equivocation artifacts do not form one conflict".into())
-    }
-    #[cfg(all(test, feature = "bls"))]
-    /// Construct a proposal pair for sibling-module tests only.
-    pub(crate) fn proposal_for_test(first: wire::Proposal, second: wire::Proposal) -> Self {
-        Self::proposal(first, second)
-    }
-    #[cfg(test)]
-    /// Construct a vote pair for sibling-module tests only.
-    pub(crate) fn vote_for_test(first: wire::Vote, second: wire::Vote) -> Self {
-        Self::vote(first, second)
-    }
-    #[cfg(all(test, feature = "bls"))]
-    /// Construct a timeout-vote pair for sibling-module tests only.
-    pub(crate) fn timeout_vote_for_test(
-        first: wire::TimeoutVote,
-        second: wire::TimeoutVote,
-    ) -> Self {
-        Self::timeout_vote(first, second)
-    }
-    #[cfg(test)]
-    /// Consume a vote pair in sibling-module tests only.
-    pub(crate) fn into_vote_pair_for_test(self) -> Option<(wire::Vote, wire::Vote)> {
-        let Self::Vote(pair) = self else {
-            return None;
-        };
-        Some((pair.first, pair.second))
-    }
-    #[cfg(test)]
-    fn proposal_pair(&self) -> Option<(&wire::Proposal, &wire::Proposal)> {
-        let Self::Proposal(pair) = self else {
-            return None;
-        };
-        Some((&pair.first, &pair.second))
-    }
-    #[cfg(test)]
-    fn vote_pair(&self) -> Option<(&wire::Vote, &wire::Vote)> {
-        let Self::Vote(pair) = self else {
-            return None;
-        };
-        Some((&pair.first, &pair.second))
+        ) && self
+            .persisted
+            .exactly_binds_payload_free_proposal_sign(&self.effect)
+            && companion.exactly_matches_live_wal_sign_effect(&self.effect);
+        if !exact {
+            return Err((self, companion));
+        }
+        Ok(PendingLiveWalSignAdmissionV1::from_local_proposal(
+            self.persisted,
+            companion,
+        ))
     }
 }
+include!("v2_adapter_equivocation_evidence.rs");
 /// Result of one serialized reducer input after all synchronous WAL work.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AdapterOutcome {
@@ -9466,6 +9317,12 @@ pub(crate) struct SumeragiV2Adapter {
     aggregator: Box<dyn SignatureAggregator>,
     active_subject: Option<(reducer::Round, reducer::Subject)>,
     pending_persistence_id: Option<u64>,
+    /// Exact live ProposalIntent frame awaiting its positional Sign handoff.
+    ///
+    /// The sealed continuation retains the WAL-derived standalone owner. The
+    /// earlier local-body owner rejoins only at lifecycle admission and never
+    /// replaces this pending binding.
+    pending_live_proposal_intent_sign: Option<Box<LiveProposalIntentWalSignHandoffV1>>,
     /// Source-only replay seal for the exact live Decision WAL frame whose
     /// Apply child waits for a durable Validate body frame.
     pending_live_decision_apply: Option<SealedLiveWalPersistedEffectV1>,
@@ -9894,6 +9751,7 @@ impl SumeragiV2Adapter {
             aggregator,
             active_subject,
             pending_persistence_id: None,
+            pending_live_proposal_intent_sign: None,
             pending_live_decision_apply: None,
             ingress_equivocations: BTreeMap::new(),
             ingress_deliveries: BTreeMap::new(),
@@ -9928,6 +9786,28 @@ impl SumeragiV2Adapter {
     pub(crate) const fn current_tag(&self) -> reducer::EventTag {
         self.reducer.current_tag()
     }
+    /// Consume the exact post-fsync ProposalIntent Sign sidecar for one batch.
+    ///
+    /// Recovered startup Proposal signs have no live append sidecar and return
+    /// `None`. Once a live sidecar exists, any positional or semantic mismatch
+    /// is restart-only: the adapter keeps the seal and fails closed rather than
+    /// allowing another reducer turn to overtake its WAL-owned Sign.
+    pub(in crate::sumeragi) fn take_live_proposal_intent_wal_sign(
+        &mut self,
+        effects: &[AdapterEffect],
+    ) -> Result<Option<LiveProposalIntentWalSignHandoffV1>, AdapterError> {
+        let Some(pending) = self.pending_live_proposal_intent_sign.as_ref() else {
+            return Ok(None);
+        };
+        if !pending.exactly_matches_effects(effects) {
+            self.fail_closed = true;
+            return Err(AdapterError::LiveWalReplayCauseMismatch);
+        }
+        Ok(self
+            .pending_live_proposal_intent_sign
+            .take()
+            .map(|pending| *pending))
+    }
     /// Borrow the immutable wire context authenticated by this height's
     /// reducer adapter.
     pub(crate) const fn wire_context(&self) -> &wire::HeightContext {
@@ -9943,6 +9823,20 @@ impl SumeragiV2Adapter {
         let round = reducer::Round::new(round.height, round.view);
         let subject = reducer::Subject::new(Hash::new(subject.encode()).into());
         self.reducer.body_state(round, subject)
+    }
+    /// Return whether the live wire registry contains this exact manifest key.
+    #[cfg(all(test, feature = "bls"))]
+    pub(crate) fn has_registered_manifest_for_test(
+        &self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> bool {
+        if round.context_id != self.wire_context.id() {
+            return false;
+        }
+        let round = reducer::Round::new(round.height, round.view);
+        let subject = reducer::Subject::new(Hash::new(subject.encode()).into());
+        self.registry.manifests.contains_key(&(round, subject))
     }
     /// Actor-global ordinal source shared with every replacement height
     /// adapter owned by this runtime actor.
@@ -12504,6 +12398,43 @@ impl SumeragiV2Adapter {
             },
         ))
     }
+    fn stage_direct_validation_registry(
+        &self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        durable_receipt: &DurableBodyReceipt,
+        local_origin_manifest: Option<&wire::PayloadManifest>,
+    ) -> Result<(WireRegistry, reducer::Round, reducer::Subject), AdapterError> {
+        if durable_receipt.context_id() != self.wire_context.id()
+            || durable_receipt.round() != round
+            || durable_receipt.subject() != subject
+        {
+            return Err(AdapterError::DurableBodyMismatch);
+        }
+        let mut next_registry = self.registry.clone();
+        let core_round = next_registry.round_to_core(round, &self.wire_context)?;
+        let core_subject = next_registry.register_subject(subject)?;
+        if let Some(manifest) = local_origin_manifest {
+            if manifest.round != round
+                || manifest.subject != subject
+                || durable_receipt.manifest_hash() != HashOf::new(manifest)
+            {
+                return Err(AdapterError::DurableBodyMismatch);
+            }
+            let core_manifest = next_registry.manifest_to_core(manifest, &self.wire_context)?;
+            if core_manifest.subject() != core_subject {
+                return Err(AdapterError::DurableBodyMismatch);
+            }
+        }
+        let manifest = next_registry
+            .manifests
+            .get(&(core_round, core_subject))
+            .ok_or(AdapterError::MissingManifest)?;
+        if durable_receipt.manifest_hash() != HashOf::new(manifest) {
+            return Err(AdapterError::DurableBodyMismatch);
+        }
+        Ok((next_registry, core_round, core_subject))
+    }
     /// Preview one exact successful deterministic validation directly against
     /// cloned reducer and wire-registry state.
     ///
@@ -12526,24 +12457,30 @@ impl SumeragiV2Adapter {
         subject: wire::BlockSubject,
         validated_receipt: &ValidatedBodyReceipt,
     ) -> Result<DirectValidationSucceededPreparation<'_>, AdapterError> {
+        self.prepare_direct_validation_succeeded_with_local_origin_manifest(
+            tag,
+            round,
+            subject,
+            validated_receipt,
+            None,
+        )
+    }
+    fn prepare_direct_validation_succeeded_with_local_origin_manifest(
+        &mut self,
+        tag: reducer::EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        validated_receipt: &ValidatedBodyReceipt,
+        local_origin_manifest: Option<&wire::PayloadManifest>,
+    ) -> Result<DirectValidationSucceededPreparation<'_>, AdapterError> {
         self.ensure_ingress()?;
         let durable_receipt = validated_receipt.durable();
-        if durable_receipt.context_id() != self.wire_context.id()
-            || durable_receipt.round() != round
-            || durable_receipt.subject() != subject
-        {
-            return Err(AdapterError::DurableBodyMismatch);
-        }
-        let mut next_registry = self.registry.clone();
-        let core_round = next_registry.round_to_core(round, &self.wire_context)?;
-        let core_subject = next_registry.register_subject(subject)?;
-        let manifest = next_registry
-            .manifests
-            .get(&(core_round, core_subject))
-            .ok_or(AdapterError::MissingManifest)?;
-        if durable_receipt.manifest_hash() != HashOf::new(manifest) {
-            return Err(AdapterError::DurableBodyMismatch);
-        }
+        let (mut next_registry, core_round, core_subject) = self.stage_direct_validation_registry(
+            round,
+            subject,
+            durable_receipt,
+            local_origin_manifest,
+        )?;
         validated_receipt.execution_commitment().validate()?;
         next_registry.register_execution_commitment(
             core_round,
@@ -12725,23 +12662,29 @@ impl SumeragiV2Adapter {
         subject: wire::BlockSubject,
         durable_receipt: &DurableBodyReceipt,
     ) -> Result<DirectValidationFailedPreparation<'_>, AdapterError> {
+        self.prepare_direct_validation_failed_with_local_origin_manifest(
+            tag,
+            round,
+            subject,
+            durable_receipt,
+            None,
+        )
+    }
+    fn prepare_direct_validation_failed_with_local_origin_manifest(
+        &mut self,
+        tag: reducer::EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        durable_receipt: &DurableBodyReceipt,
+        local_origin_manifest: Option<&wire::PayloadManifest>,
+    ) -> Result<DirectValidationFailedPreparation<'_>, AdapterError> {
         self.ensure_ingress()?;
-        if durable_receipt.context_id() != self.wire_context.id()
-            || durable_receipt.round() != round
-            || durable_receipt.subject() != subject
-        {
-            return Err(AdapterError::DurableBodyMismatch);
-        }
-        let mut next_registry = self.registry.clone();
-        let core_round = next_registry.round_to_core(round, &self.wire_context)?;
-        let core_subject = next_registry.register_subject(subject)?;
-        let manifest = next_registry
-            .manifests
-            .get(&(core_round, core_subject))
-            .ok_or(AdapterError::MissingManifest)?;
-        if durable_receipt.manifest_hash() != HashOf::new(manifest) {
-            return Err(AdapterError::DurableBodyMismatch);
-        }
+        let (mut next_registry, core_round, core_subject) = self.stage_direct_validation_registry(
+            round,
+            subject,
+            durable_receipt,
+            local_origin_manifest,
+        )?;
         let reducer_fence_generation = self.reducer_fence_generation;
         if reducer_fence_generation == u64::MAX {
             return Err(AdapterError::ReducerFenceGenerationExhausted);
@@ -12893,27 +12836,33 @@ impl SumeragiV2Adapter {
         &'adapter mut self,
         authority: ReadyValidatedAdapterAuthority<'_>,
     ) -> Result<SealedReadyDurableValidateAdapterPreview<'adapter>, AdapterError> {
-        let (tag, round, subject, receipt) = authority.into_parts();
-        self.prepare_direct_validation_succeeded(tag, round, subject, receipt)
-            .map(|preview| {
-                SealedReadyDurableValidateAdapterPreview(match preview {
-                    DirectValidationSucceededPreparation::Busy(adapter) => {
-                        ReadyDurableValidateAdapterPreviewKind::ValidatedBusy(adapter)
-                    }
-                    DirectValidationSucceededPreparation::Inactive(adapter) => {
-                        ReadyDurableValidateAdapterPreviewKind::ValidatedInactive(adapter)
-                    }
-                    DirectValidationSucceededPreparation::NoEffect(adapter) => {
-                        ReadyDurableValidateAdapterPreviewKind::ValidatedNoEffect(adapter)
-                    }
-                    DirectValidationSucceededPreparation::Apply(adapter) => {
-                        ReadyDurableValidateAdapterPreviewKind::ValidatedApply(adapter)
-                    }
-                    DirectValidationSucceededPreparation::Persist(adapter) => {
-                        ReadyDurableValidateAdapterPreviewKind::ValidatedPersist(adapter)
-                    }
-                })
+        let (tag, round, subject, receipt, local_origin_manifest) = authority.into_parts();
+        self.prepare_direct_validation_succeeded_with_local_origin_manifest(
+            tag,
+            round,
+            subject,
+            receipt,
+            local_origin_manifest.as_ref(),
+        )
+        .map(|preview| {
+            SealedReadyDurableValidateAdapterPreview(match preview {
+                DirectValidationSucceededPreparation::Busy(adapter) => {
+                    ReadyDurableValidateAdapterPreviewKind::ValidatedBusy(adapter)
+                }
+                DirectValidationSucceededPreparation::Inactive(adapter) => {
+                    ReadyDurableValidateAdapterPreviewKind::ValidatedInactive(adapter)
+                }
+                DirectValidationSucceededPreparation::NoEffect(adapter) => {
+                    ReadyDurableValidateAdapterPreviewKind::ValidatedNoEffect(adapter)
+                }
+                DirectValidationSucceededPreparation::Apply(adapter) => {
+                    ReadyDurableValidateAdapterPreviewKind::ValidatedApply(adapter)
+                }
+                DirectValidationSucceededPreparation::Persist(adapter) => {
+                    ReadyDurableValidateAdapterPreviewKind::ValidatedPersist(adapter)
+                }
             })
+        })
     }
     /// Preview one rejected Ready Validate completion from sealed registry authority.
     ///
@@ -12924,24 +12873,30 @@ impl SumeragiV2Adapter {
         &'adapter mut self,
         authority: ReadyRejectedAdapterAuthority<'_>,
     ) -> Result<SealedReadyDurableValidateAdapterPreview<'adapter>, AdapterError> {
-        let (tag, round, subject, receipt) = authority.into_parts();
-        self.prepare_direct_validation_failed(tag, round, subject, receipt)
-            .map(|preview| {
-                SealedReadyDurableValidateAdapterPreview(match preview {
-                    DirectValidationFailedPreparation::Busy(adapter) => {
-                        ReadyDurableValidateAdapterPreviewKind::RejectedBusy(adapter)
-                    }
-                    DirectValidationFailedPreparation::Inactive(adapter) => {
-                        ReadyDurableValidateAdapterPreviewKind::RejectedInactive(adapter)
-                    }
-                    DirectValidationFailedPreparation::NoEffect(adapter) => {
-                        ReadyDurableValidateAdapterPreviewKind::RejectedNoEffect(adapter)
-                    }
-                    DirectValidationFailedPreparation::Report(adapter) => {
-                        ReadyDurableValidateAdapterPreviewKind::RejectedReport(adapter)
-                    }
-                })
+        let (tag, round, subject, receipt, local_origin_manifest) = authority.into_parts();
+        self.prepare_direct_validation_failed_with_local_origin_manifest(
+            tag,
+            round,
+            subject,
+            receipt,
+            local_origin_manifest.as_ref(),
+        )
+        .map(|preview| {
+            SealedReadyDurableValidateAdapterPreview(match preview {
+                DirectValidationFailedPreparation::Busy(adapter) => {
+                    ReadyDurableValidateAdapterPreviewKind::RejectedBusy(adapter)
+                }
+                DirectValidationFailedPreparation::Inactive(adapter) => {
+                    ReadyDurableValidateAdapterPreviewKind::RejectedInactive(adapter)
+                }
+                DirectValidationFailedPreparation::NoEffect(adapter) => {
+                    ReadyDurableValidateAdapterPreviewKind::RejectedNoEffect(adapter)
+                }
+                DirectValidationFailedPreparation::Report(adapter) => {
+                    ReadyDurableValidateAdapterPreviewKind::RejectedReport(adapter)
+                }
             })
+        })
     }
     // READY_DURABLE_VALIDATE_ADAPTER_BRIDGE_END
     /// Complete a body reconstruction requested by [`AdapterEffect::FetchBody`].
@@ -17646,6 +17601,10 @@ impl SumeragiV2Adapter {
         &mut self,
         effects: Vec<reducer::Effect>,
     ) -> Result<Vec<AdapterEffect>, AdapterError> {
+        if self.pending_live_proposal_intent_sign.is_some() {
+            self.fail_closed = true;
+            return Err(AdapterError::LiveWalReplayCauseMismatch);
+        }
         let initial_effects = effects.len();
         let mut persist_effects = 0usize;
         let mut persistence_class = None;
@@ -17727,6 +17686,61 @@ impl SumeragiV2Adapter {
                             persistence_id: id.get(),
                             frame_hash: receipt.frame_hash(),
                         });
+                    }
+                    if let reducer::WalRecord::ProposalIntent(proposal) = entry.record() {
+                        let post_wal: Result<LiveProposalIntentWalSignHandoffV1, AdapterError> =
+                            (|| {
+                                let frame = self
+                                    .wal
+                                    .recovered_records()
+                                    .last()
+                                    .ok_or(AdapterError::LiveWalReplayCauseMismatch)?;
+                                let wal_identity = LiveWalFrameIdentity::from_append_receipt(
+                                    frame,
+                                    receipt,
+                                    id.get(),
+                                )
+                                .ok_or(AdapterError::LiveWalReplayCauseMismatch)?;
+                                let effect = AdapterEffect::Sign {
+                                    tag,
+                                    request: SignRequest::Proposal(
+                                        self.registry.unsigned_proposal_to_wire(
+                                            proposal,
+                                            self.aggregator.as_ref(),
+                                        )?,
+                                    ),
+                                };
+                                let pending =
+                                    PendingRuntimeEffectBinding::from_exact_live_wal_append(
+                                        &wal_identity,
+                                        &effect,
+                                    )
+                                    .ok_or(AdapterError::LiveWalReplayCauseMismatch)?;
+                                let persisted =
+                                    SealedLiveWalPersistedEffectV1::from_exact_live_append(
+                                        ExactLiveWalPersistedContinuationCause::PayloadFree {
+                                            wal_identity,
+                                            effect: effect.clone(),
+                                            pending,
+                                        },
+                                    )
+                                    .ok_or(AdapterError::LiveWalReplayCauseMismatch)?;
+                                LiveProposalIntentWalSignHandoffV1::from_exact(effect, persisted)
+                                    .ok_or(AdapterError::LiveWalReplayCauseMismatch)
+                            })();
+                        match post_wal {
+                            Ok(handoff) => {
+                                if self.pending_live_proposal_intent_sign.is_some() {
+                                    self.fail_closed = true;
+                                    return Err(AdapterError::LiveWalReplayCauseMismatch);
+                                }
+                                self.pending_live_proposal_intent_sign = Some(Box::new(handoff));
+                            }
+                            Err(error) => {
+                                self.fail_closed = true;
+                                return Err(error);
+                            }
+                        }
                     }
                     if let reducer::WalRecord::Decision(certificate) = entry.record() {
                         if self.pending_live_decision_apply.is_some() {

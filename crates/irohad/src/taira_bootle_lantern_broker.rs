@@ -53,7 +53,7 @@ const CREDENTIAL_FILE_MODE_V1: u32 = 0o400;
 const MAX_CREDENTIAL_PATH_COMPONENTS_V1: usize = 64;
 #[cfg(target_os = "linux")]
 const SYSTEMD_CREDENTIAL_DIRECTORY_V1: &str =
-    "/run/credentials/taira-bootle-lantern-broker.service";
+    "/run/credentials/iroha-privacy-runtime-broker.service";
 const PARAMETER_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.issuer-parameter-id.v1";
 const PRINCIPAL_DIGEST_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.stable-principal.v1";
 const BEARER_TOKEN_DIGEST_DOMAIN_V1: &[u8] =

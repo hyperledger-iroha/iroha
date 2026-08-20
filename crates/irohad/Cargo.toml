@@ -35,8 +35,6 @@ daemon = [
 ]
 # Build the standalone external signer only in release lanes that request it.
 external-software-signer-bin = ["daemon"]
-# Build the isolated Taira release authorities and their native verifier/client.
-taira-authority-bin = ["daemon", "dep:sha2"]
 dev-tools = ["daemon", "zk-stark"]
 accel-metal = ["fastpq-gpu", "ivm/metal", "norito/codec-gpu-metal"]
 accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cuda"]
@@ -86,11 +84,6 @@ path = "src/bin/sorafs_governance_dag.rs"
 required-features = ["daemon"]
 
 [[bin]]
-name = "taira_privacy_prebundle_gate"
-path = "src/bin/taira_privacy_prebundle_gate.rs"
-required-features = ["dev-tools", "zk-stark"]
-
-[[bin]]
 name = "taira_bootle_lantern_broker"
 path = "src/bin/taira_bootle_lantern_broker.rs"
 required-features = ["daemon"]
@@ -99,11 +92,6 @@ required-features = ["daemon"]
 name = "sorafs_external_software_signer"
 path = "src/bin/sorafs_external_software_signer.rs"
 required-features = ["external-software-signer-bin"]
-
-[[bin]]
-name = "taira_release_authority"
-path = "src/bin/taira_release_authority.rs"
-required-features = ["taira-authority-bin"]
 
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }

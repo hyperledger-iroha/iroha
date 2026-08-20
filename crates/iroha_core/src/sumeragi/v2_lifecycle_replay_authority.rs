@@ -3876,6 +3876,34 @@ impl LocalProposalReadyReplayEvidenceV1 {
     }
 }
 impl LocalProposalIntentReplayEvidenceV1 {
+    /// Rejoin the consumed local-body lineage to the exact standalone
+    /// Proposal Sign emitted by its fsynced `ProposalIntent` WAL record.
+    ///
+    /// The returned lifecycle row deliberately uses the WAL-derived pending
+    /// owner, not this inherited local pending. This oracle proves only that
+    /// both owners name the same immutable unsigned Proposal while retaining
+    /// the local lineage as companion provenance.
+    pub(in crate::sumeragi) fn exactly_matches_live_wal_sign_effect(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        matches!(
+            effect,
+            AdapterEffect::Sign {
+                request: SignRequest::Proposal(_),
+                ..
+            }
+        ) && self.effect == *effect
+            && self.pending.exactly_binds_adapter_effect(&self.effect)
+            && self
+                .ready
+                .exactly_matches_proposal_intent_effect(self.ready.command_identity, effect)
+            && self
+                .ready
+                .family
+                .is_exact_for_stage(LifecycleStageKind::ValidateBody)
+    }
+
     /// Match an idempotent local-build retry after ProposalIntent was emitted.
     pub(in crate::sumeragi) fn exactly_matches_retry(
         &self,

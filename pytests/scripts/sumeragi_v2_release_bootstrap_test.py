@@ -639,7 +639,7 @@ OPTION_ORDER = (
     "--expected-ssh-keygen-sha256", "--expected-allowed-signers-sha256",
     "--expected-revocation-sha256", "--expected-signer-fingerprint",
     "--corridor-completion", "--formal-completion", "--seed-completion",
-    "--chaos-completion", "--taira-completion", "--g4p-completion",
+    "--chaos-completion", "--g4p-completion",
     "--g12-seed-completion", "--g12-fault-soak-completion",
     "--scaling-evidence-manifest",
     "--sdk-dependency-archive", "--sdk-dependency-input-inventory",
@@ -696,7 +696,6 @@ for option in (
     "formal-completion",
     "seed-completion",
     "chaos-completion",
-    "taira-completion",
     "g4p-completion",
     "g12-seed-completion",
     "g12-fault-soak-completion",
@@ -1538,7 +1537,6 @@ for label in (
     "formal_cross_tool_evidence",
     "seed_matrix_completion",
     "chaos_completion",
-    "taira_completion",
 ):
     path = mock_directory / (label + ".tsv")
     data = (label + "\\n").encode()
@@ -1903,8 +1901,6 @@ receipt = {{
         "seed_matrix_localnet_manifest_index": {{}},
         "seed_matrix_localnet_manifests": [],
         "chaos_log": {{}},
-        "taira_evidence": {{}},
-        "taira_run_log": {{}},
         "multilane_scaling_bundle": {{
             "archive_id": "release-scaling.bundle.v1",
             "file_count": len(scaling_files),
@@ -1970,7 +1966,6 @@ python3 -I -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" 
   --formal-completion "$release_output/mock-completions/formal_completion.tsv" \
   --seed-completion "$release_output/mock-completions/seed_matrix_completion.tsv" \
   --chaos-completion "$release_output/mock-completions/chaos_completion.tsv" \
-  --taira-completion "$release_output/mock-completions/taira_completion.tsv" \
   --g4p-completion "$release_output/g4p/COMPLETED.tsv" \
   --g12-seed-completion "$release_output/g12-seed/COMPLETED.tsv" \
   --g12-fault-soak-completion "$release_output/g12-soak/COMPLETED.tsv" \

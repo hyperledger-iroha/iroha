@@ -45,7 +45,6 @@ _SEALED_CONTEXT_FILES = frozenset(
         b"Dockerfile",
         b"context-control.sha256",
         b"scripts/compute_workspace_source_manifest.py",
-        b"scripts/taira_image_smoke.sh",
         b"source-archive.sha256",
         b"source-path-list.sha256",
         b"taira-workspace-source-paths-v1.bin",

@@ -1820,7 +1820,9 @@ fn advance_executor(
             lifecycle_owner,
             executor,
             services,
-        )? || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
+        )? || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
+            || executor.has_pending_live_wal_sign_admission()
+            || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
             || executor.has_pending_lifecycle_output_admissions()
             || executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0
             || executor.has_pending_durable_validate_admissions()
@@ -1842,7 +1844,9 @@ fn advance_executor(
             lifecycle_owner,
             executor,
             services,
-        )? || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
+        )? || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
+            || executor.has_pending_live_wal_sign_admission()
+            || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
             || executor.has_pending_lifecycle_output_admissions()
             || executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0
             || executor.has_pending_durable_validate_admissions()

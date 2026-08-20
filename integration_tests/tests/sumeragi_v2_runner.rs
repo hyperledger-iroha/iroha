@@ -2386,10 +2386,7 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
     init_instruction_registry();
     // Taira's one-second cadence is signed into genesis. The v2 round timeout
     // is derived from that immutable cadence by the protocol.
-    let builder = NetworkBuilder::new()
-        .with_peers(VALIDATOR_COUNT)
-        .with_auto_populated_trusted_peers()
-        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
+    let builder = four_validator_npos_builder()
         .with_block_cadence(TAIRA_BLOCK_CADENCE)
         .with_sync_timeout(Duration::from_secs(180));
     let context = stringify!(taira_npos_leader_timeout_commits_within_rotation_bound);
@@ -2559,10 +2556,7 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
 -> Result<()> {
     init_instruction_registry();
     const CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
-    let builder = NetworkBuilder::new()
-        .with_peers(VALIDATOR_COUNT)
-        .with_auto_populated_trusted_peers()
-        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
+    let builder = four_validator_npos_builder()
         .with_block_cadence(Duration::from_secs(2))
         .with_initial_consensus_message_control_rules(
             LOCKED_REPROPOSAL_QUEUE_CAPACITY,
@@ -2957,10 +2951,7 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
 async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release() -> Result<()> {
     init_instruction_registry();
     const CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
-    let builder = NetworkBuilder::new()
-        .with_peers(VALIDATOR_COUNT)
-        .with_auto_populated_trusted_peers()
-        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
+    let builder = four_validator_npos_builder()
         .with_base_seed(stringify!(
             real_network_distinct_subject_prepare_qcs_converge_after_causal_release
         ))

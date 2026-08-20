@@ -190,7 +190,6 @@ def _signer_inventory(target: str) -> set[str]:
             f"{SIGNER_ASSET_ROOT}/external_software_signer/systemd/iroha-runtime-provider-broker-v1.service.d/20-external-software-signers.conf",
             f"{SIGNER_ASSET_ROOT}/runtime_provider_broker/systemd/iroha-runtime-provider-broker-v1.service",
             f"{SIGNER_ASSET_ROOT}/runtime_provider_broker/systemd/sorafs-governance-dag@.service.d/20-runtime-provider-broker-v1.conf",
-            f"{SIGNER_ASSET_ROOT}/runtime_provider_broker/systemd/taira-irohad.service.d/20-runtime-provider-broker-v1.conf",
         }
     launchd_assets = {
         f"{SIGNER_ASSET_ROOT}/external_software_signer/launchd/sorafs-external-software-signer-launchd-v1",

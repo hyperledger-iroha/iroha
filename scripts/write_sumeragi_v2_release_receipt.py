@@ -61,13 +61,13 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
+        "a149f3b8b376d8e75052c520b081b48069ba2338e13642bdae1192524a8cc2a8"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
+        "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "4f351ac1711c88465e76f804c714a8d43ee0fc8d0133739b717f6e31dcf79ae6"
+        "06ab9c0a97432134b102b8533032afd8915d4ee300d8102352d955c622fc5658"
     ),
 }
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
@@ -241,21 +241,21 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
+        "a149f3b8b376d8e75052c520b081b48069ba2338e13642bdae1192524a8cc2a8"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
+        "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "4f351ac1711c88465e76f804c714a8d43ee0fc8d0133739b717f6e31dcf79ae6"
+        "06ab9c0a97432134b102b8533032afd8915d4ee300d8102352d955c622fc5658"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "59bdbde20094d65a855f08dd5aad22e827c985c19f58edf3090a72164cd7cc0e"
+        "5bed5c9b26be1c3ccd74142be5516e62c2185a5a96b9c636d4cb322e1b35971c"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -738,14 +738,6 @@ _DATA_STATUS_TEST = (
 )
 _DATA_LANE_CERTIFICATE_TEST = (
     "block::consensus::tests::lane_block_certificate_decodes_atomically_from_slice"
-)
-_TAIRA_CONTRACT_TESTS = (
-    "taira_public_localnet::release_execution_profile_accepts_only_the_exact_positive_profile",
-    "taira_public_localnet::release_execution_profile_rejects_wrong_or_blank_build_profiles",
-    "taira_public_localnet::release_execution_profile_rejects_cargo_profile_mismatch",
-    "taira_public_localnet::release_execution_profile_rejects_non_exact_offline_values",
-    "taira_public_localnet::simulation_summary_json_records_release_profile_and_status_evidence",
-    "taira_public_localnet::strict_restart::taira_localnet_restart_catchup_behavior",
 )
 _RUST_SDK_DIAGNOSTICS_TESTS = (
     "client::tests::get_sumeragi_status_prefers_norito_and_handles_json",

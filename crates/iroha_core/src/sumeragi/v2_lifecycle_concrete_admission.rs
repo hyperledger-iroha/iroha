@@ -15,8 +15,9 @@ use super::{
         DurableValidateCompletionPublication, DurableValidateCompletionPublicationError,
         DurableValidateDispatch, DurableValidateExecutionError,
         DurableValidateRegistryPublicationErrorV1, ExecutedDurableValidateDispatch,
-        LifecycleOutputRegistryJoinV1, OpenedRecoveredWalValidateLedger,
-        PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
+        LifecycleOutputRegistryJoinV1, LiveWalRegistryPublicationErrorV1,
+        OpenedRecoveredWalValidateLedger, PendingDurableValidateAdmissionV1,
+        PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
         PreparedLifecycleAdmissionErrorV1, PreparedLifecycleAdmissionOwnerV1,
         PreparedLifecycleAdmissionV1, PreparedLifecycleOutputExecutionV1,
         PreparedLifecycleOutputRegistryRetirementV1, PreparedRecoveredDecisionApplyDispatch,
@@ -367,6 +368,40 @@ pub(in crate::sumeragi) enum ProductionDurableValidateAdmissionSettlementV1 {
         failure: ProductionDurableValidateAdmissionFailureV1,
         /// Complete origin-specific durable Validate owner retained by the caller.
         pending: PendingDurableValidateAdmissionV1,
+    },
+}
+/// Closed retry/fail-stop class for live-WAL Sign admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProductionLiveWalSignAdmissionFailureV1 {
+    /// The exact WAL/local companion did not match the active verified context.
+    Projection(AdapterEffectAdmissionError),
+    /// Concrete registration rejected the exact carrier before publication.
+    Registry,
+    /// LedgerV1 publication was attempted and the owner is now fail-closed.
+    Durability,
+}
+
+/// Owner-preserving result of one live-WAL Sign admission settlement.
+#[derive(Debug)]
+#[must_use = "live WAL Sign admission settlement must be observed"]
+pub(in crate::sumeragi) enum ProductionLiveWalSignAdmissionSettlementV1 {
+    /// A new logical ordinal and its exact Sign carrier committed atomically.
+    Admitted(AdmissionDecision),
+    /// The exact durable logical ordinal regained its live concrete carrier.
+    Rebound(AdmissionDecision),
+    /// Logical reduction returned the exact pending owner without publication.
+    Returned {
+        /// Deterministic logical decision governing retry or capacity.
+        decision: AdmissionDecision,
+        /// Complete live-WAL owner retained for settlement.
+        pending: PendingLiveWalSignAdmissionV1,
+    },
+    /// Preparation, registration, or publication failed with ownership intact.
+    Failed {
+        /// Closed failure classification.
+        failure: ProductionLiveWalSignAdmissionFailureV1,
+        /// Complete live-WAL owner retained by the caller.
+        pending: PendingLiveWalSignAdmissionV1,
     },
 }
 /// Closed failure from lifecycle-owned output admission, service I/O, or terminal fsync.
@@ -748,8 +783,53 @@ impl LifecycleCoordinator {
                 }
             };
             return match prepared.into_owner() {
-                PreparedLifecycleAdmissionOwnerV1::LiveWal(bound)
-                | PreparedLifecycleAdmissionOwnerV1::InvalidBodyReport(bound)
+                PreparedLifecycleAdmissionOwnerV1::LiveWal(live) => {
+                    match registry.registry.install_live_wal_before_publication(
+                        self.active_context,
+                        &candidate,
+                        location.address,
+                        location.digest,
+                        live,
+                        || next.persist_durable_projection(),
+                    ) {
+                        Ok(()) => {
+                            *self = next;
+                            if first_admission {
+                                AdapterEffectAdmissionTransaction::Admitted(decision)
+                            } else {
+                                AdapterEffectAdmissionTransaction::Rebound(decision)
+                            }
+                        }
+                        Err(LiveWalRegistryPublicationErrorV1::Install(error, live)) => {
+                            let prepared = PreparedLifecycleAdmissionV1::from_returned_live_wal(
+                                self.active_context,
+                                candidate,
+                                live,
+                            )
+                            .expect("registry rollback returns the exact live-WAL admission owner");
+                            AdapterEffectAdmissionTransaction::Failed {
+                                failure: AdapterEffectAdmissionFailure::Registry(error),
+                                prepared,
+                            }
+                        }
+                        Err(LiveWalRegistryPublicationErrorV1::Publication(_, live)) => {
+                            self.fault = Some(CoordinatorFault::DurabilityFailure);
+                            let prepared = PreparedLifecycleAdmissionV1::from_returned_live_wal(
+                                self.active_context,
+                                candidate,
+                                live,
+                            )
+                            .expect(
+                                "publication rollback returns the exact live-WAL admission owner",
+                            );
+                            AdapterEffectAdmissionTransaction::Failed {
+                                failure: AdapterEffectAdmissionFailure::Durability,
+                                prepared,
+                            }
+                        }
+                    }
+                }
+                PreparedLifecycleAdmissionOwnerV1::InvalidBodyReport(bound)
                 | PreparedLifecycleAdmissionOwnerV1::DirectSigned(bound) => {
                     match registry.registry.install_bound_before_publication(
                         self.active_context,
@@ -877,6 +957,54 @@ impl LifecycleCoordinator {
     }
 }
 impl ProductionLifecycleOwnerV1 {
+    /// Prepare and atomically admit one post-fsync live-WAL Sign owner.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn settle_live_wal_sign_admission(
+        &mut self,
+        pending: PendingLiveWalSignAdmissionV1,
+    ) -> ProductionLiveWalSignAdmissionSettlementV1 {
+        let prepared = match pending.prepare(self.coordinator.active_context(), &self.verified) {
+            Ok(prepared) => prepared,
+            Err((failure, pending)) => {
+                return ProductionLiveWalSignAdmissionSettlementV1::Failed {
+                    failure: ProductionLiveWalSignAdmissionFailureV1::Projection(failure),
+                    pending,
+                };
+            }
+        };
+        match self
+            .coordinator
+            .admit_prepared_lifecycle(&mut self.registry, prepared)
+        {
+            AdapterEffectAdmissionTransaction::Admitted(decision) => {
+                ProductionLiveWalSignAdmissionSettlementV1::Admitted(decision)
+            }
+            AdapterEffectAdmissionTransaction::Rebound(decision) => {
+                ProductionLiveWalSignAdmissionSettlementV1::Rebound(decision)
+            }
+            AdapterEffectAdmissionTransaction::Returned { decision, prepared } => {
+                ProductionLiveWalSignAdmissionSettlementV1::Returned {
+                    decision,
+                    pending: PendingLiveWalSignAdmissionV1::reclaim_returned(prepared),
+                }
+            }
+            AdapterEffectAdmissionTransaction::Failed { failure, prepared } => {
+                let failure = match failure {
+                    AdapterEffectAdmissionFailure::Registry(_) => {
+                        ProductionLiveWalSignAdmissionFailureV1::Registry
+                    }
+                    AdapterEffectAdmissionFailure::Durability => {
+                        ProductionLiveWalSignAdmissionFailureV1::Durability
+                    }
+                };
+                ProductionLiveWalSignAdmissionSettlementV1::Failed {
+                    failure,
+                    pending: PendingLiveWalSignAdmissionV1::reclaim_returned(prepared),
+                }
+            }
+        }
+    }
+
     /// Prepare and atomically settle one origin-specific durable Validate owner.
     ///
     /// The pending owner can be projected only against this production owner's

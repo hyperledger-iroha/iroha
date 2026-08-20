@@ -1600,8 +1600,12 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
             "runtime remote Proposal transport omitted {required}"
         );
     }
+    let ledger = reviewed_lifecycle_ledger_source_for_test()
+        .split("\n#[cfg(test)]\n/// Ledger-local behavior and source-surface regressions.")
+        .next()
+        .expect("ledger production prefix is bounded");
     for outside in [
-        reviewed_lifecycle_ledger_source_for_test(),
+        ledger,
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
     ] {
@@ -1851,16 +1855,36 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
         adapter
             .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
             .count(),
-        3,
-        "only recovered Proposal-Prepare, sealed Ready-Sign, and Decision-Apply cuts mint live replay authority"
+        4,
+        "only local ProposalIntent, recovered Proposal-Prepare, sealed Ready-Sign, and Decision-Apply cuts mint live replay authority"
     );
     assert_eq!(
         adapter
             .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
             .count(),
-        2,
-        "only recovered Proposal-Prepare and sealed Ready-Sign derive frame-bound pending owners"
+        3,
+        "only local ProposalIntent, recovered Proposal-Prepare, and sealed Ready-Sign derive frame-bound pending owners"
     );
+    let local_proposal_intent = adapter
+        .split("if let reducer::WalRecord::ProposalIntent(proposal) = entry.record() {")
+        .nth(1)
+        .expect("local ProposalIntent WAL append has one implementation")
+        .split("if let reducer::WalRecord::Decision(certificate) = entry.record() {")
+        .next()
+        .expect("local ProposalIntent WAL append stays bounded");
+    assert_eq!(
+        local_proposal_intent
+            .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        local_proposal_intent
+            .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
+            .count(),
+        1
+    );
+    assert!(local_proposal_intent.contains("LiveProposalIntentWalSignHandoffV1::from_exact("));
     let recovered_proposal_prepare = adapter
         .split("pub(in crate::sumeragi) fn append_recovered_lifecycle_proposal_prepare_wal(")
         .nth(1)

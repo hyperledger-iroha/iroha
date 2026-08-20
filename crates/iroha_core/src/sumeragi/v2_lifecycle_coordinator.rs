@@ -83,7 +83,8 @@ pub(in crate::sumeragi) use body_pipeline_transition::{
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
 pub(in crate::sumeragi) use concrete_admission::{
     ProductionDurableValidateAdmissionSettlementV1, ProductionLifecycleOutputAdmissionFailureV1,
-    ProductionLifecycleOutputAdmissionSettlementV1,
+    ProductionLifecycleOutputAdmissionSettlementV1, ProductionLiveWalSignAdmissionFailureV1,
+    ProductionLiveWalSignAdmissionSettlementV1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use launch::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -321,12 +322,13 @@ pub(in crate::sumeragi) use work_registry::{
     LiveValidateSignWorkProjectionPermit, PreparedLiveValidateApplyRegistryWork,
     PreparedLiveValidateReportRegistryWork, PreparedLiveValidateSignRegistryWork,
     PreparedReadyDurableValidateAdapterPreview, ReadyDurableValidateAdapterPreviewError,
+    ReadyValidatedExecutorCatalogAuthorityV1,
 };
 pub(in crate::sumeragi) use work_registry::{
     LifecycleOutputAdmissionKeyV1, PendingDurableValidateAdmissionV1,
-    PendingLifecycleOutputAdmissionV1, PreparedLocalBodyValidateReplayPreAdmission,
-    PreparedRemoteProposalFetchReplayPreAdmission, PreparedRemoteProposalStoreReplayPreAdmission,
-    PreparedRemoteProposalStoredReplayPreAdmission,
+    PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
+    PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,
+    PreparedRemoteProposalStoreReplayPreAdmission, PreparedRemoteProposalStoredReplayPreAdmission,
 };
 const MAX_PENDING_ADMISSION_WAITS: usize = 64;
 /// Sole allocator and writer of logical Sumeragi lifecycle state.

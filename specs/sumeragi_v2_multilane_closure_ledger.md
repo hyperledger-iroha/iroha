@@ -56,7 +56,7 @@ execution or release receipts.
   volatile index/worktree counts are deliberately not treated as release
   identity; only a later signed, detached, source-sealed candidate may supply
   that evidence.
-- The bound static inventory contains exactly 91 corridor legs, 864/864
+- The bound static inventory contains exactly 84 corridor legs, 864/864
   production tests across 43 modules, 530/530 G-UNIT rows, and four mandatory
   G-4P gates. The grouped fixture pin validates. The recursive SDK resolver
   enumerates 1,400 grouped and 1,402 diagnostics paths at the exact hashes in

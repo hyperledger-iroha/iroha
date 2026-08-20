@@ -1986,8 +1986,11 @@ fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
     assert!(bridge.contains("authority: ReadyValidatedAdapterAuthority<'_>"));
     assert!(bridge.contains("authority: ReadyRejectedAdapterAuthority<'_>"));
     assert_eq!(bridge.matches("authority.into_parts()").count(), 2);
-    assert!(bridge.contains("self.prepare_direct_validation_succeeded("));
-    assert!(bridge.contains("self.prepare_direct_validation_failed("));
+    assert!(
+        bridge.contains("self.prepare_direct_validation_succeeded_with_local_origin_manifest(")
+    );
+    assert!(bridge.contains("self.prepare_direct_validation_failed_with_local_origin_manifest("));
+    assert_eq!(bridge.matches("local_origin_manifest.as_ref()").count(), 2);
     assert!(bridge.contains("SealedReadyDurableValidateAdapterPreview(match preview"));
     for forbidden in [
         "PreparedReadyDurableValidateExecution",

@@ -38,81 +38,6 @@ print("X-Iroha-Operator-Nonce: " + "22" * 16)
 print("X-Iroha-Operator-Signature: " + "33" * 64)
 PY
 
-  cat >"${root}/scripts/taira_bootstrap_canary.py" <<'PY'
-#!/usr/bin/env python3
-import os
-import sys
-from pathlib import Path
-
-output_path = None
-faucet_asset_id = None
-skip_faucet = False
-args = sys.argv[1:]
-for index, value in enumerate(args):
-    if value == "--output-config" and index + 1 < len(args):
-        output_path = args[index + 1]
-    elif value == "--faucet-asset-id" and index + 1 < len(args):
-        faucet_asset_id = args[index + 1]
-    elif value == "--skip-faucet":
-        skip_faucet = True
-
-if output_path is None:
-    raise SystemExit("missing --output-config")
-
-state_dir = os.environ.get("MOCK_STATE_DIR")
-if state_dir:
-    state = Path(state_dir)
-    state.joinpath("bootstrap_seen").write_text("1\n", encoding="utf-8")
-    if faucet_asset_id is not None:
-        state.joinpath("bootstrap_faucet_asset_seen").write_text(
-            faucet_asset_id + "\n", encoding="utf-8"
-        )
-    if skip_faucet:
-        state.joinpath("bootstrap_skip_faucet_seen").write_text(
-            "1\n", encoding="utf-8"
-        )
-
-with open(output_path, "w", encoding="utf-8") as handle:
-    handle.write(
-        'chain = "fc56984b-2be7-431d-840e-21514d1883f0"\n'
-        'network_id = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"\n'
-        '\n'
-        '[account]\n'
-        'domain = "universal"\n'
-        'public_key = "ED0120BOOTSTRAPPUBLICKEY0123456789ABCDEF0123456789ABCDEF0123456789"\n'
-        'private_key = "802620BOOTSTRAPPRIVATEKEY0123456789ABCDEF0123456789ABCDEF0123456789"\n'
-        'chain_discriminant = 369\n'
-        '\n'
-        '[transaction]\n'
-        'nonce = true\n'
-        'time_to_live_ms = 120000\n'
-        'status_timeout_ms = 120000\n'
-    )
-PY
-
-  cat >"${root}/scripts/taira_faucet_canary.py" <<'PY'
-#!/usr/bin/env python3
-import os
-import sys
-from pathlib import Path
-
-status_timeout_ms = None
-args = sys.argv[1:]
-for index, value in enumerate(args):
-    if value == "--status-timeout-ms" and index + 1 < len(args):
-        status_timeout_ms = args[index + 1]
-
-state_dir = os.environ.get("MOCK_STATE_DIR")
-if state_dir:
-    state = Path(state_dir)
-    state.joinpath("faucet_seen").write_text("1\n", encoding="utf-8")
-    if status_timeout_ms is not None:
-        state.joinpath("faucet_status_timeout_seen").write_text(
-            status_timeout_ms + "\n", encoding="utf-8"
-        )
-print("faucet bootstrap skipped in mock harness")
-PY
-
   cat >"${root}/mockbin/curl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -458,8 +383,6 @@ SH
 
   chmod +x \
     "${root}/configs/soranexus/taira/check_sorafs_rollout.sh" \
-    "${root}/scripts/taira_bootstrap_canary.py" \
-    "${root}/scripts/taira_faucet_canary.py" \
     "${root}/mockbin/curl" \
     "${root}/mockbin/iroha" \
     "${root}/mockbin/sorafs_manifest_builder" \
@@ -579,31 +502,16 @@ run_read_only_success_case() {
   test ! -f "${root}/state/submit_seen"
 }
 
-run_implicit_bootstrap_success_case() {
-  local root output_file config_path
+run_missing_write_config_fails_case() {
+  local root output_file
   root="$(make_case_root)"
   output_file="${root}/output.log"
-  config_path="${root}/tmp/taira-canary-client.toml"
-  mkdir -p "${root}/tmp"
 
-  WRITE_CONFIG_DEFAULT="$config_path" \
-    run_rollout \
-      "$root" \
-      success \
-      --iroha-bin "${root}/mockbin/iroha" \
-      --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
-      --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
-      >"$output_file" 2>&1
-
-  grep -q 'SoraFS rollout verification passed.' "$output_file"
-  test -f "${root}/state/bootstrap_seen"
-  grep -q '6TEAJqbb8oEPmLncoNiMRbLEK6tw' "${root}/state/bootstrap_faucet_asset_seen"
-  test -f "${root}/state/bootstrap_skip_faucet_seen"
-  test -f "${root}/state/submit_seen"
-  test -f "${root}/state/fee_program_seen"
-  test -f "$config_path"
-  ! grep -q 'BOOTSTRAPPRIVATEKEY' "${root}/state/sorafs_manifest_builder_argv"
-  ! grep -Eq -- '--(request-out|authority|private-key)' "${root}/state/sorafs_manifest_builder_argv"
+  if run_rollout "$root" success >"$output_file" 2>&1; then
+    echo "missing write-config case unexpectedly succeeded" >&2
+    return 1
+  fi
+  grep -q -- '--write-config is required unless --skip-write-canary is used' "$output_file"
 }
 
 run_custom_http_timeouts_are_passed_to_curl_case() {
@@ -761,6 +669,9 @@ run_expected_numeric_failure_case() {
     "$@" \
     "${root}/configs/soranexus/taira/check_sorafs_rollout.sh" \
       --public-root https://taira.sora.org \
+      --operator-network-id hash:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#0000 \
+      --operator-private-key-file "${root}/state/operator-private-key" \
+      --skip-write-canary \
       --iroha-bin "${root}/mockbin/iroha" \
       --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
       --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
@@ -811,35 +722,8 @@ run_expected_numeric_argument_failure_case() {
   test ! -f "${root}/state/submit_seen"
 }
 
-run_asset_retry_success_case() {
-  local root output_file config_path
-  root="$(make_case_root)"
-  output_file="${root}/output.log"
-  config_path="${root}/explicit-canary.toml"
-  write_canary_config \
-    "$config_path" \
-    "ED0120ASSETRETRYPUBLICKEY0123456789ABCDEF0123456789ABCDEF0123" \
-    "802620ASSETRETRYPRIVATEKEY0123456789ABCDEF0123456789ABCDEF0123"
-
-  run_rollout \
-    "$root" \
-    failed_asset_then_success \
-    --write-config "$config_path" \
-    --iroha-bin "${root}/mockbin/iroha" \
-    --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
-    --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
-    >"$output_file" 2>&1
-
-  grep -q 'SoraFS rollout verification passed.' "$output_file"
-  test -f "${root}/state/retry_seen"
-  test -f "${root}/state/faucet_seen"
-  grep -q '^120000$' "${root}/state/faucet_status_timeout_seen"
-  test -f "${root}/state/fee_program_seen"
-  ! grep -q 'ASSETRETRYPRIVATEKEY' "${root}/state/sorafs_manifest_builder_argv"
-}
-
 run_read_only_success_case
-run_implicit_bootstrap_success_case
+run_missing_write_config_fails_case
 run_custom_http_timeouts_are_passed_to_curl_case
 run_explicit_config_is_preserved_case
 run_explicit_missing_config_fails_without_bootstrap_case
@@ -849,7 +733,10 @@ run_invalid_canary_identity_case \
 run_invalid_canary_identity_case \
   wrong-discriminant \
   'write canary config must use Taira chain discriminant 369'
-run_asset_retry_success_case
+run_expected_failure_case \
+  failed_asset_then_success \
+  'SoraFS capacity canary signer is unfunded' \
+  'Failed to find asset'
 run_expected_failure_case \
   capacity_state_503 \
   'capacity/state: expected HTTP 200, got 503'
@@ -917,9 +804,6 @@ run_expected_numeric_failure_case \
 run_expected_numeric_failure_case \
   'CAPACITY_STATE_RECHECK_DELAY_SECONDS must be a non-negative integer' \
   env CAPACITY_STATE_RECHECK_ATTEMPTS=2 CAPACITY_STATE_RECHECK_DELAY_SECONDS=-1
-run_expected_numeric_failure_case \
-  'ROLLOUT_CANARY_SKIP_FAUCET must be auto, 1, 0, true, false, yes, or no' \
-  env ROLLOUT_CANARY_SKIP_FAUCET=maybe CAPACITY_STATE_RECHECK_ATTEMPTS=2 CAPACITY_STATE_RECHECK_DELAY_SECONDS=0
 run_expected_numeric_argument_failure_case \
   'SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS must be a positive integer' \
   --curl-connect-timeout-seconds 0

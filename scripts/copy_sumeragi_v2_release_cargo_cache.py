@@ -86,7 +86,6 @@ VALIDATOR_OPTION_ORDER = (
     "--formal-completion",
     "--seed-completion",
     "--chaos-completion",
-    "--taira-completion",
     "--g4p-completion",
     "--g12-seed-completion",
     "--g12-fault-soak-completion",
@@ -130,7 +129,6 @@ VALIDATOR_PATH_OPTIONS = frozenset(
         "--formal-completion",
         "--seed-completion",
         "--chaos-completion",
-        "--taira-completion",
         "--g4p-completion",
         "--g12-seed-completion",
         "--g12-fault-soak-completion",
@@ -160,7 +158,7 @@ VALIDATION_ACK_COMPONENT_FILES = (
     "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
 )
 VALIDATION_ACK_COMPONENT_SHA256 = (
-    "9dab3cd31c184be81838db6df78146914a85d228400a7bb07b916f5f41e679e8"
+    "ea01518547b6a99a907cd1a6564e1219fc90918f2b7a8525b8b93bccfb9bfbd6"
 )
 VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 CLI_COMPONENT_FILES = (
@@ -1740,7 +1738,7 @@ def seal_release_result(
                 "formal-completion-path", "seed-matrix-completion-path",
                 "multilane-four-peer-completion-path", "nexus-cross-dataspace-completion-path",
                 "nexus-cross-dataspace-soak-completion-path", "chaos-completion-path",
-                "taira-completion-path", "release-child-result.json",
+                "release-child-result.json",
             )),
             (invocation_root, "receipt-validator.stdout"),
             (invocation_root, "receipt-validator.stderr"),

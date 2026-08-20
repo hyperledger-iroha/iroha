@@ -3102,7 +3102,6 @@ def _validate_terminal_receipt(
         "formal_cross_tool_evidence",
         "seed_matrix_completion",
         "chaos_completion",
-        "taira_completion",
     ):
         record = receipt_evidence[label]
         if (
@@ -3677,8 +3676,6 @@ def _run_protected_receipt_validator(
         str(receipt_artifact("seed_matrix_completion")),
         "--chaos-completion",
         str(receipt_artifact("chaos_completion")),
-        "--taira-completion",
-        str(receipt_artifact("taira_completion")),
         "--g4p-completion",
         str(
             nested_artifact(("g4p_multilane", "completion"))

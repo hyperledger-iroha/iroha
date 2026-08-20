@@ -661,6 +661,232 @@ fn local_proposal_ready_is_owned_by_its_validate_predecessor() {
     assert!(validate.exactly_authorizes_body_pipeline_successor(&validate_effect, tag, &evidence,));
 }
 #[test]
+fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and_owner() {
+    let directory = TempDir::new().expect("temporary Ready Validate ingress directory");
+    let (expected_context, _) = authenticated_runtime_context();
+    let local_validator = expected_context.leader(0);
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 2, 2),
+        Some(local_validator),
+    );
+    assert_eq!(context.id(), expected_context.id());
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm the local leader runtime");
+    let tag = runtime.round_tag();
+    assert!(
+        runtime
+            .local_proposal_admission_available(tag)
+            .expect("the local leader owns its active-view producer")
+    );
+
+    let manifest = runtime_manifest(&context, 0x91);
+    let durable = DurableBodyReceipt::for_test(
+        context.id(),
+        manifest.round,
+        manifest.subject,
+        HashOf::new(&manifest),
+    );
+    let validated = ValidatedBodyReceipt::for_test(durable.clone());
+    let local = runtime
+        .mint_local_proposal_effect_ownership(tag, &manifest)
+        .expect("mint the active producer's exact local Store owner");
+    let store_effect = AdapterEffect::StoreBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+    };
+    let store_ownership = local
+        .exact_store_task_ownership(&store_effect, &manifest)
+        .expect("retain the local Store owner");
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+    };
+    let validate_ownership = store_ownership
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("project the local Store owner into Validate");
+    let validate_pending = validate_ownership
+        .exact_pending_adapter_effect_binding(&validate_effect)
+        .expect("bind the exact local Validate predecessor");
+    let ready_lifecycle_ordinal = validate_ownership.owner().lifecycle_ordinal();
+
+    let unrelated = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(
+            signed_runtime_quorum_certificate(&context, &keys, 0x92),
+        ),
+    );
+    runtime
+        .enqueue_network(unrelated)
+        .expect("queue one unrelated authenticated command");
+    let incumbent_before = runtime
+        .ingress
+        .commands
+        .front()
+        .expect("unrelated command is physically first")
+        .clone();
+    let incumbent_bytes = incumbent_before
+        .command
+        .exact_runtime_command_identity()
+        .canonical_bytes;
+    let incumbent_owner = incumbent_before
+        .lifecycle_owner()
+        .expect("authenticated incumbent owns one lifecycle");
+    let incumbent_physical = incumbent_before
+        .admission_ordinal
+        .expect("authenticated incumbent owns one physical position");
+    let incumbent_occurrence = incumbent_before
+        .queue_occurrence_owner
+        .clone()
+        .expect("authenticated incumbent retains its queue occurrence");
+    let incumbent_ingress = incumbent_before
+        .ingress_ownership
+        .clone()
+        .expect("authenticated incumbent retains its ingress owner");
+
+    assert!(
+        runtime.ready_validate_runtime_gate_is_open(true),
+        "stable queued ingress is not an active Ready Validate mutation owner"
+    );
+    let ready_identity = runtime
+        .enqueue_local_proposal_with_lifecycle_pending(
+            tag,
+            manifest.clone(),
+            durable.clone(),
+            validated.clone(),
+            &validate_pending,
+            ready_lifecycle_ordinal,
+        )
+        .expect("publish LocalProposalReady behind the unrelated FIFO incumbent");
+    assert!(ready_identity.exactly_matches_handoff(
+        tag,
+        &manifest,
+        &durable,
+        &validated,
+        &validate_pending,
+    ));
+    assert_eq!(runtime.ingress.commands.len(), 2);
+    let incumbent_after_publication = &runtime.ingress.commands[0];
+    assert_eq!(
+        incumbent_after_publication
+            .command
+            .exact_runtime_command_identity()
+            .canonical_bytes,
+        incumbent_bytes,
+        "Ready publication cannot rewrite incumbent authenticated bytes"
+    );
+    assert_eq!(
+        incumbent_after_publication
+            .lifecycle_owner()
+            .expect("incumbent lifecycle remains exact"),
+        incumbent_owner,
+    );
+    assert_eq!(
+        incumbent_after_publication.admission_ordinal,
+        Some(incumbent_physical),
+    );
+    assert_eq!(
+        incumbent_after_publication.queue_occurrence_owner.as_ref(),
+        Some(&incumbent_occurrence),
+    );
+    assert_eq!(
+        incumbent_after_publication.ingress_ownership.as_ref(),
+        Some(&incumbent_ingress),
+    );
+    let ready = &runtime.ingress.commands[1];
+    assert!(matches!(
+        ready.command,
+        AdapterCommand::LocalProposalReady { .. }
+    ));
+    let ready_physical = ready
+        .admission_ordinal
+        .expect("LocalProposalReady owns its appended physical position");
+    assert!(ready_physical > incumbent_physical);
+    let ready_owner = ready
+        .lifecycle_owner()
+        .expect("LocalProposalReady restores the Validate lifecycle owner");
+    assert_eq!(ready_owner.lifecycle_ordinal(), ready_lifecycle_ordinal);
+    assert_eq!(
+        ready_owner.causal_origin().lifecycle_key,
+        *validate_pending.causal_lifecycle_key(),
+    );
+
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(now)
+        .expect("completion rank dispatches LocalProposalReady first")
+    else {
+        panic!("LocalProposalReady dispatch unexpectedly idled")
+    };
+    assert!(matches!(
+        effects.as_slice(),
+        [AdapterEffect::Sign {
+            tag: effect_tag,
+            request: SignRequest::Proposal(_),
+        }] if *effect_tag == tag
+    ));
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("the Ready dispatch publishes exact scheduler ownership");
+    assert_eq!(scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
+    assert_eq!(scheduler.queue_before.len, 2);
+    assert_eq!(scheduler.queue_after.len, 1);
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = scheduler.candidate else {
+        panic!("the Ready dispatch must retain one exact FIFO candidate")
+    };
+    assert_eq!(candidate.kind, RuntimeCommandKind::LocalProposalReady);
+    assert_eq!(candidate.fifo_position, 1);
+    assert_eq!(candidate.admission_ordinal, ready_physical);
+    assert_eq!(candidate.lifecycle_ordinal, ready_lifecycle_ordinal);
+    let effect_ownership = runtime
+        .take_effect_ownership(effects.len())
+        .expect("Proposal Sign inherits the Ready lifecycle owner");
+    assert_eq!(effect_ownership.len(), 1);
+    assert_eq!(
+        effect_ownership[0].owner().lifecycle_ordinal(),
+        ready_lifecycle_ordinal,
+    );
+    assert_eq!(
+        effect_ownership[0].owner().causal_origin().lifecycle_key,
+        *validate_pending.causal_lifecycle_key(),
+    );
+
+    assert_eq!(runtime.ingress.commands.len(), 1);
+    let incumbent_after_turn = runtime
+        .ingress
+        .commands
+        .front()
+        .expect("one runtime turn leaves the unrelated incumbent queued");
+    assert_eq!(
+        incumbent_after_turn
+            .command
+            .exact_runtime_command_identity()
+            .canonical_bytes,
+        incumbent_bytes,
+    );
+    assert_eq!(
+        incumbent_after_turn
+            .lifecycle_owner()
+            .expect("incumbent lifecycle remains exact after the Ready turn"),
+        incumbent_owner,
+    );
+    assert_eq!(
+        incumbent_after_turn.admission_ordinal,
+        Some(incumbent_physical),
+    );
+    assert_eq!(
+        incumbent_after_turn.queue_occurrence_owner.as_ref(),
+        Some(&incumbent_occurrence),
+    );
+    assert_eq!(
+        incumbent_after_turn.ingress_ownership.as_ref(),
+        Some(&incumbent_ingress),
+    );
+    assert!(!runtime.fail_closed);
+}
+#[test]
 fn body_available_rejects_second_persistent_lifecycle_before_mutation() {
     let directory = TempDir::new().expect("temporary persistent-root conflict directory");
     let (mut runtime, context, _keys) = authenticated_network_runtime_with_local_validator(

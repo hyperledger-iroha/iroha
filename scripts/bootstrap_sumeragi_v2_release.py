@@ -157,16 +157,16 @@ _RUNNER_TOOL_PROBE_OPERATION_IDS = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
+        "a149f3b8b376d8e75052c520b081b48069ba2338e13642bdae1192524a8cc2a8"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
+        "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "4f351ac1711c88465e76f804c714a8d43ee0fc8d0133739b717f6e31dcf79ae6"
+        "06ab9c0a97432134b102b8533032afd8915d4ee300d8102352d955c622fc5658"
     ),
 }
 _BOOTSTRAP_COMPONENT_FILES = (
@@ -174,7 +174,7 @@ _BOOTSTRAP_COMPONENT_FILES = (
 )
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "59bdbde20094d65a855f08dd5aad22e827c985c19f58edf3090a72164cd7cc0e"
+        "5bed5c9b26be1c3ccd74142be5516e62c2185a5a96b9c636d4cb322e1b35971c"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -300,9 +300,6 @@ _TERMINAL_EVIDENCE_KEYS = {
     "seed_matrix_localnet_manifests",
     "chaos_completion",
     "chaos_log",
-    "taira_completion",
-    "taira_evidence",
-    "taira_run_log",
     "multilane_scaling_bundle",
     "multilane_scaling_retained_validator",
     "multilane_scaling_trust_anchors",
@@ -422,7 +419,6 @@ _VALIDATOR_OPTION_ORDER = (
     "--formal-completion",
     "--seed-completion",
     "--chaos-completion",
-    "--taira-completion",
     "--g4p-completion",
     "--g12-seed-completion",
     "--g12-fault-soak-completion",
@@ -466,7 +462,6 @@ _VALIDATOR_PATH_OPTIONS = frozenset(
         "--formal-completion",
         "--seed-completion",
         "--chaos-completion",
-        "--taira-completion",
         "--g4p-completion",
         "--g12-seed-completion",
         "--g12-fault-soak-completion",
@@ -836,7 +831,6 @@ def _terminal_validator_invocation_values(
         "--formal-completion": ("path", artifact_path("formal_completion")),
         "--seed-completion": ("path", artifact_path("seed_matrix_completion")),
         "--chaos-completion": ("path", artifact_path("chaos_completion")),
-        "--taira-completion": ("path", artifact_path("taira_completion")),
         "--g4p-completion": (
             "path", artifact_path("g4p_multilane", "completion")
         ),

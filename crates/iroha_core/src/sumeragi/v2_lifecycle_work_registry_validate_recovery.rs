@@ -10,6 +10,7 @@ pub(crate) struct ReadyValidatedAdapterAuthority<'a> {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     receipt: &'a ValidatedBodyReceipt,
+    local_origin_manifest: Option<wire::PayloadManifest>,
 }
 /// Non-forgeable installed-Validate predecessor accepted only by the
 /// adapter's sealed WAL-sign binding step.
@@ -118,8 +119,15 @@ impl<'a> ReadyValidatedAdapterAuthority<'a> {
         wire::ConsensusRound,
         wire::BlockSubject,
         &'a ValidatedBodyReceipt,
+        Option<wire::PayloadManifest>,
     ) {
-        (self.tag, self.round, self.subject, self.receipt)
+        (
+            self.tag,
+            self.round,
+            self.subject,
+            self.receipt,
+            self.local_origin_manifest,
+        )
     }
 }
 /// Non-forgeable rejected-validation input accepted only by the adapter's
@@ -133,6 +141,7 @@ pub(crate) struct ReadyRejectedAdapterAuthority<'a> {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     receipt: &'a DurableBodyReceipt,
+    local_origin_manifest: Option<wire::PayloadManifest>,
 }
 impl<'a> ReadyRejectedAdapterAuthority<'a> {
     /// Consume the unforgeable registry authority inside the adapter module.
@@ -143,8 +152,15 @@ impl<'a> ReadyRejectedAdapterAuthority<'a> {
         wire::ConsensusRound,
         wire::BlockSubject,
         &'a DurableBodyReceipt,
+        Option<wire::PayloadManifest>,
     ) {
-        (self.tag, self.round, self.subject, self.receipt)
+        (
+            self.tag,
+            self.round,
+            self.subject,
+            self.receipt,
+            self.local_origin_manifest,
+        )
     }
 }
 /// Fixed dual-borrow result of joining one Ready Validate carrier to the
@@ -461,6 +477,7 @@ impl<'registry> PreparedReadyDurableValidateAdapterPreview<'registry, '_> {
             address,
             outcome_kind: _,
             lease,
+            validated_catalog_authority: _,
         } = prepared;
         assert_eq!(lease.ordinal(), address.ordinal);
         assert_eq!(lease.owner(), address.owner);
@@ -781,6 +798,7 @@ impl<'registry, 'adapter> PreparedInvalidBodyReportReplayPreAdmission<'registry,
             address: parent_address,
             outcome_kind: _,
             lease: _,
+            validated_catalog_authority: _,
         } = registry;
         let detached_parent = registry
             .entries
@@ -968,6 +986,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             address: parent_address,
             outcome_kind: _,
             lease: _,
+            validated_catalog_authority: _,
         } = registry;
         let detached_parent = registry
             .entries
@@ -1605,6 +1624,13 @@ pub(super) enum BoundAdapterRegistryPublicationErrorV1<E> {
     /// Durable publication failed and the exact bound owner was reconstructed.
     Publication(E, BoundAdapterEffectV1),
 }
+/// Failure from the live-WAL registry publication boundary.
+pub(super) enum LiveWalRegistryPublicationErrorV1<E> {
+    /// The prepared owner or exact-address installation failed before publication.
+    Install(RegistryError, PreparedLiveWalAdmissionV1),
+    /// Durable publication failed and the exact live-WAL owner was reconstructed.
+    Publication(E, PreparedLiveWalAdmissionV1),
+}
 /// Failure from the mandatory replay-bound durable Validate publication boundary.
 pub(super) enum DurableValidateRegistryPublicationErrorV1<E> {
     /// The prepared owner or exact-address installation failed before publication.
@@ -2058,7 +2084,32 @@ impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
 }
 // READY_DURABLE_VALIDATE_ADAPTER_JOIN_BEGIN
 #[allow(dead_code)]
+impl ReadyValidatedExecutorCatalogAuthorityV1 {
+    /// Consume the one-shot catalog authority into its exact fsynced receipt.
+    pub(in crate::sumeragi) fn into_validated_receipt(self) -> ValidatedBodyReceipt {
+        self.validated
+    }
+
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(validated: ValidatedBodyReceipt) -> Self {
+        Self { validated }
+    }
+}
+
 impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
+    /// Take the sole executor-catalog authority from a successful completion.
+    pub(in crate::sumeragi) fn take_validated_catalog_authority(
+        &mut self,
+    ) -> Option<ReadyValidatedExecutorCatalogAuthorityV1> {
+        let expected = self
+            .validated_completion()?
+            .outcome
+            .validated_receipt()?
+            .clone();
+        let authority = self.validated_catalog_authority.take()?;
+        (authority.validated == expected).then_some(authority)
+    }
+
     fn completion(&self) -> Option<&DurableValidateCompletion> {
         let work = self.registry.entries.get(&self.address)?;
         let ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) = &work.kind else {
@@ -2123,6 +2174,19 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             replay,
         )
     }
+    fn local_origin_manifest(
+        completion: &DurableValidateCompletion,
+    ) -> Option<wire::PayloadManifest> {
+        completion
+            .incumbent
+            .replay_evidence
+            .project_local_completion_evidence(
+                &completion.incumbent.effect,
+                &completion.incumbent.durable_receipt,
+                &completion.incumbent.pending,
+            )
+            .map(|(_replay, manifest)| manifest)
+    }
     fn validated_authority(&self) -> Option<ReadyValidatedAdapterAuthority<'_>> {
         let completion = self.validated_completion()?;
         let AdapterEffect::ValidateBody {
@@ -2139,6 +2203,7 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             round: *round,
             subject: *subject,
             receipt,
+            local_origin_manifest: Self::local_origin_manifest(completion),
         })
     }
     fn validate_sign_predecessor_authority(
@@ -2192,6 +2257,7 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             round: *round,
             subject: *subject,
             receipt: completion.outcome.durable_body(),
+            local_origin_manifest: Self::local_origin_manifest(completion),
         })
     }
 
@@ -2301,6 +2367,7 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             address: _,
             outcome_kind: _,
             lease: _,
+            validated_catalog_authority: _,
         } = self;
         Ok(RecoveredWalValidateRegistryCut {
             registry: Some(registry),

@@ -55,7 +55,7 @@ use super::{
         AdapterEffect, AdapterError, AuthenticatedConsensusMessage, BodyPipelineCompletionEvidence,
         DecisionLocalProposalDisposition, DeferredAdmissionOrdinalSource, DeferredEventKind,
         DeferredOccurrenceOwnershipEvidence, DeferredRuntimeOwnershipSeal, DeferredServiceEvidence,
-        LiveWalFrameIdentity, PersistedWalFrameLocatorV1,
+        LiveProposalIntentWalSignHandoffV1, LiveWalFrameIdentity, PersistedWalFrameLocatorV1,
         PreparedRecoveredDecisionApplyAdapterCompletionV1, ProducerContinuationHandoffEvidence,
         ReadyDurableValidateAdapterPublicationKind,
         RecoveredDecisionApplyAdapterCompletionAuthorityV1, RecoveredWalControlSign,
@@ -2308,23 +2308,6 @@ impl LocalProposalReadyCommandIdentity {
         self.projection_hash == local_proposal_ready_command_projection_hash(self)
     }
 
-    /// Match the sole queued lifecycle-owned local proposal completion.
-    fn exactly_matches_queued_lifecycle_handoff(
-        &self,
-        queued: &TaggedCommand<AdapterCommand>,
-        lifecycle_ordinal: u128,
-    ) -> bool {
-        self.validate_exact()
-            && lifecycle_ordinal != 0
-            && queued.validate_admission_identity()
-            && queued.tag == self.tag
-            && queued.class == CommandClass::Completion
-            && queued.lifecycle_ordinal == Some(lifecycle_ordinal)
-            && queued.causal_origin.lifecycle_key == self.causal_lifecycle_key
-            && queued.identity.kind == RuntimeCommandKind::LocalProposalReady
-            && queued.identity.canonical_hash == self.command_hash
-            && matches!(queued.command, AdapterCommand::LocalProposalReady { .. })
-    }
     /// Compare the cloneable FIFO command with its retained Validate owner.
     pub(in crate::sumeragi) fn exactly_matches_handoff(
         &self,
@@ -15216,46 +15199,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         RuntimeError::Driver(error)
     }
 }
+include!("v2_runtime_ready_validate_publication.rs");
+
 impl SerializedV2Runtime<SumeragiV2Adapter> {
-    /// Seal the adapter's exact reducer-fence source and generation.
-    pub(in crate::sumeragi) fn lifecycle_reducer_fence_observation(
-        &self,
-    ) -> super::v2::LifecycleReducerFenceObservationV1 {
-        self.driver.lifecycle_reducer_fence_observation()
-    }
-
-    fn ready_validate_runtime_gate_is_open(
-        &self,
-        local_publication: Option<(LocalProposalReadyCommandIdentity, u128)>,
-    ) -> bool {
-        let ingress_is_exact_local_retry =
-            local_publication.is_some_and(|(identity, lifecycle_ordinal)| {
-                self.ingress.commands.len() == 1
-                    && self.ingress.commands.front().is_some_and(|queued| {
-                        identity.exactly_matches_queued_lifecycle_handoff(queued, lifecycle_ordinal)
-                    })
-            });
-        (self.ingress.len() == 0 || ingress_is_exact_local_retry)
-            && self.pending_effect_ownership.is_none()
-            && self.last_scheduler_ownership.is_none()
-            && self.pending_leader_wire_terminals.is_empty()
-    }
-
-    /// Classify a Ready Validate publication without retaining adapter state.
-    ///
-    /// An exact already-queued local successor is accepted only for retry of
-    /// the same actor-global lifecycle ordinal. No other runtime ingress can
-    /// be bypassed by this gate.
-    pub(in crate::sumeragi) fn preflight_ready_durable_validate_adapter_publication(
-        &mut self,
-        execution: &PreparedReadyDurableValidateExecution<'_>,
-        local_publication: Option<(LocalProposalReadyCommandIdentity, u128)>,
-    ) -> Result<ReadyDurableValidateAdapterPublicationKind, AdapterError> {
-        if self.fail_closed || !self.ready_validate_runtime_gate_is_open(local_publication) {
-            return Err(AdapterError::ReadyDurableValidatePublicationContractViolation);
-        }
-        execution.preflight_adapter_publication_kind(&mut self.driver)
-    }
     /// Freeze the serialized shell around one ordinary Fetch-to-Store preview.
     pub(in crate::sumeragi) fn prepare_certified_fetch_store(
         &mut self,
@@ -15300,7 +15246,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         PreparedReadyDurableValidateAdapterPreview<'registry, '_>,
         ReadyDurableValidateAdapterPreviewError<'registry>,
     > {
-        if self.fail_closed || !self.ready_validate_runtime_gate_is_open(local_publication) {
+        if self.fail_closed
+            || !self.ready_validate_runtime_gate_is_open(local_publication.is_some())
+        {
             return Err(ReadyDurableValidateAdapterPreviewError::runtime_gate(
                 execution,
                 AdapterError::ReadyDurableValidatePublicationContractViolation,

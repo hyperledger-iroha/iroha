@@ -727,11 +727,6 @@ _NETWORK_SCALE_SOAK_PLANS = (
         "bash",
         "scripts/run_sumeragi_v2_100k_chaos.sh",
     ),
-    _planned(
-        "network-taira-24h-soak",
-        "bash",
-        "scripts/run_taira_v2_24h_soak.sh",
-    ),
 )
 
 _FINAL_BOOTSTRAP_PUBLICATION_PLANS = (

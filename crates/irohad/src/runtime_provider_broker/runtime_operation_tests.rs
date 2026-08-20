@@ -1186,24 +1186,6 @@ fn production_endpoint_policy_pins_non_root_service_uid() {
     );
 }
 #[test]
-fn shipped_taira_validator_unit_owns_private_runtime_directory() {
-    let unit = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../configs/soranexus/taira/taira-irohad.service"
-    ));
-    for directive in [
-        "User=iroha",
-        "Group=iroha",
-        "RuntimeDirectory=iroha",
-        "RuntimeDirectoryMode=0700",
-    ] {
-        assert!(
-            unit.lines().any(|line| line == directive),
-            "shipped validator unit must contain {directive}"
-        );
-    }
-}
-#[test]
 fn endpoint_policy_rejects_outage_mode_owner_symlink_and_path_substitution() {
     let production = EndpointPolicy::production();
     assert_eq!(production.path, PathBuf::from(STOCK_BROKER_ENDPOINT_V1));

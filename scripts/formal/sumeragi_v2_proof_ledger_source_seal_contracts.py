@@ -764,9 +764,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'main/runtime_budget_and_config_tests.rs',
         'main/startup_tail_tests.rs',
     ),
-    'integration_tests/tests/taira_public_localnet.rs': (
-        'taira_public_localnet_config_digest_test.rs',
-    ),
     'crates/iroha_core/src/sumeragi/mod.rs': (
         'fair_v2_ingress_selector.rs',
         'tests/queue_plan_admission_handoff.rs',
@@ -2399,12 +2396,12 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 }
 
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 864
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 91
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 84
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
     "23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "355564c335110edc2811b8dd3542305ebf1dac3f269e2bb22ac758c0fea93cbd"
+    "997e91f2e5df5ee3b96941301c4e765b4073f8f5135a9d89492392f597f9738f"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -4429,185 +4426,6 @@ public_address = "{network_public_address}"{taira_network_frame_overrides}
             errors.append(
                 f"{kagami_path}:{render_items[0].line}: Kagami peer config must "
                 "install the Taira frame overrides in the network table"
-            )
-
-    renderer_description = "Taira renderer scales aggregate bytes by N+H+1"
-    try:
-        renderer_tree = ast.parse(sources["taira_renderer"])
-    except SyntaxError as exc:
-        errors.append(
-            f"{paths['taira_renderer']}:{exc.lineno or 1}: "
-            f"{renderer_description} requires valid Python syntax"
-        )
-    else:
-        functions = [
-            node
-            for node in renderer_tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "_scaled_sumeragi_body_bytes"
-        ]
-        assignments = (
-            [
-                statement
-                for statement in functions[0].body
-                if isinstance(statement, ast.Assign)
-                and len(statement.targets) == 1
-                and isinstance(statement.targets[0], ast.Name)
-                and statement.targets[0].id == "minimum"
-            ]
-            if len(functions) == 1
-            else []
-        )
-        expected = ast.parse(
-            "minimum = (validator_count + authenticated_non_validator_sources + 1) * source_bytes"
-        ).body[0]
-        if (
-            len(assignments) != 1
-            or not isinstance(expected, ast.Assign)
-            or ast.dump(assignments[0].value, include_attributes=False)
-            != ast.dump(expected.value, include_attributes=False)
-        ):
-            errors.append(
-                f"{paths['taira_renderer']}: {renderer_description} must have "
-                "one exact semantic assignment in _scaled_sumeragi_body_bytes"
-            )
-        scale_body = functions[0].body if len(functions) == 1 else []
-        source_count_assignments = [
-            statement
-            for statement in scale_body
-            if isinstance(statement, ast.Assign)
-            and len(statement.targets) == 1
-            and isinstance(statement.targets[0], ast.Name)
-            and statement.targets[0].id == "source_count"
-        ]
-        expected_source_count = ast.parse(
-            "source_count = validator_count + authenticated_non_validator_sources + 1"
-        ).body[0]
-        if (
-            len(source_count_assignments) != 1
-            or not isinstance(expected_source_count, ast.Assign)
-            or ast.dump(source_count_assignments[0].value, include_attributes=False)
-            != ast.dump(expected_source_count.value, include_attributes=False)
-        ):
-            errors.append(
-                f"{paths['taira_renderer']}: Taira renderer must derive one exact "
-                "N+H+1 source count before checked aggregate-byte multiplication"
-            )
-        guard_tests = [
-            statement.test for statement in scale_body if isinstance(statement, ast.If)
-        ]
-        expected_guards = [
-            ast.parse("source_count > TOML_I64_MAX", mode="eval").body,
-            ast.parse("source_bytes > TOML_I64_MAX // source_count", mode="eval").body,
-        ]
-        dumped_guards = {
-            ast.dump(test, include_attributes=False) for test in guard_tests
-        }
-        if any(
-            ast.dump(expected_guard, include_attributes=False) not in dumped_guards
-            for expected_guard in expected_guards
-        ):
-            errors.append(
-                f"{paths['taira_renderer']}: Taira renderer must guard both "
-                "source-count addition and aggregate-byte multiplication at the TOML i64 boundary"
-            )
-        integer_helpers = [
-            node
-            for node in renderer_tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "_require_positive_integer"
-        ]
-        helper_guard_tests = (
-            [
-                statement.test
-                for statement in integer_helpers[0].body
-                if isinstance(statement, ast.If)
-            ]
-            if len(integer_helpers) == 1
-            else []
-        )
-        expected_helper_guard = ast.parse("value > TOML_I64_MAX", mode="eval").body
-        if ast.dump(expected_helper_guard, include_attributes=False) not in {
-            ast.dump(test, include_attributes=False) for test in helper_guard_tests
-        }:
-            errors.append(
-                f"{paths['taira_renderer']}: Taira renderer positive integers "
-                "must be bounded by the Rust/TOML signed 64-bit maximum"
-            )
-        bodies_functions = [
-            node
-            for node in renderer_tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "_scaled_sumeragi_bodies"
-        ]
-        bodies_body = bodies_functions[0].body if len(bodies_functions) == 1 else []
-        bodies_minimum = [
-            statement
-            for statement in bodies_body
-            if isinstance(statement, ast.Assign)
-            and len(statement.targets) == 1
-            and isinstance(statement.targets[0], ast.Name)
-            and statement.targets[0].id == "minimum"
-        ]
-        expected_bodies_minimum = ast.parse(
-            "minimum = 5 * validator_count + 3 * "
-            "authenticated_non_validator_sources + "
-            "(1 if validator_count == 0 else 2)"
-        ).body[0]
-        if (
-            len(bodies_minimum) != 1
-            or not isinstance(expected_bodies_minimum, ast.Assign)
-            or ast.dump(bodies_minimum[0].value, include_attributes=False)
-            != ast.dump(expected_bodies_minimum.value, include_attributes=False)
-        ):
-            errors.append(
-                f"{paths['taira_renderer']}: Taira renderer must derive one "
-                "exact roster-aware 5N+3H+(N==0?1:2) body-message minimum"
-            )
-        bodies_guard_tests = {
-            ast.dump(statement.test, include_attributes=False)
-            for statement in bodies_body
-            if isinstance(statement, ast.If)
-        }
-        expected_bodies_guards = (
-            "validator_count > TOML_I64_MAX // 5",
-            "authenticated_non_validator_sources > "
-            "(TOML_I64_MAX - validator_slots) // 3",
-            "validator_slots + authenticated_slots > "
-            "TOML_I64_MAX - anonymous_slots",
-        )
-        if any(
-            ast.dump(ast.parse(guard, mode="eval").body, include_attributes=False)
-            not in bodies_guard_tests
-            for guard in expected_bodies_guards
-        ):
-            errors.append(
-                f"{paths['taira_renderer']}: Taira renderer must guard every "
-                "roster-aware body-message multiplication and addition at the TOML i64 boundary"
-            )
-        render_functions = [
-            node
-            for node in renderer_tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "render_validator_config"
-        ]
-        render_function = render_functions[0] if len(render_functions) == 1 else None
-        expected_bodies_render = ast.parse(
-            'rendered.append(f"bodies = {sumeragi_bodies}")'
-        ).body[0]
-        renders_bodies = render_function is not None and any(
-            ast.dump(node, include_attributes=False)
-            == ast.dump(expected_bodies_render, include_attributes=False)
-            for node in ast.walk(render_function)
-        )
-        has_bodies_parameter = render_function is not None and any(
-            argument.arg == "sumeragi_bodies"
-            for argument in render_function.args.args
-        )
-        if not renders_bodies or not has_bodies_parameter:
-            errors.append(
-                f"{paths['taira_renderer']}: per-validator rendering must "
-                "install the derived roster-aware sumeragi.queues.bodies capacity"
             )
 
     config_contracts = (

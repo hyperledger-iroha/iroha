@@ -64,46 +64,30 @@ The repository-root `Dockerfile` builds the runtime image used for published
 - `single` — embed the default single-node bundle under `/config`
 - `nexus` — embed the Nexus sample bundle under `/config`
 - `taira` — ship the public Taira static bundle under
-  `/opt/iroha/configs/soranexus/taira` and expect a rendered validator config
-  to be mounted at `/config/config.toml`
+  `/opt/iroha/configs/soranexus/taira` and expect an operator-owned validator
+  config to be mounted at `/config/config.toml`
 
-Local Taira image build example:
-
-```bash
-cd /path/to/dpn-api-rust
-IROHA_DIR=/path/to/iroha ops/taira/build-validator-image.sh
-```
-
-Taira image builds must enter through the DPN release wrapper so the ignored
-Iroha lockfile and a dirty developer checkout cannot silently become release
-inputs. The wrapper reconstructs and verifies the policy-pinned source tree,
-installs the reviewed full Cargo lock, and passes both digests to Docker. The
-equivalent low-level inputs are shown below for reference, not as a release
-procedure:
+The build always uses the tracked workspace lockfile with `cargo --locked`.
+Feature selection is explicit; `CONFIG_PROFILE=taira` no longer changes the
+feature graph, binary list, source tree, or build profile behind the caller's
+back. For a hosted Soracloud runtime image, request the real runtime feature:
 
 ```bash
 docker build \
   --build-arg CONFIG_PROFILE=taira \
-  --build-arg FEATURES=embedded-soracloud-runtime \
-  --build-arg CARGO_BUILD_JOBS=1 \
-  --build-arg BINARIES=iroha3d \
-  --build-arg VALIDATOR_LOCK_SHA256=<reviewed-lock-sha256> \
-  --build-arg VALIDATOR_SOURCE_TREE_SHA256=<attested-source-tree-sha256> \
+  --build-arg FEATURES=embedded-soracloud-runtime,external-software-signer-bin \
   -t hyperledger/iroha:taira-local .
 ```
 
-The Taira image automatically includes `embedded-soracloud-runtime` and uses a
-Taira-aware entrypoint. With no command override it starts:
+The Taira-aware entrypoint starts:
 
 ```bash
 iroha3d --sora --config /config/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json
 ```
 
-Keep validator-specific runtime material out of the image. Generate
-`/config/config.toml` with a read-only bind mount; the image entrypoint copies
-it to `/storage/runtime-config.toml` before starting `iroha3d`.
-`python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ...`
-and mount it into the container together with persistent `/storage`.
+Keep validator-specific runtime material out of the image. Mount the exact
+operator-owned `/config/config.toml` read-only; the entrypoint copies it to
+`/storage/runtime-config.toml` before starting `iroha3d`.
 The runtime image also carries the bundled rANS tables under
 `/opt/iroha/codec/rans/tables`, matching the default
 `streaming.codec.rans_tables_path`.
@@ -113,27 +97,10 @@ signed genesis payload. The entrypoint accepts `IROHA_TAIRA_SIGNED_GENESIS` and
 rewrites the copied runtime config so `genesis.file` points at the mounted
 payload path before `iroha3d` starts.
 
-For a local 4-validator container rollout proof, first render a fresh
-`kagami localnet` bundle into bridge-friendly configs/env files:
+For a disposable local four-validator Taira network, do not build a custom
+container corridor. Use the same-revision bare-metal smoke:
 
 ```bash
-python3 scripts/render_taira_localnet_container_bundle.py \
-  --bundle-dir dist/taira-localnet-smoke \
-  --output-dir dist/taira-localnet-cluster
+python3 scripts/taira_devnet.py up
+python3 scripts/taira_devnet.py down
 ```
-
-Those generated env files set `TAIRA_DOCKER_NETWORK=taira-localnet` so the
-existing `taira-validator-container.sh` wrapper can launch all four peers on a
-shared Docker bridge with canonical internal `addr:...#CRC16` literals.
-
-For a host-side Taira validator deployment, use the checked-in examples under
-`configs/soranexus/taira/`:
-
-- `taira-validator-container.sh`
-- `docker-compose.validator.yml`
-- `taira-validator-container.compose.env.example`
-- `taira-validator-container.service`
-
-Prefer `taira-validator-container.sh` on hosts that only have the base Docker
-CLI. Use `docker-compose.validator.yml` only when the Compose plugin is
-installed and verified.

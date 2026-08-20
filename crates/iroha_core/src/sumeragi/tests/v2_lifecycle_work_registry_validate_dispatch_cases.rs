@@ -872,6 +872,122 @@ fn durable_validate_store_fixture_at_view_with_commitment(
 }
 
 #[cfg(feature = "bls")]
+fn durable_local_validate_store_fixture_at_view(
+    marker: u8,
+    view: wire::View,
+) -> (
+    DurableValidateFixture,
+    TempDir,
+    V2BodyStore,
+    DurableBodyReceipt,
+) {
+    let mut fixture = durable_validate_fixture_at_view(marker, view);
+    let directory = TempDir::new().expect("temporary local Validate body store");
+    let mut store = V2BodyStore::open(directory.path(), fixture.verified.context().clone())
+        .expect("open local Validate body store");
+    let durable = store
+        .store(fixture.manifest.clone(), fixture.canonical_wire.clone())
+        .expect("persist local Validate fixture body");
+    assert_eq!(durable.manifest_hash(), fixture.expected_manifest_hash);
+    let AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    } = fixture.effect.clone()
+    else {
+        unreachable!("local Validate fixture retains one Validate effect")
+    };
+    let store_effect = AdapterEffect::StoreBody {
+        tag,
+        round,
+        subject,
+    };
+    let ordinal = fixture.lease.ordinal();
+    let store_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&store_effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+    )
+    .expect("bind local Validate Store owner")
+    .pop()
+    .expect("one local Validate Store owner");
+    let local_store = crate::sumeragi::v2_runtime::LocalProposalEffectOwnership::for_test(
+        store_ownership.clone(),
+        &store_effect,
+        &fixture.manifest,
+    )
+    .expect("seal local Validate Store replay authority");
+    let validate_ownership = store_ownership
+        .rebind_as_inherited_adapter_effect(&fixture.effect)
+        .expect("carry local Store authority into Validate");
+    let local_replay = local_store
+        .project_exact_validate(
+            &store_effect,
+            &fixture.manifest,
+            &durable,
+            &fixture.effect,
+            &validate_ownership,
+        )
+        .expect("project exact local Store-to-Validate replay");
+    let prepared = PreparedLocalBodyValidateReplayPreAdmission::seal_exact_validate(
+        fixture.effect.clone(),
+        validate_ownership,
+        durable.clone(),
+        local_replay,
+    )
+    .unwrap_or_else(|_| panic!("seal exact local Validate pre-admission"));
+    let context = fixture.verified.context();
+    let mut context_id = [0_u8; 32];
+    context_id.copy_from_slice(context.id().0.as_ref());
+    let active_context = LifecycleContext::new(LifecycleDigest::new(context_id), context.height);
+    let prepared = prepared
+        .prepare_lifecycle_admission(active_context, &fixture.verified)
+        .unwrap_or_else(|_| panic!("prepare exact local Validate admission"));
+    let candidate = prepared.candidate().clone();
+    let (physical_slots, slot_universe, consumed_slots) = candidate
+        .physical_geometry
+        .normalized()
+        .expect("normalize local Validate fixture geometry");
+    assert_eq!(slot_universe, consumed_slots);
+    assert_eq!(physical_slots.len(), 1);
+    let (&slot, &digest) = physical_slots
+        .first_key_value()
+        .expect("one local Validate fixture slot");
+    let owner = OwnerId::new(candidate.causal_root, ordinal);
+    let address = ConcreteWorkAddress::new(owner, ordinal, slot)
+        .expect("exact local Validate registry address");
+    let PreparedLifecycleAdmissionOwnerV1::LocalBody(prepared) = prepared.into_owner() else {
+        unreachable!("local Validate preparation retains its exact origin")
+    };
+    let (validate, carrier_digest) = prepared
+        .into_durable_validate_carrier(address)
+        .unwrap_or_else(|_| panic!("close exact local Validate carrier"));
+    assert_eq!(carrier_digest, digest);
+    let removed = fixture
+        .registry
+        .entries
+        .remove(&fixture.address)
+        .expect("replace synthetic Validate fixture with local carrier");
+    assert!(fixture.registry.entries.is_empty());
+    drop(removed);
+    let work = ConcreteLifecycleWork {
+        digest,
+        kind: ConcreteLifecycleWorkKind::DurableValidateBody(validate),
+    };
+    assert!(work.validate_exact());
+    assert!(work.validates_at(address));
+    assert!(fixture.registry.entries.insert(address, work).is_none());
+    fixture.address = address;
+    fixture.slot = slot;
+    fixture.lease.owner = owner;
+    fixture.lease.key = candidate.key;
+    fixture.lease.work_class = candidate.work_class;
+    fixture.lease.stage = candidate.stage;
+    fixture.lease.physical_slots = physical_slots;
+    fixture.store_ownership = store_ownership;
+    (fixture, directory, store, durable)
+}
+
+#[cfg(feature = "bls")]
 fn durable_validate_sidecar_store_fixture(
     marker: u8,
 ) -> (
@@ -1153,9 +1269,32 @@ fn ready_durable_validate_fixture(
 }
 
 #[cfg(feature = "bls")]
+fn ready_local_durable_validate_fixture_at_view(
+    marker: u8,
+    view: wire::View,
+    outcome: ReadyDurableValidateFixtureOutcome,
+) -> ReadyDurableValidateFixture {
+    let waiting = waiting_durable_validate_fixture_from_store(
+        durable_local_validate_store_fixture_at_view(marker, view),
+    );
+    ready_durable_validate_fixture_from_waiting(waiting, outcome)
+}
+
+#[cfg(feature = "bls")]
 fn ready_durable_validate_fixture_at_view(
     marker: u8,
     view: wire::View,
+    outcome: ReadyDurableValidateFixtureOutcome,
+) -> ReadyDurableValidateFixture {
+    ready_durable_validate_fixture_from_waiting(
+        waiting_durable_validate_fixture_at_view(marker, view),
+        outcome,
+    )
+}
+
+#[cfg(feature = "bls")]
+fn ready_durable_validate_fixture_from_waiting(
+    waiting: WaitingDurableValidateFixture,
     outcome: ReadyDurableValidateFixtureOutcome,
 ) -> ReadyDurableValidateFixture {
     let WaitingDurableValidateFixture {
@@ -1166,7 +1305,7 @@ fn ready_durable_validate_fixture_at_view(
         mut coordinator,
         mut holder,
         dispatch,
-    } = waiting_durable_validate_fixture_at_view(marker, view);
+    } = waiting;
     let executed = match outcome {
         ReadyDurableValidateFixtureOutcome::Validated => {
             let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();

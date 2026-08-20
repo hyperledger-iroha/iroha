@@ -11,7 +11,7 @@ def test_release_inventory_constants_match_current_source_seal(
         "23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "355564c335110edc2811b8dd3542305ebf1dac3f269e2bb22ac758c0fea93cbd"
+        "997e91f2e5df5ee3b96941301c4e765b4073f8f5135a9d89492392f597f9738f"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -330,12 +330,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "scripts/write_sumeragi_v2_release_receipt_gate_evidence.py",
         "scripts/write_sumeragi_v2_release_receipt_publication.py",
     )
-    taira_source = read_reviewed_source_bundle(
-        "integration_tests/tests/taira_public_localnet.rs"
-    )
-    taira_strict_restart_source = (
-        ROOT_DIR / "integration_tests/tests/taira_public_localnet/strict_restart.rs"
-    ).read_text(encoding="utf-8")
     integration_runner_source = read_reviewed_source_bundle(
         "integration_tests/tests/sumeragi_v2_runner.rs"
     )
@@ -1943,9 +1937,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     bootstrap_validation = release_source.index("for bootstrap_suffix in")
     required_network = release_source.index("export IROHA_TEST_REQUIRE_NETWORK=1")
     production_units = release_source.index("required_production_liveness_tests")
-    taira_rust_contracts = release_source.index(
-        "required_taira_release_contract_tests=("
-    )
     source_contract_preflight = release_source.index(
         "source_manifest_contract_tests=("
     )
@@ -1962,7 +1953,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     formal_launcher_preflight = release_source.index(
         "formal_launcher_contract_files=("
     )
-    taira_soak_preflight = release_source.index("taira_soak_contract_files=(")
     seed_matrix = release_source.index("run_sumeragi_v2_seed_matrix.sh")
     pr_branch = release_source.index('if [[ "$profile" == "--pr" ]]; then')
     pr_fast_formal = release_source.index(
@@ -1980,8 +1970,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     )
     scaling_call = release_source.index("\n  run_release_scaling_gate\n", g12_soak)
     chaos_gate = release_source.index("run_sumeragi_v2_100k_chaos.sh")
-    pre_soak_manifest = release_source.index("pre_soak_source_manifest_sha256")
-    taira_run = release_source.index("run_taira_v2_24h_soak.sh")
     final_manifest = release_source.index("final_release_source_manifest_sha256")
     final_proof_check = release_source.index("final_proof_evidence_args=(")
     final_proof_invocation = release_source.index(
@@ -2003,21 +1991,17 @@ kura.claim_autonomous_lifecycle_process_generation(
         bootstrap_validation
         < required_network
         < production_units
-        < taira_rust_contracts
         < source_contract_preflight
         < seed_launcher_preflight
         < chaos_launcher_preflight
         < receipt_contract_preflight
         < proof_fidelity_preflight
         < formal_launcher_preflight
-        < taira_soak_preflight
         < formal_definition
         < formal_gate
         < formal_call
         < seed_matrix
         < chaos_gate
-        < pre_soak_manifest
-        < taira_run
         < final_manifest
         < final_proof_check
     )
@@ -2266,11 +2250,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert (
         len(receipt_module._corridor_legs())
         == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
-        == 91
-    )
-    assert len(receipt_module._TAIRA_CONTRACT_TESTS) == 6
-    assert receipt_module._TAIRA_CONTRACT_TESTS[-1] == (
-        "taira_public_localnet::strict_restart::taira_localnet_restart_catchup_behavior"
+        == 84
     )
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
@@ -2670,116 +2650,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     )
     assert (
         '"preflight-formal-launcher",\n                "pytest",\n                27,'
-        in receipt_source
-    )
-    assert "taira_release_ignored_contract_list=" in release_source
-    assert "required Taira release-evidence contract test is ignored" in release_source
-    for test_name in (
-        "release_execution_profile_accepts_only_the_exact_positive_profile",
-        "release_execution_profile_rejects_wrong_or_blank_build_profiles",
-        "release_execution_profile_rejects_cargo_profile_mismatch",
-        "release_execution_profile_rejects_non_exact_offline_values",
-        "simulation_summary_json_records_release_profile_and_status_evidence",
-        "strict_restart::taira_localnet_restart_catchup_behavior",
-    ):
-        assert test_name in release_source
-    strict_restart_declaration = "async fn taira_localnet_restart_catchup_behavior()"
-    assert taira_strict_restart_source.count(strict_restart_declaration) == 1
-    strict_restart_offset = taira_strict_restart_source.index(strict_restart_declaration)
-    strict_restart_attribute = taira_strict_restart_source.rfind(
-        "#[tokio::test", 0, strict_restart_offset
-    )
-    assert strict_restart_attribute >= 0
-    strict_restart_test = taira_strict_restart_source[strict_restart_attribute:]
-    for forbidden_success_path in (
-        "#[ignore",
-        "finalize_result(",
-        "sandbox_reason",
-        "enforce_network_start_requirement",
-        "skipping",
-    ):
-        assert forbidden_success_path not in taira_strict_restart_source
-    assert "setup_taira_harness::<true>" in strict_restart_test
-    assert strict_restart_test.count("strict_process_restart_catchup(") == 1
-    assert "\n    result\n}" in strict_restart_test
-    assert "const TAIRA_VALIDATORS: u16 = 4;" in taira_source
-    for exact_tip_token in (
-        ".query(FindBlocks)",
-        "height: tip.header().height().get(),",
-        "hash: tip.hash(),",
-        "parent_hash: tip.header().prev_block_hash(),",
-        "tips.iter().all(|(_, tip)| *tip == expected)",
-        "observed.block == expected && observed.contains_transaction",
-    ):
-        assert exact_tip_token in taira_strict_restart_source
-    strict_restart_helper_offset = taira_strict_restart_source.index(
-        "async fn strict_process_restart_catchup("
-    )
-    strict_restart_helper = taira_strict_restart_source[
-        strict_restart_helper_offset:strict_restart_attribute
-    ]
-    assert strict_restart_helper.count("signed_probe(") == 2
-    assert strict_restart_helper.count("submit_signed(") == 2
-    for restart_contract_token in (
-        "harness.validator_clients.len() == usize::from(TAIRA_VALIDATORS)",
-        "let baseline = wait_for_all_common_tip(",
-        '"strict four-validator baseline convergence"',
-        "harness.localnet.stop_validator(restart_index)?;",
-        "let sentinel = signed_probe(",
-        "let sentinel_block = wait_for_all_signed_tip(",
-        "sentinel_block.height",
-        "&& sentinel_block.parent_hash == Some(baseline.hash)",
-        "harness.localnet.start_validator(restart_index)?;",
-        "Some(sentinel_block),",
-        '"restarted validator must reach the exact sentinel height/hash"',
-        "ensure!(recovered == sentinel_block);",
-        "let successor = signed_probe(",
-        "let successor_block = wait_for_all_signed_tip(",
-        '"all four validators must finalize the exact successor"',
-        "successor_block.height",
-        "&& successor_block.parent_hash == Some(sentinel_block.hash)",
-        "&& successor_block.hash != sentinel_block.hash",
-    ):
-        assert restart_contract_token in strict_restart_helper
-    assert strict_restart_helper.count(".checked_add(1)") == 2
-    strict_setup = taira_source.index(
-        "async fn setup_taira_harness<const STRICT_ALL_VALIDATORS: bool>"
-    )
-    strict_initial_failure = taira_source.index("if STRICT_ALL_VALIDATORS", strict_setup)
-    assert taira_source.index("return Err(err);", strict_initial_failure) > strict_initial_failure
-    process_churn_start = taira_source.index("async fn process_churn_cycle(")
-    process_churn_end = taira_source.index(
-        "fn validator_restart_catchup_target(", process_churn_start
-    )
-    all_validator_lag_branch = taira_source.index(
-        "} else if let Err(err) = wait_for_cluster_convergence(",
-        process_churn_start,
-        process_churn_end,
-    )
-    all_validator_lag_diagnostic = taira_source.index(
-        '"validator restart all-validator convergence lagged;',
-        all_validator_lag_branch,
-        process_churn_end,
-    )
-    assert (
-        taira_source.index(
-            "lagged = true;",
-            all_validator_lag_branch,
-            all_validator_lag_diagnostic,
-        )
-        > all_validator_lag_branch
-    )
-    assert "taira_soak_contract_files=(" in release_source
-    assert "did not run exactly 43 passing tests" in release_source
-    for soak_contract in (
-        "test_launcher_rejects_bundle_tampering_before_completion",
-        "test_launcher_rejects_symlinked_marker_temp_without_completion",
-        "test_launcher_marker_durability_failure_is_not_terminal",
-        "test_launcher_does_not_promote_provisional_evidence_when_validation_fails",
-    ):
-        assert soak_contract in release_source
-    assert (
-        '"preflight-taira-soak",\n                "pytest",\n                43,'
         in receipt_source
     )
     assert (
@@ -3330,30 +3200,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         in seed_source
     )
     assert "workspace sources changed during the PR release corridor" in release_source
-    assert "workspace sources changed before the Taira production soak" in release_source
     assert "workspace sources changed during the production release corridor" in release_source
-    soak_source = (
-        ROOT_DIR / "scripts" / "run_taira_v2_24h_soak.sh"
-    ).read_text(encoding="utf-8")
-    assert "expected exactly one ignored Taira soak" in soak_source
-    assert "check_taira_v2_soak_evidence.py" in soak_source
-    pinned_taira_profile = {
-        "IROHA_TAIRA_SIM_DURATION_SECS": "86400",
-        "IROHA_TAIRA_SIM_SEED": "taira-public-sim",
-        "IROHA_TAIRA_LOAD_TPS": "5",
-        "IROHA_TAIRA_PACKET_LOSS_PERCENT": "10",
-        "IROHA_TAIRA_CHURN_INTERVAL_SECS": "300",
-        "IROHA_TAIRA_MAX_HEIGHT_SKEW": "2",
-        "IROHA_TAIRA_MAX_HEIGHT_SKEW_GRACE_SECS": "30",
-        "IROHA_TAIRA_MAX_TRANSIENT_HEIGHT_SKEW": "32",
-        "IROHA_TAIRA_STALL_TIMEOUT_SECS": "300",
-        "IROHA_TAIRA_MAX_VIEW_CHANGE_RATE": "0.2",
-        "IROHA_TAIRA_MAX_LAGGED_CYCLE_RATIO": "0.35",
-        "IROHA_TAIRA_MIN_COMMITTED_TPS_RATIO": "0.6",
-        "IROHA_TAIRA_KEEP_LOCALNET": "1",
-    }
-    for name, value in pinned_taira_profile.items():
-        assert f"export {name}={value}" in soak_source
 
     chaos_branch = harness_source.index("--chaos-100k)")
     chaos_inventory = harness_source.index("ignored_test_list=", chaos_branch)
@@ -3385,19 +3232,9 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert "expected exactly eight Sumeragi v2 model-replay tests" in harness_source
     assert "model-replay gate requires all eight tests to be runnable" in harness_source
 
-    finalizer = taira_source.index("fn finalize_result")
-    fail_closed = taira_source.index(
-        "sandbox::enforce_network_start_requirement::<()>(None, context)?", finalizer
-    )
-    successful_skip = taira_source.index("return Ok(());", fail_closed)
-    assert finalizer < fail_closed < successful_skip
-
 def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> None:
     release_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
-    ).read_text(encoding="utf-8")
-    soak_source = (
-        ROOT_DIR / "scripts" / "run_taira_v2_24h_soak.sh"
     ).read_text(encoding="utf-8")
     seed_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_seed_matrix.sh"
@@ -3431,7 +3268,7 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
         ROOT_DIR / "scripts" / "sumeragi_v2_release_cargo_proxy.sh"
     ).read_text(encoding="utf-8")
 
-    for source in (release_source, soak_source):
+    for source in (release_source,):
         assert "unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN" in source
         assert "CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami" in source
         assert "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA" in source
@@ -3450,11 +3287,6 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
         'export KAGAMI_BIN="${IROHA_TEST_TARGET_DIR}/release/kagami"',
     ):
         assert prebuilt_shell_source.count(token) == 1
-    assert (
-        'readonly source_bound_root="${IROHA_RELEASE_ARTIFACT_ROOT}/'
-        'sumeragi-v2-release/${source_manifest_sha256}"'
-        in soak_source
-    )
     assert '${prebuilt_repo_root}/target' not in prebuilt_shell_source
     assert "_workspace_target" not in prebuilt_python_source
     assert prebuilt_shell_source.count(

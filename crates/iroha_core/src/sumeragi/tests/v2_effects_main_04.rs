@@ -1,3 +1,230 @@
+#[cfg(feature = "bls")]
+#[test]
+fn live_local_proposal_sign_enters_lifecycle_before_generic_sign_or_broadcast() {
+    let fixture = ProductionTransportFixture::new();
+    let tag = tag(0);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.round,
+        fixture.subject,
+        HashOf::new(&fixture.manifest),
+    );
+    let validated = ValidatedBodyReceipt::for_test(durable.clone());
+    let proofs = fixture
+        .validator_keys
+        .iter()
+        .map(|key| {
+            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("validator proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
+        .expect("verify live ProposalIntent context");
+    let directory = TempDir::new().expect("temporary live ProposalIntent WAL");
+    let (mut adapter, startup) = SumeragiV2Adapter::open(
+        directory.path().join("live-proposal-intent.wal"),
+        verified,
+        Some(fixture.context.leader(0)),
+        tag.generation(),
+        [0xD7; 32],
+        AdapterFingerprints {
+            node: Hash::new(b"live ProposalIntent node"),
+            build: Hash::new(b"live ProposalIntent build"),
+            config: Hash::new(b"live ProposalIntent config"),
+        },
+        DeferredAdmissionOrdinalSource::new(0),
+    )
+    .expect("open live ProposalIntent adapter");
+    assert!(startup.is_empty());
+    assert_eq!(adapter.current_tag(), tag);
+    let effects = adapter
+        .local_proposal_ready(tag, fixture.manifest.clone(), &durable, &validated)
+        .expect("drive LocalProposalReady into one fsynced ProposalIntent")
+        .into_effects();
+    let [sign_effect] = effects.as_slice() else {
+        panic!("local ProposalReady must emit one Proposal Sign: {effects:?}")
+    };
+    assert!(matches!(
+        sign_effect,
+        AdapterEffect::Sign {
+            request: SignRequest::Proposal(proposal),
+            ..
+        } if proposal.signature.is_empty()
+    ));
+    let handoff = adapter
+        .take_live_proposal_intent_wal_sign(&effects)
+        .expect("consume exact live ProposalIntent sidecar")
+        .expect("live ProposalIntent must retain one WAL Sign sidecar");
+
+    let store_effect = AdapterEffect::StoreBody {
+        tag,
+        round: fixture.round,
+        subject: fixture.subject,
+    };
+    let store_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&store_effect),
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                tag,
+                9_701,
+                b"live local proposal lineage",
+            ),
+        ],
+    )
+    .expect("bind exact local Store owner")
+    .pop()
+    .expect("one local Store owner");
+    let local =
+        LocalProposalEffectOwnership::for_test(store_ownership, &store_effect, &fixture.manifest)
+            .expect("seal local Store replay lineage");
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag,
+        round: fixture.round,
+        subject: fixture.subject,
+    };
+    let validate_ownership = local
+        .exact_store_task_ownership(&store_effect, &fixture.manifest)
+        .expect("retain exact local Store scheduling owner")
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("project exact local Validate owner");
+    let validate_pending = validate_ownership
+        .exact_pending_adapter_effect_binding(&validate_effect)
+        .expect("project exact local Validate pending owner");
+    let command_identity = LocalProposalReadyCommandIdentity::from_exact_pending_handoff(
+        tag,
+        &fixture.manifest,
+        &durable,
+        &validated,
+        &validate_pending,
+    )
+    .expect("derive exact LocalProposalReady command identity");
+    let ready = local
+        .project_exact_validate(
+            &store_effect,
+            &fixture.manifest,
+            &durable,
+            &validate_effect,
+            &validate_ownership,
+        )
+        .unwrap_or_else(|_| panic!("project exact local Validate replay"))
+        .complete_local_proposal(
+            &validate_effect,
+            &fixture.manifest,
+            validated,
+            command_identity,
+        )
+        .unwrap_or_else(|_| panic!("complete exact LocalProposalReady replay"));
+    let sign_ownership = validate_ownership
+        .rebind_as_inherited_adapter_effect(sign_effect)
+        .expect("project exact ProposalIntent effect owner");
+    let mut executor = V2EffectExecutor::with_runtime(
+        FakeRuntime {
+            steps: VecDeque::from([Ok(RuntimeStep::Advanced(effects.clone()))]),
+            round_tag: Some(tag),
+            next_lifecycle_ordinal: 9_702,
+            exact_effect_ownership: Some((sign_effect.clone(), sign_ownership)),
+            live_proposal_intent_wal_sign: Some((sign_effect.clone(), handoff)),
+            ..FakeRuntime::default()
+        },
+        BTreeMap::new(),
+        fixture.context.clone(),
+        PeerId::new(fixture.requester_key.public_key().clone()),
+        Some(fixture.context.leader(0)),
+        EffectQueueConfig::default(),
+    )
+    .expect("construct live ProposalIntent executor");
+    assert!(
+        executor
+            .local_proposal_ready_replay
+            .insert(command_identity, ready)
+            .is_none()
+    );
+    let mut services = FakeServices::default();
+    assert!(matches!(
+        executor.step(Instant::now(), &mut services),
+        Ok(EffectExecutorStep::Advanced { effects: 1 })
+    ));
+    assert!(executor.pending_live_wal_sign_admission.is_some());
+    assert_eq!(executor.status().pending_signatures, 1);
+    assert_eq!(executor.pending_work(), 1);
+    assert!(executor.pending_signatures.is_empty());
+    assert!(executor.pending_lifecycle_output_admissions.is_empty());
+    assert!(executor.local_proposal_ready_replay.is_empty());
+    assert!(executor.local_proposal_intent_replay.is_empty());
+    assert!(services.sign_tasks.is_empty());
+    assert!(services.broadcast_attempts.is_empty());
+    assert!(services.broadcasts.is_empty());
+}
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    live_proposal_intent_sign_is_joined_before_generic_effect_dispatch
+);
+
+#[test]
+fn live_lifecycle_validation_marker_promotes_idempotently_and_authorizes_vote_signing() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let durable = services
+        .body_store
+        .as_mut()
+        .expect("body store service")
+        .store(fixture.manifest.clone(), fixture.body.clone())
+        .expect("persist exact body fixture");
+    let validated = validate_durable_body_fixture(&mut services, &fixture.manifest, durable.clone());
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    assert!(executor.durable_bodies.insert(key, durable.clone()).is_none());
+    assert!(executor.validated_bodies.is_empty());
+
+    executor
+        .record_lifecycle_validated_body(
+            ReadyValidatedExecutorCatalogAuthorityV1::for_test(validated.clone()),
+        )
+        .expect("promote one live fsynced validation marker");
+    executor
+        .record_lifecycle_validated_body(
+            ReadyValidatedExecutorCatalogAuthorityV1::for_test(validated.clone()),
+        )
+        .expect("exact live marker retry is idempotent");
+    assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
+
+    let conflicting = ValidatedBodyReceipt::for_test_with_commitment(
+        durable,
+        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"conflicting live marker parent state"),
+            Hash::new(b"conflicting live marker post state"),
+            Hash::new(b"conflicting live marker writes"),
+            1,
+            Hash::new(b"conflicting live marker executed block"),
+        ),
+    );
+    assert!(matches!(
+        executor.record_lifecycle_validated_body(
+            ReadyValidatedExecutorCatalogAuthorityV1::for_test(conflicting),
+        ),
+        Err(EffectExecutorError::BodyStore(reason))
+            if reason.contains("conflicting validation receipts")
+    ));
+    assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
+
+    executor
+        .consume_effects(
+            vec![AdapterEffect::Sign {
+                tag: tag(0),
+                request: SignRequest::Vote(vote(&fixture)),
+            }],
+            &mut services,
+        )
+        .expect("live validation marker authorizes exact Vote signing");
+    assert_eq!(services.sign_tasks.len(), 1);
+    assert!(!executor.status().fail_closed);
+}
+
 #[test]
 fn vote_signing_requires_the_exact_fsynced_execution_commitment() {
     let fixture = Fixture::new();

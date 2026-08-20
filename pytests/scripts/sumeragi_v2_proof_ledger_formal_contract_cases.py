@@ -233,9 +233,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('main/runtime_budget_and_config_tests.rs'),
         Path('main/startup_tail_tests.rs'),
     ),
-    Path('integration_tests/tests/taira_public_localnet.rs'): (
-        Path('taira_public_localnet_config_digest_test.rs'),
-    ),
     Path('crates/iroha_core/src/sumeragi/mod.rs'): (
         Path('fair_v2_ingress_selector.rs'),
         Path('tests/queue_plan_admission_handoff.rs'),

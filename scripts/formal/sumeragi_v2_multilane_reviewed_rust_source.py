@@ -154,7 +154,7 @@ FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS = (
         "scripts/write_sumeragi_v2_release_receipt.py",
         (
             '"write_sumeragi_v2_release_receipt_gate_evidence.py": (',
-            "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5",
+            "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b",
             '_SDK_SOURCE_CLOSURE_RESOLVER = "ci/'
             'resolve_sumeragi_v2_sdk_source_closure.py"',
             '_SDK_SOURCE_CLOSURE_MANIFEST = "ci/'

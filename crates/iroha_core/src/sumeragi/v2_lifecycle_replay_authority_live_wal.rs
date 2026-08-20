@@ -124,6 +124,33 @@ impl SealedLiveWalPersistedEffectV1 {
             .replay
             .exactly_matches_payload_free_effect(&self.effect)
     }
+    /// Recheck one initial local Proposal Sign against its frame-derived owner.
+    ///
+    /// This comparison-only seam lets the adapter retain the complete live
+    /// seal behind an opaque handoff. It exposes neither the effect nor the
+    /// locator-derived pending binding, and deliberately does not accept the
+    /// inherited local-body owner used before the ProposalIntent WAL append.
+    pub(in crate::sumeragi) fn exactly_binds_payload_free_proposal_sign(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        self.effect == *effect
+            && matches!(
+                &self.effect,
+                AdapterEffect::Sign {
+                    request: SignRequest::Proposal(proposal),
+                    ..
+                } if proposal.signature.is_empty()
+            )
+            && matches!(
+                &self.pending,
+                LiveWalPersistedPendingV1::PayloadFree(pending)
+                    if pending.exactly_binds_adapter_effect(&self.effect)
+            )
+            && self
+                .replay
+                .exactly_matches_payload_free_effect(&self.effect)
+    }
     /// Recheck one body-frame-completed Apply without exposing its WAL source
     /// or predecessor-derived pending owner.
     pub(in crate::sumeragi) fn exactly_binds_completed_apply(
@@ -302,6 +329,78 @@ impl SealedLiveWalPersistedEffectV1 {
                 replay,
                 pending: LiveWalPersistedPendingV1::ValidateSignBound(pending),
             }),
+        }
+    }
+
+    /// Consume one exact local `ProposalIntent` continuation into its
+    /// standalone WAL-owned lifecycle admission.
+    ///
+    /// The local-body composite remains nested in the prepared admission as
+    /// companion provenance. Its inherited pending owner is intentionally not
+    /// substituted for the locator-derived WAL owner, so live admission and
+    /// cold reconstruction select the same causal root.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_live_local_proposal_admission(
+        self,
+        active_context: LifecycleContext,
+        verified: &VerifiedHeightContext,
+        companion: LocalProposalIntentReplayEvidenceV1,
+    ) -> Result<
+        super::work_registry::PreparedLifecycleAdmissionV1,
+        (
+            Self,
+            LocalProposalIntentReplayEvidenceV1,
+            AdapterEffectAdmissionError,
+        ),
+    > {
+        if !matches!(&self.pending, LiveWalPersistedPendingV1::PayloadFree(_))
+            || !companion.exactly_matches_live_wal_sign_effect(&self.effect)
+            || !matches!(
+                &self.effect,
+                AdapterEffect::Sign {
+                    request: SignRequest::Proposal(_),
+                    ..
+                }
+            )
+            || !self
+                .replay
+                .exactly_matches_payload_free_effect(&self.effect)
+        {
+            return Err((self, companion, AdapterEffectAdmissionError::InvalidCarrier));
+        }
+        let Self {
+            effect,
+            replay,
+            pending,
+        } = self;
+        let LiveWalPersistedPendingV1::PayloadFree(pending) = pending else {
+            unreachable!("local Proposal WAL seal retains its locator-derived pending owner")
+        };
+        let LiveWalPersistedReplayStateV1::Canonical {
+            authority: replay_authority,
+            ..
+        } = &replay.state
+        else {
+            unreachable!("local Proposal WAL seal retains canonical replay authority")
+        };
+        match super::work_registry::PreparedLifecycleAdmissionV1::live_wal_local_proposal(
+            active_context,
+            verified,
+            effect,
+            pending,
+            replay_authority.clone(),
+            companion,
+        ) {
+            Ok(prepared) => Ok(prepared),
+            Err((failure, effect, pending, _authority, companion)) => Err((
+                Self {
+                    effect,
+                    replay,
+                    pending: LiveWalPersistedPendingV1::PayloadFree(pending),
+                },
+                companion,
+                failure,
+            )),
         }
     }
     /// Compare the complete test effect and expected inherited causal key

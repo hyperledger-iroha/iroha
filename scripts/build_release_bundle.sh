@@ -366,7 +366,6 @@ else
       "external_software_signer/systemd/iroha-runtime-provider-broker-v1.service.d/20-external-software-signers.conf"
       "runtime_provider_broker/systemd/iroha-runtime-provider-broker-v1.service"
       "runtime_provider_broker/systemd/sorafs-governance-dag@.service.d/20-runtime-provider-broker-v1.conf"
-      "runtime_provider_broker/systemd/taira-irohad.service.d/20-runtime-provider-broker-v1.conf"
     )
   else
     platform_assets=(

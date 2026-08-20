@@ -1433,7 +1433,7 @@ except (UnicodeDecodeError, json.JSONDecodeError) as error:
     raise SystemExit("release child-result is malformed") from error
 names = (
     "corridor_completion", "formal_completion", "seed_completion",
-    "chaos_completion", "taira_completion", "g4p_completion",
+    "chaos_completion", "g4p_completion",
     "g12_seed_completion", "g12_fault_soak_completion",
 )
 if (
@@ -1469,8 +1469,7 @@ PY
   if ((sealed_status == 0)); then
     IFS=$'\t' read -r \
       corridor_completion_path formal_completion_path seed_completion_path \
-      chaos_completion_path taira_completion_path \
-      multilane_four_peer_completion_path nexus_cross_completion_path \
+      chaos_completion_path multilane_four_peer_completion_path nexus_cross_completion_path \
       nexus_cross_soak_completion_path child_result_extra \
       <<<"$child_result_fields"
     if [[ -n "${child_result_extra:-}" ]]; then
@@ -1521,7 +1520,6 @@ PY
       --formal-completion "$formal_completion_path" \
       --seed-completion "$seed_completion_path" \
       --chaos-completion "$chaos_completion_path" \
-      --taira-completion "$taira_completion_path" \
       --g4p-completion "$multilane_four_peer_completion_path" \
       --g12-seed-completion "$nexus_cross_completion_path" \
       --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \
@@ -1599,7 +1597,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 530/530 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 530/530 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, and 100,000 heights; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -3908,41 +3906,6 @@ run_final_workspace_verification() {
   verify_release_identity "after final source-sealed full workspace verification"
 }
 
-# Pin the production-soak evidence contract and strict all-validator restart
-# gate. Cargo's filter succeeds on zero tests, so require every exact unignored
-# test before executing it with `--exact`.
-required_taira_release_contract_tests=(
-  taira_public_localnet::release_execution_profile_accepts_only_the_exact_positive_profile
-  taira_public_localnet::release_execution_profile_rejects_wrong_or_blank_build_profiles
-  taira_public_localnet::release_execution_profile_rejects_cargo_profile_mismatch
-  taira_public_localnet::release_execution_profile_rejects_non_exact_offline_values
-  taira_public_localnet::simulation_summary_json_records_release_profile_and_status_evidence
-  taira_public_localnet::strict_restart::taira_localnet_restart_catchup_behavior
-)
-taira_release_contract_target="consensus_and_da"
-taira_release_contract_list="$(
-  run_cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" -- --list
-)"
-taira_release_ignored_contract_list="$(
-  run_cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" -- --list --ignored
-)"
-for taira_contract_index in "${!required_taira_release_contract_tests[@]}"; do
-  required_test="${required_taira_release_contract_tests[$taira_contract_index]}"
-  if ! grep -Fqx -- "${required_test}: test" <<<"$taira_release_contract_list"; then
-    echo "missing required Taira release-evidence contract test: ${required_test}" >&2
-    exit 1
-  fi
-  if grep -Fqx -- "${required_test}: test" <<<"$taira_release_ignored_contract_list"; then
-    echo "required Taira release-evidence contract test is ignored: ${required_test}" >&2
-    exit 1
-  fi
-  run_corridor_leg \
-    "taira-contract-${taira_contract_index}" cargo-exact 1 \
-    "cargo test --locked --offline -p integration_tests --test ${taira_release_contract_target} ${required_test} -- --exact --test-threads=1" \
-    run_cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" \
-      "$required_test" -- --exact --test-threads=1
-done
-
 # Keep the canonical Rust wire authority and the maintained lightweight SDK
 # parsers in the same source-bound corridor. These commands use only checked-in
 # fixtures and in-memory responses; dependency installation is deliberately a
@@ -4472,43 +4435,6 @@ record_corridor_log \
   "${formal_launcher_pipeline_status[0]}" "${formal_launcher_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$formal_launcher_contract_log"
 
-# Run the complete mocked soak launcher/evidence corpus as one exact file-bound
-# preflight. The 43-pass summary rejects missing, added, skipped, or xfailed
-# cases before the release corridor can trust the 24-hour evidence path.
-taira_soak_contract_files=(
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_pins_complete_profile_and_runs_exactly_one_test
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_zero_test_inventory
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_zero_test_execution_output
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_bundle_tampering_before_completion
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_symlinked_marker_temp_without_completion
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_marker_durability_failure_is_not_terminal
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_profile_override_arguments_before_cargo
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_a_concurrent_source_bound_soak
-  pytests/scripts/taira_v2_soak_test.py::test_launcher_does_not_promote_provisional_evidence_when_validation_fails
-  pytests/scripts/taira_v2_soak_evidence_test.py
-)
-taira_soak_contract_log="$(corridor_contract_log_path preflight-taira-soak)"
-release_gate_boundary "preflight-taira-soak:before" || exit $?
-set +e
-PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
-  "${taira_soak_contract_files[@]}" 2>&1 | tee "$taira_soak_contract_log"
-taira_soak_pipeline_status=("${PIPESTATUS[@]}")
-set -e
-release_gate_boundary "preflight-taira-soak:after-natural-completion" || exit $?
-taira_soak_pass_summary="$(
-  grep -Ec '^43 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
-)"
-if ((taira_soak_pipeline_status[0] != 0 || taira_soak_pipeline_status[1] != 0)) \
-  || [[ "$taira_soak_pass_summary" != 1 ]]; then
-  echo "Taira v2 soak launcher/evidence preflight did not run exactly 43 passing tests (pytest=${taira_soak_pipeline_status[0]}, tee=${taira_soak_pipeline_status[1]})" >&2
-  exit 1
-fi
-record_corridor_log \
-  preflight-taira-soak pytest 43 \
-  "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${taira_soak_contract_files[*]}" \
-  "$taira_soak_contract_log" \
-  "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
-((corridor_enabled)) || rm -f -- "$taira_soak_contract_log"
 publish_corridor_completion() {
   if ((!corridor_enabled)); then
     return
@@ -4518,9 +4444,9 @@ publish_corridor_completion() {
     return 1
   fi
   # 43 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
-  # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
-  # SDK + 6 diagnostics + 11 pytest legs = 91.
-  readonly expected_corridor_leg_count=91
+  # command + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped SDK +
+  # 6 diagnostics + 10 pytest legs = 84.
+  readonly expected_corridor_leg_count=84
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -4852,27 +4778,6 @@ if [[ ! -s "$chaos_completion_path_file" ]]; then
   exit 1
 fi
 verify_release_identity "after 100,000-height chaos"
-pre_soak_source_manifest_sha256="$(
-  python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
-)"
-if [[ ! "$pre_soak_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "workspace source manifest helper returned an invalid digest before the Taira production soak" >&2
-  exit 1
-fi
-if [[ "$pre_soak_source_manifest_sha256" != "$release_source_manifest_sha256" ]]; then
-  echo "workspace sources changed before the Taira production soak" >&2
-  exit 1
-fi
-readonly taira_completion_path_file="${IROHA_RELEASE_HOST_ROOT}/taira-completion-path"
-rm -f -- "$taira_completion_path_file"
-IROHA_TAIRA_COMPLETION_PATH_FILE="$taira_completion_path_file" \
-  bash scripts/run_taira_v2_24h_soak.sh
-if [[ ! -s "$taira_completion_path_file" ]]; then
-  echo "Taira production soak did not publish its completion path" >&2
-  exit 1
-fi
-verify_release_identity "after Taira production soak"
-
 final_release_source_manifest_sha256="$(
   python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
 )"
@@ -4931,15 +4836,14 @@ verify_release_identity "after final corridor completion publication"
 seed_completion_path="$(<"$seed_completion_path_file")"
 formal_completion_path="$(<"$formal_completion_path_file")"
 chaos_completion_path="$(<"$chaos_completion_path_file")"
-taira_completion_path="$(<"$taira_completion_path_file")"
 verify_release_identity "before protected child-result publication"
 release_gate_boundary "child-result:before-publication" || exit $?
 "$IROHA_RELEASE_PYTHON_BIN" -I -S - \
   "$IROHA_RELEASE_CHILD_RESULT_PATH" "$IROHA_RELEASE_HOST_ROOT" \
   "$release_source_manifest_sha256" "$corridor_completion_path" \
   "$formal_completion_path" "$seed_completion_path" \
-  "$chaos_completion_path" "$taira_completion_path" \
-  "$multilane_four_peer_completion_path" "$nexus_cross_completion_path" \
+  "$chaos_completion_path" "$multilane_four_peer_completion_path" \
+  "$nexus_cross_completion_path" \
   "$nexus_cross_soak_completion_path" <<'PY'
 from pathlib import Path
 import json
@@ -4951,7 +4855,7 @@ output = Path(sys.argv[1])
 host = Path(sys.argv[2]).resolve(strict=True)
 names = (
     "corridor_completion", "formal_completion", "seed_completion",
-    "chaos_completion", "taira_completion", "g4p_completion",
+    "chaos_completion", "g4p_completion",
     "g12_seed_completion", "g12_fault_soak_completion",
 )
 if output != host / "release-child-result.json" or output.exists() or output.is_symlink():

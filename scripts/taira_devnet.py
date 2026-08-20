@@ -1,0 +1,770 @@
+#!/usr/bin/env python3
+"""Bring up, verify, inspect, or stop one disposable four-peer Taira devnet.
+
+``up`` builds the current Kagami, daemon, and CLI; asks Kagami for a fresh
+four-validator NPoS Nexus network using the canonical Taira chain id; validates
+all four configs; starts the peers; and proves finality with one blocking signed
+``iroha tx ping``.  The generated network lives in one marked
+directory and is replaced on the next ``up``.  There is no release authority,
+promotion state, evidence bundle, soak, or rollback workflow.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable, Sequence
+from pathlib import Path
+from typing import Any, NoReturn
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DIR = REPO_ROOT / "dist" / "taira-devnet"
+DEFAULT_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
+DEFAULT_API_PORT = 29_080
+DEFAULT_P2P_PORT = 33_337
+PEER_COUNT = 4
+MCP_PROTOCOL_VERSION = "2025-06-18"
+MARKER = ".iroha-taira-devnet"
+MARKER_BODY = "managed by scripts/taira_devnet.py\n"
+MAX_BUNDLE_TEXT_BYTES = 8 * 1024 * 1024
+MAX_LOG_TAIL_BYTES = 64 * 1024
+MAX_PID_FILE_BYTES = 32
+
+
+class DevnetError(RuntimeError):
+    """A disposable Taira operation failed."""
+
+
+def fail(message: str) -> NoReturn:
+    """Raise a concise operator-facing error."""
+
+    raise DevnetError(message)
+
+
+Runner = Callable[..., subprocess.CompletedProcess[str]]
+Request = Callable[[str, object | None], tuple[int, object | None]]
+
+
+def run_command(
+    command: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float | None = None,
+    capture_output: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Run one command and surface its useful trailing diagnostics."""
+
+    try:
+        completed = subprocess.run(
+            list(command),
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            capture_output=capture_output,
+            text=True,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        fail(f"{Path(command[0]).name} timed out after {timeout:g}s")
+    if completed.returncode != 0:
+        stderr = completed.stderr or ""
+        stdout = completed.stdout or ""
+        detail = (stderr.strip() or stdout.strip())[-6000:]
+        fail(f"{Path(command[0]).name} failed: {detail or completed.returncode}")
+    return completed
+
+
+def require_executable(path: Path) -> Path:
+    """Require one regular executable file."""
+
+    path = path.expanduser().absolute()
+    if path.is_symlink() or not path.is_file() or not os.access(path, os.X_OK):
+        fail(f"required executable is unavailable: {path}")
+    return path
+
+
+def managed_root(path: Path, *, create: bool) -> Path:
+    """Resolve a narrowly marked directory owned by this script."""
+
+    path = path.expanduser().absolute().resolve(strict=False)
+    forbidden = {Path("/"), REPO_ROOT, Path.home().absolute()}
+    if path in forbidden:
+        fail(f"refusing unsafe devnet directory: {path}")
+    marker = path / MARKER
+    if not path.exists():
+        if not create:
+            fail(f"no Taira devnet exists at {path}; run `up` first")
+        path.mkdir(parents=True, mode=0o700)
+    if not path.is_dir():
+        fail(f"devnet path is not a directory: {path}")
+    if marker.exists():
+        if marker.is_symlink() or marker.read_text(encoding="utf-8") != MARKER_BODY:
+            fail(f"invalid devnet marker: {marker}")
+    elif any(path.iterdir()):
+        fail(f"refusing unmarked non-empty directory: {path}")
+    elif create:
+        marker.write_text(MARKER_BODY, encoding="utf-8")
+        marker.chmod(0o600)
+    else:
+        fail(f"devnet marker is missing: {marker}")
+    path.chmod(0o700)
+    return path.resolve(strict=True)
+
+
+def network_dir(root: Path) -> Path:
+    """Return the sole disposable network directory below a managed root."""
+
+    return root / "network"
+
+
+def require_network_bundle(root: Path) -> Path:
+    """Require the minimal generated files that identify this owned cohort."""
+
+    target = network_dir(root)
+    if target.is_symlink():
+        fail(f"refusing symlinked network directory: {target}")
+    if not target.is_dir():
+        fail(f"no generated Taira network exists at {target}; run `up` first")
+    required = [
+        target / "client.toml",
+        target / "genesis.expected_hash",
+        target / "start.sh",
+        target / "stop.sh",
+    ]
+    required.extend(target / f"peer{index}.toml" for index in range(PEER_COUNT))
+    for path in required:
+        if path.is_symlink() or not path.is_file():
+            fail(f"generated Taira network is incomplete: missing {path.name}")
+    return target
+
+
+def require_stoppable_network(root: Path) -> Path:
+    """Require the generated stop surface without depending on intact configs."""
+
+    target = network_dir(root)
+    if target.is_symlink():
+        fail(f"refusing symlinked network directory: {target}")
+    if not target.is_dir():
+        fail(f"no generated Taira network exists at {target}; run `up` first")
+    stop = target / "stop.sh"
+    if stop.is_symlink() or not stop.is_file():
+        fail(f"generated Taira network is incomplete: missing {stop.name}")
+    return target
+
+
+def read_bounded_text(path: Path, *, limit: int, label: str) -> str:
+    """Read one regular bundle file without accepting an oversized substitute."""
+
+    if path.is_symlink() or not path.is_file():
+        fail(f"{label} is missing or not a regular file: {path}")
+    try:
+        size = path.stat().st_size
+    except OSError as error:
+        fail(f"cannot inspect {label} {path}: {error}")
+    if size > limit:
+        fail(f"{label} exceeds the {limit}-byte safety bound: {path}")
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        fail(f"cannot read {label} {path}: {error}")
+
+
+def quoted_assignment(path: Path, key: str) -> str:
+    """Read one unique canonical quoted assignment from a generated TOML file."""
+
+    text = read_bounded_text(path, limit=MAX_BUNDLE_TEXT_BYTES, label="generated config")
+    pattern = re.compile(rf'^\s*{re.escape(key)}\s*=\s*"([^"\\]*)"\s*$')
+    values = [match.group(1) for line in text.splitlines() if (match := pattern.fullmatch(line))]
+    if len(values) != 1:
+        fail(f"generated config must contain one canonical {key} assignment: {path}")
+    return values[0]
+
+
+def require_bundle_identity(target: Path, roots: Sequence[str]) -> None:
+    """Bind checks to the generated Taira chain and requested loopback ports."""
+
+    client = target / "client.toml"
+    if quoted_assignment(client, "chain") != DEFAULT_CHAIN_ID:
+        fail(f"generated client config is not for canonical Taira: {client}")
+    if quoted_assignment(client, "torii_url") != roots[0]:
+        fail(f"generated client Torii URL does not match requested ports: {client}")
+    expected_hash = read_bounded_text(
+        target / "genesis.expected_hash",
+        limit=256,
+        label="generated genesis hash",
+    ).strip()
+    if not expected_hash or quoted_assignment(client, "network_id") != expected_hash:
+        fail(f"generated client network id does not match its genesis hash: {client}")
+
+    for index, root in enumerate(roots):
+        config = target / f"peer{index}.toml"
+        if quoted_assignment(config, "chain") != DEFAULT_CHAIN_ID:
+            fail(f"peer{index} config is not for canonical Taira: {config}")
+        port = root.removeprefix("http://127.0.0.1:").removesuffix("/")
+        address = re.compile(
+            rf'^address = "addr:127\.0\.0\.1:{re.escape(port)}#[0-9A-Fa-f]{{4}}"$'
+        )
+        text = read_bounded_text(
+            config,
+            limit=MAX_BUNDLE_TEXT_BYTES,
+            label=f"peer{index} config",
+        )
+        if sum(address.fullmatch(line) is not None for line in text.splitlines()) != 1:
+            fail(f"peer{index} Torii address does not match requested ports: {config}")
+
+
+def process_table(run: Runner) -> dict[int, str]:
+    """Read the local process table used to bind PID files to peer configs."""
+
+    completed = run(["ps", "-axww", "-o", "pid=,command="], timeout=5)
+    processes: dict[int, str] = {}
+    for line in (completed.stdout or "").splitlines():
+        fields = line.strip().split(maxsplit=1)
+        if len(fields) != 2 or not fields[0].isdigit():
+            continue
+        processes[int(fields[0])] = fields[1]
+    return processes
+
+
+def read_peer_pid(path: Path) -> int:
+    """Read one small, regular, positive peer PID file."""
+
+    value = read_bounded_text(path, limit=MAX_PID_FILE_BYTES, label="peer PID").strip()
+    if not value.isdigit() or int(value) <= 1:
+        fail(f"peer PID file is malformed: {path}")
+    return int(value)
+
+
+def command_uses_config(command: str, config: Path) -> bool:
+    """Return whether one process command line names the exact peer config."""
+
+    value = str(config)
+    return f"--config {value}" in command or f"--config={value}" in command
+
+
+def require_running_cohort(target: Path, run: Runner) -> None:
+    """Require exactly the four PID-bound processes generated for this bundle."""
+
+    pids: list[int] = []
+    for index in range(PEER_COUNT):
+        pids.append(read_peer_pid(target / f"peer{index}.pid"))
+    if len(set(pids)) != PEER_COUNT:
+        fail("generated peer PID files do not identify four distinct processes")
+
+    processes = process_table(run)
+    for index, pid in enumerate(pids):
+        config = target / f"peer{index}.toml"
+        matches = [
+            process_pid
+            for process_pid, command in processes.items()
+            if command_uses_config(command, config)
+        ]
+        if matches != [pid]:
+            fail(
+                f"peer{index} PID {pid} is not the sole running process for its generated config"
+            )
+
+
+def require_stopped_cohort(target: Path, run: Runner) -> None:
+    """Prove that teardown left neither peer PID files nor managed processes."""
+
+    residual_pidfiles = sorted(path.name for path in target.glob("peer*.pid"))
+    if residual_pidfiles:
+        fail(f"Taira teardown left peer PID files: {', '.join(residual_pidfiles)}")
+    processes = process_table(run)
+    residual = [
+        pid
+        for pid, command in processes.items()
+        if any(
+            command_uses_config(command, target / f"peer{index}.toml")
+            for index in range(PEER_COUNT)
+        )
+    ]
+    if residual:
+        fail(f"Taira teardown left managed peer processes running: {residual}")
+
+
+def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> None:
+    """Stop only peers owned by the generated Kagami bundle."""
+
+    try:
+        target = network_dir(root)
+        if target.is_symlink():
+            fail(f"refusing symlinked network directory: {target}")
+        if not target.exists():
+            return
+        if not target.is_dir():
+            fail(f"network path is not a directory: {target}")
+        stop = target / "stop.sh"
+        if stop.is_symlink():
+            fail(f"refusing symlinked stop script: {stop}")
+        if stop.is_file():
+            run(["/bin/bash", str(stop)], cwd=stop.parent, timeout=30)
+        require_stopped_cohort(target, run)
+    except (DevnetError, subprocess.TimeoutExpired) as error:
+        if not tolerate_failure:
+            raise
+        print(f"warning: could not prove Taira cohort stopped: {error}", file=sys.stderr)
+
+
+def reset_network(root: Path, run: Runner) -> Path:
+    """Stop and replace the one script-owned throwaway network directory."""
+
+    target = network_dir(root)
+    stop_network(root, run, tolerate_failure=False)
+    if target.is_symlink():
+        fail(f"refusing symlinked network directory: {target}")
+    if target.exists():
+        if not target.is_dir():
+            fail(f"network path is not a directory: {target}")
+        shutil.rmtree(target)
+    return target
+
+
+def cargo_build_command(profile: str, target_dir: Path) -> list[str]:
+    """Return the single current-workspace build used by ``up``."""
+
+    return [
+        "cargo",
+        "build",
+        "--locked",
+        "--profile",
+        profile,
+        "--target-dir",
+        str(target_dir),
+        "-p",
+        "iroha_kagami",
+        "--bin",
+        "kagami",
+        "-p",
+        "irohad",
+        "--bin",
+        "iroha3d",
+        "-p",
+        "iroha_cli",
+        "--bin",
+        "iroha",
+    ]
+
+
+def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Path]:
+    """Build or locate Kagami, iroha3d, and iroha from one profile directory."""
+
+    target_dir = args.target_dir.expanduser().absolute()
+    if not args.no_build:
+        print(f"Building current Taira binaries ({args.profile})...", flush=True)
+        run(
+            cargo_build_command(args.profile, target_dir),
+            cwd=REPO_ROOT,
+            timeout=args.build_timeout_seconds,
+            capture_output=False,
+        )
+    bin_dir = (
+        args.bin_dir.expanduser().absolute()
+        if args.bin_dir is not None
+        else target_dir / args.profile
+    )
+    return tuple(
+        require_executable(bin_dir / name) for name in ("kagami", "iroha3d", "iroha")
+    )
+
+
+def generate_network(
+    target: Path,
+    kagami: Path,
+    api_port: int,
+    p2p_port: int,
+    run: Runner,
+) -> None:
+    """Generate exactly one fresh-key, four-validator Taira network."""
+
+    run(
+        [
+            str(kagami),
+            "localnet",
+            "--out-dir",
+            str(target),
+            "--fresh-random-keys",
+            "--build-line",
+            "iroha3",
+            "--sora-profile",
+            "nexus",
+            "--consensus-mode",
+            "npos",
+            "--peers",
+            str(PEER_COUNT),
+            "--bind-host",
+            "127.0.0.1",
+            "--public-host",
+            "127.0.0.1",
+            "--chain-id",
+            DEFAULT_CHAIN_ID,
+            "--base-api-port",
+            str(api_port),
+            "--base-p2p-port",
+            str(p2p_port),
+        ],
+        cwd=REPO_ROOT,
+        timeout=None,
+        capture_output=False,
+    )
+
+
+def validate_configs(target: Path, irohad: Path, run: Runner) -> None:
+    """Run the current daemon's offline validator for every generated peer."""
+
+    for index in range(PEER_COUNT):
+        config = target / f"peer{index}.toml"
+        run(
+            [
+                str(irohad),
+                "--sora",
+                "--config",
+                str(config),
+                "--genesis-manifest-json",
+                str(target / "genesis.json"),
+                "--check-config",
+            ],
+            cwd=target,
+            timeout=120,
+        )
+
+
+def http_request(url: str, payload: object | None = None) -> tuple[int, object | None]:
+    """Send one local Torii GET/JSON POST and decode JSON when present."""
+
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {"Accept": "application/json"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            status = response.status
+            body = response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, None
+    except (OSError, ValueError):
+        return 0, None
+    if not body:
+        return status, None
+    try:
+        return status, json.loads(body)
+    except (UnicodeDecodeError, ValueError):
+        return status, body.decode("utf-8", errors="replace")
+
+
+def torii_roots(api_port: int) -> tuple[str, ...]:
+    """Return all four loopback Torii roots."""
+
+    return tuple(f"http://127.0.0.1:{api_port + index}/" for index in range(PEER_COUNT))
+
+
+def read_height(root: str, request: Request) -> int:
+    """Read the canonical committed block height from ``/status/blocks``."""
+
+    status, payload = request(root + "status/blocks", None)
+    if status != 200 or isinstance(payload, bool) or not isinstance(payload, int):
+        fail(f"invalid /status/blocks response from {root} (HTTP {status})")
+    return payload
+
+
+def wait_for_cluster(
+    roots: Sequence[str],
+    timeout: float,
+    request: Request,
+    *,
+    above: int | None = None,
+) -> list[int]:
+    """Wait for four ready peers at one converged height, optionally advanced."""
+
+    deadline = time.monotonic() + timeout
+    last = "not reachable"
+    while time.monotonic() < deadline:
+        try:
+            for root in roots:
+                for endpoint in ("health", "readyz"):
+                    status, _ = request(root + endpoint, None)
+                    if not 200 <= status < 300:
+                        fail(f"{root}{endpoint} returned HTTP {status}")
+            heights = [read_height(root, request) for root in roots]
+            if len(set(heights)) == 1 and (above is None or heights[0] > above):
+                return heights
+            last = f"heights={heights}, required_above={above}"
+        except DevnetError as error:
+            last = str(error)
+        time.sleep(0.5)
+    fail(f"four-peer cluster did not converge within {timeout:g}s: {last}")
+
+
+def check_mcp(root: str, request: Request) -> None:
+    """Verify the enabled MCP endpoint can initialize and list current tools."""
+
+    url = root + "v1/mcp"
+    status, capabilities = request(url, None)
+    if (
+        status != 200
+        or not isinstance(capabilities, dict)
+        or capabilities.get("enabled") is not True
+        or capabilities.get("protocolVersion") != MCP_PROTOCOL_VERSION
+    ):
+        fail(f"MCP capabilities are not enabled/current at {url} (HTTP {status})")
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "taira-devnet-smoke", "version": "1"},
+        },
+    }
+    status, initialized = request(url, initialize)
+    initialized_result = (
+        initialized.get("result") if isinstance(initialized, dict) else None
+    )
+    if (
+        status != 200
+        or not isinstance(initialized, dict)
+        or initialized.get("jsonrpc") != "2.0"
+        or initialized.get("id") != 1
+        or "error" in initialized
+        or not isinstance(initialized_result, dict)
+        or initialized_result.get("protocolVersion") != MCP_PROTOCOL_VERSION
+    ):
+        fail(f"MCP initialize failed at {url} (HTTP {status})")
+    tools_request = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {},
+    }
+    status, tools_response = request(url, tools_request)
+    result = tools_response.get("result") if isinstance(tools_response, dict) else None
+    tools = result.get("tools") if isinstance(result, dict) else None
+    if (
+        status != 200
+        or not isinstance(tools_response, dict)
+        or tools_response.get("jsonrpc") != "2.0"
+        or tools_response.get("id") != 2
+        or "error" in tools_response
+        or not isinstance(tools, list)
+        or not tools
+        or any(
+            not isinstance(tool, dict)
+            or not isinstance(tool.get("name"), str)
+            or not tool["name"].startswith("iroha.")
+            for tool in tools
+        )
+    ):
+        fail(f"MCP tools/list returned no tools at {url} (HTTP {status})")
+
+
+def run_full_doctor(target: Path, iroha: Path, root: str, run: Runner) -> None:
+    """Run the broad public-product diagnostic only when explicitly requested."""
+
+    run(
+        [
+            str(iroha),
+            "-c",
+            str(target / "client.toml"),
+            "taira",
+            "doctor",
+            "--public-root",
+            root,
+            "--json",
+        ],
+        cwd=target,
+        timeout=120,
+    )
+
+
+def dump_logs(target: Path) -> None:
+    """Print bounded daemon log tails without reading configs or key files."""
+
+    for index in range(PEER_COUNT):
+        path = target / f"peer{index}.log"
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                start = max(0, stream.tell() - MAX_LOG_TAIL_BYTES)
+                stream.seek(start)
+                payload = stream.read(MAX_LOG_TAIL_BYTES)
+        except OSError as error:
+            print(f"\n--- cannot read {path}: {error} ---", file=sys.stderr)
+            continue
+        if start:
+            _, separator, payload = payload.partition(b"\n")
+            if not separator:
+                payload = b""
+        lines = payload.decode("utf-8", errors="replace").splitlines()[-40:]
+        print(f"\n--- {path} (last {len(lines)} lines) ---", file=sys.stderr)
+        print("\n".join(lines), file=sys.stderr)
+
+
+def up(
+    args: argparse.Namespace,
+    *,
+    run: Runner = run_command,
+    request: Request = http_request,
+) -> dict[str, Any]:
+    """Replace the disposable network and prove one signed transaction finalizes."""
+
+    root = managed_root(args.dir, create=True)
+    target = reset_network(root, run)
+    kagami, irohad, iroha = binary_paths(args, run)
+    roots = torii_roots(args.base_api_port)
+    try:
+        print("Generating a fresh four-validator Taira network...", flush=True)
+        generate_network(target, kagami, args.base_api_port, args.base_p2p_port, run)
+        validate_configs(target, irohad, run)
+        require_bundle_identity(target, roots)
+        env = os.environ.copy()
+        env.update({"IROHAD_BIN": str(irohad), "IROHA_CLI": str(iroha)})
+        run(
+            ["/bin/bash", str(target / "start.sh")],
+            cwd=target,
+            env=env,
+            timeout=60,
+            capture_output=False,
+        )
+        require_running_cohort(target, run)
+        baseline = wait_for_cluster(roots, args.timeout_seconds, request)
+        run(
+            [
+                str(iroha),
+                "--machine",
+                "-c",
+                str(target / "client.toml"),
+                "--fee-payer",
+                "authority",
+                "--output-format",
+                "json",
+                "tx",
+                "ping",
+                "--log-level",
+                "INFO",
+                "--msg",
+                "taira-devnet-ready",
+            ],
+            cwd=target,
+            timeout=args.timeout_seconds,
+        )
+        final = wait_for_cluster(roots, args.timeout_seconds, request, above=max(baseline))
+        check_mcp(roots[0], request)
+        if args.full_doctor:
+            run_full_doctor(target, iroha, roots[0], run)
+    except (DevnetError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+        stop_network(root, run, tolerate_failure=True)
+        dump_logs(target)
+        if isinstance(error, subprocess.TimeoutExpired):
+            fail(f"command timed out: {error.cmd}")
+        if isinstance(error, KeyboardInterrupt):
+            fail("Taira devnet startup was interrupted; the generated cohort was stopped")
+        raise
+    report = {
+        "directory": str(target),
+        "client_config": str(target / "client.toml"),
+        "torii_roots": list(roots),
+        "baseline_height": baseline[0],
+        "final_height": final[0],
+    }
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return report
+
+
+def check(
+    args: argparse.Namespace,
+    *,
+    run: Runner = run_command,
+    request: Request = http_request,
+) -> dict[str, Any]:
+    """Read readiness and convergence without submitting a transaction."""
+
+    root = managed_root(args.dir, create=False)
+    target = require_network_bundle(root)
+    roots = torii_roots(args.base_api_port)
+    require_bundle_identity(target, roots)
+    require_running_cohort(target, run)
+    heights = wait_for_cluster(roots, args.timeout_seconds, request)
+    check_mcp(roots[0], request)
+    if args.full_doctor:
+        iroha = require_executable(args.iroha.expanduser().absolute())
+        run_full_doctor(target, iroha, roots[0], run)
+    report = {"directory": str(target), "torii_roots": list(roots), "height": heights[0]}
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return report
+
+
+def down(args: argparse.Namespace, *, run: Runner = run_command) -> dict[str, Any]:
+    """Stop the peers owned by the disposable bundle and retain its logs."""
+
+    root = managed_root(args.dir, create=False)
+    target = require_stoppable_network(root)
+    stop_network(root, run)
+    report = {"directory": str(target), "stopped": True}
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return report
+
+
+def parser() -> argparse.ArgumentParser:
+    """Build the command-line parser."""
+
+    result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument("--dir", type=Path, default=DEFAULT_DIR, help="managed disposable directory")
+    commands = result.add_subparsers(dest="command", required=True)
+
+    up_parser = commands.add_parser("up", help="replace, start, and verify the devnet")
+    up_parser.add_argument("--profile", default="local-release", help="Cargo profile")
+    up_parser.add_argument("--target-dir", type=Path, default=REPO_ROOT / "target")
+    up_parser.add_argument("--bin-dir", type=Path, help="directory containing all three binaries")
+    up_parser.add_argument("--no-build", action="store_true", help="use binaries already in --bin-dir")
+    up_parser.add_argument(
+        "--build-timeout-seconds",
+        type=float,
+        help="optional Cargo build deadline; the default lets a cold build finish",
+    )
+    up_parser.add_argument("--timeout-seconds", type=float, default=120)
+    up_parser.add_argument("--base-api-port", type=int, default=DEFAULT_API_PORT)
+    up_parser.add_argument("--base-p2p-port", type=int, default=DEFAULT_P2P_PORT)
+    up_parser.add_argument("--full-doctor", action="store_true", help="also require the broad public Taira product surface")
+    up_parser.set_defaults(handler=up)
+
+    check_parser = commands.add_parser("check", help="read four-peer readiness and height")
+    check_parser.add_argument("--timeout-seconds", type=float, default=20)
+    check_parser.add_argument("--base-api-port", type=int, default=DEFAULT_API_PORT)
+    check_parser.add_argument("--full-doctor", action="store_true")
+    check_parser.add_argument("--iroha", type=Path, default=REPO_ROOT / "target/local-release/iroha")
+    check_parser.set_defaults(handler=check)
+
+    down_parser = commands.add_parser("down", help="stop the disposable peers and retain logs")
+    down_parser.set_defaults(handler=down)
+    return result
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the selected disposable devnet operation."""
+
+    args = parser().parse_args(argv)
+    try:
+        args.handler(args)
+    except DevnetError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

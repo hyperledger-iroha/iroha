@@ -281,6 +281,70 @@ pub(super) struct BoundAdapterEffectV1 {
     pending: PendingRuntimeEffectBinding,
     replay_origin: BoundAdapterReplayOriginV1,
 }
+
+/// Origin-specific companion retained beside one live-WAL admission.
+///
+/// Most live WAL children are published by an already-closed lifecycle
+/// transition. A locally assembled Proposal is different: its standalone WAL
+/// owner must retain the consumed local-body lineage beside it until the
+/// lifecycle Sign carrier advances to its signed Broadcast.
+#[derive(Debug)]
+enum PreparedLiveWalCompanionV1 {
+    None,
+    LocalProposal(LocalProposalIntentReplayEvidenceV1),
+}
+
+/// One WAL-bound admission plus any move-only lineage required by its live
+/// process carrier.
+#[derive(Debug)]
+pub(super) struct PreparedLiveWalAdmissionV1 {
+    bound: BoundAdapterEffectV1,
+    companion: PreparedLiveWalCompanionV1,
+}
+
+impl PreparedLiveWalAdmissionV1 {
+    fn bound_only(bound: BoundAdapterEffectV1) -> Self {
+        Self {
+            bound,
+            companion: PreparedLiveWalCompanionV1::None,
+        }
+    }
+
+    fn local_proposal(
+        bound: BoundAdapterEffectV1,
+        companion: LocalProposalIntentReplayEvidenceV1,
+    ) -> Result<Self, (BoundAdapterEffectV1, LocalProposalIntentReplayEvidenceV1)> {
+        if companion.exactly_matches_live_wal_sign_effect(&bound.effect) {
+            Ok(Self {
+                bound,
+                companion: PreparedLiveWalCompanionV1::LocalProposal(companion),
+            })
+        } else {
+            Err((bound, companion))
+        }
+    }
+
+    fn exactly_authorizes_candidate(
+        &self,
+        active_context: LifecycleContext,
+        candidate: &CandidateAdmission,
+    ) -> bool {
+        self.bound
+            .exactly_authorizes_candidate(active_context, candidate)
+            && match &self.companion {
+                PreparedLiveWalCompanionV1::None => true,
+                PreparedLiveWalCompanionV1::LocalProposal(companion) => companion
+                    .exactly_matches_live_wal_sign_effect(&self.bound.effect)
+                    && matches!(
+                        &self.bound.effect,
+                        AdapterEffect::Sign {
+                            request: SignRequest::Proposal(_),
+                            ..
+                        }
+                    ),
+            }
+    }
+}
 /// Ownership-preserving failure while binding mandatory replay authority.
 #[derive(Debug)]
 pub(super) struct BoundAdapterEffectErrorV1 {
@@ -503,7 +567,7 @@ pub(in crate::sumeragi) struct PreparedLifecycleAdmissionV1 {
 }
 pub(super) enum PreparedLifecycleAdmissionOwnerV1 {
     /// A child effect authenticated by one fsynced safety-WAL frame.
-    LiveWal(BoundAdapterEffectV1),
+    LiveWal(PreparedLiveWalAdmissionV1),
     /// Durable Validate work descended from one locally assembled body.
     LocalBody(PreparedLocalBodyValidateReplayPreAdmission),
     /// Durable Validate work descended from one authenticated Proposal.
@@ -566,8 +630,10 @@ impl PreparedLifecycleAdmissionV1 {
     /// Recheck the complete prepared owner against its active context.
     pub(super) fn validates(&self, active_context: LifecycleContext) -> bool {
         match &self.owner {
-            PreparedLifecycleAdmissionOwnerV1::LiveWal(bound)
-            | PreparedLifecycleAdmissionOwnerV1::InvalidBodyReport(bound)
+            PreparedLifecycleAdmissionOwnerV1::LiveWal(live) => {
+                live.exactly_authorizes_candidate(active_context, &self.candidate)
+            }
+            PreparedLifecycleAdmissionOwnerV1::InvalidBodyReport(bound)
             | PreparedLifecycleAdmissionOwnerV1::DirectSigned(bound) => {
                 bound.exactly_authorizes_candidate(active_context, &self.candidate)
             }
@@ -583,6 +649,18 @@ impl PreparedLifecycleAdmissionV1 {
     pub(super) fn into_owner(self) -> PreparedLifecycleAdmissionOwnerV1 {
         self.owner
     }
+    fn is_live_wal_local_proposal(&self) -> bool {
+        matches!(
+            &self.owner,
+            PreparedLifecycleAdmissionOwnerV1::LiveWal(PreparedLiveWalAdmissionV1 {
+                bound,
+                companion: PreparedLiveWalCompanionV1::LocalProposal(companion),
+            }) if companion.exactly_matches_live_wal_sign_effect(&bound.effect)
+        ) && self.validates(LifecycleContext::new(
+            self.candidate.key.context(),
+            self.candidate.key.round().height(),
+        ))
+    }
     /// Reconstitute the exact prepared owner after a reversible registry failure.
     pub(super) fn from_returned_bound(
         active_context: LifecycleContext,
@@ -591,7 +669,9 @@ impl PreparedLifecycleAdmissionV1 {
     ) -> Option<Self> {
         let owner = match &bound.replay_origin {
             BoundAdapterReplayOriginV1::LiveWal(_) => {
-                PreparedLifecycleAdmissionOwnerV1::LiveWal(bound)
+                PreparedLifecycleAdmissionOwnerV1::LiveWal(
+                    PreparedLiveWalAdmissionV1::bound_only(bound),
+                )
             }
             BoundAdapterReplayOriginV1::InvalidBodyReport(_) => {
                 PreparedLifecycleAdmissionOwnerV1::InvalidBodyReport(bound)
@@ -602,6 +682,119 @@ impl PreparedLifecycleAdmissionV1 {
         };
         let prepared = Self { owner, candidate };
         prepared.validates(active_context).then_some(prepared)
+    }
+    pub(super) fn from_returned_live_wal(
+        active_context: LifecycleContext,
+        candidate: CandidateAdmission,
+        live: PreparedLiveWalAdmissionV1,
+    ) -> Option<Self> {
+        let prepared = Self {
+            owner: PreparedLifecycleAdmissionOwnerV1::LiveWal(live),
+            candidate,
+        };
+        prepared.validates(active_context).then_some(prepared)
+    }
+
+    /// Prepare one live Proposal Sign from its WAL-derived standalone owner
+    /// while retaining the consumed local-body lineage as companion evidence.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn live_wal_local_proposal(
+        active_context: LifecycleContext,
+        verified: &VerifiedHeightContext,
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+        authority: LifecycleReplayAuthorityV1,
+        companion: LocalProposalIntentReplayEvidenceV1,
+    ) -> Result<
+        Self,
+        (
+            AdapterEffectAdmissionError,
+            AdapterEffect,
+            PendingRuntimeEffectBinding,
+            LifecycleReplayAuthorityV1,
+            LocalProposalIntentReplayEvidenceV1,
+        ),
+    > {
+        let bound = match BoundAdapterEffectV1::bind_live_wal(effect, pending, authority) {
+            Ok(bound) => bound,
+            Err((effect, pending, authority)) => {
+                return Err((
+                    AdapterEffectAdmissionError::UnboundEffect,
+                    effect,
+                    pending,
+                    authority,
+                    companion,
+                ));
+            }
+        };
+        let live = match PreparedLiveWalAdmissionV1::local_proposal(bound, companion) {
+            Ok(live) => live,
+            Err((bound, companion)) => {
+                let BoundAdapterEffectV1 {
+                    effect,
+                    pending,
+                    replay_origin,
+                } = bound;
+                let BoundAdapterReplayOriginV1::LiveWal(authority) = replay_origin else {
+                    unreachable!("local Proposal admission retains live WAL replay")
+                };
+                return Err((
+                    AdapterEffectAdmissionError::InvalidCarrier,
+                    effect,
+                    pending,
+                    authority,
+                    companion,
+                ));
+            }
+        };
+        let candidate = match live.bound.project_candidate(active_context, verified) {
+            Ok(candidate) => candidate,
+            Err(failure) => {
+                let PreparedLiveWalAdmissionV1 { bound, companion } = live;
+                let PreparedLiveWalCompanionV1::LocalProposal(companion) = companion else {
+                    unreachable!("local Proposal admission retains its companion")
+                };
+                let BoundAdapterEffectV1 {
+                    effect,
+                    pending,
+                    replay_origin,
+                } = bound;
+                let BoundAdapterReplayOriginV1::LiveWal(authority) = replay_origin else {
+                    unreachable!("local Proposal admission retains live WAL replay")
+                };
+                return Err((failure, effect, pending, authority, companion));
+            }
+        };
+        let prepared = Self {
+            owner: PreparedLifecycleAdmissionOwnerV1::LiveWal(live),
+            candidate,
+        };
+        if !prepared.validates(active_context) {
+            let Self { owner, candidate: _ } = prepared;
+            let PreparedLifecycleAdmissionOwnerV1::LiveWal(live) = owner else {
+                unreachable!("local Proposal admission retains live WAL owner")
+            };
+            let PreparedLiveWalAdmissionV1 { bound, companion } = live;
+            let PreparedLiveWalCompanionV1::LocalProposal(companion) = companion else {
+                unreachable!("local Proposal admission retains its companion")
+            };
+            let BoundAdapterEffectV1 {
+                effect,
+                pending,
+                replay_origin,
+            } = bound;
+            let BoundAdapterReplayOriginV1::LiveWal(authority) = replay_origin else {
+                unreachable!("local Proposal admission retains live WAL replay")
+            };
+            return Err((
+                AdapterEffectAdmissionError::InvalidCarrier,
+                effect,
+                pending,
+                authority,
+                companion,
+            ));
+        }
+        Ok(prepared)
     }
     /// Reconstitute the exact durable Validate owner after reversible failure.
     pub(super) fn from_returned_durable_validate(
@@ -765,6 +958,86 @@ pub(super) enum PreparedDurableValidateAdmissionV1 {
 #[must_use = "pending durable Validate admission must be settled or retained intact"]
 pub(in crate::sumeragi) struct PendingDurableValidateAdmissionV1 {
     validate: PreparedDurableValidateAdmissionV1,
+}
+
+enum PendingLiveWalSignAdmissionStateV1 {
+    Sealed {
+        wal: SealedLiveWalPersistedEffectV1,
+        companion: LocalProposalIntentReplayEvidenceV1,
+    },
+    Prepared(PreparedLifecycleAdmissionV1),
+}
+
+/// Move-only local Proposal Sign awaiting the lifecycle owner's atomic WAL
+/// admission transaction.
+///
+/// Before first projection this owns the exact post-fsync WAL seal and the
+/// consumed local-body lineage. A capacity or duplicate retry retains the
+/// already-projected five-origin admission intact, so no WAL identity needs to
+/// be reconstructed from decoded metadata.
+#[must_use = "pending live WAL Sign admission must be settled or retained intact"]
+pub(in crate::sumeragi) struct PendingLiveWalSignAdmissionV1 {
+    state: PendingLiveWalSignAdmissionStateV1,
+}
+
+impl fmt::Debug for PendingLiveWalSignAdmissionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PendingLiveWalSignAdmissionV1")
+            .field(
+                "state",
+                &match &self.state {
+                    PendingLiveWalSignAdmissionStateV1::Sealed { .. } => "sealed",
+                    PendingLiveWalSignAdmissionStateV1::Prepared(_) => "prepared",
+                },
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingLiveWalSignAdmissionV1 {
+    /// Join the exact local ProposalIntent lineage to its post-fsync WAL seal.
+    pub(in crate::sumeragi) fn from_local_proposal(
+        wal: SealedLiveWalPersistedEffectV1,
+        companion: LocalProposalIntentReplayEvidenceV1,
+    ) -> Self {
+        Self {
+            state: PendingLiveWalSignAdmissionStateV1::Sealed { wal, companion },
+        }
+    }
+
+    /// Prepare only against the production owner's coheld verified context.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn prepare(
+        self,
+        active_context: LifecycleContext,
+        verified: &VerifiedHeightContext,
+    ) -> Result<PreparedLifecycleAdmissionV1, (AdapterEffectAdmissionError, Self)> {
+        match self.state {
+            PendingLiveWalSignAdmissionStateV1::Prepared(prepared) => Ok(prepared),
+            PendingLiveWalSignAdmissionStateV1::Sealed { wal, companion } => wal
+                .into_live_local_proposal_admission(active_context, verified, companion)
+                .map_err(|(wal, companion, failure)| {
+                    (
+                        failure,
+                        Self {
+                            state: PendingLiveWalSignAdmissionStateV1::Sealed { wal, companion },
+                        },
+                    )
+                }),
+        }
+    }
+
+    /// Retain an already-projected admission across Retry/Capacity/failure.
+    pub(super) fn reclaim_returned(prepared: PreparedLifecycleAdmissionV1) -> Self {
+        assert!(
+            prepared.is_live_wal_local_proposal(),
+            "live WAL Sign settlement returned another prepared origin"
+        );
+        Self {
+            state: PendingLiveWalSignAdmissionStateV1::Prepared(prepared),
+        }
+    }
 }
 impl fmt::Debug for PreparedDurableValidateAdmissionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1133,10 +1406,10 @@ impl PreparedRemoteProposalValidateReplayPreAdmission {
     ) -> Result<PreparedLifecycleAdmissionV1, Self> {
         PreparedDurableValidateAdmissionV1::RemoteProposal(self)
             .prepare(active_context, verified)
-            .map_err(|prepared| match prepared {
+            .map_err(|validate| match validate {
                 PreparedDurableValidateAdmissionV1::RemoteProposal(validate) => validate,
                 PreparedDurableValidateAdmissionV1::LocalBody(_) => {
-                    unreachable!("remote admission cannot change replay origin")
+                    unreachable!("remote Proposal preparation retains its exact origin")
                 }
             })
     }
@@ -1290,10 +1563,10 @@ impl PreparedLocalBodyValidateReplayPreAdmission {
     ) -> Result<PreparedLifecycleAdmissionV1, Self> {
         PreparedDurableValidateAdmissionV1::LocalBody(self)
             .prepare(active_context, verified)
-            .map_err(|prepared| match prepared {
+            .map_err(|validate| match validate {
                 PreparedDurableValidateAdmissionV1::LocalBody(validate) => validate,
                 PreparedDurableValidateAdmissionV1::RemoteProposal(_) => {
-                    unreachable!("local admission cannot change replay origin")
+                    unreachable!("local body preparation retains its exact origin")
                 }
             })
     }

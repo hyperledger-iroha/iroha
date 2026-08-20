@@ -27,12 +27,12 @@ use super::{
         CertifiedStoreReplayEvidenceV1, CertifiedValidateReplayEvidenceV1,
         DurableCertifiedFetchReplayProjectionV1, DurableValidateReplayEvidenceV1,
         InvalidBodyReportBoundEffectPermit, LifecycleReplayAuthorityV1,
-        LocalValidateReplayEvidenceV1, PreparedDurableCertifiedBodyPipelineStartupV1,
-        PreparedDurableCertifiedBodyPipelineWorkV1, PreparedLifecycleLocalProposalReadyV1,
-        RecoveredLifecycleNextWalVoteCandidateProjectionV1, RemoteProposalFetchReplayEvidenceV1,
-        RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
-        RemoteProposalValidateReplayEvidenceV1, SealedLiveWalPersistedEffectV1,
-        exact_direct_signed_admission_authority,
+        LocalProposalIntentReplayEvidenceV1, LocalValidateReplayEvidenceV1,
+        PreparedDurableCertifiedBodyPipelineStartupV1, PreparedDurableCertifiedBodyPipelineWorkV1,
+        PreparedLifecycleLocalProposalReadyV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+        RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
+        RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
+        SealedLiveWalPersistedEffectV1, exact_direct_signed_admission_authority,
     },
     schema::{DurablePayloadReference, DurableRecordMetadata},
     selector::{CertifiedFetchCompletionAuthority, CertifiedFetchDequeuedResponse},
@@ -1918,6 +1918,7 @@ impl DurableValidateCompletion {
 }
 // DURABLE_VALIDATE_COMPLETION_CARRIER_END
 include!("v2_lifecycle_work_registry_pre_admission.rs");
+include!("v2_lifecycle_work_registry_live_wal_sign.rs");
 /// Closed concrete form of one fsynced recovered WAL `Sign` successor.
 ///
 /// The complete durable logical repair and detached validated predecessor stay
@@ -1959,6 +1960,7 @@ struct DurableRecoveredLifecycleNextWalVoteSignWork {
 /// restart over the same WAL/replay authority. No effect, pending binding, or
 /// signature bytes can be extracted through this discriminator.
 enum DurableRecoveredLifecycleSignParentV1 {
+    Live(DurableLiveWalSignWork),
     PhaseVote(DurableRecoveredWalSignWork),
     NextWalVote(DurableRecoveredLifecycleNextWalVoteSignWork),
     Control(DurableRecoveredWalControlSignWork),
@@ -1966,6 +1968,7 @@ enum DurableRecoveredLifecycleSignParentV1 {
 impl DurableRecoveredLifecycleSignParentV1 {
     fn dispatch_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
         match self {
+            Self::Live(parent) => parent.dispatch_key,
             Self::PhaseVote(parent) => parent.dispatch_key,
             Self::NextWalVote(parent) => parent.dispatch_key,
             Self::Control(parent) => parent.dispatch_key,
@@ -1977,6 +1980,7 @@ impl DurableRecoveredLifecycleSignParentV1 {
         broadcast: &RecoveredLifecycleSignedBroadcastProjectionV1,
     ) -> bool {
         match self {
+            Self::Live(parent) => parent.validates_broadcast(verified, broadcast),
             Self::PhaseVote(parent) => parent.repair.matches_signed_broadcast(verified, broadcast),
             Self::NextWalVote(parent) => {
                 broadcast.validates_from_next_wal_vote(verified, &parent.projection)
@@ -1986,6 +1990,7 @@ impl DurableRecoveredLifecycleSignParentV1 {
     }
     fn causal_root(&self) -> super::CausalRoot {
         match self {
+            Self::Live(parent) => parent.causal_root(),
             Self::PhaseVote(parent) => parent.repair.repair().child().causal_root,
             Self::NextWalVote(parent) => parent.address.owner.causal_root(),
             Self::Control(parent) => parent.address.owner.causal_root(),
@@ -2129,6 +2134,30 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
     /// Rejoin the retained historical Sign parent to this exact live Broadcast row.
     fn validates_in_ledger(&self, ledger: &super::ledger::LifecycleLedgerV1) -> bool {
         match &self.parent {
+            DurableRecoveredLifecycleSignParentV1::Live(parent) => {
+                let Some(sign_record) = ledger
+                    .records()
+                    .iter()
+                    .find(|record| record.ordinal() == parent.address.ordinal)
+                else {
+                    return false;
+                };
+                let Some(broadcast_record) = ledger
+                    .records()
+                    .iter()
+                    .find(|record| record.ordinal() == self.address.ordinal)
+                else {
+                    return false;
+                };
+                parent.exactly_matches_advanced_record(
+                    ledger.context(),
+                    sign_record,
+                    self.address.ordinal,
+                ) && self
+                    .broadcast
+                    .exactly_matches_record(broadcast_record, parent.address.owner)
+                    && parent.predecessor_is_exact_in_ledger(ledger, true)
+            }
             DurableRecoveredLifecycleSignParentV1::PhaseVote(parent) => ledger
                 .authenticate_recovered_phase_signed_broadcast(&self.verified, &parent.repair)
                 .is_ok_and(
@@ -2672,6 +2701,7 @@ pub(super) enum RecoveredLifecycleSignDispatchProjectionErrorV1 {
     AlreadyDispatched,
 }
 enum PreparedRecoveredLifecycleSignCarrier<'registry> {
+    Live(&'registry mut DurableLiveWalSignWork),
     PhaseVote(&'registry mut DurableRecoveredWalSignWork),
     NextWalVote(&'registry mut DurableRecoveredLifecycleNextWalVoteSignWork),
     Control(&'registry mut DurableRecoveredWalControlSignWork),
@@ -2697,6 +2727,7 @@ impl PreparedRecoveredLifecycleSignDispatch<'_> {
         mut self,
     ) -> crate::sumeragi::v2_worker::RecoveredLifecycleSignTaskV1 {
         let dispatch_key = match &mut self.carrier {
+            PreparedRecoveredLifecycleSignCarrier::Live(work) => &mut work.dispatch_key,
             PreparedRecoveredLifecycleSignCarrier::PhaseVote(work) => &mut work.dispatch_key,
             PreparedRecoveredLifecycleSignCarrier::NextWalVote(work) => &mut work.dispatch_key,
             PreparedRecoveredLifecycleSignCarrier::Control(work) => &mut work.dispatch_key,
@@ -3203,6 +3234,7 @@ enum ConcreteLifecycleWorkKind {
     DurableStoreBody(DurableStoreBody),
     DurableValidateBody(DurableValidateBody),
     DurableValidateCompletion(DurableValidateCompletion),
+    DurableLiveWalSign(DurableLiveWalSignWork),
     DurableRecoveredWalSign(DurableRecoveredWalSignWork),
     DurableRecoveredLifecycleNextWalVoteSign(DurableRecoveredLifecycleNextWalVoteSignWork),
     DurableRecoveredWalControlSign(DurableRecoveredWalControlSignWork),
@@ -3361,6 +3393,9 @@ impl ConcreteLifecycleWork {
             ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => {
                 completion.validates(self.digest)
             }
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                sign.validates_at(sign.address, self.digest)
+            }
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                 sign.validates_digest(self.digest)
             }
@@ -3401,6 +3436,9 @@ impl ConcreteLifecycleWork {
                 }
                 ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => {
                     completion.address == address
+                }
+                ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                    sign.validates_at(address, self.digest)
                 }
                 ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                     sign.validates_at(address, self.digest)
@@ -3445,6 +3483,7 @@ impl ConcreteLifecycleWork {
             ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => {
                 completion.address.owner.causal_root()
             }
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => sign.causal_root(),
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                 sign.repair.repair().child().causal_root
             }
@@ -3505,7 +3544,8 @@ impl ConcreteLifecycleWork {
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                 sign.repair.installed_child_effect()
             }
-            ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_)
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(_)
@@ -4680,6 +4720,14 @@ pub(crate) struct PreparedReadyDurableValidateExecution<'a> {
     address: ConcreteWorkAddress,
     outcome_kind: ReadyDurableValidateOutcomeKind,
     lease: TurnLease,
+    validated_catalog_authority: Option<ReadyValidatedExecutorCatalogAuthorityV1>,
+}
+
+/// Move-only authority to promote one fsynced successful Validate marker into
+/// the executor's live body catalog.
+#[must_use = "a successful Ready Validate marker must enter the executor catalog"]
+pub(in crate::sumeragi) struct ReadyValidatedExecutorCatalogAuthorityV1 {
+    validated: ValidatedBodyReceipt,
 }
 include!("v2_lifecycle_work_registry_recovered_wal.rs");
 include!("v2_lifecycle_work_registry_validate_recovery.rs");

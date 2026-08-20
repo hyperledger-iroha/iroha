@@ -179,7 +179,7 @@ reject the captured old-generation completion. The gate also pins duplicate
 and reordered certificate delivery plus insufficient count-only and power-only
 NPoS certificates. Its schema-v2 marker binds the exact schedule and counters.
 These are bounded reducer/recovery faults with terminating fixture work, not a
-substitute for the real-network seed matrix or Taira-profile soak. An exact
+substitute for the real-network seed matrix. An exact
 schema-v2 harness run on 2026-07-17 completed all 100,000 heights in 57.52
 seconds and matched every pinned counter. The source-attested wrapper correctly
 refuses a dirty worktree, so the final checkout-manifest-bound rerun remains

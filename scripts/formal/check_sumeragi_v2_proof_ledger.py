@@ -28184,7 +28184,6 @@ def _transport_geometry_production_source_fidelity_errors(
         "kagami_localnet": (
             repo_root / "crates" / "iroha_kagami" / "src" / "localnet.rs"
         ),
-        "taira_renderer": repo_root / "scripts" / "render_taira_validator_bundle.py",
         "kagami_profiles": repo_root / "xtask" / "src" / "kagami_profiles.rs",
         "taira_default": (
             repo_root / "defaults" / "kagami" / "iroha3-taira" / "config.toml"
@@ -28201,9 +28200,6 @@ def _transport_geometry_production_source_fidelity_errors(
             / "kagami"
             / "iroha3-taira"
             / "genesis.json"
-        ),
-        "taira_readme": (
-            repo_root / "configs" / "soranexus" / "taira" / "README.md"
         ),
     }
     sources: dict[str, str] = {}
@@ -30602,13 +30598,6 @@ queues.insert(
 
     deployment_fragments = (
         (
-            "taira_renderer",
-            'authenticated_non_validator_sources = _require_positive_integer(\n'
-            '        queues, "authenticated_non_validator_sources", context\n'
-            '    )',
-            "Taira renderer validates the public H key",
-        ),
-        (
             "taira_default",
             "max_transactions = 96\n"
             "max_payload_bytes = 16777216\n"
@@ -30660,47 +30649,14 @@ queues.insert(
             '"max_tx_bytes": 10485760',
             "default Taira genesis admits one maximum privacy transaction",
         ),
-        (
-            "taira_readme",
-            "(validator_count + authenticated_non_validator_sources + 1) *\n"
-            "     body_source_bytes",
-            "Taira operator documentation states N+H+1 byte scaling",
-        ),
-        (
-            "taira_readme",
-            "`[network] max_frame_bytes_tx_gossip = 13631488` (13 MiB plaintext),\n"
-            "     `[network] max_frame_bytes_block_sync = 23068672` (22 MiB plaintext) and\n"
-            "     `max_frame_bytes = 23068700` (the same ceiling plus 28 AEAD bytes)",
-            "Taira operator documentation pins the derived privacy transport corridor",
-        ),
     )
     for role, fragment, description in deployment_fragments:
         observed = sources[role].count(fragment)
-        if observed != (expected_count := 2 if description == "Taira renderer validates the public H key" else 1):
+        if observed != 1:
             errors.append(
-                f"{paths[role]}: {description} must occur exactly {expected_count} time(s); "
+                f"{paths[role]}: {description} must occur exactly 1 time(s); "
                 f"found {observed}"
             )
-    renderer_functions = renderer_minimum = ()
-    try:
-        renderer_functions = tuple(
-            node for node in ast.parse(sources["taira_renderer"]).body
-            if isinstance(node, ast.FunctionDef) and node.name == "_scaled_sumeragi_body_bytes"
-        )
-        renderer_minimum = tuple(
-            node.value for function in renderer_functions for node in function.body
-            if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "minimum" for target in node.targets)
-        )
-    except SyntaxError:
-        pass
-    expected_minimum = ast.parse(
-        "(validator_count + authenticated_non_validator_sources + 1) * source_bytes", mode="eval"
-    ).body
-    if len(renderer_functions) != 1 or len(renderer_minimum) != 1 or ast.dump(
-        renderer_minimum[0], include_attributes=False
-    ) != ast.dump(expected_minimum, include_attributes=False):
-        errors.append(f'{paths["taira_renderer"]}: Taira renderer scales aggregate bytes by N+H+1')
     for role, label in (("taira_genesis", "production"), ("taira_default_genesis", "default")):
         try:
             genesis = json.loads(sources[role], object_pairs_hook=_unique_object)

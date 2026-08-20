@@ -5,18 +5,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 PUBLIC_TORII_ROOT="${PUBLIC_TORII_ROOT:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
-WRITE_CONFIG_EXPLICIT=0
-WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-}"
 IROHA_BIN="${IROHA_BIN:-}"
 SORAFS_MANIFEST_BUILDER_BIN="${SORAFS_MANIFEST_BUILDER_BIN:-}"
 SORAFS_TX_STDIN_BUILDER_BIN="${SORAFS_TX_STDIN_BUILDER_BIN:-}"
-ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary}"
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
-ROLLOUT_CANARY_FAUCET_ASSET_ID="${ROLLOUT_CANARY_FAUCET_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
 ROLLOUT_CANARY_FEE_PROGRAM_ID="${ROLLOUT_CANARY_FEE_PROGRAM_ID:-testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default}"
 ROLLOUT_CANARY_FEE_PROGRAM_REVISION="${ROLLOUT_CANARY_FEE_PROGRAM_REVISION:-1}"
-ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
 DECLARED_CAPACITY_GIB="${DECLARED_CAPACITY_GIB:-1}"
 STAKE_AMOUNT="${STAKE_AMOUNT:-1}"
 DECLARATION_VALID_BLOCKS="${DECLARATION_VALID_BLOCKS:-10000}"
@@ -40,7 +35,6 @@ Usage: check_sorafs_rollout.sh --public-root URL [--write-config PATH]
                                [--iroha-bin PATH]
                                [--sorafs-manifest-builder-bin PATH]
                                [--sorafs-tx-stdin-builder-bin PATH]
-                               [--faucet-asset-id ASSET_DEFINITION_ID]
                                [--fee-program PROGRAM_ID]
                                [--fee-program-revision REVISION]
                                [--declared-capacity-gib N]
@@ -67,40 +61,12 @@ The check fails unless:
   - a deterministic capacity declaration lands through `iroha ledger transaction stdin`
   - the declaration is visible in /v1/sorafs/capacity/state
 
-When `--write-config` is omitted, the script bootstraps a runtime-only canary
-config automatically, preferring `/run/secrets/taira-canary-client.toml` when
-that directory is writable and otherwise falling back to the local temp
-directory. The bootstrap posts the current universal-account DTO to
-`/v1/accounts/onboard`, requires `HTTP 202` with a `QUEUED` receipt, and follows
-that receipt through `/v1/pipeline/transactions/status` before running the
-capacity declaration canary. Onboarding fees are sponsored by the configured
-Torii onboarding authority. The capacity transaction gets an exact
-`/v1/fees/quote` and signs the returned intent for the configured immutable
-sponsor-program revision. Set `ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet
-claim. Both onboarding and faucet helpers wait for their `202 QUEUED` receipts
-to reach `Applied` or `Committed` through the canonical pipeline status route.
-When `--write-config` is supplied, that runtime-only signer config is read
-as-is and is never overwritten by bootstrap.
+The signed check requires an explicit runtime-only `--write-config`; this
+script never creates accounts, claims faucet funds, or writes signing material.
+The capacity transaction gets an exact `/v1/fees/quote` and signs the returned
+intent for the configured immutable sponsor-program revision.
 Use `--skip-write-canary` only for read-only validation.
 EOF
-}
-
-default_write_config_path() {
-  if [[ -n "$WRITE_CONFIG_DEFAULT" ]]; then
-    printf '%s\n' "$WRITE_CONFIG_DEFAULT"
-    return 0
-  fi
-
-  local linux_secret_path="/run/secrets/taira-canary-client.toml"
-  local linux_secret_dir="${linux_secret_path%/*}"
-  if [[ -d "$linux_secret_dir" && -w "$linux_secret_dir" ]]; then
-    printf '%s\n' "$linux_secret_path"
-    return 0
-  fi
-
-  local temp_root="${TMPDIR:-/tmp}"
-  temp_root="$(physical_path "$temp_root")"
-  printf '%s\n' "${temp_root%/}/taira-canary-client.toml"
 }
 
 physical_path() {
@@ -110,24 +76,6 @@ import sys
 
 print(os.path.realpath(sys.argv[1]))
 PY
-}
-
-should_skip_canary_faucet() {
-  case "$ROLLOUT_CANARY_SKIP_FAUCET" in
-    auto|"")
-      [[ -n "$ROLLOUT_CANARY_FAUCET_ASSET_ID" ]]
-      ;;
-    1|true|TRUE|yes|YES)
-      return 0
-      ;;
-    0|false|FALSE|no|NO)
-      return 1
-      ;;
-    *)
-      echo "ROLLOUT_CANARY_SKIP_FAUCET must be auto, 1, 0, true, false, yes, or no" >&2
-      exit 1
-      ;;
-  esac
 }
 
 while [[ $# -gt 0 ]]; do
@@ -146,7 +94,6 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       WRITE_CONFIG="$2"
-      WRITE_CONFIG_EXPLICIT=1
       shift 2
       ;;
     --iroha-bin)
@@ -187,14 +134,6 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       SORAFS_TX_STDIN_BUILDER_BIN="$2"
-      shift 2
-      ;;
-    --faucet-asset-id)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --faucet-asset-id" >&2
-        exit 1
-      }
-      ROLLOUT_CANARY_FAUCET_ASSET_ID="$2"
       shift 2
       ;;
     --fee-program)
@@ -355,7 +294,8 @@ validate_numeric_inputs() {
 validate_numeric_inputs
 
 if [[ -z "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then
-  WRITE_CONFIG="$(default_write_config_path)"
+  echo "--write-config is required unless --skip-write-canary is used" >&2
+  exit 1
 fi
 
 normalize_root_url() {
@@ -885,45 +825,11 @@ with open(output_path, "w", encoding="utf-8") as handle:
 PY
 }
 
-ensure_write_canary_config() {
-  local target_url="$1"
-  local bootstrap_cmd=(
-    python3
-    "${REPO_ROOT}/scripts/taira_bootstrap_canary.py"
-    --torii-root "$target_url"
-    --output-config "$WRITE_CONFIG"
-    --alias-prefix "$ROLLOUT_CANARY_ALIAS_PREFIX"
-    --time-to-live-ms "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
-    --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
-  )
-
-  if [[ -n "$IROHA_BIN" ]]; then
-    bootstrap_cmd+=(--iroha-bin "$IROHA_BIN")
-  fi
-  if [[ -n "$ROLLOUT_CANARY_FAUCET_ASSET_ID" ]]; then
-    bootstrap_cmd+=(--faucet-asset-id "$ROLLOUT_CANARY_FAUCET_ASSET_ID")
-  fi
-  if should_skip_canary_faucet; then
-    bootstrap_cmd+=(--skip-faucet)
-  fi
-
-  echo "==> canary bootstrap: ${WRITE_CONFIG}" >&2
-  "${bootstrap_cmd[@]}" >&2
-}
-
 prepare_write_canary_config() {
-  local target_url="$1"
-
-  [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$(default_write_config_path)"
-  if [[ $WRITE_CONFIG_EXPLICIT -eq 1 ]]; then
-    [[ -f "$WRITE_CONFIG" ]] || {
-      echo "write canary config not found: $WRITE_CONFIG" >&2
-      exit 1
-    }
-    return 0
-  fi
-
-  ensure_write_canary_config "$target_url"
+  [[ -f "$WRITE_CONFIG" ]] || {
+    echo "write canary config not found: $WRITE_CONFIG" >&2
+    exit 1
+  }
 }
 
 ensure_iroha_bin() {
@@ -1141,16 +1047,6 @@ PY
   rm -f "$output_file"
 }
 
-claim_faucet_for_canary() {
-  local target_url="$1"
-  local account_id="$2"
-  echo "==> faucet bootstrap: ${account_id}" >&2
-  python3 "${REPO_ROOT}/scripts/taira_faucet_canary.py" \
-    --account-id "$account_id" \
-    --torii-root "$target_url" \
-    --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
-}
-
 current_block_height() {
   local root_url="$1"
   expect_status "status" GET "${root_url}/status" 200
@@ -1260,7 +1156,7 @@ run_write_canary() {
   ensure_iroha_bin
   ensure_sorafs_manifest_builder_bin
   ensure_sorafs_tx_stdin_builder_bin
-  prepare_write_canary_config "$target_url"
+  prepare_write_canary_config
 
   local temp_config work_dir summary_path tx_stdin_path spec_path output_file account_id current_blocks provider_id_hex
   temp_config="$(physical_path "$(mktemp)")"
@@ -1302,21 +1198,16 @@ run_write_canary() {
 
   if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file"; then
     if grep -q 'Failed to find asset' "$output_file"; then
-      claim_faucet_for_canary "$target_url" "$account_id" >/dev/null
-      if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file"; then
-        sed -n '1,120p' "$output_file" >&2 || true
-        exit 1
-      fi
-    else
-      if grep -Eq 'fee quote rejected|fee_payment_rejected' "$output_file"; then
-        echo "SoraFS capacity canary failed: the exact fee quote was rejected; inspect the reported capacity and remediation, then re-quote against the active program revision" >&2
-      fi
-      if grep -q 'Unknown instruction type' "$output_file"; then
-        echo "SoraFS capacity canary failed: the served validator binary is stale and missing SoraFS capacity/order instruction dispatch" >&2
-      fi
-      sed -n '1,120p' "$output_file" >&2 || true
-      exit 1
+      echo "SoraFS capacity canary signer is unfunded; fund the runtime-only signer before retrying" >&2
     fi
+    if grep -Eq 'fee quote rejected|fee_payment_rejected' "$output_file"; then
+      echo "SoraFS capacity canary failed: the exact fee quote was rejected; inspect the reported capacity and remediation, then re-quote against the active program revision" >&2
+    fi
+    if grep -q 'Unknown instruction type' "$output_file"; then
+      echo "SoraFS capacity canary failed: the served validator binary is stale and missing SoraFS capacity/order instruction dispatch" >&2
+    fi
+    sed -n '1,120p' "$output_file" >&2 || true
+    exit 1
   fi
 
   local attempt

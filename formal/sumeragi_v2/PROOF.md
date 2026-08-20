@@ -1626,7 +1626,7 @@ noncanonical autonomous-output retirement, and the ordinary plus record-backed
 autonomous predecessor-durability regressions yield the
 current 864-test, 43-module inventory. The complete source-sealed
 pre-network corridor
-contains 91 legs. Six source-
+contains 84 legs. Six source-
 sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
@@ -1738,7 +1738,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 91 legs, including the governance-unlock audit module, the autonomous
+now has 84 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
@@ -1746,7 +1746,7 @@ geometry modules, and source-sealed command-success legs. Its finality, offline
 compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the forty-module, eighty-eight-leg corridor. It
+tests are not claimed by the 43-module, 84-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
@@ -1850,5 +1850,4 @@ does not promote any changed obligation.
 Fresh current-source asynchronous-liveness proof evidence remains outstanding.
 A fresh
 pinned strict whole-module aggregate release TLAPS run, the clean source-sealed
-release gate, the release-profile 100,000-height chaos rerun, and the 24-hour
-Taira-profile soak remain pending.
+release gate, and the release-profile 100,000-height chaos rerun remain pending.

@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-19
+Last updated: 2026-08-20
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -12,12 +12,15 @@ Completed history lives in [`status.md`](./status.md).
   promotion canary must submit real work, observe it commit within the finite
   timeout envelope, then prove the empty queue leaves total and non-empty block
   heights stable; empty blocks are not a liveness mechanism.
-- Exercise the combined Sumeragi liveness changes in the authenticated
-  four-validator loss/hold/heal corridor, then complete full-workspace tests and
-  strict all-target Clippy before the release freeze. The current Core library
-  test target compiles and the focused 24-test Soracloud slice is green, but the
-  fixture-bound Core lint cleanup and settled-tree Sumeragi source-contract
-  rerun remain open and none of these substitutes for the release-wide run.
+- Treat Sumeragi Validate/replay production wiring as complete and keep the
+  remaining gate evidence-driven. The exact focused matrix passes 34/34, the
+  `iroha_core` library and library-test targets compile cleanly, and the prior
+  formal/static inventory reconciled 864/864 production tests. The fresh
+  2,359-test Sumeragi namespace and unchanged 11,549-test Core baseline remain
+  in progress while reproducing broad pre-existing failures; capture their
+  final results, isolate unrelated failures, and then complete full-workspace
+  tests and strict all-target Clippy before the release freeze. None of the
+  focused or mutable-tree results substitutes for that release-wide run.
 - Freeze the current revision-4 candidate only after the physical ChainEpoch
   proof shards, exact four-validator fault corridor, and remaining authoritative
   formal and workspace-wide validation are complete. Historical mutable-tree
@@ -156,7 +159,23 @@ profile-config admission, and public consensus wire roundtrips are complete.
 The five checked-in OpenAPI artifacts remain stale and require deterministic
 regeneration from a clean exact candidate; the dirty development checkout
 without the required release-authorized SSH signature is not release
-provenance. The outstanding revision-4 work includes:
+provenance.
+
+The production Validate/replay cut itself is no longer outstanding. One
+mandatory binding carries exactly the five `LiveWal`, `LocalBody`,
+`RemoteProposal`, `InvalidBodyReport`, and `DirectSigned` origins through all
+nine Ready outcomes. Same-row sidecar wait/wake and cold reopen, standalone
+local/remote Validate reopen, and cold Broadcast/equivocation/invalid-report
+output recovery are wired; the dormant generic WAL and legacy storage-recovery
+surfaces are removed. The source contract executes 44/44 cases across 353
+spans, with the static 3/2 sealed/pending WAL-mint and 1/1 active-storage-
+factory inventories reconciled. The exact focused matrix passes 34/34, Core
+library and library-test compilation is clean, the previous formal/static
+release inventory was green at 864/864 production tests, and `Cargo.lock` is
+unchanged. The still-running namespace/baseline suites and the strict network
+evidence below remain release gates, not implementation joins.
+
+The outstanding revision-4 work includes:
 
 - Preserve the single finalized-lane predecessor owner through release
   qualification. Ordinary and PendingKura lifecycles now share a bounded
@@ -380,11 +399,10 @@ provenance. The outstanding revision-4 work includes:
   now uses one direct runtime observation plus a move-only, one-turn worker
   admission; the old persistent episode/witness state is gone while immutable
   lifecycle ordinals and the single bounded retry latch remain.
-  Run the phase-vote/control-Sign/Decision-Fetch end-to-end owner factory and
-  the existing
-  empty/two-Fetch/terminal-Validate-plus-Serve startup regressions, including
-  steady and payload-store-ahead terminal Serve, once the active formal
-  validation process releases the build lane. Decision Fetch now has an exact
+  The phase-vote/control-Sign/Decision-Fetch end-to-end owner-factory and
+  empty/two-Fetch/terminal-Validate-plus-Serve startup checks, including steady
+  and payload-store-ahead terminal Serve, are included in the 34/34 passing
+  exact matrix. Decision Fetch now has an exact
   certificate-only V1 origin for its absent manifest and enters the complete
   Ledger/registry/coordinator startup census with exact no-rewrite coalescing;
   quarantined markers cannot cross the revalidated-store seal. A matching
@@ -429,10 +447,12 @@ provenance. The outstanding revision-4 work includes:
   publication, same-row sidecar wake, restart reconstruction, and
   post-LedgerV1-fsync fail-stop in exact four-validator BLS/RS16 contexts, plus
   real four-validator success, view-change, restart, and authenticated
-  consensus Hold/Drop convergence. Live invalid-body reporting, live sidecar
-  recovery, publication-phase-targeted live restarts, and direct
-  PayloadManifest/PayloadChunk loss remain release-soak depth rather than
-  missing production joins. CompleteTip
+  consensus Hold/Drop convergence. Those layered fixtures do not close the
+  strict live-network release gaps: no unskipped live invalid-body-report or
+  merge-sidecar-recovery test exists, the publication-phase-targeted live
+  restart matrix and direct `PayloadManifest`/`PayloadChunk` loss test remain
+  open, and the strongest observer/body-recovery case remains ignored. These
+  are evidence gaps, not missing production joins. CompleteTip
   recovery now retains its full Kura artifact and receipt instead of a lossy
   predecessor hash projection, and terminal Apply has a separate exact
   four-row ledger oracle which cannot mint a live carrier. CompleteTip recovery
@@ -475,20 +495,16 @@ provenance. The outstanding revision-4 work includes:
   shutdown/finalization fixture with source mutations. The former monolithic
   height body is removed; the remaining gate is coordinated Rust execution of
   that restricted no-clock corridor and the full source/formal suite.
-- Close the autonomous carrier terminal-gating, signed-bootstrap roll-forward,
-  and lifecycle-retention release gate from one final source seal. Run the
-  focused Kura and Sumeragi regressions, build the optimized `irohad` and
-  Kagami artifacts from the signed revision, and run a pristine four-validator
-  canary through the complete multi-stage autonomous contract workload. Require
-  all stages to apply, four-peer health, an empty
-  queue, no unexpected rejection, equality of total and non-empty block
-  heights, and stable height throughout the idle observation window. Then roll
-  the identical attested artifacts to the live four-validator Taira cohort in
-  one coordinated operation and repeat chain-health, manifest, and signed-write
-  canaries before reopening public traffic; source tests or a partial cohort
-  replacement do not satisfy this gate.
-- Finish source-seal, proof, and release validation for the selected-Serve
-  Taira `missing_proposal` repair. Live evidence showed a responsive pacemaker
+- Exercise autonomous carrier terminal gating, bootstrap roll-forward, and
+  lifecycle retention with the focused Kura/Sumeragi regressions and a fresh
+  disposable four-validator devnet. Require the multi-stage workload to apply,
+  all peers to remain healthy, the queue to drain, and committed heights to
+  converge without unexpected rejection. Public deployment qualification is a
+  separate operator activity and is not a prerequisite for creating this
+  throwaway network.
+- Keep the selected-Serve `missing_proposal` repair covered by the focused
+  mutation matrix and disposable four-peer smoke. Live evidence showed a
+  responsive pacemaker
   rotating views while proposal scheduling stayed behind one selected Serve:
   a passive Fetch could complete after the prior predecessor turn and re-enter
   `BodyAvailable` under an older ordinal. Runtime now directly observes the
@@ -500,9 +516,7 @@ provenance. The outstanding revision-4 work includes:
   pacemaker. The earlier focused regression still drives local timeout,
   responsive remote TimeoutVotes, grouped TC, and `EnterView`; the final queue
   handoff still blocks fresh Serve replenishment until one ordinary producer
-  turn runs. The remaining closure is the digest-refreshed mutation matrix,
-  strict non-promotional proof pass, complete four-peer release build,
-  deployment, and observed Taira height advancement. Keep exact semantic
+  turn runs. Keep exact semantic
   retries on their immutable owner, reject owner replacement before refinement,
   and retain only the separately typed monotone Fetch/Store/Validate authority
   lineage.
@@ -1012,134 +1026,22 @@ source validation.
   until every documented and CI caller has migrated, then remove only the
   adapters whose replacement paths have parity evidence.
 
-## Taira testnet recovery and universal offline protocol closure
+## Taira development networks
 
-The source-side consensus-stall, exact `/status.blocks`, supervisor-loop, and
-cash-handoff protocol ingress repairs are complete. The restart source patch
-also restores snapshot-authenticated autoscale windows before canonical
-reserialization, rejects any writer payload that cannot pass isolated restart
-initialization before publication/geometry compaction, keeps capture and
-publication ordered under one lock, leaves process gas/telemetry untouched
-during dry-run validation, and blocks empty-state fallback when either the
-configured-primary durable binding disagrees or its geometry floor was
-compacted. Reset capture now reads native Darwin argv, binds the direct
-root-controlled Python.app runtime for new supervisors, and requires every
-loaded supervisor argv to match its launchd `ProgramArguments` exactly. Restart
-proof now binds a bounded same-inode log cursor,
-requires exactly one authenticated snapshot load with no Kura/empty-state
-fallback, rechecks the final process identities and advancing fleet, and emits
-the measured duration under the 45-second ceiling. Controller and public smoke
-parsers accept the exact optional four-hex checksum in canonical Iroha block
-hashes without accepting arbitrary suffixes. The first-party Soracloud
-signed-mutation path also uses
-middleware-authenticated signer headers only: Torii rejects retired inline
-signing fields and the CLI omits them from every mutation request. Focused
-locked/offline validation of those consensus and restart repairs is complete.
-Linked-worktree Git provenance now watches the actual common packed ref and
-safe loose-ref ancestor, preventing the stale nonexistent `packed-refs` input
-from cascading every focused command into a full core relink. The two final
-regression fixtures also mirror production semantics for durable post-decision
-CommitQC rebroadcast and startup auxiliary-lane binding. Source-bound focused
-revalidation, compact-commitment validation, source sealing, release
-generation, and live rollout remain open. At the latest public sample, Taira
-remains on the old deployment at committed height 11, view 230, phase
-`awaiting_proposal`, blocker `missing_proposal`, and approximately 64.3 hours
-without block progress. Offline application protocols are a universal Iroha
-capability;
-they require no validator mode, dataspace or asset opt-in, escrow catalog, or
-backend readiness gate. Taira promotion therefore evaluates ordinary node and
-consensus health only. App/device offline user-interface state must never make
-`/health` or `/readyz` fail. The guarded reset must still pass the signed public
-canary and prove a healthy, advancing validator cohort.
-
-Promotion is blocked by circuit capacity, not another host-memory
-representation optimization. Authenticated raw `StepEqBootstrap` telemetry
-reports `advice_cells=2,596,502,505`; with 131,063 usable k17 rows, the graph
-requires at least 19,812 advice columns. The required `[220]` advice /
-`[25, 0, 0]` lookup-advice runs aborted under the mandatory host guard before
-`calculate_params`, so they established no usable shape, parameters, keys,
-proof bounds, or production qualification. Packed-cell, sparse-rational, and
-other memory-only reductions cannot make this graph fit and are not release
-evidence.
-
-Every currently reviewed cross-field bridge variant—raw or compressed SHA,
-narrow-field Poseidon, dense vector/Pedersen, and direct verification—is a hard
-`NO` under the combined k17, 5 GiB processed-key, 384 KiB proof-pair, and
-128 MiB device ceilings. Exact public transport remains an unreviewed schema
-redesign whose fit depends on the guarded inventory; it is not production-ready.
-Any replacement binding requires independent cryptographic review. The guarded
-pre-graph `S/E/T/P` inventory completed at a 1,636,745,216-byte evidence peak
-with zero populated Step circuits. Both parities have 2,025 sources, eight
-equations, 2,680 terms, 636 protocol points, and 5,364 non-native Poseidon
-permutations; raw/compressed combined bindings require 69/51 k17 lanes, so
-neither fits the reviewed five-lane bridge. Do not run a populated graph, bind
-release hashes, or describe `[220]` / `[25, 0, 0]` as a candidate until a
-reviewed replacement satisfies every cap.
-
-The production-readiness audit closed the local false-green and
-resource-amplification gaps: candidate success is now explicitly static and
-rejects unresolved index state, the complete lightweight release-tool and SDK
-boundary suites are workflow-owned, and Core/Kagami share bounded governed
-device-policy validation. Those controls do not discharge release evidence.
-The authenticated source-seal projection still needs a pinned producer (or an
-equivalently reviewed external-controller protocol) with end-to-end
-generate/seal/reconstruct tests. Production hardware qualification must also
-use a production-policy identifier and hash distinct from the
-`taira-testnet-physical-ios-xcode-paired-v1` candidate lab schema; promotion
-now rejects the latter's `app_attest_used:false` receipt. Replace that explicit
-blocker only after an independently reviewed production App Attest/Secure
-Enclave evidence schema and validator are available.
-
-Remaining work stays ordered and fail-closed:
-
-- Bind the completed guarded pre-graph `S/E/T/P`, V6/V2 element and
-  permutation counts, and legacy SHA lower bounds into the independent review
-  input. Use those measurements to select and independently review a
-  replacement cross-field binding before implementation. Do not rerun
-  populated `[220]` / `[25, 0, 0]` generation while the authenticated capacity
-  lower bound remains unsatisfied.
-- Keep the focused-tested V4 provenance structural-schema hashes frozen and
-  complete the remaining promotion-evidence corridor. Require the
-  authenticated source projection plus actual reviewed Cargo/rustc digests to
-  match across the manifest,
-  qualification, review, attestation, and promotion records; no source-only
-  fixture or placeholder hash is release evidence.
-- Seal the final reviewed source closure over the next clean `optimizations`
-  anchor carrying the release-authorized SSH signature. The current dirty
-  worktree is not a production source seal.
-  Require an empty tracked diff, zero untracked files, present-empty gitlink
-  directories, and the exact separately bound root `Cargo.lock`. Build and
-  hash the candidate
-  generator, runtime binaries, configuration, and reset tooling from that one
-  provenance set; no earlier r5/r6 binary or artifact seal attests the k17
-  layout.
-- After a reviewed replacement binding passes the bounded shape and key gates,
-  run guarded production generation for the exact eight-artifact Eq/Ep bundle,
-  derive and bind its actual proof and pair sizes, complete the required
-  independent review and physical-device evidence, finalize the immutable
-  release, and qualify its validator catalog. The old 93,120-byte proof and
-  191,862-byte pair values are unvalidated projections, not release constants.
-  Diagnostic probe output is not a candidate or promotion record.
-- Install the finalized 17-file release and policy beneath a separate
-  root-controlled Kagemusha trust root on all four validators, qualify every
-  catalog with the admitted binary, and prove identical manifest digests and
-  whole-catalog byte accounting before startup. Because those settings change
-  `execution_policy_hash`, deploy them only through a fresh compatible reset
-  or an independently approved consensus-context migration. Recover advancing
-  Taira consensus; the latest public sample remains stalled at height 11, view
-  230, `missing_proposal`, after approximately 64.3 hours. No reviewed
-  activation authority or canonical activation transaction has been supplied.
-  The checked-in genesis does not establish such an authority with direct
-  `CanActivateKagemushaRecursiveReleaseV4` and
-  `CanManageOfflineDeviceAttestationPolicy` grants and contains no canonical
-  `MultisigRegister`; those genesis-only grants cannot be repaired in place.
-  Only after resolving that authority boundary should operators prepare and
-  approve the one-instruction governed activation at a strictly future height.
-  Prove committed finality,
-  query-visible `/status.blocks` equality, ordinary node readiness, universal
-  `cash_handoff_v1`/ABI-21 capability discovery without an asset enrollment
-  gate, a real top-up/redemption canary, a restart below 45 seconds, and
-  continued advancement after restart.
+- Keep the disposable Taira path one command and four peers:
+  `python3 scripts/taira_devnet.py up`. It must generate fresh keys, canonical
+  Taira chain identity, NPoS Nexus configuration, validate all four daemon
+  configs with the current binaries, start only its owned cohort, and require
+  readiness, a blocking signed transaction, converged advancing heights, and
+  semantic MCP initialization before returning success.
+- Keep `check` read-only and `down` scoped to the marked disposable directory.
+  Do not restore release authorities, source-seal handoffs, publication
+  receipts, LaunchAgents, systemd validator units, predecessor rollback, or
+  24-hour soak requirements to this path.
+- Treat public Taira product-surface qualification as a separate operator
+  activity. The compiled `iroha taira doctor` and `iroha taira write-canary`
+  commands remain available for an explicitly configured public deployment;
+  the broad doctor is opt-in for disposable networks.
 
 ## ZK-ACE JavaScript signed-transaction parity
 
@@ -1178,7 +1080,7 @@ the signed receipts and completion marker against that same commit and ledger
 digest.
 
 On the current mutable tree, the independent static release inventory contract
-contains 91 legs, 864/864 production tests across 43 modules, 530/530 G-UNIT
+contains 84 legs, 864/864 production tests across 43 modules, 530/530 G-UNIT
 rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
 The grouped SDK closure is 1,400 paths at
@@ -20373,16 +20275,16 @@ operator-provided rollout bundles.
   routes. Public Taira SoraFS read-only rollout evidence also passes, covering
   the SoraFS route surface and capacity-state read path. The signed SoraFS
   rollout canary now also rejects malformed numeric operator controls before
-  signer bootstrap, transaction submission, or capacity-state polling, and
-  explicit `--write-config` signer inputs are preserved instead of being
-  overwritten by bootstrap. Public SoraFS rollout HTTP probes now also use
+  transaction submission or capacity-state polling, and requires an explicit
+  runtime-only `--write-config`. It no longer creates or funds a signer.
+  Public SoraFS rollout HTTP probes now also use
   JSON `Accept` headers plus bounded curl connect/overall timeouts so `/status`
   content negotiation and stalled public edges fail cleanly. The same SoraFS
   rollout smoke now gates read-only promotion on positive `/status.blocks`,
   healthy Sumeragi commit-QC height, and at least four commit-QC validators.
   Local SoraFS rollout mock coverage now exercises
-  read-only no-submit behavior, implicit bootstrap, explicit signer-config
-  preservation, missing explicit config failure, unfunded-signer faucet retry,
+  read-only no-submit behavior, explicit signer-config preservation, missing
+  config failure, unfunded-signer diagnostics without an automatic retry,
   stale validator instruction dispatch, missing capacity-state visibility after
   submit, malformed node-health responses, and malformed canary/timeout
   controls. The remaining live Taira
@@ -27011,7 +26913,7 @@ observers and rotated responders. Configure and open both fail closed when any
 count, byte partition, topic frame, global encrypted frame, or queue owner is
 undersized. Shipping defaults are 17 MiB for global/consensus/block-sync,
 2 MiB for control, `H=2`, 518 ingress entries, a 33 MiB source partition, and
-231 MiB aggregate body ownership. Kagami and the Taira renderer scale aggregate
+231 MiB aggregate body ownership. Kagami localnet scales aggregate
 body bytes by `N + H + 1` and reject validator rosters above the protocol
 maximum of 128. The independent P2P wire-prefix boundary is also closed: the
 wire body has the inclusive `u32::MAX` ceiling, while runtime configuration is
@@ -27023,8 +26925,8 @@ counters reject arithmetic overflow explicitly, outbound serialization is
 counted before frame materialization, and stream readers grow incrementally
 after checked prefix arithmetic. Remaining consensus work is evidence and
 mechanization: this
-closure does not make the strict TLAPS runner, clean release corridor,
-100,000-height chaos receipt, or 24-hour Taira soak complete, and
+closure does not make the strict TLAPS runner, clean release corridor, or
+100,000-height chaos receipt complete, and
 the checked-in `machine_checked_completion: true` value remains a precommit,
 not a current aggregate proof result or release receipt.
 
@@ -27314,7 +27216,7 @@ The earlier eleven-module wrapper and final exact genesis rerun are green, but
 the complete PR corridor still needs a recorded green run. A standalone
 focused 100,000-height permissioned/NPoS chaos run also preserved both
 50,000-height chain prefixes in 52.97 seconds. The four-seed PR and 32-seed
-release real-network matrices plus the 24-hour Taira runner remain unexecuted;
+release real-network matrices remain unexecuted;
 the release profile must also reproduce the chaos result under its
 checkout-manifest-bound evidence root. The current schema-v2 gate additionally
 queues local work, rotates restart across five persistence/application
@@ -27361,7 +27263,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 91 pre-network legs and their exact
+original HEAD/tree/`Cargo.lock`, all 84 pre-network legs and their exact
 864-test inventory plus the separate exact 530-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
@@ -27698,51 +27600,6 @@ runtime premise on the final signed source.
   the current queued-work/restart schema is green in the standalone 320-height
   smoke and exact 100,000-height harness (57.52 seconds), but still needs the
   clean-source attestation rerun; and
-- complete and archive the fully pinned 24-hour Taira-profile soak, including
-  its recorded seed, load, impairment, anchored churn schedule, wall-clock
-  throughput, and acceptance bounds, with zero unclassified no-progress
-  intervals. Archive the invocation-local canonical evidence JSON only after
-  the provisional `.partial` file's checker has re-hashed the checkout
-  manifest, Git revision, daemon, Kagami, test binary, generated configuration,
-  and initial/final status quorums, and retain its hash-bound completion in the
-  aggregate release receipt.
-- After an authorized fresh four-validator public cutover, run the distinct
-  deployed-public soak under its independently provisioned observation and
-  replay authority. Archive exactly 432,000 five-per-second scheduled-transfer
-  lineage records, the bounded confirmation/finality drain, quorum-aligned
-  attestation and zero-drift lifecycle evidence, and the candidate/publication/
-  deploy-bound `TAIRA_PUBLIC_V2_24H_COMPLETED.json` plus durable admission
-  receipt; the local fault-profile receipt above is not a substitute for this
-  public-cohort evidence. The fail-closed process lease and a structural
-  long-lived runner now own one exact 432,000-slot attempt, stream its bounded
-  workload/capture inventories, and require exact native launch and backend-
-  shutdown receipts. The public runner remains source-disabled before path or
-  network I/O until a genuine runtime signer/native verifier is provisioned;
-  its captured handoff must still be submitted to the independently provisioned
-  authority and replay broker. Do not
-  register the state library itself as a controller operation or treat an
-  abandoned lease as resumable evidence. The installed controller must inject
-  its preprovisioned state root beneath non-writable trusted ancestry rather
-  than accepting a caller-selected root. The signed pre-deploy chain now carries
-  an explicit key-derived receipt-signer node ID for every validator and binds
-  it to the exact binary, config, restart generation, runtime, and lifecycle
-  identities; no label-derived substitute is accepted. The supervisor and plist
-  renderers support fixed owner-private peer-local journals, and the offline
-  collector validates, retains, and globally resequences all four windows before
-  passing the four source journals plus the global journal to a digest-pinned
-  native verifier and capturing its receipt. The collector still needs to run
-  behind the protected controller. The path-only candidate/publication
-  prerequisite producer is now sealed into `macos-publish`, and the publication
-  workflow retains both root-closed outputs; its three upstream authority
-  refusals remain intentional. The structural post-deploy handoff producer now
-  derives the exact checker identity from a closed applied-report/reset/native-
-  receipt evidence root plus both prior handoffs and the installed deploy
-  controller attestation, but its independent native-evidence authority remains
-  an unconditional source barrier and it is not yet a sealed workflow operation.
-  The genuine native producer/verifier, authority verifier, replay broker, and
-  protected controller/workflow integration remain to be implemented and
-  provisioned.
-
 Transaction inclusion and censorship fairness are outside the consensus
 height-progress theorem. The proof conditions height progress on a valid
 proposal carrying authenticated external, state-derived clock, autonomous, or

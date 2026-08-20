@@ -462,7 +462,7 @@ height-context state are not migrated in place.
   17 MiB global/consensus/block-sync settings, 2 MiB control, a 128 MiB
   high-priority byte queue, `H = 2`, and
   `4 * 128 + 2 * 2 + 2 = 518` outer-ingress entries.
-  Kagami and the Taira renderer reject rosters above 128 and preserve one
+  Kagami rejects rosters above 128 and preserves one
   source partition for every validator, every simultaneously materialized
   authenticated non-validator lane, and the anonymous lane by scaling body
   bytes to at least `(N + H + 1) * body_source_bytes`.
@@ -1584,7 +1584,7 @@ record-backed autonomous predecessor-durability regressions, followed by the
 three producer-publication-fence race regressions, bring the current
 inventory to 864 tests across 43 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 91 legs. The
+corridor contains 84 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor. The
 fence rows prove that an exact lifecycle dequeue serializes both same-wire and
 unrelated producers until publication, and that abandoning an unpublished
@@ -1697,7 +1697,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 91 legs, including the governance-
+the complete pre-network corridor now spans 84 legs, including the governance-
 unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
@@ -1705,7 +1705,7 @@ command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those forty modules or eighty-eight legs. The
+geometry tests as part of the 43 modules or 84 legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1799,11 +1799,10 @@ unchanged; this source-fidelity boundary promotes no theorem, proof-ledger row,
 or evidence gate.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
-source-bound 100,000-height chaos receipt, provisional Taira evidence
-promotion, and the aggregate release receipt. These execution contracts are
+source-bound 100,000-height chaos receipt, and the aggregate release receipt. These execution contracts are
 not deductive proof. A fresh pinned strict whole-module aggregate release TLAPS
 run, the complete clean source-sealed PR corridor, the source-bound chaos run,
-and the 24-hour Taira-profile soak remain pending.
+and aggregate receipt publication remain pending.
 
 The formal mutation gate also runs one source-sealed post-Decision model with
 nine configurations. The repaired trace completes with status 0. Eight
@@ -1856,7 +1855,7 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 91 pre-network legs and the exact
+binds original HEAD/tree/`Cargo.lock`, all 84 pre-network legs and the exact
 864-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable

@@ -236,7 +236,9 @@ required|cold_next_sign|self.seal.effect.clone()|cold next-Sign projection omitt
 end
 case|direct_validation_preview_surface_is_closed_move_only_and_lifecycle_wired
 region|production|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
-count|production|prepare_direct_validation_succeeded(|4|only the private definition, recovered-Decision fast-forward, sealed Ready bridge, and cfg(test) sealed settlement helper may name the preview
+count|production|prepare_direct_validation_succeeded(|3|only the strict private definition, recovered-Decision fast-forward, and cfg(test) sealed settlement helper may name the strict preview
+count|production|prepare_direct_validation_succeeded_with_local_origin_manifest(|3|only the private definition, strict wrapper, and sealed Ready bridge may name the local-origin successful preview
+count|production|stage_direct_validation_registry(|3|only the shared staging definition and the two closed direct-validation previews may stage registry state
 region|recovered_fast_forward|adapter|after|fn prepare_recovered_decision_apply_fast_forward(|before|/// Preview a certified Fetch completion directly
 count|recovered_fast_forward|prepare_direct_validation_succeeded(|1|the recovered-Decision preview call stays sealed inside replay
 region|tokens|adapter|at|enum DirectValidationSucceededStutter|before|/// Opaque staged adapter state for the fixed recovered Decision body fast-forward.
@@ -275,6 +277,14 @@ forbidden|tokens|BodyPipelineCompletionEvidence|sealed direct-validation tokens 
 forbidden|tokens|AdapterOutcome|sealed direct-validation tokens expose forbidden surface AdapterOutcome
 forbidden|tokens|encode_wal_entry|sealed direct-validation tokens expose forbidden surface encode_wal_entry
 region|method|adapter|at|fn prepare_direct_validation_succeeded(|before|\n    /// Preview one exact deterministic rejection
+region|staging|adapter|at|fn stage_direct_validation_registry(|before|\n    /// Preview one exact successful deterministic validation directly against
+required|staging|local_origin_manifest: Option<&wire::PayloadManifest>|direct-validation registry staging lost its sealed optional local manifest
+required|staging|let mut next_registry = self.registry.clone()|direct-validation registry staging must remain drop-inert
+required|staging|next_registry.manifest_to_core(manifest, &self.wire_context)?|local-origin manifest must enter only the staged registry
+required|staging|.ok_or(AdapterError::MissingManifest)?|remote and strict direct validation must still require prior manifest registration
+forbidden|staging|self.registry =|direct-validation preflight must not publish live registry state
+forbidden|staging|wal.append(|direct-validation registry staging must remain WAL-inert
+required|method|self.prepare_direct_validation_succeeded_with_local_origin_manifest(|strict successful validation must delegate without widening its surface
 forbidden|method|drive_effects(|inert direct-validation preview invokes forbidden machinery drive_effects(
 forbidden|method|wal.append(|inert direct-validation preview invokes forbidden machinery wal.append(
 forbidden|method|step_with_completion_evidence(|inert direct-validation preview invokes forbidden machinery step_with_completion_evidence(
@@ -287,7 +297,8 @@ forbidden|method|.commit(|inert direct-validation preview invokes forbidden mach
 end
 case|direct_validation_failed_surface_is_closed_move_only_and_lifecycle_wired
 region|production|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
-count|production|prepare_direct_validation_failed(|2|only the private definition and sealed Ready-carrier bridge may name the preview
+count|production|prepare_direct_validation_failed(|1|only the strict private definition may name the strict failed-validation preview
+count|production|prepare_direct_validation_failed_with_local_origin_manifest(|3|only the private definition, strict wrapper, and sealed Ready bridge may name the local-origin rejected preview
 region|tokens|adapter|at|enum DirectValidationFailedStutter|before|/// Exact idempotent disposition of one direct successful-validation preview
 count|tokens|next_registry: WireRegistry|4|Busy, inactive, no-effect, and report must each retain the staged registry
 count|tokens|next_reducer: reducer::Reducer|3|every non-Busy rejection must retain the staged reducer
@@ -305,6 +316,7 @@ forbidden|tokens|into_parts|sealed direct-rejection tokens expose forbidden surf
 forbidden|tokens|Vec<u8>|sealed direct-rejection tokens expose forbidden surface Vec<u8>
 forbidden|tokens|encode_wal_entry|sealed direct-rejection tokens expose forbidden surface encode_wal_entry
 region|method|adapter|at|fn prepare_direct_validation_failed(|before|\n    // READY_DURABLE_VALIDATE_ADAPTER_BRIDGE_BEGIN
+required|method|self.prepare_direct_validation_failed_with_local_origin_manifest(|strict failed validation must delegate without widening its surface
 required|method|durable_receipt: &DurableBodyReceipt|direct-rejection preview must borrow the durable body receipt
 required|method|valid: false|direct-rejection preview must emit an invalid validation event
 required|method|wire::GlobalPhase::Prepare|direct-rejection preview must remain in Prepare
@@ -860,6 +872,7 @@ case|live_wal_replay_seal_is_linear_nondecodable_and_has_only_specialized_produc
 region|production|replay_authority|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|live|replay_authority|after|struct LiveWalPersistedReplaySealV1|before|/// Canonical inert replay evidence for one exact signed broadcast effect.
 region|adapter|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|handoff|adapter|after|pub(crate) struct LiveProposalIntentWalSignHandoffV1 {|before|/// Exact process-local pair of authenticated artifacts proving equivocation.
 region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|work_registry|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|ready_sign|adapter|after|// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN|before|// READY_DURABLE_VALIDATE_LIVE_SIGN_END
@@ -897,8 +910,8 @@ forbidden|live|RecoveredWalFrameIdentity|live WAL seal exposed or reserved forbi
 forbidden|live|!= [0; 32]|live WAL seal exposed or reserved forbidden surface != [0; 32]
 forbidden|live|== [0; 32]|live WAL seal exposed or reserved forbidden surface == [0; 32]
 forbidden|live|is_zero()|live WAL seal exposed or reserved forbidden surface is_zero()
-count|adapter|SealedLiveWalPersistedEffectV1::from_exact_live_append(|3|only recovered Proposal-Prepare, Ready-Validate Sign, and Decision Apply mint live replay authority
-count|adapter|PendingRuntimeEffectBinding::from_exact_live_wal_append(|2|only recovered Proposal-Prepare and Ready-Validate Sign derive frame-bound pending owners
+count|adapter|SealedLiveWalPersistedEffectV1::from_exact_live_append(|4|only local ProposalIntent, recovered Proposal-Prepare, Ready-Validate Sign, and Decision Apply mint live replay authority
+count|adapter|PendingRuntimeEffectBinding::from_exact_live_wal_append(|3|only local ProposalIntent, recovered Proposal-Prepare, and Ready-Validate Sign derive frame-bound pending owners
 count|ready_sign|SealedLiveWalPersistedEffectV1::from_exact_live_append(|1|sealed Ready-Sign must mint exactly one live replay authority
 count|ready_sign|PendingRuntimeEffectBinding::from_exact_live_wal_append(|1|sealed Ready-Sign must derive exactly one frame-bound placeholder owner
 required|ready_sign|LiveWalFrameIdentity::from_append_receipt(|sealed Ready-Sign lost its append receipt identity
@@ -908,6 +921,52 @@ count|runtime|fn from_exact_live_wal_append(|1|runtime must expose exactly one l
 count|work_registry|.complete_exact_apply(|1|only the retained Validate completion supplies an Apply receipt
 forbidden|adapter|RecoveredWalFrameIdentity::for_test|production adapter retained a test-only recovered WAL frame identity
 forbidden|outside|SealedLiveWalPersistedEffectV1|live WAL replay authority escaped its closed production boundary: SealedLiveWalPersistedEffectV1
+end
+case|live_proposal_intent_sign_is_joined_before_generic_effect_dispatch
+region|adapter|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|handoff|adapter|after|pub(crate) struct LiveProposalIntentWalSignHandoffV1 {|before|/// Exact process-local pair of authenticated artifacts proving equivocation.
+region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|executor|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|settlement|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|registry|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|pending|registry|after|enum PendingLiveWalSignAdmissionStateV1 {|before|impl fmt::Debug for PreparedDurableValidateAdmissionV1 {
+region|carrier|registry|after|enum DurableLiveWalSignOriginV1 {|before|/// Closed concrete form of one fsynced recovered WAL `Sign` successor.
+region|runner|runner|after|fn advance_executor(|before|fn reconcile_executor_locked_body(
+required|adapter|pending_live_proposal_intent_sign: Option<Box<LiveProposalIntentWalSignHandoffV1>>|adapter omitted the post-fsync ProposalIntent Sign sidecar
+required|adapter|exactly_binds_payload_free_proposal_sign(|adapter omitted the exact ProposalIntent Sign WAL oracle
+required|adapter|fn take_live_proposal_intent_wal_sign(|adapter omitted the one-shot ProposalIntent Sign handoff
+required|handoff|pub(in crate::sumeragi) fn join_local_proposal(|live ProposalIntent handoff omitted its consuming local-lineage join
+forbidden|handoff|derive(Clone|live ProposalIntent handoff became cloneable
+forbidden|handoff|derive(Copy|live ProposalIntent handoff became copyable
+forbidden|handoff|Encode|live ProposalIntent handoff became codec-constructible
+forbidden|handoff|Decode|live ProposalIntent handoff became codec-constructible
+forbidden|handoff|fn into_parts(|live ProposalIntent handoff exposed raw parts
+required|runtime|fn take_live_proposal_intent_wal_sign(|serialized runtime omitted the positional ProposalIntent Sign handoff
+required|executor|pending_live_wal_sign_admission: Option<PendingLiveWalSignAdmissionV1>|executor omitted the move-only live Sign admission slot
+count|executor|fn take_live_proposal_intent_wal_sign(|2|the runtime trait seam and production override must be the only executor-side live Sign handoffs
+required|executor|handoff.join_local_proposal(replay)|executor omitted the exact WAL/local-lineage join
+required|executor|self.pending_live_wal_sign_admission = Some(pending)|executor omitted live Sign admission retention
+required|executor|self.pending_live_wal_sign_admission.is_none()|height finish omitted live Sign admission debt
+required|executor|usize::from(self.pending_live_wal_sign_admission.is_some())|bounded pending work omitted live Sign admission debt
+required|executor|pending_signatures: self\n                .pending_signatures\n                .len()\n                .saturating_add(usize::from(self.pending_live_wal_sign_admission.is_some()))|status omitted live Sign admission debt
+order|executor|5|.take_live_proposal_intent_wal_sign(&effects)|self.retain_effect_batch_at_frontier(effects, ownership, frontier)|handoff.join_local_proposal(replay)|self.pending_live_wal_sign_admission = Some(pending)|.drain_retained_effect_batch(services, true)|the post-fsync Sign must leave the generic retained batch before generic effect dispatch
+required|settlement|pub(in crate::sumeragi) fn settle_live_wal_sign_admission(|production owner omitted atomic live Sign settlement
+required|registry|ConcreteLifecycleWorkKind::DurableLiveWalSign|registry omitted the dedicated live WAL Sign carrier
+required|pending|pub(in crate::sumeragi) struct PendingLiveWalSignAdmissionV1|registry omitted the move-only pending live Sign owner
+required|pending|PendingLiveWalSignAdmissionStateV1::Prepared(prepared)|pending live Sign owner omitted exact prepared retry retention
+forbidden|pending|derive(Clone|pending live Sign owner became cloneable
+forbidden|pending|derive(Copy|pending live Sign owner became copyable
+forbidden|pending|Encode|pending live Sign owner became codec-constructible
+forbidden|pending|Decode|pending live Sign owner became codec-constructible
+required|carrier|struct DurableLiveWalSignWork|registry omitted the dedicated concrete live Sign carrier
+count|registry|DurableRecoveredLifecycleSignParentV1::Live(sign)|2|both live Sign successor paths must retain their signed Broadcast parent handoff
+forbidden|carrier|derive(Clone|concrete live Sign carrier became cloneable
+forbidden|carrier|derive(Copy|concrete live Sign carrier became copyable
+forbidden|carrier|Encode|concrete live Sign carrier became codec-constructible
+forbidden|carrier|Decode|concrete live Sign carrier became codec-constructible
+count|runner|settle_pending_live_wal_sign_admission(lifecycle_owner, services)|2|runner must settle live Sign admission at both executor seams
+count|runner|settle_pending_lifecycle_output_admissions(lifecycle_owner, services)|2|runner must retain both generic output settlement seams
+order|runner|4|settle_pending_live_wal_sign_admission(lifecycle_owner, services)|settle_pending_lifecycle_output_admissions(lifecycle_owner, services)|settle_pending_live_wal_sign_admission(lifecycle_owner, services)|settle_pending_lifecycle_output_admissions(lifecycle_owner, services)|live WAL Sign admission must precede generic signed-output settlement at both runner seams
 end
 case|live_validate_wal_pre_admissions_are_closed_and_scheduler_owned
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1244,6 +1303,7 @@ region|carrier|registry|after|struct DurableValidateBody {|before|impl DurableVa
 region|validation|registry|after|impl DurableValidateBody {|before|struct DurableValidateCompletion {
 region|common_work|registry|after|impl ConcreteLifecycleWork {|before|pub(super) enum CertifiedFetchCompletionError
 region|live_sign_work|registry|after|pub(in crate::sumeragi) struct PreparedLiveValidateSignRegistryWork {|before|/// Closed pre-mutation failure inventory for certified-Fetch conversion.
+region|live_sign_install|registry|after|impl LiveValidateSignRegistryReservation<'_> {|before|#[cfg_attr(not(test), allow(dead_code))]
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_validate_execution(|before|pub(super) fn classify_ready_validate_carrier(
 region|execution_impl|registry_recovery|after|impl PreparedDurableValidateExecution<'_>|end|-
 region|validate_successor|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|/// Move-only Store projection sealed under its closed Fetch parent
@@ -1288,7 +1348,13 @@ required|live_sign_work|SignRequest::Vote(vote)|opaque live Sign work omitted {r
 required|live_sign_work|wire::GlobalPhase::Prepare \p wire::GlobalPhase::Commit|opaque live Sign work omitted {required}
 required|live_sign_work|ConcreteWorkAddress::new(owner, ordinal, slot)|opaque live Sign work omitted {required}
 required|live_sign_work|PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)|opaque live Sign work omitted {required}
-required|live_sign_work|reservation.install_live_sign(into_live_wal_concrete(self.admission))|opaque live Sign work omitted {required}
+required|live_sign_work|BTreeMap::from([(parent_address.slot, predecessor.digest())])|live Validate Sign predecessor omitted its exact retained terminal slot and digest
+required|live_sign_work|reservation.install_live_sign(self)|opaque live Sign work omitted its consuming registry reservation
+required|live_sign_install|PreparedLifecycleAdmissionOwnerV1::LiveWal(live)|live Validate Sign install omitted its exact live-WAL admission owner
+required|live_sign_install|DurableLiveWalSignOriginV1::Validate {|live Validate Sign install omitted its detached Validate predecessor
+required|live_sign_install|parent: Box::new(parent)|live Validate Sign install omitted the move-only predecessor carrier
+required|live_sign_install|.into_live_sign_work(|live Validate Sign install bypassed the typed durable Sign carrier
+required|live_sign_install|entry.insert(work)|live Validate Sign install omitted the exact post-fsync registry publication
 forbidden|live_sign_work|pub admission:|opaque live Sign work exposes forbidden surface {forbidden}
 forbidden|live_sign_work|work: ConcreteLifecycleWork|opaque live Sign work retained the bypassed concrete carrier
 forbidden|live_sign_work|derive(Clone|opaque live Sign work exposes forbidden surface {forbidden}

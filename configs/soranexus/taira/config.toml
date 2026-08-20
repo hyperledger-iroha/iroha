@@ -1,12 +1,10 @@
 # Sora Taira (testnet) validator configuration
 # Network prefix: `taira`
-# Render a per-validator config first, then start with:
-# `iroha3d --sora --config <rendered-validator-config.toml>`
-# This is the checked-in peer-1 template. Runtime-only validator private keys,
-# SoraNet transport identities, onboarding/faucet authorities, and streaming
-# identity keys must come from a user-local `validator_secrets.local.toml`
-# rendered through:
-# `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`.
+# This is a checked-in product-profile fixture consumed by Kagami and tests.
+# It is not an input to the disposable testnet workflow. Use
+# `python3 scripts/taira_devnet.py up` for a fresh loopback four-peer network.
+# Runtime deployments must inject every private key through their own secret
+# store; never add those values to this file.
 
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 chain_discriminant = 369
@@ -140,11 +138,9 @@ operation_registry_max_bytes = 524288
 
 # The base template deliberately has no active `[settlement.offline]` release
 # paths, so ordinary rendering has no dependency on unpublished artifacts.
-# Once an immutable Kagemusha V4 release is installed on every validator, pass
-# `--kagemusha-release-root /absolute/root-controlled/path` to
-# `render_taira_validator_bundle.py`; the renderer derives the policy, catalog,
-# qualification-seal, and decoded-budget settings outside the validator-owned
-# install root.
+# Runtime deployments that enable settlement must provide their reviewed
+# Kagemusha policy, catalog, qualification seal, and decoded-budget settings
+# through their deployment-specific configuration source.
 
 [torii.account_onboarding]
 authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"

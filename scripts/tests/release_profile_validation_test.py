@@ -513,10 +513,6 @@ def test_legacy_image_workflows_pass_validated_digest_base_refs() -> None:
         "CONFIG_PROFILE=taira",
     ):
         assert retired_taira_path not in custom
-    dedicated_taira = (
-        REPO_ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
-    ).read_text(encoding="utf-8")
-    assert "environment: taira-validator-publish" in dedicated_taira
     for argument_name in (
         "IROHA_MUSL_BUILDER_IMAGE",
         "IROHA_MUSL_RUNTIME_IMAGE",
@@ -562,26 +558,6 @@ def test_release_build_workflow_containers_use_validated_digest_refs() -> None:
         assert "IROHA_CI_IMAGE: ${{ vars.IROHA_CI_IMAGE }}" in source
         assert '--builder "$IROHA_CI_IMAGE"' in source
         assert '--runtime "$IROHA_CI_IMAGE"' in source
-
-    taira = (
-        REPO_ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
-    ).read_text(encoding="utf-8")
-    assert "container:" not in taira
-    assert "docker/build-push-action@" not in taira
-    for runner in (
-        "runs-on: [self-hosted, Linux, ARM64, taira-public-input]",
-        "runs-on: [self-hosted, Linux, ARM64, taira-untrusted-build]",
-        "runs-on: [self-hosted, Linux, ARM64, taira-linux-authority]",
-        "runs-on: [self-hosted, macOS, ARM64, taira-untrusted-build]",
-        "runs-on: [self-hosted, macOS, ARM64, taira-secret-free-qualification]",
-        "runs-on: [self-hosted, macOS, ARM64, taira-candidate-authority]",
-        "runs-on: [self-hosted, macOS, ARM64, taira-deploy]",
-        "runs-on: [self-hosted, macOS, ARM64, taira-publish-authority]",
-    ):
-        assert runner in taira
-    assert "runs-on: [self-hosted, Linux, ARM64, iroha2]" not in taira
-    assert "runs-on: [self-hosted, macOS, ARM64, taira-release]" not in taira
-
 
 def test_fastpq_repro_builder_rejects_mutable_or_missing_base_refs(
     tmp_path: Path,

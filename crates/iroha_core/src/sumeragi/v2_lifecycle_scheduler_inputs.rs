@@ -1208,7 +1208,12 @@ impl ProductionLifecycleOwnerV1 {
             .prepare_ready_durable_validate_execution(&lease, slot, &self.verified)
         {
             Ok(execution) => execution,
-            Err(_) => {
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "Ready Validate registry execution projection failed"
+                );
                 self.rollback_ready_validate_publication(&lease);
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
@@ -1217,12 +1222,14 @@ impl ProductionLifecycleOwnerV1 {
             Ok(preview) => preview,
             Err(error) => {
                 drop(error);
+                iroha_logger::error!(ordinal, "Ready Validate serialized adapter preview failed");
                 self.rollback_ready_validate_publication(&lease);
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
         };
         use crate::sumeragi::v2::ReadyDurableValidateAdapterPublicationKind as Kind;
-        match preview.publication_kind() {
+        let publication_kind = preview.publication_kind();
+        match publication_kind {
             Kind::ValidatedBusy | Kind::RejectedBusy => {
                 let Some((context_id, generation)) = preview.busy_reducer_fence() else {
                     drop(preview);
@@ -1254,11 +1261,19 @@ impl ProductionLifecycleOwnerV1 {
                     Ok(transition) => transition,
                     Err(error) => {
                         drop(error);
+                        iroha_logger::error!(
+                            ordinal,
+                            "Ready Validate no-successor transition preparation failed"
+                        );
                         self.rollback_ready_validate_publication(&lease);
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
                 };
                 if transition.persist_and_publish().is_err() {
+                    iroha_logger::error!(
+                        ordinal,
+                        "Ready Validate no-successor transaction publication failed"
+                    );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
                 Ok(ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal })
@@ -1268,6 +1283,7 @@ impl ProductionLifecycleOwnerV1 {
                     Ok(publication) => publication,
                     Err(error) => {
                         drop(error);
+                        iroha_logger::error!(ordinal, "Ready Validate Sign WAL seal failed");
                         self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
@@ -1280,11 +1296,19 @@ impl ProductionLifecycleOwnerV1 {
                     Ok(transition) => transition,
                     Err(error) => {
                         drop(error);
+                        iroha_logger::error!(
+                            ordinal,
+                            "Ready Validate-to-Sign transition preparation failed"
+                        );
                         self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
                 };
                 if transition.persist_and_publish().is_err() {
+                    iroha_logger::error!(
+                        ordinal,
+                        "Ready Validate-to-Sign transaction publication failed"
+                    );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
@@ -1297,6 +1321,10 @@ impl ProductionLifecycleOwnerV1 {
                     Ok(report) => report,
                     Err(error) => {
                         drop(error);
+                        iroha_logger::error!(
+                            ordinal,
+                            "Ready Validate invalid-body report seal failed"
+                        );
                         self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
@@ -1309,11 +1337,19 @@ impl ProductionLifecycleOwnerV1 {
                     Ok(transition) => transition,
                     Err(error) => {
                         drop(error);
+                        iroha_logger::error!(
+                            ordinal,
+                            "Ready Validate-to-report transition preparation failed"
+                        );
                         self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
                 };
                 if transition.persist_and_publish().is_err() {
+                    iroha_logger::error!(
+                        ordinal,
+                        "Ready Validate-to-report transaction publication failed"
+                    );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
@@ -1326,6 +1362,7 @@ impl ProductionLifecycleOwnerV1 {
                     Ok(publication) => publication,
                     Err(error) => {
                         drop(error);
+                        iroha_logger::error!(ordinal, "Ready Validate Apply WAL seal failed");
                         self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
@@ -1338,11 +1375,19 @@ impl ProductionLifecycleOwnerV1 {
                     Ok(transition) => transition,
                     Err(error) => {
                         drop(error);
+                        iroha_logger::error!(
+                            ordinal,
+                            "Ready Validate-to-Apply transition preparation failed"
+                        );
                         self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
                 };
                 if transition.persist_and_publish().is_err() {
+                    iroha_logger::error!(
+                        ordinal,
+                        "Ready Validate-to-Apply transaction publication failed"
+                    );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
@@ -1478,7 +1523,12 @@ impl ProductionLifecycleOwnerV1 {
             .prepare_durable_store_execution(&lease, slot, &self.verified)
         {
             Ok(execution) => execution,
-            Err(_) => {
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "lifecycle Store registry execution projection failed"
+                );
                 assert!(self.coordinator.rollback_unpublished_turn(&lease));
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
@@ -1520,8 +1570,17 @@ impl ProductionLifecycleOwnerV1 {
                 }
                 return Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal });
             }
-            Ok(crate::sumeragi::v2::DurableStoreValidateAdapterPreparationV1::Inactive)
-            | Err(_) => {
+            Ok(crate::sumeragi::v2::DurableStoreValidateAdapterPreparationV1::Inactive) => {
+                iroha_logger::error!(
+                    ordinal,
+                    "lifecycle Store adapter preview classified the row inactive"
+                );
+                drop(execution);
+                assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+            }
+            Err(error) => {
+                iroha_logger::error!(?error, ordinal, "lifecycle Store adapter preview failed");
                 drop(execution);
                 assert!(self.coordinator.rollback_unpublished_turn(&lease));
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
@@ -1529,7 +1588,12 @@ impl ProductionLifecycleOwnerV1 {
         };
         let successor = match execution.seal_validate_successor(adapter) {
             Ok(successor) => successor,
-            Err(_) => {
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "lifecycle Store-to-Validate successor sealing failed"
+                );
                 assert!(self.coordinator.rollback_unpublished_turn(&lease));
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
@@ -1540,7 +1604,12 @@ impl ProductionLifecycleOwnerV1 {
             successor,
         ) {
             Ok(transition) => transition,
-            Err(_) => {
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "lifecycle Store-to-Validate transition preparation failed"
+                );
                 assert!(self.coordinator.rollback_unpublished_turn(&lease));
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
@@ -1553,7 +1622,12 @@ impl ProductionLifecycleOwnerV1 {
                 "durable Store publication output is closed".to_owned(),
             ));
         };
-        if transition.persist_exact_successor().is_err() {
+        if let Err(error) = transition.persist_exact_successor() {
+            iroha_logger::error!(
+                ?error,
+                ordinal,
+                "lifecycle Store-to-Validate LedgerV1 publication failed"
+            );
             drop(transition);
             self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
             drop(operation);

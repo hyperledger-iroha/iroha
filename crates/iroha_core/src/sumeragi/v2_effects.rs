@@ -92,7 +92,8 @@ use super::{
     message::BlockMessage,
     output_guard::ConsensusOutputGuard,
     v2::{
-        AdapterEffect, AdapterError, PreparedRecoveredDecisionApplyAdapterCompletionV1,
+        AdapterEffect, AdapterError, LiveProposalIntentWalSignHandoffV1,
+        PreparedRecoveredDecisionApplyAdapterCompletionV1,
         RecoveredDecisionApplyAdapterCompletionAuthorityV1,
         RecoveredDecisionApplyAdapterFinalityV1, RecoveredLifecycleNextVoteBodyAuthorityV1,
         RecoveredLifecycleNextVoteBodyLookupV1, SignRequest,
@@ -107,14 +108,15 @@ use super::{
     },
     v2_lifecycle_coordinator::{
         AdmissionDecision, LifecycleOutputAdmissionKeyV1, PendingDurableValidateAdmissionV1,
-        PendingLifecycleOutputAdmissionV1, PreparedLocalBodyValidateReplayPreAdmission,
-        PreparedRemoteProposalFetchReplayPreAdmission,
+        PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
+        PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,
         PreparedRemoteProposalStoreReplayPreAdmission,
         PreparedRemoteProposalStoredReplayPreAdmission,
         ProductionDurableValidateAdmissionSettlementV1,
         ProductionLifecycleLiveClockActivationPermitV1,
         ProductionLifecycleOutputAdmissionFailureV1,
         ProductionLifecycleOutputAdmissionSettlementV1, ProductionLifecycleOwnerV1,
+        ProductionLiveWalSignAdmissionFailureV1, ProductionLiveWalSignAdmissionSettlementV1,
         RecoveredDecisionApplyDispatchKeyV1,
     },
     v2_recovery::PendingKuraApply,
@@ -2718,6 +2720,14 @@ pub(crate) trait EffectRuntime {
         &mut self,
         effects: &[AdapterEffect],
     ) -> Result<Vec<RuntimeEffectOwnership>, String>;
+    /// Consume an exact live ProposalIntent WAL Sign sidecar, when the runtime
+    /// produces one. Synthetic runtimes never mint production WAL authority.
+    fn take_live_proposal_intent_wal_sign(
+        &mut self,
+        _effects: &[AdapterEffect],
+    ) -> Result<Option<LiveProposalIntentWalSignHandoffV1>, String> {
+        Ok(None)
+    }
     /// Consume the exact receiver-side terminal sidecar emitted by the same
     /// serialized transition. A later runtime step cannot overtake it.
     fn take_leader_wire_runtime_terminals(
@@ -3010,6 +3020,13 @@ impl EffectRuntime for SerializedV2Runtime {
         effects: &[AdapterEffect],
     ) -> Result<Vec<RuntimeEffectOwnership>, String> {
         SerializedV2Runtime::take_effect_ownership(self, effects.len())
+    }
+    fn take_live_proposal_intent_wal_sign(
+        &mut self,
+        effects: &[AdapterEffect],
+    ) -> Result<Option<LiveProposalIntentWalSignHandoffV1>, String> {
+        SerializedV2Runtime::take_live_proposal_intent_wal_sign(self, effects)
+            .map_err(|error| error.to_string())
     }
     fn take_leader_wire_runtime_terminals(
         &mut self,
@@ -3326,6 +3343,8 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// Durable local/remote Validate owners awaiting the sole lifecycle cut.
     pending_durable_validate_admissions:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), PendingDurableValidateAdmissionV1>,
+    /// One fsynced ProposalIntent Sign waiting for lifecycle admission.
+    pending_live_wal_sign_admission: Option<PendingLiveWalSignAdmissionV1>,
     /// Signed/diagnostic outputs awaiting exact lifecycle-row execution.
     pending_lifecycle_output_admissions:
         BTreeMap<LifecycleOutputAdmissionKeyV1, PendingLifecycleOutputAdmissionV1>,
@@ -3559,233 +3578,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 
 include!("v2_effects_recovered_lifecycle_output_service.rs");
 
+include!("v2_effects_lifecycle_admission_settlement.rs");
+
 impl V2EffectExecutor<SerializedV2Runtime> {
-    /// Return whether a signed/diagnostic output is parked at the lifecycle cut.
-    pub(in crate::sumeragi) fn has_pending_lifecycle_output_admissions(&self) -> bool {
-        !self.pending_lifecycle_output_admissions.is_empty()
-    }
-
-    /// Execute the exact output service callback after lifecycle ordering grants the row.
-    fn execute_lifecycle_output_service<S: V2EffectServices>(
-        &mut self,
-        effect: &AdapterEffect,
-        ownership: &RuntimeEffectOwnership,
-        services: &mut S,
-    ) -> Result<(), EffectExecutorError> {
-        match effect {
-            AdapterEffect::Broadcast(message) => {
-                message
-                    .validate_version()
-                    .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
-                let proposal_round = match &message.payload {
-                    wire::ConsensusMessageV2Payload::Proposal(proposal) => {
-                        if proposal.round.context_id != self.context.id()
-                            || proposal.round.height != self.context.height
-                        {
-                            return Err(EffectExecutorError::Contract(
-                                "outbound Proposal changed the frozen height context".to_owned(),
-                            ));
-                        }
-                        Some(proposal.round)
-                    }
-                    _ => None,
-                };
-                let disposition = services
-                    .broadcast_consensus(message.clone())
-                    .map_err(service_error)?;
-                if let Some(proposal_round) = proposal_round
-                    && disposition == ConsensusBroadcastDisposition::ExactServiceAccepted
-                {
-                    self.runtime
-                        .complete_active_view_producer_after_proposal_fanout(
-                            proposal_round,
-                            ownership,
-                        )
-                        .map_err(EffectExecutorError::Runtime)?;
-                }
-                Ok(())
-            }
-            AdapterEffect::ReportEquivocation { evidence } => {
-                evidence
-                    .validate_structure(&self.context)
-                    .map_err(|reason| {
-                        EffectExecutorError::Contract(format!(
-                            "ReportEquivocation carried invalid evidence: {reason}"
-                        ))
-                    })?;
-                services
-                    .report_equivocation(evidence.to_wire())
-                    .map_err(service_error)
-            }
-            AdapterEffect::ReportInvalidCertifiedBody {
-                subject,
-                certificate,
-            } => services
-                .report_invalid_certified_body(*subject, certificate.clone())
-                .map_err(service_error),
-            AdapterEffect::Sign { .. }
-            | AdapterEffect::FetchBody { .. }
-            | AdapterEffect::StoreBody { .. }
-            | AdapterEffect::ValidateBody { .. }
-            | AdapterEffect::Apply { .. }
-            | AdapterEffect::EnterView { .. } => Err(EffectExecutorError::Contract(
-                "non-output effect crossed the lifecycle output settlement seam".to_owned(),
-            )),
-        }
-    }
-    /// Settle each initially parked lifecycle output once in binding-key order.
-    pub(in crate::sumeragi) fn settle_pending_lifecycle_output_admissions<S: V2EffectServices>(
-        &mut self,
-        owner: &mut ProductionLifecycleOwnerV1,
-        services: &mut S,
-    ) -> Result<usize, EffectExecutorError> {
-        self.ensure_open()?;
-        let keys = self
-            .pending_lifecycle_output_admissions
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        let mut completed = 0usize;
-        for key in keys {
-            let Some(pending) = self.pending_lifecycle_output_admissions.remove(&key) else {
-                continue;
-            };
-            let settlement =
-                owner.settle_lifecycle_output_admission(pending, |effect, ownership| {
-                    self.execute_lifecycle_output_service(effect, ownership, services)
-                });
-            match settlement {
-                ProductionLifecycleOutputAdmissionSettlementV1::Completed
-                | ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted => {
-                    completed = completed.saturating_add(1);
-                }
-                ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending) => {
-                    let previous = self
-                        .pending_lifecycle_output_admissions
-                        .insert(key, pending);
-                    debug_assert!(previous.is_none());
-                }
-                ProductionLifecycleOutputAdmissionSettlementV1::Failed { failure, pending } => {
-                    let previous = self
-                        .pending_lifecycle_output_admissions
-                        .insert(key, pending);
-                    debug_assert!(previous.is_none());
-                    let error = match failure {
-                        ProductionLifecycleOutputAdmissionFailureV1::Service(error) => error,
-                        ProductionLifecycleOutputAdmissionFailureV1::Projection(error) => {
-                            EffectExecutorError::Contract(format!(
-                                "lifecycle output admission projection failed: {error:?}"
-                            ))
-                        }
-                        ProductionLifecycleOutputAdmissionFailureV1::Registry => {
-                            EffectExecutorError::Contract(
-                                "lifecycle output registry settlement failed".to_owned(),
-                            )
-                        }
-                        ProductionLifecycleOutputAdmissionFailureV1::Durability => {
-                            EffectExecutorError::Contract(
-                                "lifecycle output terminal publication failed".to_owned(),
-                            )
-                        }
-                    };
-                    return Err(self.close(error, services));
-                }
-            }
-        }
-        Ok(completed)
-    }
-
-    /// Return whether an exact durable Validate owner is parked at lifecycle admission.
-    pub(in crate::sumeragi) fn has_pending_durable_validate_admissions(&self) -> bool {
-        !self.pending_durable_validate_admissions.is_empty()
-    }
-
-    /// Settle each currently pending durable Validate owner once, in body-key order.
-    ///
-    /// Capacity waits restore the exact move-only owner. An exact logical
-    /// `Retry` consumes the duplicate because the incumbent ordinal and
-    /// registry carrier already own execution. Any other non-committing
-    /// decision is a production invariant violation and closes the shared
-    /// output gate while preserving the pending owner for restart diagnosis.
-    pub(in crate::sumeragi) fn settle_pending_durable_validate_admissions<S: V2EffectServices>(
-        &mut self,
-        owner: &mut ProductionLifecycleOwnerV1,
-        services: &mut S,
-    ) -> Result<usize, EffectExecutorError> {
-        self.ensure_open()?;
-        let pending_keys = self
-            .pending_durable_validate_admissions
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        let mut made_ready = 0usize;
-        for key in pending_keys {
-            let Some(pending) = self.pending_durable_validate_admissions.remove(&key) else {
-                continue;
-            };
-            match owner.settle_durable_validate_admission(pending) {
-                ProductionDurableValidateAdmissionSettlementV1::Admitted(
-                    AdmissionDecision::Admitted { .. },
-                )
-                | ProductionDurableValidateAdmissionSettlementV1::Rebound(
-                    AdmissionDecision::Retry { .. },
-                ) => {
-                    made_ready = made_ready.saturating_add(1);
-                }
-                ProductionDurableValidateAdmissionSettlementV1::Admitted(decision)
-                | ProductionDurableValidateAdmissionSettlementV1::Rebound(decision) => {
-                    return Err(self.close(
-                        EffectExecutorError::Contract(format!(
-                            "durable Validate settlement committed an invalid logical decision: {decision:?}"
-                        )),
-                        services,
-                    ));
-                }
-                ProductionDurableValidateAdmissionSettlementV1::Returned {
-                    decision: AdmissionDecision::WaitForCapacity(_),
-                    pending,
-                } => {
-                    let previous = self
-                        .pending_durable_validate_admissions
-                        .insert(key, pending);
-                    debug_assert!(previous.is_none());
-                }
-                ProductionDurableValidateAdmissionSettlementV1::Returned {
-                    decision:
-                        AdmissionDecision::Retry { .. }
-                        | AdmissionDecision::ReplayTerminal { .. }
-                        | AdmissionDecision::StutterTerminal { .. },
-                    pending: _,
-                } => {}
-                ProductionDurableValidateAdmissionSettlementV1::Returned { decision, pending } => {
-                    let previous = self
-                        .pending_durable_validate_admissions
-                        .insert(key, pending);
-                    debug_assert!(previous.is_none());
-                    return Err(self.close(
-                        EffectExecutorError::Contract(format!(
-                            "durable Validate admission returned a terminally invalid decision: {decision:?}"
-                        )),
-                        services,
-                    ));
-                }
-                ProductionDurableValidateAdmissionSettlementV1::Failed { failure, pending } => {
-                    let previous = self
-                        .pending_durable_validate_admissions
-                        .insert(key, pending);
-                    debug_assert!(previous.is_none());
-                    return Err(self.close(
-                        EffectExecutorError::Contract(format!(
-                            "durable Validate admission failed before commit: {failure:?}"
-                        )),
-                        services,
-                    ));
-                }
-            }
-        }
-        Ok(made_ready)
-    }
-
     /// Take ownership of an exact-body store opened during sealed preflight.
     ///
     /// Production uses this entry point after independently inspecting the
@@ -4021,10 +3816,34 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         super::v2_lifecycle_coordinator::PreparedReadyDurableValidateAdapterPreview<'registry, '_>,
         super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError<'registry>,
     > {
+        let mut execution = execution;
+        let validated_catalog_authority = execution.take_validated_catalog_authority();
+        if matches!(
+            execution.outcome_kind(),
+            super::v2_lifecycle_coordinator::ReadyDurableValidateOutcomeKind::Validated
+        ) != validated_catalog_authority.is_some()
+        {
+            return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
+                execution,
+                AdapterError::ReadyDurableValidatePublicationContractViolation,
+            ));
+        }
+        if let Some(authority) = validated_catalog_authority
+            && let Err(error) = self.record_lifecycle_validated_body(authority)
+        {
+            self.fatal_reason = Some(error.to_string());
+            return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
+                execution,
+                AdapterError::ReadyDurableValidatePublicationContractViolation,
+            ));
+        }
         let local_handoff = execution.project_local_proposal_ready();
         let local_publication = match local_handoff.as_ref() {
             Some(handoff) => {
                 let Some(identity) = handoff.command_identity() else {
+                    iroha_logger::error!(
+                        "local Ready Validate handoff could not derive its exact runtime identity"
+                    );
                     return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
                         execution,
                         AdapterError::ReadyDurableValidatePublicationContractViolation,
@@ -4040,6 +3859,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         {
             Ok(kind) => kind,
             Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    "Ready Validate adapter publication preflight failed"
+                );
                 return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
                     execution,
                     error,
@@ -4056,6 +3879,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             self.fatal_reason = Some(
                 "local lifecycle Validate produced a nonterminal reducer publication".to_owned(),
             );
+            iroha_logger::error!(
+                ?preflight_kind,
+                "local Ready Validate preflight produced a nonterminal reducer publication"
+            );
             return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
                 execution,
                 AdapterError::ReadyDurableValidatePublicationContractViolation,
@@ -4065,6 +3892,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             Some(handoff) => match handoff.publish_into_runtime(&mut self.runtime) {
                 Ok(published) => Some(published),
                 Err(_) => {
+                    iroha_logger::error!(
+                        "local Ready Validate handoff failed exact runtime publication"
+                    );
                     return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
                         execution,
                         AdapterError::ReadyDurableValidatePublicationContractViolation,
@@ -4090,6 +3920,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                         "lifecycle local-proposal publication conflicted with retained replay authority"
                             .to_owned(),
                     );
+                    iroha_logger::error!(
+                        "local Ready Validate publication conflicted with retained replay authority"
+                    );
                     return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
                         execution,
                         AdapterError::ReadyDurableValidatePublicationContractViolation,
@@ -4101,9 +3934,18 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 debug_assert!(previous.is_none());
             }
         }
-        let preview = self
+        let preview = match self
             .runtime
-            .prepare_ready_durable_validate_adapter_preview(execution, local_publication)?;
+            .prepare_ready_durable_validate_adapter_preview(execution, local_publication)
+        {
+            Ok(preview) => preview,
+            Err(error) => {
+                iroha_logger::error!(
+                    "Ready Validate adapter preview failed after local publication"
+                );
+                return Err(error);
+            }
+        };
         if preview.publication_kind() != preflight_kind
             || (has_local_publication
                 && !matches!(
@@ -4111,15 +3953,72 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     Kind::ValidatedInactive | Kind::ValidatedNoEffect
                 ))
         {
+            let published_kind = preview.publication_kind();
             let error = preview.into_runtime_gate_error(
                 AdapterError::ReadyDurableValidatePublicationContractViolation,
             );
             self.fatal_reason = Some(
                 "local lifecycle Validate produced a nonterminal reducer publication".to_owned(),
             );
+            iroha_logger::error!(
+                ?preflight_kind,
+                ?published_kind,
+                "Ready Validate adapter publication changed after preflight"
+            );
             return Err(error);
         }
         Ok(preview)
+    }
+
+    /// Restore one live lifecycle validation marker to the executor catalog.
+    ///
+    /// Durable validation has already fsynced this receipt. The move-only Ready
+    /// authority is available for local and remote origins alike; this join
+    /// runs before any successor can emit a Vote and is idempotent for retries.
+    fn record_lifecycle_validated_body(
+        &mut self,
+        authority: super::v2_lifecycle_coordinator::ReadyValidatedExecutorCatalogAuthorityV1,
+    ) -> Result<(), EffectExecutorError> {
+        let validated = authority.into_validated_receipt();
+        let durable = validated.durable();
+        let key = (durable.round(), durable.subject());
+        let retained_body_is_exact =
+            self.recovered_bodies
+                .get(&key)
+                .is_some_and(|(retained_manifest, retained)| {
+                    retained == durable
+                        && retained_manifest.round == durable.round()
+                        && retained_manifest.subject == durable.subject()
+                        && HashOf::new(retained_manifest) == durable.manifest_hash()
+                });
+        if durable.context_id() != self.context.id()
+            || !retained_body_is_exact
+            || self.durable_bodies.get(&key) != Some(durable)
+        {
+            return Err(EffectExecutorError::BodyStore(
+                "lifecycle validation marker differs from its exact durable body catalogs"
+                    .to_owned(),
+            ));
+        }
+        if self.rejected_bodies.contains_key(&key)
+            || self.retired_rejected_bodies.contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "one exact durable body produced both validated and rejected outcomes".to_owned(),
+            ));
+        }
+        match self.validated_bodies.entry(key) {
+            Entry::Vacant(slot) => {
+                slot.insert(validated);
+            }
+            Entry::Occupied(slot) if slot.get() == &validated => {}
+            Entry::Occupied(_) => {
+                return Err(EffectExecutorError::BodyStore(
+                    "one exact durable body produced conflicting validation receipts".to_owned(),
+                ));
+            }
+        }
+        Ok(())
     }
     /// Preview one exact lifecycle-owned signature on the serialized adapter.
     pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(
@@ -4421,6 +4320,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             && self.parked_effect_batch.is_none()
             && self.remote_proposal_replay.is_empty()
             && self.pending_durable_validate_admissions.is_empty()
+            && self.pending_live_wal_sign_admission.is_none()
             && self.pending_lifecycle_output_admissions.is_empty()
             && self.recovered_decision_fetch_request_index_is_exact_and_empty()
             && self.runtime.queued_commands() == 0
@@ -4843,6 +4743,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             local_store_replay: BTreeMap::new(),
             remote_proposal_replay: BTreeMap::new(),
             pending_durable_validate_admissions: BTreeMap::new(),
+            pending_live_wal_sign_admission: None,
             pending_lifecycle_output_admissions: BTreeMap::new(),
             local_proposal_ready_replay: BTreeMap::new(),
             local_proposal_intent_replay: BTreeMap::new(),
@@ -5133,6 +5034,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         {
             return Err(EffectExecutorError::Contract(
                 "protected-lock cleanup cannot retire a parked lifecycle Validate admission"
+                    .to_owned(),
+            ));
+        }
+        if self.pending_live_wal_sign_admission.is_some() {
+            return Err(EffectExecutorError::Contract(
+                "protected-lock cleanup cannot overtake a parked live WAL Sign admission"
                     .to_owned(),
             ));
         }
@@ -5463,9 +5370,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let local_proposal_replay_projections = self
             .plan_local_proposal_replay_consumptions(&effects, &ownership)
             .map_err(|error| self.close(error, services))?;
+        let mut live_proposal_sign = self
+            .runtime
+            .take_live_proposal_intent_wal_sign(&effects)
+            .map_err(|error| EffectExecutorError::Runtime(error.to_string()))
+            .map_err(|error| self.close(error, services))?;
         if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
             return Err(self.close(error, services));
         }
+        let mut lifecycle_handoffs = 0usize;
         for projection in local_proposal_replay_projections {
             let ready = self
                 .local_proposal_ready_replay
@@ -5495,24 +5408,78 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
             };
-            let duplicate = match self
-                .local_proposal_intent_replay
-                .entry(projection.command_identity)
-            {
-                Entry::Vacant(slot) => {
-                    slot.insert(replay);
-                    false
+            if let Some(handoff) = live_proposal_sign.take() {
+                if self.pending_live_wal_sign_admission.is_some() {
+                    return Err(self.close(
+                        EffectExecutorError::Contract(
+                            "one live WAL Sign admission overtook its predecessor".to_owned(),
+                        ),
+                        services,
+                    ));
                 }
-                Entry::Occupied(_) => true,
-            };
-            if duplicate {
-                return Err(self.close(
-                    EffectExecutorError::Contract(
-                        "one local ProposalIntent acquired duplicate replay authority".to_owned(),
-                    ),
-                    services,
-                ));
+                let pending = match handoff.join_local_proposal(replay) {
+                    Ok(pending) => pending,
+                    Err((_handoff, _replay)) => {
+                        return Err(self.close(
+                            EffectExecutorError::Contract(
+                                "local ProposalIntent WAL owner changed before lifecycle handoff"
+                                    .to_owned(),
+                            ),
+                            services,
+                        ));
+                    }
+                };
+                let retained = self
+                    .retained_effect_batch
+                    .as_mut()
+                    .and_then(|batch| batch.effects.pop_front());
+                if !retained.is_some_and(|owned| {
+                    owned.effect == projection.effect && owned.ownership == projection.ownership
+                }) || self
+                    .retained_effect_batch
+                    .as_ref()
+                    .is_some_and(|batch| !batch.effects.is_empty())
+                {
+                    return Err(self.close(
+                        EffectExecutorError::Contract(
+                            "live ProposalIntent handoff did not own the exact retained batch"
+                                .to_owned(),
+                        ),
+                        services,
+                    ));
+                }
+                self.retained_effect_batch = None;
+                self.pending_live_wal_sign_admission = Some(pending);
+                lifecycle_handoffs = lifecycle_handoffs.saturating_add(1);
+            } else {
+                let duplicate = match self
+                    .local_proposal_intent_replay
+                    .entry(projection.command_identity)
+                {
+                    Entry::Vacant(slot) => {
+                        slot.insert(replay);
+                        false
+                    }
+                    Entry::Occupied(_) => true,
+                };
+                if duplicate {
+                    return Err(self.close(
+                        EffectExecutorError::Contract(
+                            "one local ProposalIntent acquired duplicate replay authority"
+                                .to_owned(),
+                        ),
+                        services,
+                    ));
+                }
             }
+        }
+        if live_proposal_sign.is_some() {
+            return Err(self.close(
+                EffectExecutorError::Contract(
+                    "ProposalIntent WAL sidecar had no exact local replay companion".to_owned(),
+                ),
+                services,
+            ));
         }
         if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
             return Err(self.close_after_transferring_runtime_terminals(error, services));
@@ -5526,7 +5493,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
             return Err(self.close(error, services));
         }
-        Ok(count)
+        Ok(count.saturating_add(lifecycle_handoffs))
     }
     fn plan_local_proposal_replay_consumptions(
         &self,
@@ -9010,7 +8977,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .map(PendingKuraApplyRecoveryEvidence::stage),
             pending_tip_recovery_attempts: self.pending_tip_recovery_attempts,
             pending_tip_recovery_last_result: self.pending_tip_recovery_last_result,
-            pending_signatures: self.pending_signatures.len(),
+            pending_signatures: self
+                .pending_signatures
+                .len()
+                .saturating_add(usize::from(self.pending_live_wal_sign_admission.is_some())),
             // The production service overlays its height-local disk acquisition
             // ownership when this executor snapshot crosses that boundary.
             pending_candidate_loads: 0,
@@ -11646,6 +11616,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         if !self.pending_durable_validate_admissions.is_empty()
+            || self.pending_live_wal_sign_admission.is_some()
             || !self.pending_lifecycle_output_admissions.is_empty()
         {
             return Err(EffectExecutorError::Contract(
@@ -12221,6 +12192,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.preflight_certified_fetch_indexes()?;
         self.preflight_exact_body_byte_accounting()?;
         if !self.pending_durable_validate_admissions.is_empty()
+            || self.pending_live_wal_sign_admission.is_some()
             || !self.pending_lifecycle_output_admissions.is_empty()
         {
             return Err(EffectExecutorError::Contract(
@@ -12616,6 +12588,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .checked_add(self.pending_fetches.len())
             .and_then(|total| total.checked_add(self.pending_stores.len()))
             .and_then(|total| total.checked_add(self.pending_durable_validate_admissions.len()))
+            .and_then(|total| {
+                total.checked_add(usize::from(self.pending_live_wal_sign_admission.is_some()))
+            })
             .and_then(|total| total.checked_add(self.pending_lifecycle_output_admissions.len()))
             .and_then(|total| total.checked_add(self.pending_applications.len()))
             .unwrap_or(usize::MAX)

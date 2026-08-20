@@ -132,6 +132,8 @@ struct FakeRuntime {
         (EventTag, HashOf<wire::PayloadManifest>),
         crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment,
     >,
+    exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
+    live_proposal_intent_wal_sign: Option<(AdapterEffect, LiveProposalIntentWalSignHandoffV1)>,
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
     terminal_body_candidate_commits: usize,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
@@ -313,6 +315,14 @@ impl EffectRuntime for FakeRuntime {
         if effects.is_empty() {
             return Ok(Vec::new());
         }
+        if let Some((expected, ownership)) = self.exact_effect_ownership.take() {
+            if effects == core::slice::from_ref(&expected)
+                && ownership.exactly_binds_adapter_effect(&expected)
+            {
+                return Ok(vec![ownership]);
+            }
+            return Err("fake exact effect ownership changed before transfer".to_owned());
+        }
         let mut ownership = Vec::with_capacity(effects.len());
         for effect in effects {
             let local = match effect {
@@ -328,6 +338,18 @@ impl EffectRuntime for FakeRuntime {
             ownership.push(local.unwrap_or_else(|| self.test_effect_ownership(effect)));
         }
         bind_adapter_effect_batch_ownership(effects, ownership)
+    }
+    fn take_live_proposal_intent_wal_sign(
+        &mut self,
+        effects: &[AdapterEffect],
+    ) -> Result<Option<LiveProposalIntentWalSignHandoffV1>, String> {
+        let Some((expected, handoff)) = self.live_proposal_intent_wal_sign.take() else {
+            return Ok(None);
+        };
+        if effects != core::slice::from_ref(&expected) {
+            return Err("fake live ProposalIntent WAL Sign batch changed".to_owned());
+        }
+        Ok(Some(handoff))
     }
     fn take_leader_wire_runtime_terminals(
         &mut self,

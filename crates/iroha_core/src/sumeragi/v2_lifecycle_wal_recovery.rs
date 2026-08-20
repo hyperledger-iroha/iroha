@@ -749,6 +749,70 @@ fn project_recovered_signed_broadcast(
         .validates_from_sign(verified, sign_effect, sign_pending)
         .then_some(projection)
 }
+
+/// Rejoin one adapter-authenticated live Sign completion to the exact
+/// post-fsync WAL parent retained by the concrete registry carrier.
+///
+/// The adapter authority is consumed here because this module alone can mint
+/// the projection permit. Callers receive only the dispatch identity and the
+/// closed Broadcast projection; neither the signed effect nor its pending
+/// binding is released separately.
+pub(super) fn project_live_wal_sign_signed_broadcast(
+    sign_effect: &AdapterEffect,
+    sign_pending: &PendingRuntimeEffectBinding,
+    verified: &VerifiedHeightContext,
+    authority: crate::sumeragi::v2::RecoveredLifecycleSignBroadcastProjectionAuthorityV1,
+) -> Option<(
+    super::work_registry::RecoveredLifecycleSignDispatchKeyV1,
+    RecoveredLifecycleSignedBroadcastProjectionV1,
+)> {
+    let (key, broadcast) = authority
+        .consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+    let projection =
+        project_recovered_signed_broadcast(verified, sign_effect, sign_pending, &broadcast)?;
+    Some((key, projection))
+}
+
+/// Recheck a retained live Broadcast without exposing the projection's
+/// private effect or pending binding.
+pub(super) fn live_wal_sign_matches_signed_broadcast(
+    sign_effect: &AdapterEffect,
+    sign_pending: &PendingRuntimeEffectBinding,
+    verified: &VerifiedHeightContext,
+    broadcast: &RecoveredLifecycleSignedBroadcastProjectionV1,
+) -> bool {
+    broadcast.validates_from_sign(verified, sign_effect, sign_pending)
+}
+
+/// Rejoin one adapter-authenticated live Sign completion to its exact
+/// Broadcast and follow-on WAL Vote pair.
+pub(super) fn project_live_wal_sign_signed_broadcast_and_sign(
+    sign_effect: &AdapterEffect,
+    sign_pending: &PendingRuntimeEffectBinding,
+    verified: &VerifiedHeightContext,
+    authority: crate::sumeragi::v2::RecoveredLifecycleSignBroadcastAndSignAuthorityV1,
+) -> Option<(
+    super::work_registry::RecoveredLifecycleSignDispatchKeyV1,
+    RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+)> {
+    let (key, broadcast, next_sign) = authority
+        .consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+    if !next_sign.matches_verified_height(verified) {
+        return None;
+    }
+    let next_sign =
+        project_recovered_lifecycle_next_wal_vote_candidate(verified, next_sign).ok()?;
+    let broadcast =
+        project_recovered_signed_broadcast(verified, sign_effect, sign_pending, &broadcast)?;
+    let projection = RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
+        broadcast,
+        next_sign,
+        cold_adapter_authority_minted: false,
+    };
+    projection
+        .children_are_exact(verified)
+        .then_some((key, projection))
+}
 /// Rejoin one adapter-authenticated signed Broadcast to its exact standalone
 /// recovered WAL Vote without exposing either projection's constituent parts.
 pub(super) fn project_recovered_next_wal_vote_signed_broadcast(

@@ -1,225 +1,132 @@
 ---
 name: sora-taira-testnet
-description: "Work against the SORA Taira testnet through its deployed Torii MCP endpoint for live account, asset, alias, contract, governance, Musubi package-registry, and transaction workflows. Use when Codex needs to inspect or mutate the Taira testnet, verify or add `https://taira.sora.org/v1/mcp`, prefer the curated `iroha.*` tool surface, classify Taira ingress and chain-health failures correctly, or handle runtime-only signing inputs such as `authority` and `private_key`."
+description: "Work against the SORA Taira testnet through its deployed Torii MCP endpoint, or operate the repository's disposable four-validator Taira devnet. Use for live account, asset, alias, contract, governance, Musubi, transaction, endpoint-health, and local deployment workflows."
 ---
 
 # SORA Taira Testnet
 
-Use the Taira testnet through native Torii MCP.
+Use current compiled Iroha surfaces and native Torii MCP. Do not reconstruct
+API contracts in shell scripts.
 
-## Quick Start
+## Select the workflow
 
-1. Confirm a Taira MCP server is available in the current Codex environment.
-2. Treat `https://taira.sora.org` as the primary public Torii/API origin on the current deployment and `https://taira.sora.org/v1/mcp` as its native MCP endpoint.
-3. Before long or stateful writes, sample public health first. Prefer proceeding only when blocks are advancing, `queue_size` is low, `tx_queue_saturated=false`, and `teu_dataspace_backlog` is not climbing.
-4. Prefer curated `iroha.*` tools over raw `torii.*` tools.
-5. Stay read-only until the user explicitly asks to mutate live state.
-6. Treat any signing inputs, API tokens, or forwarded auth headers as runtime-only secrets.
+- For a disposable local four-validator testnet, use
+  `python3 scripts/taira_devnet.py up`.
+- For live public Taira reads, prefer the curated `iroha.*` MCP tools at
+  `https://taira.sora.org/v1/mcp`.
+- For public endpoint diagnostics, use the same-revision compiled
+  `iroha taira doctor --public-root https://taira.sora.org --json`.
+- For a public write canary, require explicit user authorization and use
+  `iroha taira write-canary` with runtime-only credentials.
 
-## MCP Endpoint
+Stay read-only until the user explicitly asks to mutate live state. Treat
+`authority`, `private_key`, bearer tokens, onboarding tokens, and forwarded
+authorization headers as runtime-only secrets; never persist them in tracked
+files or committed documentation.
 
-Use the public Taira MCP endpoint:
+## Disposable deployment
 
-- `https://taira.sora.org/v1/mcp`
-
-The matching public Torii/API root is:
-
-- `https://taira.sora.org`
-
-If the endpoint is not configured locally, instruct the user to add a user-local
-MCP entry that points at that URL.
-
-If the endpoint returns `404`, report that native Torii MCP is not enabled on
-the deployment yet and stop before attempting live-network actions.
-
-If the MCP endpoint or the public Torii root returns `502` or `503`, report
-public ingress / rollout health degradation before attempting writes. Treat
-that as deployment health, not user input failure.
-
-If reads work but live writes fail with `route_unavailable`, report that the
-public ingress still cannot reach authoritative peers for the target lane and
-point operators at
-`configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org --write-config <runtime-only client.toml>`.
-For that runtime-only signer config, prefer
-`configs/soranexus/taira/taira-canary-client.example.toml`; the generic
-`defaults/client.toml` targets the zero chain id and is not valid for Taira.
-When `--write-config` is omitted, the MCP rollout script bootstraps
-`/run/secrets/taira-canary-client.toml` automatically by generating a fresh
-ordinary signer, onboarding it with the DPN-scoped credential at the
-dataspace-root alias `<label>@dpn`, and attempting an initial faucet claim
-before the write canary. Do not invent a domain-qualified alias for that flow.
-If the rollout is still using hand-edited validator configs, point them at
-`configs/soranexus/taira/validator_roster.example.toml`,
-`configs/soranexus/taira/validator_secrets.example.toml`, and
-`python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`
-so every validator shares the same `trusted_peers` / `trusted_peers_pop` roster.
-
-If writes fail with `Transaction expired`, classify that as chain health,
-consensus latency, or queue saturation first. Sample `/status` and
-`/v1/sumeragi/status` and report the current `blocks`, `commit_qc_height`,
-`highest_qc_height`, `queue_size`, `tx_queue_depth`, `tx_queue_saturated`,
-`teu_dataspace_backlog`, and `view_change_causes.last_cause` before blaming
-the caller.
-
-## Working Rules
-
-1. Prefer `iroha.*` aliases. They are the intended agent-facing surface for
-   deployed networks.
-2. Use explicit JSON `body` payloads when a write flow needs more than a couple
-   of flat shortcut arguments.
-3. Keep `authority`, `private_key`, bearer tokens, and forwarded auth headers
-   out of files, docs, and commits.
-4. Before long write flows, verify the signer on-chain first: the account
-   exists on the current Taira chain, holds a positive fee asset balance, and
-   has the permissions required for the specific mutation.
-5. For Soracloud releases or site publishes, verify the signer still has
-   `CanManageSoracloud` and `CanPublishSpaceDirectoryManifest` before starting
-   a large upload.
-6. If Taira was recently reset or redeployed, treat cached or previously
-   faucet-funded signers as suspect until their balance and permissions are
-   re-checked on-chain.
-7. For pre-signed transaction envelopes, use
-   `iroha.transactions.submit_and_wait`.
-8. If a mutation would affect live state, restate the intended change clearly
-   before executing it unless the user already gave a direct mutation request.
-9. For Taira SoraFS or app-api rollout, treat the public read path as healthy
-   only when `/v1/app-api/cid/<cid>` is stable `200` and
-   `/v1/sorafs/capacity/state` shows `declaration_count >= 1`. Mixed `200` /
-   `404` reads or zero declarations are rollout health problems, not a bad CID.
-10. For Musubi package-registry writes, use the pre-signing helpers only:
-    `iroha.musubi.instructions.release_publish`,
-    `iroha.musubi.instructions.release_yank_set`,
-    `iroha.musubi.instructions.alias_register`, and
-    `iroha.musubi.instructions.release_digest_assert` are the common V1 entry
-    points. Governance, archive, metadata, and member mutations have their own
-    typed V1 helpers. They return unsigned Norito-framed instructions; sign and
-    submit them from the client side.
-
-## Public-Node Diagnostics
-
-1. Treat `https://taira.sora.org` as the default public Torii vantage point on
-   the current deployment. It is still only one public view, not proof of full
-   validator-set health.
-2. Do not invent or assume direct per-validator public hostnames. They may
-   exist on some deployments and may be intentionally absent on others.
-3. Do not infer validator-set size from `/status.peers`. That field is the
-   queried node's current remote-peer count, not the network's validator-set
-   length.
-4. When diagnosing public-write or finality issues, prefer this read bundle:
-   - `iroha.status`
-   - `iroha.sumeragi.status`
-   - `iroha.blocks.list`
-   - `iroha.transactions.status` or `iroha.transactions.wait`
-   - `GET https://taira.sora.org/status`
-5. If the latest committed block timestamp stops advancing and Sumeragi shows
-   signals such as `membership.height > commit_qc.height`,
-   `view_change_causes.last_cause = "missing_qc"`, or
-   `view_change_causes.last_cause = "quorum_timeout"`, or
-   `worker_loop.stage = "idle"`, report that the queried public Torii finality
-   path appears stalled. Do not claim the entire validator set is down unless
-   you also have direct validator or operator visibility.
-6. If `iroha.transactions.status` returns `404 not_found` for a previously
-   submitted hash, report only that the queried public node currently has no
-   visibility for that transaction hash. Do not infer commit, reject, or
-   network-wide disappearance from that result alone.
-7. If public reads are healthy but generic signed writes still expire while a
-   dedicated lane like SoraFS capacity declaration succeeds, call that a
-   partial public-node or public-finality-path failure first, not proof that
-   the user payload is malformed.
-8. If staged validator lanes are only reachable from the edge host, validate
-   them through an SSH tunnel or the rollout scripts' `--resolve-host` path
-   before treating the problem as an application bug.
-9. If an operator-side nginx reload fails after a config edit on the Homebrew
-   edge, check for backup `.conf` files left under the `servers/` include
-   directory. Duplicate upstream definitions there will block reload.
-
-## Known Failure Patterns
-
-1. `route_unavailable` while public reads still work usually means the public
-   ingress can answer read traffic but cannot reach an authoritative peer for
-   the target write lane. Treat that as rollout health first and point
-   operators at `configs/soranexus/taira/check_mcp_rollout.sh`.
-2. Stable `404` on `/v1/app-api/cid/<cid>` together with
-   `/v1/sorafs/capacity/state.declaration_count = 0` usually means public
-   SoraFS provider capacity was never declared on-chain or the publish surface
-   is pointed at a node that cannot hydrate the CID.
-3. Mixed `200` and `404` from repeated `/v1/app-api/cid/<cid>` probes usually
-   means the edge is balancing across validators with inconsistent SoraFS
-   manifest visibility. Treat that as a rollout or edge-routing problem, not a
-   corrupted CID.
-4. `check_sorafs_rollout.sh` can pass while `check_mcp_rollout.sh` still fails.
-   That means the SoraFS-specific route and declaration path are healthy enough
-   for the app-api read surface, but the generic signed-transaction or finality
-   lane is still degraded.
-5. `Transaction expired` on generic signed writes while a dedicated SoraFS
-   declaration succeeds usually points at partial public finality trouble such
-   as `missing_qc` or `quorum_timeout`, not necessarily a malformed request.
-6. `502` or `503` from `/v1/mcp` or the public Torii root usually means nginx
-   or upstream rollout breakage, not a signer or payload problem.
-
-## Preferred Triage Sequence
-
-1. Start with read-only public health:
-   - `GET https://taira.sora.org/status`
-   - `iroha.status`
-   - `iroha.sumeragi.status`
-2. If the task involves SoraFS or app-api rollout, check the public read path
-   before any write:
-   - `GET /v1/sorafs/capacity/state`
-   - repeated `GET /v1/app-api/cid/<cid>`
-3. If shell access is available, run the read-only public SoraFS ingress check
-   first:
-   - `bash configs/soranexus/taira/check_sorafs_rollout.sh --public-root https://taira.sora.org --skip-write-canary`
-4. If the public read path looks healthy and the task needs generic signed
-   writes or native MCP validation, run:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
-5. Only after those checks are green should the agent spend time on signer or
-   payload debugging. If the user wants a live write canary, then move to the
-   full write checks with either an explicit `--write-config` or the automatic
-   runtime-only canary bootstrap.
-6. When using the rollout scripts, pass the Torii root as `--public-root`
-   (`https://taira.sora.org`), not the MCP URL. The scripts derive `/v1/mcp`
-   themselves.
-
-## MCP Write Recipes
-
-### Bootstrap a fresh runtime-only signer
-
-If the user wants a fresh ordinary signer for rollout checks, prefer the helper
-script over hand-editing TOML:
+Run from the repository root:
 
 ```bash
-python3 scripts/taira_bootstrap_canary.py \
-  --torii-root https://taira.sora.org \
-  --onboarding-token-file /absolute/runtime/path/onboarding-token \
-  --network-id "${OPERATOR_NETWORK_ID}" \
-  --output-config /run/secrets/taira-canary-client.toml
+python3 scripts/taira_devnet.py up
+python3 scripts/taira_devnet.py check
+python3 scripts/taira_devnet.py down
 ```
 
-That flow generates a new local Ed25519 keypair, onboards it on Taira, attempts
-the public faucet claim, and writes a runtime-only client config with rollout-
-specific TTL and status timeout. `OPERATOR_NETWORK_ID` must be the exact
-genesis-derived NetworkId for the deployment under test; do not rely on the
-helper's repository default during a live rollout. Keep the generated config
-out of tracked repo state unless the user explicitly asks to persist it.
+`up` builds the current Kagami, daemon, and CLI and replaces one marked
+owner-only directory under `dist/`. It generates exactly four fresh-key NPoS
+validators on the canonical Taira chain, binds them to loopback, validates all
+four configs with the current daemon, starts them, requires health/readiness,
+submits a blocking signed ping, requires four-peer height convergence, and
+performs a semantic MCP initialize/tools-list smoke.
 
-### Verify the bootstrapped signer before writes
+Use `--full-doctor` only when the broad public product-route surface is part of
+the test. A minimal throwaway chain must not be rejected merely because an
+unrelated optional application route is absent.
 
-After bootstrap, confirm the alias, account, and fee balance before debugging
-permissions or payloads:
+The generated bundle contains private keys and tokens. Do not print, move,
+archive, or commit it. On failure the command stops the failed cohort and leaves
+bounded peer logs for diagnosis. `down` retains those logs; the next `up`
+replaces the bundle.
 
-- resolve the alias with `iroha.aliases.resolve`
-- fetch the canonical account with `iroha.accounts.get`
-- inspect balances with `iroha.accounts.assets`
+## Public MCP endpoint
 
-If the signer is missing entirely, re-run the bootstrap flow. If the signer
-exists but has no fee asset balance, treat that as a faucet or funding problem
-before blaming the write payload.
+The default public Torii root is `https://taira.sora.org`; its native MCP
+endpoint is `https://taira.sora.org/v1/mcp`. If the operator supplies another
+Torii root, use that exact deployment instead.
 
-### Submit a pre-signed transaction envelope
+If MCP returns `404`, report that native Torii MCP is not enabled. If the MCP
+endpoint or public root returns `502` or `503`, classify it as ingress or
+upstream deployment degradation before investigating a signer or payload.
 
-For pre-built signed transactions, prefer `iroha.transactions.submit_and_wait`
-instead of lower-level polling:
+Prefer curated `iroha.*` tools over raw route wrappers. Use each tool's current
+`inputSchema`; rediscover tools when the server reports a changed tool set.
+
+## Public-node triage
+
+Before long or stateful writes, sample:
+
+- `iroha.status`
+- `iroha.sumeragi.status`
+- `iroha.blocks.list`
+- `iroha.transactions.status` or `iroha.transactions.wait`
+- `GET https://taira.sora.org/status`
+
+Proceed only when blocks advance, the queue is not saturated, and the relevant
+dataspace backlog is not climbing.
+
+Interpret common failures narrowly:
+
+- `route_unavailable` with healthy reads usually means public ingress cannot
+  reach an authoritative peer for the write lane.
+- `Transaction expired` usually indicates slow/stalled finality or queue
+  saturation. Report `blocks`, `commit_qc_height`, `highest_qc_height`,
+  `queue_size`, `tx_queue_depth`, `tx_queue_saturated`,
+  `teu_dataspace_backlog`, and `view_change_causes.last_cause` when available.
+- A transaction-status `404` means only that the queried node cannot currently
+  see that hash; it does not prove commit, rejection, or network-wide loss.
+- `Failed to find asset` during a signed canary usually means the signer is not
+  funded for the fee asset.
+- `403` after a chain reset is usually a signer existence or permission issue.
+
+Do not infer validator-set size from `/status.peers`; that is the queried
+node's current remote-peer count. Do not claim a whole-network outage from one
+public node without validator/operator evidence.
+
+## Public CLI diagnostics
+
+Copy `configs/soranexus/taira/taira-canary-client.example.toml` to an ignored,
+owner-only runtime path and replace its placeholders. Then run:
+
+```bash
+target/local-release/iroha -c /private/runtime/client.toml \
+  taira doctor --public-root https://taira.sora.org --json
+```
+
+For an explicitly authorized write canary:
+
+```bash
+target/local-release/iroha -c /private/runtime/client.toml \
+  --fee-payer authority \
+  taira write-canary \
+  --public-root https://taira.sora.org \
+  --onboarding-token-file /private/runtime/onboarding.token \
+  --write-config /private/runtime/canary-client.toml \
+  --json
+```
+
+The canary CLI owns onboarding, faucet funding, blocking submission, and
+receipt verification. Do not replace it with a parallel Python implementation.
+
+Before other live writes, verify the account exists, holds a positive fee
+asset balance, and has the exact required permission. After any reset, treat
+cached or previously funded signers as suspect until rechecked.
+
+## MCP transaction and package workflows
+
+For a pre-signed transaction envelope, prefer
+`iroha.transactions.submit_and_wait`:
 
 ```json
 {
@@ -229,9 +136,9 @@ instead of lower-level polling:
 }
 ```
 
-### Inspect Musubi packages
+Do not pass more than one envelope encoding.
 
-Use the curated Musubi tools for package reads:
+For Musubi reads, prefer:
 
 - `iroha.musubi.queries.exact_package`
 - `iroha.musubi.queries.exact_release`
@@ -239,132 +146,42 @@ Use the curated Musubi tools for package reads:
 - `iroha.musubi.queries.versions`
 - `iroha.musubi.queries.maintainers`
 - `iroha.musubi.queries.archive_locations`
-- `iroha.musubi.queries.alias` and
-  `iroha.musubi.queries.alias_history`
+- `iroha.musubi.queries.alias`
+- `iroha.musubi.queries.alias_history`
 - `iroha.musubi.queries.ordered_prefix`
 
-Pass the structural V1 package or release object required by the tool's
-`inputSchema`; human-facing `namespace/package` text is not accepted in place
-of `home_dataspace`, `scope`, and `name` on typed registry routes. Permanent
-aliases are normalized to structural package IDs before manifests or locks are
-created.
+Pass the structural V1 package/release object required by `inputSchema`.
+Human-facing `namespace/package` text is not a substitute for typed
+`home_dataspace`, `scope`, and `name` fields.
 
-### Build Musubi instructions for local signing
+Musubi instruction helpers return unsigned Norito-framed instructions. They do
+not accept signing material. Assemble and sign locally, then submit with
+`iroha.transactions.submit_and_wait`. Common helpers are:
 
-The Musubi instruction tools do not accept `authority`, `private_key`, bearer
-tokens, or any other signing material. They return `wire_id`,
-`instruction_base64`, `instruction_hex`, and an `instruction_json` preview.
-The client must assemble a signed transaction locally and submit it with
-`iroha.transactions.submit_and_wait`.
+- `iroha.musubi.instructions.release_publish`
+- `iroha.musubi.instructions.release_yank_set`
+- `iroha.musubi.instructions.alias_register`
+- `iroha.musubi.instructions.release_digest_assert`
 
-For a yank or unyank, call
-`iroha.musubi.instructions.release_yank_set` with the exact structural release,
-the `yanked` boolean, a bounded reason, and `expected_yank_revision`. Follow the
-published `inputSchema`; the retired string-only package payload is not a V1
-request.
+## SoraFS and application reads
 
-Use `signed_tx_base64` or `tx_base64` for base64 envelopes, or the hex variants
-for hex-encoded envelopes. Do not pass multiple envelope encodings in the same
-request. If the call returns `Transaction expired`, go back to the public
-health and Sumeragi checks before rebuilding the transaction.
+For SoraFS/app-api diagnosis, sample both:
 
-### Rollout reads for SoraFS and app-api
+- `GET /v1/sorafs/capacity/state`
+- repeated `GET /v1/app-api/cid/<cid>`
 
-For public trader/app rollout checks, use this read bundle before attempting a
-republish or signer mutation:
+The retained `configs/soranexus/taira/check_sorafs_rollout.sh` is an
+application-specific read check, not a deployment gate. A stable app-api `404`
+with zero capacity declarations suggests missing provider publication. Mixed
+`200`/`404` responses suggest inconsistent upstream manifest visibility, not a
+bad CID.
 
-- `iroha.status`
-- `iroha.sumeragi.status`
-- `GET https://taira.sora.org/v1/sorafs/capacity/state`
-- repeated `GET https://taira.sora.org/v1/app-api/cid/<cid>`
+## Response handling and safety
 
-If shell access is available, prefer the bundled rollout checks:
-
-```bash
-bash configs/soranexus/taira/check_sorafs_rollout.sh \
-  --public-root https://taira.sora.org \
-  --skip-write-canary
-
-bash configs/soranexus/taira/check_mcp_rollout.sh \
-  --skip-local \
-  --public-root https://taira.sora.org \
-  --skip-write-canary
-```
-
-Treat `check_sorafs_rollout.sh` as the SoraFS/app-api surface check and
-`check_mcp_rollout.sh` as the generic signed-write and native MCP surface
-check. They can fail independently.
-
-## Common Flows
-
-### Accounts and aliases
-
-- `iroha.accounts.get`
-- `iroha.accounts.query`
-- `iroha.aliases.resolve`
-- `iroha.accounts.assets`
-
-### Assets and balances
-
-- `iroha.assets.get`
-- `iroha.asset-definitions.get`
-- `iroha.accounts.assets`
-
-### Contracts
-
-- `iroha.contracts.deploy`
-- `iroha.contracts.instance.create`
-- `iroha.contracts.instance.activate`
-- `iroha.contracts.call`
-- `iroha.contracts.call_and_wait`
-
-### Governance and network state
-
-- `iroha.gov.*`
-- `iroha.blocks.*`
-- `iroha.transactions.wait`
-
-### Transaction submission
-
-- `iroha.transactions.submit`
-- `iroha.transactions.submit_and_wait`
-
-## Response Handling
-
-1. Use each tool's `inputSchema` as the source of truth for accepted fields.
-2. Re-run tool discovery if the MCP server reports that the tool list changed.
-3. When a write tool succeeds, summarize the resulting transaction hash or the
-   returned status, not just the request payload.
-4. When a write tool fails, surface the server error and say whether the issue
-   looks like auth, validation, missing tool exposure, or endpoint availability.
-5. Treat `route_unavailable` as deployment health, not user input failure:
-   the public Torii node is up but the write route still cannot reach an
-   authoritative peer.
-6. Treat `502` or `503` from the MCP endpoint or public Torii root as ingress
-   or rollout-health failures first.
-7. Treat `Transaction expired` as a likely stalled, saturated, or slow chain
-   path first; report the public `/status` and `/v1/sumeragi/status` sample
-   alongside the failure.
-8. Treat `403 Forbidden` after a chain reset as a likely signer-permission
-   problem first, not a malformed request.
-9. Treat `Failed to find asset` on the signed rollout canary as a likely
-   unfunded-signer condition first; use the rollout smoke or the public faucet
-   endpoints before assuming the chain rejected the signer itself.
-10. If `/v1/app-api/cid/<cid>` flaps between `200` and `404` and
-    `/v1/sorafs/capacity/state` shows `declaration_count = 0`, classify it as
-    a public SoraFS provider-capacity or read-path failure first, not a bad
-    CID.
-11. If public reads succeed but finality appears stalled, describe the issue as
-    a public-node or public-finality-path observation unless you have
-    validator-side evidence. Avoid overstating that as a full-network outage.
-
-## Safety
-
-- Do not invent or claim pre-existing operator key material.
-- If the user explicitly asks for a fresh runtime-only signer, it is valid to
-  generate a new local keypair, onboard it on Taira, and fund it through the
-  public faucet. Do not present it as a shared or pre-existing credential.
-- Persist runtime credentials only when the user explicitly asks, and then keep
-  them in ignored user-local files rather than tracked repo state.
-- Do not assume operator-only routes are available on public Taira.
-- Prefer anonymous/public reads first when investigating state.
+1. Report transaction hashes and terminal status for successful writes.
+2. Surface server errors and classify them as authentication, validation,
+   missing-tool exposure, endpoint availability, or chain-health failures.
+3. Do not invent operator credentials or direct validator hostnames.
+4. Do not assume operator-only routes are exposed publicly.
+5. Persist a newly generated signer only when the user explicitly requests it,
+   and then only in an ignored owner-only runtime file.

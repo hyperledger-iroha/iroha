@@ -1194,3 +1194,95 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned()
         assert!(!caller_source.contains("installed_child_effect"));
     }
 }
+
+#[test]
+fn live_wal_sign_carrier_uses_typed_dispatch_and_both_signed_successor_families() {
+    let source = reviewed_lifecycle_work_registry_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("registry has one production prefix");
+    let live_install = production
+        .split("pub(super) fn install_live_wal_before_publication")
+        .nth(1)
+        .expect("live WAL admission has one registry transaction")
+        .split("/// Install one origin-specific durable Validate carrier")
+        .next()
+        .expect("live WAL transaction ends before durable Validate admission");
+    for required in [
+        "PreparedLiveWalCompanionV1::LocalProposal(_)",
+        "DurableLiveWalSignOriginV1::LocalProposal",
+        "ConcreteLifecycleWorkKind::DurableLiveWalSign(work)",
+    ] {
+        assert!(
+            live_install.contains(required),
+            "live ProposalIntent admission omitted typed carrier step {required}"
+        );
+    }
+    let live_validate_install = production
+        .split("fn install_live_sign(self, prepared: PreparedLiveValidateSignRegistryWork)")
+        .nth(1)
+        .expect("live Validate Sign has one registry installation")
+        .split("impl LiveValidateApplyRegistryReservation")
+        .next()
+        .expect("live Validate Sign installation stays bounded");
+    assert!(live_validate_install.contains("DurableLiveWalSignOriginV1::Validate"));
+    assert!(live_validate_install.contains("into_live_sign_work"));
+    assert!(
+        !live_validate_install.contains("PendingAdapter"),
+        "fsynced live Validate Sign must never re-enter generic effect dispatch"
+    );
+
+    let dispatch = production
+        .split("pub(super) fn prepare_recovered_lifecycle_sign_dispatch(")
+        .nth(1)
+        .expect("typed Sign dispatch has one implementation")
+        .split("/// Attest one exact Ready recovered Decision Fetch")
+        .next()
+        .expect("typed Sign dispatch stays bounded");
+    for required in [
+        "ConcreteLifecycleWorkKind::DurableLiveWalSign(sign)",
+        "sign.matches_claimed_record(address, digest, coordinator, lease)",
+        "PreparedRecoveredLifecycleSignCarrier::Live(sign)",
+        "RecoveredLifecycleSignDispatchProjectionErrorV1::AlreadyDispatched",
+    ] {
+        assert!(
+            dispatch.contains(required),
+            "typed live Sign dispatch omitted {required}"
+        );
+    }
+
+    let broadcast_only = production
+        .split("pub(super) fn prepare_recovered_lifecycle_sign_broadcast_successor")
+        .nth(1)
+        .expect("Broadcast-only Sign successor has one preparation")
+        .split("/// Seal the exact Broadcast-and-next-WAL-Sign pair")
+        .next()
+        .expect("Broadcast-only preparation stays bounded");
+    for required in [
+        "ConcreteLifecycleWorkKind::DurableLiveWalSign(sign)",
+        "sign.project_authenticated_signed_broadcast(verified, projection_authority)",
+    ] {
+        assert!(
+            broadcast_only.contains(required),
+            "live Commit Vote completion omitted {required}"
+        );
+    }
+
+    let broadcast_and_sign = production
+        .split("pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor")
+        .nth(1)
+        .expect("Broadcast-and-Sign successor has one preparation")
+        .split("impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor")
+        .next()
+        .expect("combined successor preparation stays bounded");
+    for required in [
+        "ConcreteLifecycleWorkKind::DurableLiveWalSign(sign)",
+        ".project_authenticated_signed_broadcast_and_sign(verified, projection_authority)",
+    ] {
+        assert!(
+            broadcast_and_sign.contains(required),
+            "live Prepare Vote or WAL-ahead Proposal completion omitted {required}"
+        );
+    }
+}

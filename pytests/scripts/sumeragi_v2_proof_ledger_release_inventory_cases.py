@@ -1274,25 +1274,25 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
             Path("formal/sumeragi_v2/README.md"),
             "current\ninventory to 864 tests across 43 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 91 legs.",
+            "corridor contains 84 legs.",
             "current\ninventory to 864 tests across 43 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 90 legs.",
+            "corridor contains 83 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
             "current 864-test, 43-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
-            "contains 91 legs",
+            "contains 84 legs",
             "current 864-test, 43-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
-            "contains 90 legs",
+            "contains 83 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current\nsource-bound inventory to 864 exact tests across 43 modules and 91 pre-network\n"
+            "current\nsource-bound inventory to 864 exact tests across 43 modules and 84 pre-network\n"
             "legs.",
-            "current\nsource-bound inventory to 864 exact tests across 43 modules and 90 pre-network\n"
+            "current\nsource-bound inventory to 864 exact tests across 43 modules and 83 pre-network\n"
             "legs.",
         ),
         (
@@ -1498,21 +1498,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  taira_public_localnet::strict_restart::taira_localnet_restart_catchup_behavior",
-            "  taira_public_localnet::strict_restart::taira_localnet_restart_catchup_warning",
-            "Taira release contract inventory must equal the reviewed six-test tuple",
-        ),
-        (
-            Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '    "taira_public_localnet::strict_restart::taira_localnet_restart_catchup_behavior",',
-            '    "taira_public_localnet::strict_restart::taira_localnet_restart_catchup_warning",',
-            "Taira receipt tuple must equal the exact six-test runner inventory",
-        ),
-        (
-            Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=91",
-            "  readonly expected_corridor_leg_count=90",
-            "sealed at 91 legs",
+            "  readonly expected_corridor_leg_count=84",
+            "  readonly expected_corridor_leg_count=83",
+            "sealed at 84 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),

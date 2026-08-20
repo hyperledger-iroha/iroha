@@ -30,10 +30,10 @@ fn invalid_report_admission_parts(
 fn live_wal_admission_parts(
     admission: &PreparedLifecycleAdmissionV1,
 ) -> Option<(&BoundAdapterEffectV1, &CandidateAdmission)> {
-    let PreparedLifecycleAdmissionOwnerV1::LiveWal(bound) = &admission.owner else {
+    let PreparedLifecycleAdmissionOwnerV1::LiveWal(live) = &admission.owner else {
         return None;
     };
-    Some((bound, &admission.candidate))
+    Some((&live.bound, &admission.candidate))
 }
 
 fn into_invalid_report_concrete(admission: PreparedLifecycleAdmissionV1) -> ConcreteLifecycleWork {
@@ -59,8 +59,12 @@ fn into_invalid_report_concrete(admission: PreparedLifecycleAdmissionV1) -> Conc
 
 fn into_live_wal_concrete(admission: PreparedLifecycleAdmissionV1) -> ConcreteLifecycleWork {
     let PreparedLifecycleAdmissionV1 { owner, candidate } = admission;
-    let PreparedLifecycleAdmissionOwnerV1::LiveWal(bound) = owner else {
+    let PreparedLifecycleAdmissionOwnerV1::LiveWal(live) = owner else {
         unreachable!("prepared WAL work retained another admission origin")
+    };
+    let PreparedLiveWalAdmissionV1 { bound, companion } = live;
+    let PreparedLiveWalCompanionV1::None = companion else {
+        unreachable!("fixed Validate publication cannot retain a local Proposal companion")
     };
     debug_assert!(bound.exactly_authorizes_candidate(
         lifecycle_admission_candidate_context(&candidate),
@@ -315,6 +319,6 @@ impl PreparedLiveValidateSignRegistryWork {
         self,
         reservation: LiveValidateSignRegistryReservation<'_>,
     ) {
-        reservation.install_live_sign(into_live_wal_concrete(self.admission));
+        reservation.install_live_sign(self);
     }
 }

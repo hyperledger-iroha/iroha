@@ -11867,10 +11867,19 @@ fn filesystem_identity(path: &Path) -> Option<String> {
 #[cfg(unix)]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     let stats = rustix::fs::statvfs(path).ok()?;
-    let fragment_size = stats.f_frsize.max(stats.f_bsize);
+    let fragment_size = statvfs_fragment_size(stats.f_frsize, stats.f_bsize)?;
     let available_bytes = stats.f_bavail.checked_mul(fragment_size)?;
     let total_bytes = stats.f_blocks.checked_mul(fragment_size)?;
     Some((available_bytes, total_bytes))
+}
+#[cfg(unix)]
+fn statvfs_fragment_size(fragment_size: u64, block_size: u64) -> Option<u64> {
+    let fragment_size = if fragment_size == 0 {
+        block_size
+    } else {
+        fragment_size
+    };
+    (fragment_size != 0).then_some(fragment_size)
 }
 #[cfg(target_os = "windows")]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {

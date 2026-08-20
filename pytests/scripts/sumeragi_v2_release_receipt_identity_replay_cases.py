@@ -616,7 +616,6 @@ def test_receipt_accepts_transcript_published_by_chaos_launcher(
         "corridor_completion",
         "formal_completion",
         "seed_completion",
-        "taira_completion",
     ],
 )
 def test_receipt_rejects_cross_source_completion(
@@ -684,7 +683,6 @@ def test_receipt_rejects_cross_source_completion(
             "seed localnet manifest 17 does not match retained content",
         ),
         ("chaos_log", "log digest mismatch"),
-        ("taira_evidence", "evidence digest mismatch"),
     ],
 )
 def test_receipt_rejects_artifact_changed_after_completion(
@@ -865,34 +863,6 @@ def test_receipt_rejects_symlink_in_retained_seed_localnet(tmp_path: Path) -> No
             in result.stderr
         )
         assert expected_error in result.stderr
-
-
-@pytest.mark.parametrize(
-    ("field", "replacement"),
-    [
-        ("head_commit", "9" * 40),
-        ("head_tree", "8" * 40),
-        ("cargo_lock_sha256", "7" * 64),
-    ],
-)
-def test_receipt_rejects_taira_exact_identity_mismatch(
-    tmp_path: Path, field: str, replacement: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    completion = evidence["taira_completion"]
-    assert isinstance(completion, Path)
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields[field] = replacement
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "exact release identity" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -1567,43 +1537,3 @@ def test_receipt_rejects_seed_summary_row_with_extra_column(tmp_path: Path) -> N
 
     assert result.returncode == 1
     assert "extra or missing columns" in result.stderr
-
-
-def test_receipt_revalidates_archived_taira_semantics(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    taira_log = evidence["taira_log"]
-    completion = evidence["taira_completion"]
-    assert isinstance(taira_log, Path)
-    assert isinstance(completion, Path)
-    original_log = taira_log.read_bytes()
-    taira_log.write_text(
-        "running 1 test\n"
-        "test forged_taira_soak ... ok\n\n"
-        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
-        "42 filtered out; finished in 86400.01s\n",
-        encoding="utf-8",
-    )
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["log_sha256"] = sha256(taira_log)
-    write_tsv(completion, fields)
-
-    malformed_result = run_writer(evidence, tmp_path / "malformed-receipt.json", writer)
-
-    assert malformed_result.returncode == 1
-    assert "Taira log does not prove its one exact passing soak" in malformed_result.stderr
-
-    taira_log.write_bytes(original_log)
-    fields["log_sha256"] = sha256(taira_log)
-    write_tsv(completion, fields)
-    (writer.parent / "check_taira_v2_soak_evidence.py").write_text(
-        "raise SystemExit(72)\n", encoding="utf-8"
-    )
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "archived Taira evidence failed release validation" in result.stderr

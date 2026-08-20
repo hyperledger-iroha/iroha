@@ -44,10 +44,6 @@ readonly formal_gate="ci/check_sumeragi_formal.sh"
 readonly verus_runner="scripts/verify_sumeragi_v2.sh"
 readonly replay_runner="scripts/formal/check_sumeragi_v2_replay_trace.sh"
 readonly chaos_runner="scripts/run_sumeragi_v2_100k_chaos.sh"
-readonly taira_runner="scripts/run_taira_v2_24h_soak.sh"
-readonly taira_strict_restart_source="integration_tests/tests/taira_public_localnet/strict_restart.rs"
-readonly taira_strict_restart_test="taira_localnet_restart_catchup_behavior"
-readonly taira_strict_restart_qualified_test="taira_public_localnet::strict_restart::${taira_strict_restart_test}"
 readonly kura_source="crates/iroha_core/src/kura.rs"
 readonly test_network_source="crates/iroha_test_network/src/lib.rs"
 readonly autoscale_test="nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
@@ -153,15 +149,6 @@ require_nonignored_test "$autoscale_file" "$autoscale_test"
 require_nonignored_test "$autoscale_file" "$autoscale_restart_test"
 require_nonignored_test "$autoscale_file" "$autoscale_drain_test"
 require_nonignored_test "$native_file" "$native_test"
-require_nonignored_test "$taira_strict_restart_source" "$taira_strict_restart_test"
-
-require_exact_token \
-  "$release_runner" \
-  "  ${taira_strict_restart_qualified_test}"
-require_exact_token \
-  "$release_receipt_writer" \
-  "    \"${taira_strict_restart_qualified_test}\","
-
 if [[ ! -f "$release_receipt_component" || -L "$release_receipt_component" ]]; then
   echo "release receipt formal-artifact component must be a regular non-symlink file" >&2
   exit 1
@@ -232,7 +219,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=91"
+  "  readonly expected_corridor_leg_count=84"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -1317,7 +1304,6 @@ preflight_labels = (
     "multilane-scaling",
     "proof-fidelity",
     "formal-launcher",
-    "taira-soak",
 )
 for label in preflight_labels:
     before_token = f'release_gate_boundary "preflight-{label}:before"'
@@ -1679,7 +1665,6 @@ python3 -I -S - \
   "$verus_runner" \
   "$replay_runner" \
   "$chaos_runner" \
-  "$taira_runner" \
   "$launcher" \
   "$release_receipt_writer" \
   "$release_receipt_gate_component" \
@@ -1775,11 +1760,6 @@ expected_edges = (
         'source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"',
     ),
     (
-        "scripts/run_taira_v2_24h_soak.sh",
-        "scripts/sumeragi_v2_release_process_policy.sh",
-        'source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"',
-    ),
-    (
         "ci/check_nexus_cross_dataspace_localnet.sh",
         "scripts/sumeragi_v2_prebuilt_bundle.sh",
         'source "${REPO_ROOT}/scripts/sumeragi_v2_prebuilt_bundle.sh"',
@@ -1830,11 +1810,6 @@ expected_edges = (
         'source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"',
     ),
     (
-        "scripts/run_taira_v2_24h_soak.sh",
-        "scripts/sumeragi_v2_prebuilt_bundle.sh",
-        'source "${REPO_ROOT}/scripts/sumeragi_v2_prebuilt_bundle.sh"',
-    ),
-    (
         "scripts/sumeragi_v2_prebuilt_bundle.sh",
         "scripts/sumeragi_v2_prebuilt_bundle.py",
         'local prebuilt_helper="${prebuilt_repo_root}/scripts/sumeragi_v2_prebuilt_bundle.py"',
@@ -1873,11 +1848,6 @@ expected_edges = (
         "scripts/run_sumeragi_v2_release_gates.sh",
         "scripts/run_sumeragi_v2_100k_chaos.sh",
         "bash scripts/run_sumeragi_v2_100k_chaos.sh",
-    ),
-    (
-        "scripts/run_sumeragi_v2_release_gates.sh",
-        "scripts/run_taira_v2_24h_soak.sh",
-        "bash scripts/run_taira_v2_24h_soak.sh",
     ),
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
@@ -1925,7 +1895,6 @@ guarded_cargo_scripts = (
     "scripts/run_sumeragi_v2_release_gates.sh",
     "scripts/run_sumeragi_v2_seed_matrix.sh",
     "scripts/formal/run_sumeragi_v2_harness.sh",
-    "scripts/run_taira_v2_24h_soak.sh",
     "scripts/run_nexus_cross_dataspace_atomic_swap.sh",
     "ci/check_nexus_cross_dataspace_localnet.sh",
     "ci/check_nexus_cross_lane_proofs.sh",
@@ -2050,11 +2019,6 @@ for script in guarded_cargo_scripts:
 
 entry_root_contracts = (
     (
-        "scripts/run_taira_v2_24h_soak.sh",
-        'require_disjoint_release_roots "$REPO_ROOT"',
-        'release_gate_boundary "taira:entry"',
-    ),
-    (
         "scripts/run_sumeragi_v2_formal_release.sh",
         'require_disjoint_release_roots "$repo_root"',
         'release_gate_boundary "formal-release:entry"',
@@ -2141,7 +2105,6 @@ for script, source in sources.items():
 for script in (
     "scripts/run_sumeragi_v2_release_gates.sh",
     "scripts/run_sumeragi_v2_seed_matrix.sh",
-    "scripts/run_taira_v2_24h_soak.sh",
 ):
     source = sources[script]
     for token in (
@@ -2739,4 +2702,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 91 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 43 modules, exact 530/530 G-UNIT (324 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 84 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 43 modules, exact 530/530 G-UNIT (324 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

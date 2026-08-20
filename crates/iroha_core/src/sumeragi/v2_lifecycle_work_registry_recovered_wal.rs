@@ -901,10 +901,10 @@ impl LiveValidateSignRegistryReservation<'_> {
     /// This is called only after exact LedgerV1 fsync. All validation and
     /// vacancy checks happened while the same exclusive registry borrow was
     /// retained, so the remaining map publication is structurally infallible.
-    fn install_live_sign(self, work: ConcreteLifecycleWork) {
+    fn install_live_sign(self, prepared: PreparedLiveValidateSignRegistryWork) {
         let Self {
             reservation,
-            _detached_parent: _,
+            _detached_parent: parent,
         } = self;
         let RecoveredWalValidateRegistryReservation {
             registry,
@@ -913,6 +913,21 @@ impl LiveValidateSignRegistryReservation<'_> {
         } = reservation;
         let (child_address, child_digest) =
             child.expect("pre-fsync live Sign reservation binds one exact child");
+        let PreparedLiveValidateSignRegistryWork { admission } = prepared;
+        let PreparedLifecycleAdmissionV1 { owner, candidate } = admission;
+        let PreparedLifecycleAdmissionOwnerV1::LiveWal(live) = owner else {
+            unreachable!("live Validate Sign retains its WAL admission")
+        };
+        let work = live
+            .into_live_sign_work(
+                candidate,
+                DurableLiveWalSignOriginV1::Validate {
+                    parent_address,
+                    parent: Box::new(parent),
+                },
+                child_address,
+            )
+            .unwrap_or_else(|_| panic!("prechecked live Validate Sign remains exact"));
         debug_assert_ne!(parent_address, child_address);
         debug_assert!(!registry.entries.contains_key(&parent_address));
         debug_assert!(!registry.entries.contains_key(&child_address));
@@ -4258,6 +4273,12 @@ impl ConcreteLifecycleWorkRegistry {
             return Err(RecoveredLifecycleSignBroadcastPreparationErrorV1::InvalidSignCarrier);
         }
         let (projected_key, broadcast) = match &sign.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign)
+                if sign.dispatch_key == Some(key)
+                    && sign.matches_claimed_record(sign_address, digest, coordinator, lease) =>
+            {
+                sign.project_authenticated_signed_broadcast(verified, projection_authority)
+            }
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign)
                 if sign.dispatch_key == Some(key)
                     && sign.matches_claimed_record(sign_address, digest, coordinator, lease) =>
@@ -4381,6 +4402,10 @@ impl ConcreteLifecycleWorkRegistry {
             );
         }
         let parent_is_exact = match &sign.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                sign.dispatch_key == Some(key)
+                    && sign.matches_claimed_record(sign_address, digest, coordinator, lease)
+            }
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                 sign.dispatch_key == Some(key)
                     && sign.matches_claimed_record(sign_address, digest, coordinator, lease)
@@ -4404,6 +4429,8 @@ impl ConcreteLifecycleWorkRegistry {
             |_| RecoveredLifecycleSignBroadcastAndSignPreparationErrorV1::InvalidCombinedProjection,
         )?;
         let (projected_key, successor) = match &sign.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => sign
+                .project_authenticated_signed_broadcast_and_sign(verified, projection_authority),
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => sign
                 .repair
                 .project_authenticated_signed_broadcast_and_sign(verified, projection_authority),
@@ -4475,6 +4502,9 @@ impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
             .remove(&sign_address)
             .expect("published recovered Broadcast retains its exact Sign carrier");
         let parent = match sign.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                DurableRecoveredLifecycleSignParentV1::Live(sign)
+            }
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                 DurableRecoveredLifecycleSignParentV1::PhaseVote(sign)
             }
@@ -4630,6 +4660,9 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter
             .remove(&sign_address)
             .expect("published combined successor retains its exact Sign parent");
         let parent = match sign.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                DurableRecoveredLifecycleSignParentV1::Live(sign)
+            }
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => {
                 DurableRecoveredLifecycleSignParentV1::PhaseVote(sign)
             }

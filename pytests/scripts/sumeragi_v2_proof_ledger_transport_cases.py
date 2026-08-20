@@ -984,8 +984,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     repo_root = formal_dir.parents[2]
     baseline_errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
     p2p_taira_markers = (
-        "/crates/iroha_p2p/", "/scripts/render_taira_validator_bundle.py",
-        "/configs/soranexus/taira/", "/defaults/kagami/iroha3-taira/",
+        "/crates/iroha_p2p/", "/configs/soranexus/taira/",
+        "/defaults/kagami/iroha3-taira/",
     )
     assert not [
         error for error in baseline_errors
@@ -1125,15 +1125,6 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         ".checked_add(0)",
     )
 
-    renderer_path = geometry_root / "scripts/render_taira_validator_bundle.py"
-    renderer_source = renderer_path.read_text(encoding="utf-8")
-    renderer_source = renderer_source.replace(
-        "validator_count + authenticated_non_validator_sources + 1",
-        "validator_count + 1",
-        1,
-    )
-    renderer_path.write_text(renderer_source, encoding="utf-8")
-
     for relative in (
         Path("defaults/kagami/iroha3-taira/config.toml"),
         Path("configs/soranexus/taira/config.toml"),
@@ -1144,17 +1135,6 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
             source.replace("authenticated_non_validator_sources = 2", "", 1),
             encoding="utf-8",
         )
-    readme_path = geometry_root / "configs/soranexus/taira/README.md"
-    readme_source = readme_path.read_text(encoding="utf-8")
-    readme_path.write_text(
-        readme_source.replace(
-            "validator_count + authenticated_non_validator_sources + 1",
-            "validator_count + 1",
-            1,
-        ),
-        encoding="utf-8",
-    )
-
     geometry_errors = module._transport_geometry_production_source_fidelity_errors(
         geometry_root
     )
@@ -1169,10 +1149,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         "root configuration rejects H greater than exact-output reply-source R",
         "shared Sumeragi fingerprint projection carries H beside ingress capacities",
         "localnet aggregate bytes scale by N+H+1",
-        "Taira renderer scales aggregate bytes by N+H+1",
         "default seven-validator Taira profile pins H=2 and ten source partitions",
         "production Taira profile pins H=2 and seven source partitions",
-        "Taira operator documentation states N+H+1 byte scaling",
     ):
         assert any(expected_error in error for error in geometry_errors), (
             expected_error,
@@ -1283,7 +1261,6 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         ("p2p_network", Path("crates/iroha_p2p/src/network.rs")),
         ("p2p_peer", Path("crates/iroha_p2p/src/peer.rs")),
         ("kagami_profiles", Path("xtask/src/kagami_profiles.rs")),
-        ("taira_renderer", Path("scripts/render_taira_validator_bundle.py")),
         ("taira_default", Path("defaults/kagami/iroha3-taira/config.toml")),
         ("taira_config", Path("configs/soranexus/taira/config.toml")),
         ("taira_genesis", Path("configs/soranexus/taira/genesis.json")),
@@ -1331,22 +1308,12 @@ def test_transport_geometry_source_fidelity_rejects_taira_semantic_mutants(
     )
     repo_root = formal_dir.parents[2]
     markers = (
-        "/crates/iroha_p2p/", "/scripts/render_taira_validator_bundle.py",
-        "/configs/soranexus/taira/", "/defaults/kagami/iroha3-taira/",
+        "/crates/iroha_p2p/", "/configs/soranexus/taira/",
+        "/defaults/kagami/iroha3-taira/",
     )
     baseline = module._transport_geometry_production_source_fidelity_errors(repo_root)
     assert not [error for error in baseline if any(marker in error for marker in markers)], baseline
 
-    renderer_path = repo_root / "scripts/render_taira_validator_bundle.py"
-    renderer_source = renderer_path.read_text(encoding="utf-8")
-    renderer_path.write_text(
-        renderer_source.replace(
-            "validator_count + authenticated_non_validator_sources + 1",
-            "validator_count + 1",
-            1,
-        ),
-        encoding="utf-8",
-    )
     production_path = repo_root / "configs/soranexus/taira/genesis.json"
     production_source = production_path.read_text(encoding="utf-8")
     production_path.write_text(
@@ -1366,7 +1333,6 @@ def test_transport_geometry_source_fidelity_rejects_taira_semantic_mutants(
     )
     errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
     for expected in (
-        "Taira renderer scales aggregate bytes by N+H+1",
         "production Taira genesis DA pins the revision-4 protocol ceiling",
         "production Taira genesis admits one maximum privacy transaction",
         "default Taira genesis must parse with unique keys",

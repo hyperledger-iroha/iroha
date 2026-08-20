@@ -154,10 +154,10 @@ candidate-specific expectation fail closed.
 The ordered operation inventories are exact:
 
 - `offline-toolchain-sdk` (23; plan SHA-256
-  `aba5987e1a69dba70c8ef47478ecbf748165f13c3131045594473d47a5a9e95f`):
+  `b59301ed38ad1833fa11b70c899a6dbc45c1a7f339fc1320ef838c8d5f6c35e0`):
   `offline-rustc-version`,
   `offline-cargo-version`, `offline-workspace-build`,
-  `g-unit-production-865`, `g-unit-focused-530`,
+  `g-unit-production-864`, `g-unit-focused-530`,
   `offline-workspace-clippy`, `offline-workspace-format`,
   `offline-no-legacy-codec`, `sdk-rust-regeneration-first`,
   `sdk-rust-regeneration-second`, `sdk-regeneration-byte-identity`,
@@ -199,13 +199,12 @@ The ordered operation inventories are exact:
   `formal-tlc-positive-and-mutations`, `formal-apalache-refinement`,
   `formal-production-trace-replay`, `formal-rust-verus-correspondence`,
   `formal-verus-evidence-validation`, `formal-cross-tool-evidence`.
-- `network-scale-soak` (8; plan SHA-256
-  `e922b8afbfe4848e8b2b5f858654477a28d710c3afcf7698a77276a8294681cf`):
+- `network-scale-soak` (7; plan SHA-256
+  `a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`):
   `network-release-seed-matrix`,
   `network-g4p-mandatory-cases`, `network-g12p-ten-seeds`,
   `network-g12p-rotating-fault-soak`, `scale-five-paired-trials`,
-  `scale-evidence-validation`, `network-chaos-100000-height`,
-  `network-taira-24h-soak`.
+  `scale-evidence-validation`, `network-chaos-100000-height`.
 - `final-bootstrap-publication` (8; plan SHA-256
   `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`):
   `final-protected-bootstrap`,

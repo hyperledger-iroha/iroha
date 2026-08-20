@@ -542,9 +542,6 @@ raise SystemExit(0)
     (formal / "sumeragi_v2_verus_evidence.py").write_text(
         "raise SystemExit(0)\n", encoding="utf-8"
     )
-    (scripts / "check_taira_v2_soak_evidence.py").write_text(
-        "raise SystemExit(0)\n", encoding="utf-8"
-    )
     return writer
 
 def make_bootstrap_evidence(
@@ -2570,7 +2567,6 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     canonical_g_unit_rows = writer_symbols["_canonical_g_unit_rows"](ROOT_DIR)
     data_status_test = writer_symbols["_DATA_STATUS_TEST"]
     data_lane_certificate_test = writer_symbols["_DATA_LANE_CERTIFICATE_TEST"]
-    taira_contract_tests = writer_symbols["_TAIRA_CONTRACT_TESTS"]
     cross_sdk_tests = writer_symbols["_CROSS_SDK_TESTS"]
     rust_sdk_diagnostics_tests = writer_symbols["_RUST_SDK_DIAGNOSTICS_TESTS"]
     native_amx_grouped_fixture = writer_symbols["_NATIVE_AMX_GROUPED_FIXTURE"]
@@ -2718,11 +2714,6 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             elif leg_id == "sumeragi-diagnostics-rust":
                 test_lines = [
                     f"test {test} ... ok" for test in rust_sdk_diagnostics_tests
-                ]
-            elif leg_id.startswith("taira-contract-"):
-                contract_index = int(leg_id.rsplit("-", 1)[1])
-                test_lines = [
-                    f"test {taira_contract_tests[contract_index]} ... ok"
                 ]
             log_lines = [f"running {required_count} tests", *test_lines, ""]
             log_lines.append(
@@ -3269,39 +3260,6 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         },
     )
 
-    taira_dir = tmp_path / "taira"
-    taira_dir.mkdir()
-    taira_evidence = taira_dir / "taira_v2_24h_soak.json"
-    taira_evidence.write_text('{"status":"passed"}\n', encoding="utf-8")
-    taira_log = taira_dir / "taira-v2-24h.log"
-    taira_log.write_text(
-        "\n".join(
-            (
-                "running 1 test",
-                "test taira_public_localnet::"
-                "taira_profile_24h_packet_impairment_and_restart_soak ... ok",
-                "",
-                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
-                "42 filtered out; finished in 86400.01s",
-            )
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    taira_completion = taira_dir / "COMPLETED.tsv"
-    write_tsv(
-        taira_completion,
-        {
-            "schema_version": "1",
-            "head_commit": head,
-            "head_tree": tree,
-            "source_manifest_sha256": sealed_manifest,
-            "cargo_lock_sha256": lock,
-            "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
-            "evidence_sha256": sha256(taira_evidence),
-            "log_sha256": sha256(taira_log),
-        },
-    )
     scaling = make_scaling_evidence(
         tmp_path,
         head=head,
@@ -3391,9 +3349,6 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "seed_localnet_manifest": seed_localnet_manifests[17],
         "chaos_completion": chaos_completion,
         "chaos_log": chaos_log,
-        "taira_completion": taira_completion,
-        "taira_evidence": taira_evidence,
-        "taira_log": taira_log,
         "candidate_manifest": candidate_manifest,
         "sealed_manifest": sealed_manifest,
         "multilane_manifest": multilane_manifest,
@@ -3431,7 +3386,6 @@ def run_writer(
         Path("scripts/deploy_localnet.sh"),
         Path("scripts/tx_load.py"),
         Path("scripts/nexus_lane_load_test.py"),
-        Path("scripts/check_taira_v2_soak_evidence.py"),
         Path(".cargo/config.toml"),
     ):
         destination = repository_root / relative
@@ -3499,8 +3453,6 @@ def run_writer(
             str(evidence["seed_completion"]),
             "--chaos-completion",
             str(evidence["chaos_completion"]),
-            "--taira-completion",
-            str(evidence["taira_completion"]),
             "--g4p-completion",
             str(evidence["g4p_completion"]),
             "--g12-seed-completion",
@@ -4231,10 +4183,6 @@ def test_receipt_rejects_prebuilt_binary_hardlink_alias(tmp_path: Path) -> None:
         (
             "seed_completion",
             "seed completion does not describe the exact release matrix",
-        ),
-        (
-            "taira_completion",
-            "Taira completion is not bound to the exact release identity",
         ),
         (
             "g4p_completion",

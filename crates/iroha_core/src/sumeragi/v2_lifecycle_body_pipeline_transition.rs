@@ -2010,6 +2010,11 @@ impl LifecycleCoordinator {
         ) {
             Ok(projection) => projection,
             Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal = lease.ordinal(),
+                    "Ready Validate no-successor projection failed"
+                );
                 return Err(SealedValidateNoSuccessorTransitionError {
                     _preview: preview,
                     _failure: SealedValidateNoSuccessorTransitionFailure::Projection(error),
@@ -2024,6 +2029,11 @@ impl LifecycleCoordinator {
         ) {
             Ok(transition) => transition,
             Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal = lease.ordinal(),
+                    "Ready Validate no-successor coordinator staging failed"
+                );
                 return Err(SealedValidateNoSuccessorTransitionError {
                     _preview: preview,
                     _failure: SealedValidateNoSuccessorTransitionFailure::Stage(error),
@@ -2383,6 +2393,11 @@ impl<'coordinator, 'registry, 'adapter>
                 != coordinator.capacity_generation[&CapacityClass::Consensus]
         );
         if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+            iroha_logger::error!(
+                ?error,
+                ordinal = parent_ordinal,
+                "Ready Validate no-successor LedgerV1 publication failed"
+            );
             coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
             return Err(SealedValidateNoSuccessorPublicationError {
                 _coordinator: coordinator,

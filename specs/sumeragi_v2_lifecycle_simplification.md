@@ -1755,12 +1755,13 @@ LedgerV1 retain and recheck the resulting inert envelope. There is no raw
 constructor, parts or encoded accessor, and zero-valued digest bytes are not
 reserved as a sentinel.
 
-Live safety-WAL continuations use three specialized post-fsync exact-replay
-cuts: recovered Proposal to Prepare, Ready Validate to Sign, and Decision to
-Apply. Each cut appends and fsyncs its exact frame, checks the retained frame
-against the append receipt and WAL record, and acknowledges that persistence
-identifier before exposing its sealed successor. The recovered Proposal and
-Ready Validate cuts derive frame-bound pending owners from the complete effect;
+Live safety-WAL continuations use four specialized post-fsync exact-replay
+cuts: recovered Proposal to Prepare, local `ProposalIntent` to `SignProposal`,
+Ready Validate to Sign, and Decision to Apply. Each cut appends and fsyncs its
+exact frame, checks the retained frame against the append receipt and WAL
+record, and acknowledges that persistence identifier before exposing its
+sealed successor. The recovered Proposal, local `ProposalIntent`, and Ready
+Validate cuts derive frame-bound pending owners from the complete effect;
 callers cannot splice a same-effect foreign causal root. Apply instead retains
 a source-only Decision seal until the fixed registry join revalidates its
 installed Validate carrier and receipt, projects the child pending binding from
@@ -1786,6 +1787,14 @@ then retains the same normalized `LocalBody` plus body-frame evidence beside
 the exact `LocalProposalReady` command. When that command emits
 `ProposalIntent`, its exact effect and runtime owner are consumed into one
 inseparable inert composite rather than dropping the companion body origin.
+The `ProposalIntent` append also retains its locator-derived WAL owner in a
+one-shot adapter/runtime handoff. Before generic signer I/O, the executor
+consumes that handoff together with the exact local composite, removes the Sign
+from the generic batch, and admits one `DurableLiveWalSign` row. Its typed Sign
+worker completion advances the same row through the existing atomic Proposal
+Broadcast, canonical chunks, and Prepare-Sign transaction. Direct Proposal
+output remains invalid, and restart reconstructs the same standalone WAL owner
+rather than synthesizing the inherited local pending binding.
 Retries reuse the installed sidecar, failed consuming projections return the
 original seal, and validation rejection, superseding view/lock, and Decision
 detach retire it explicitly. Detached worker tasks therefore carry no local
