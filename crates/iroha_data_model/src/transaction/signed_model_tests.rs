@@ -27,7 +27,10 @@ use crate::{
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
-use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
+use iroha_version::{
+    DecodeAll,
+    codec::{DecodeVersioned, EncodeVersioned},
+};
 use norito::core::DecodeFromSlice;
 fn sample_signed_transaction() -> SignedTransaction {
     let chain = test_network_id(0x11);
@@ -47,6 +50,88 @@ fn sample_signed_transaction() -> SignedTransaction {
     )
     .with_instructions([Log::new(Level::INFO, "exact slice".into())])
     .sign(&private_key)
+}
+#[test]
+fn queue_plan_admission_intent_is_a_required_signature_bound_field() {
+    let ordinary = sample_signed_transaction();
+    assert_eq!(
+        ordinary.admission_intent(),
+        TransactionAdmissionIntent::Ordinary
+    );
+    let private_key: iroha_crypto::PrivateKey =
+        "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+            .parse()
+            .expect("fixture private key");
+    let queue_plan = TransactionBuilder::from_payload(ordinary.payload().clone())
+        .expect("ordinary payload is reconstructible")
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+        .sign(&private_key);
+    assert_eq!(
+        queue_plan.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced
+    );
+    assert_ne!(ordinary.hash(), queue_plan.hash());
+    assert_ne!(
+        ordinary
+            .encode_wire_v1()
+            .expect("encode ordinary transaction"),
+        queue_plan
+            .encode_wire_v1()
+            .expect("encode QueuePlan transaction")
+    );
+    queue_plan
+        .verify_signature()
+        .expect("typed QueuePlan intent is covered by the transaction signature");
+
+    let mut stripped = queue_plan.clone();
+    stripped.payload.admission_intent = TransactionAdmissionIntent::Ordinary;
+    assert_eq!(
+        stripped.admission_intent(),
+        TransactionAdmissionIntent::Ordinary
+    );
+    stripped
+        .verify_signature()
+        .expect_err("a relay cannot downgrade QueuePlan intent without invalidating the signature");
+
+    let restored = TransactionBuilder::from_payload(queue_plan.payload().clone())
+        .expect("QueuePlan payload is reconstructible")
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+        .into_payload()
+        .expect("explicit ordinary intent is valid");
+    assert_eq!(restored, ordinary.payload().clone());
+}
+#[test]
+fn transaction_payload_rejects_wire_omitting_required_admission_intent() {
+    #[derive(norito::codec::Encode)]
+    struct TransactionPayloadWithoutAdmissionIntent {
+        domain: TransactionDomain,
+        authority: AccountId,
+        creation_time_ms: u64,
+        instructions: Executable,
+        time_to_live_ms: Option<NonZeroU64>,
+        nonce: Option<NonZeroU32>,
+        fee_payment: FeePaymentIntent,
+        metadata: Metadata,
+        attachments: Option<crate::proof::ProofAttachmentList>,
+    }
+    let complete = sample_signed_transaction().payload().clone();
+    let omitted = TransactionPayloadWithoutAdmissionIntent {
+        domain: complete.domain,
+        authority: complete.authority,
+        creation_time_ms: complete.creation_time_ms,
+        instructions: complete.instructions,
+        time_to_live_ms: complete.time_to_live_ms,
+        nonce: complete.nonce,
+        fee_payment: complete.fee_payment,
+        metadata: complete.metadata,
+        attachments: complete.attachments,
+    };
+    let bytes = omitted.encode();
+    let mut cursor = bytes.as_slice();
+    assert!(
+        TransactionPayload::decode_all(&mut cursor).is_err(),
+        "admission_intent is a required V1 transaction-payload wire field"
+    );
 }
 #[cfg(feature = "json")]
 fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
@@ -182,6 +267,7 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
         .as_object()
         .expect("transaction payload serializes as an object");
     assert!(canonical_object.contains_key("domain"));
+    assert!(canonical_object.contains_key("admission_intent"));
     for retired in ["chain", "chain_id", "chainId"] {
         assert!(!canonical_object.contains_key(retired));
         let mut hostile = canonical.clone();
@@ -209,6 +295,7 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
         norito::json::from_value::<TransactionPayload>(unknown).is_err(),
         "unknown transaction payload fields must fail closed"
     );
+<<<<<<< HEAD
     assert_eq!(
         canonical
             .as_object()
@@ -225,6 +312,16 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
     assert!(
         norito::json::from_value::<TransactionPayload>(missing_attachments).is_err(),
         "transaction payload attachments are mandatory even when null"
+=======
+    let mut missing_admission_intent = canonical.clone();
+    missing_admission_intent
+        .as_object_mut()
+        .expect("transaction payload object")
+        .remove("admission_intent");
+    assert!(
+        norito::json::from_value::<TransactionPayload>(missing_admission_intent).is_err(),
+        "transaction payload admission_intent is mandatory"
+>>>>>>> origin/optimizations
     );
     let mut missing_domain = canonical;
     missing_domain
@@ -2536,6 +2633,7 @@ fn verify_signature_rejects_missing_multisig_signatures() {
         time_to_live_ms: None,
         nonce: None,
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+        admission_intent: TransactionAdmissionIntent::Ordinary,
         metadata: Metadata::default(),
         attachments: None,
     };
@@ -2578,6 +2676,7 @@ fn verify_signature_accepts_multisig_with_quorum() {
         time_to_live_ms: None,
         nonce: None,
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+        admission_intent: TransactionAdmissionIntent::Ordinary,
         metadata: Metadata::default(),
         attachments: None,
     };
@@ -2677,6 +2776,7 @@ fn verify_signature_rejects_empty_multisig_bundle() {
         time_to_live_ms: None,
         nonce: None,
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+        admission_intent: TransactionAdmissionIntent::Ordinary,
         metadata: Metadata::default(),
         attachments: None,
     };
@@ -2715,6 +2815,7 @@ fn verify_signature_rejects_unknown_signer() {
         time_to_live_ms: None,
         nonce: None,
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+        admission_intent: TransactionAdmissionIntent::Ordinary,
         metadata: Metadata::default(),
         attachments: None,
     };
@@ -2758,6 +2859,7 @@ fn verify_signature_does_not_double_count_duplicates() {
         time_to_live_ms: None,
         nonce: None,
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+        admission_intent: TransactionAdmissionIntent::Ordinary,
         metadata: Metadata::default(),
         attachments: None,
     };
@@ -2820,6 +2922,7 @@ fn signature_count_tracks_all_multisig_entries() {
         time_to_live_ms: None,
         nonce: None,
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+        admission_intent: TransactionAdmissionIntent::Ordinary,
         metadata: Metadata::default(),
         attachments: None,
     };

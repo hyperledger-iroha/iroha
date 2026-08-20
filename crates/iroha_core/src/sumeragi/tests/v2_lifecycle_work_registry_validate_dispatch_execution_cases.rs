@@ -292,6 +292,16 @@
             let alias_ordinal = fixture.lease.ordinal() + 1000;
             let mut alias = coordinator.records[&fixture.lease.ordinal()].clone();
             alias.ordinal = alias_ordinal;
+            let primary_key = alias.key;
+            alias.key = super::super::LifecycleKey::new(
+                primary_key.context(),
+                primary_key.round(),
+                primary_key.proposal_round(),
+                primary_key.subject(),
+                super::super::LifecyclePhase::Apply,
+                primary_key.execution_commitment(),
+            );
+            assert_ne!(alias.key, primary_key);
             alias.state = LifecycleState::Waiting(WaitToken::new(source, 0));
             assert!(coordinator.records.insert(alias_ordinal, alias).is_none());
             let mut holder = take_dispatch_registry(&mut fixture);
@@ -607,9 +617,6 @@
     #[cfg(feature = "bls")]
     #[test]
     fn validated_completion_rejects_conflicting_inherited_commitment_intact() {
-        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xCD);
-        let yielded_commitment =
-            ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
         let inherited_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"inherited commitment parent"),
             Hash::new(b"inherited commitment post"),
@@ -618,8 +625,15 @@
             Hash::new(b"inherited commitment wire"),
         );
         assert!(inherited_commitment.validate().is_ok());
+        let (mut fixture, _directory, mut store, durable) =
+            durable_validate_store_fixture_at_view_with_commitment(
+                0xCD,
+                2,
+                Some(inherited_commitment),
+            );
+        let yielded_commitment =
+            ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
         assert_ne!(inherited_commitment, yielded_commitment);
-        seal_validate_fixture_commitment(&mut fixture, inherited_commitment);
         let mut coordinator = claimed_durable_validate_coordinator(&fixture);
         let mut holder = take_dispatch_registry(&mut fixture);
         let dispatch = coordinator

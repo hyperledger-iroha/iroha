@@ -64,7 +64,7 @@ enum ExactOutputRolloverClaim {
         request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
         response_hash: HashOf<LaneHistoricalRecoveryResponseV1>,
     },
-    HistoricalAutonomousLaneCertification {
+    HistoricalLaneCertification {
         scope: ExactOutputCreationScope,
         target: PeerId,
         source_height: u64,
@@ -156,7 +156,7 @@ impl ExactOutputRolloverClaim {
             | Self::DurableLaneCertificateResponse { scope, .. }
             | Self::HistoricalLaneRecoveryRequest { scope, .. }
             | Self::HistoricalLaneRecoveryResponse { scope, .. }
-            | Self::HistoricalAutonomousLaneCertification { scope, .. }
+            | Self::HistoricalLaneCertification { scope, .. }
             | Self::DurableKuraReplicaAdvert { scope, .. }
             | Self::NativeAmx { scope, .. }
             | Self::LaneDrainVote { scope, .. }
@@ -437,7 +437,7 @@ impl ExactOutputRolloverClaim {
                 }
                 Ok(())
             }
-            Self::HistoricalAutonomousLaneCertification {
+            Self::HistoricalLaneCertification {
                 target,
                 source_height,
                 lane_id,
@@ -448,7 +448,7 @@ impl ExactOutputRolloverClaim {
             } => {
                 let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
                     return Err(
-                        "historical autonomous certification claim requires one exact message"
+                        "historical lane certification claim requires one exact message"
                             .to_owned(),
                     );
                 };
@@ -486,7 +486,7 @@ impl ExactOutputRolloverClaim {
                     || HashOf::new(message) != *message_hash
                 {
                     return Err(
-                        "historical autonomous certification claim changed identity".to_owned()
+                        "historical lane certification claim changed identity".to_owned()
                     );
                 }
                 Ok(())
@@ -570,7 +570,7 @@ impl ExactOutputRolloverClaim {
                 if peers != std::slice::from_ref(target)
                     || certificate.is_empty()
                     || certificate.len()
-                        > iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
+                        > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES
                     || Hash::new(certificate.as_slice()) != *certificate_hash
                 {
                     return Err(

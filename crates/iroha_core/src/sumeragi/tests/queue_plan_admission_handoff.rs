@@ -37,7 +37,7 @@ fn queue_plan_admission_ingress_rejects_empty_and_oversized_bodies_before_enqueu
         Arc::new(Vec::new()),
         Arc::new(vec![
             0xA5;
-            iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
+            iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES
                 + 1
         ]),
     ] {

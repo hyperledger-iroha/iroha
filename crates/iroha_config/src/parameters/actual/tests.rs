@@ -539,6 +539,115 @@ mod tests {
         );
     }
     #[test]
+    fn sumeragi_v2_lifecycle_geometry_uses_authenticated_ingress_sources() {
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 2),
+            Ok(SumeragiV2LifecycleCapacityGeometry {
+                consensus: 16,
+                effect: 256,
+                serve: 660,
+                producer: 660,
+                total: 1_592,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(31, 256, 163, 2),
+            Ok(SumeragiV2LifecycleCapacityGeometry {
+                consensus: 16,
+                effect: 256,
+                serve: 714,
+                producer: 714,
+                total: 1_700,
+            }),
+        );
+    }
+    #[test]
+    fn sumeragi_v2_lifecycle_geometry_checks_source_and_arithmetic_boundaries() {
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 100)
+                .expect("four-validator authenticated-source boundary must fit")
+                .total,
+            65_488,
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 101),
+            Err(SumeragiV2LifecycleCapacityGeometryError::TotalTooLarge {
+                consensus: 16,
+                effect: 256,
+                serve: 32_934,
+                producer: 32_934,
+                total: 66_140,
+                maximum: 65_536,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(1, 65_537, 1, 1),
+            Err(SumeragiV2LifecycleCapacityGeometryError::ClassTooLarge {
+                class: "effect",
+                actual: 65_537,
+                maximum: 65_536,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(4, 8, 1, 32_768),
+            Err(SumeragiV2LifecycleCapacityGeometryError::ClassTooLarge {
+                class: "serve",
+                actual: 65_544,
+                maximum: 65_536,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(1, 1, usize::MAX, usize::MAX),
+            Err(SumeragiV2LifecycleCapacityGeometryError::Overflow),
+        );
+    }
+    #[test]
+    fn sumeragi_v2_body_ingress_message_capacity_is_checked_and_roster_scaled() {
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(0, 0),
+            Some(1)
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(4, 2),
+            Some(28)
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(5, 2),
+            Some(33)
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(31, 2),
+            Some(163)
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(usize::MAX, 0),
+            None,
+            "validator-slot multiplication must fail closed on overflow"
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(0, usize::MAX),
+            None,
+            "authenticated-source multiplication must fail closed on overflow"
+        );
+    }
+    #[test]
+    fn sumeragi_v2_body_ingress_byte_capacity_is_checked_and_roster_scaled() {
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_byte_capacity(4, 2, 33),
+            Some(7 * 33)
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_byte_capacity(0, 0, usize::MAX),
+            Some(usize::MAX),
+            "the anonymous-only exact maximum remains representable"
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_byte_capacity(1, 0, usize::MAX),
+            None,
+            "multiplying two source partitions must fail closed on overflow"
+        );
+    }
+    #[test]
     fn sumeragi_v2_shared_config_defaults_are_finite_and_deterministic() {
         let config = default_v2_sumeragi();
         let shared = config

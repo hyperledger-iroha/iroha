@@ -50,7 +50,6 @@ finally:
     sys.dont_write_bytecode = _PREVIOUS_DONT_WRITE_BYTECODE
 LocalnetManifestError = _LOCALNET_MANIFEST_MODULE.LocalnetManifestError
 canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manifest
-
 _RELEASE_RECEIPT_COMPONENT_FILES = (
     "write_sumeragi_v2_release_receipt_formal_artifacts.py",
     "write_sumeragi_v2_release_receipt_corridor_log.py",
@@ -71,7 +70,6 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "4f351ac1711c88465e76f804c714a8d43ee0fc8d0133739b717f6e31dcf79ae6"
     ),
 }
-
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _SSH_FINGERPRINT_RE = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
@@ -508,14 +506,14 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 860
-_G_UNIT_TEST_COUNT = 527
+_PRODUCTION_TEST_COUNT = 865
+_G_UNIT_TEST_COUNT = 530
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        321,
+        324,
         "lib",
     ),
     (
@@ -638,6 +636,7 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-lifecycle-coordinator",
         "sumeragi::v2_lifecycle_coordinator",
+<<<<<<< HEAD
         39,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
@@ -647,6 +646,17 @@ _PRODUCTION_MODULES = (
         1,
     ),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 88),
+=======
+        42,
+    ),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
+    (
+        "production-v2-lifecycle-height-driver",
+        "sumeragi::v2_runner::lifecycle_height_driver::tests",
+        1,
+    ),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 90),
+>>>>>>> origin/optimizations
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",

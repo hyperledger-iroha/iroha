@@ -349,7 +349,6 @@ fn merge_candidate_for_persistence_retry(
         activation_root: crate::merge::merge_activation_root(&active_lanes),
         lane_snapshots: Vec::new(),
         lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
         execution_batch: None,
         global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
     }

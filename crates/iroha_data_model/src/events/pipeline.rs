@@ -482,7 +482,6 @@ mod tests {
             }],
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
-            queue_plan_admissions: Vec::new(),
             global_state_root: Hash::new(b"global"),
             merge_qc: MergeQuorumCertificate::new(
                 7,

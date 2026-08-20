@@ -179,7 +179,7 @@ override lets validation read the immutable archived copy instead of mutable
 
 ## Current status
 
-The checked-in legacy/revision-3-rooted ledger declares all three
+The checked-in revision-4 ledger declares all three
 production-refinement rows `cross_tool_proved`, and
 `--print-cross-tool-obligations` returns their exact ordered IDs. That status
 does not prove the separate revision-4 exact-cardinality corridor. The

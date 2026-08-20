@@ -1960,6 +1960,131 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
                 f"forbidden ordinary-height authority {observed!r}"
             )
 
+    publication_fence_struct = rust_code_tokens(
+        """
+pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
+    queue: &'a FairV2Ingress,
+    _service_guard: MutexGuard<'a, ()>,
+    _producer_publication_guard: MutexGuard<'a, ()>,
+    witness: PreparedFairIngressQueueWitness,
+    selection: PreparedFairIngressQueueSelection,
+}
+"""
+    )
+    ingress_tokens = rust_code_tokens(sources["ingress"])
+    if _token_sequence_count(ingress_tokens, publication_fence_struct) != 1:
+        errors.append(
+            f"{paths['ingress']}: lifecycle publication fence must retain one "
+            "move-only service/producer guard carrier"
+        )
+
+    lock_publication_fence = _require_qualified_rust_item(
+        paths["ingress"],
+        sources["ingress"],
+        "PreparedFairIngressQueueWitness",
+        "lock_exact_dequeue_retaining",
+        errors,
+        "pre-LedgerV1 exact dequeue publication fence",
+        expected_attributes=("#[allow(clippy::result_large_err)]",),
+    )
+    _require_rust_item_token_sha256(
+        paths["ingress"],
+        lock_publication_fence,
+        _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256[
+            "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining"
+        ],
+        "pre-LedgerV1 exact dequeue publication fence",
+        errors,
+    )
+    require_order(
+        "ingress",
+        lock_publication_fence,
+        "service then producer publication lock before final queue preflight",
+        (
+            "if !self.is_internally_exact()",
+            "let service_guard = queue.service_lock.lock()",
+            "let producer_publication_guard = queue.producer_publication_lock.lock()",
+            "self.revalidate_for_commit(queue)",
+            "let state = queue.state.lock()",
+            "self.metadata_matches_locked(&state)",
+            "LockedPreparedFairIngressExactDequeue {",
+            "_service_guard: service_guard",
+            "_producer_publication_guard: producer_publication_guard",
+        ),
+    )
+
+    publication_commit_candidates = [
+        rust_item
+        for rust_item in rust_items(sources["ingress"], "commit")
+        if rust_item.brace_context
+        == (("impl", "LockedPreparedFairIngressExactDequeue", "<", "'", "_", ">"),)
+    ]
+    if len(publication_commit_candidates) != 1:
+        errors.append(
+            f"{paths['ingress']}: require exactly one assertion-only "
+            "LockedPreparedFairIngressExactDequeue::commit; found "
+            f"{len(publication_commit_candidates)}"
+        )
+        publication_commit = None
+    else:
+        publication_commit = publication_commit_candidates[0]
+        _require_rust_item_context(
+            paths["ingress"],
+            publication_commit,
+            (("impl", "LockedPreparedFairIngressExactDequeue", "<", "'", "_", ">"),),
+            "post-LedgerV1 assertion-only exact dequeue",
+            errors,
+        )
+    _require_rust_item_token_sha256(
+        paths["ingress"],
+        publication_commit,
+        _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256[
+            "LockedPreparedFairIngressExactDequeue::commit"
+        ],
+        "post-LedgerV1 assertion-only exact dequeue",
+        errors,
+    )
+    require_order(
+        "ingress",
+        publication_commit,
+        "post-publication assertion dequeue before producer release",
+        (
+            "_producer_publication_guard",
+            "let mut state = queue.state.lock()",
+            "witness.metadata_matches_locked(&state)",
+            "queue.dequeue_selected_locked(",
+            ".expect(\"prevalidated lifecycle dequeue is infallible after publication\")",
+            "drop(state)",
+            "drop(_producer_publication_guard)",
+            "drop(_service_guard)",
+        ),
+    )
+
+    publication_fence_test_context = (
+        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+    )
+    for test_name in (
+        "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit",
+        "locked_publication_fence_serializes_unrelated_append_and_preserves_it",
+        "dropping_locked_publication_fence_releases_producer_without_dequeue",
+    ):
+        regression = item("ingress", test_name)
+        _require_rust_item_context(
+            paths["ingress"],
+            regression,
+            publication_fence_test_context,
+            f"producer-publication-fence regression {test_name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            paths["ingress"],
+            regression,
+            _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256[test_name],
+            f"producer-publication-fence regression {test_name}",
+            errors,
+        )
+
     launched_fields = sources["launch"]
     launched_start = launched_fields.find(
         "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1"
@@ -2292,20 +2417,33 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
     )
     complete_tip_shutdown_behavior = item(
         "startup_test",
-        "complete_tip_launched_lifecycle_shuts_down_without_publishing_successor",
+        "production_empty_genesis_complete_tip_adopts_control_repair_and_launches",
     )
     require_order(
         "startup_test",
         complete_tip_shutdown_behavior,
         "production CompleteTip lifecycle clean-shutdown behavior",
         (
-            "complete_tip_lifecycle_shutdown_fixture()",
-            "launch_non_pending_lifecycle_height_and_shutdown_for_test(",
-            "Some(retirement)",
+            "production_empty_genesis_complete_tip_fixture_for_test()",
+            "adapter.timeout_elapsed(adapter.current_tag())",
+            "open_recovered_startup_with_aggregator(",
+            "authenticated.has_recovered_control_sign_for_test()",
+            "open_production_lifecycle_owner_v1(",
+            "assert_ne!( repaired_successor, empty_successor",
+            "launch_non_pending_lifecycle_height_and_activate_for_test(",
+            "drain_lifecycle_v2_ingress(",
+            "LifecycleProducerClaimDispositionV1::AwaitingCompletion",
+            "loop",
+            "drain_lifecycle_v2_ingress(",
+            "LifecycleProducerClaimDispositionV1::Eligible",
+            "assert_ne!( broadcast_successor, repaired_successor",
+            ".into_clean_shutdown(&mut active_runner)",
             "assert!(!ingress_ready.load(Ordering::Acquire))",
             "assert!(!ingress_state.open)",
             "assert!(ingress_state.leader_wire_lifecycle_gate.is_none())",
             "assert!(!output_guard.restart_required())",
+            "assert!(crate::sumeragi::status::v2_status().is_some())",
+            "crate::sumeragi::status::clear_v2_status()",
             "assert!(crate::sumeragi::status::v2_status().is_none())",
         ),
     )
@@ -2339,7 +2477,9 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
     outcome_tokens = rust_code_tokens(outcomes)
     for token, count in (
         ("PassThrough(LifecycleCurrentRunnerTurn<'cursor>)", 2),
-        ("Selected(ProductionLifecycleCompletionSelectionV1)", 1),
+        ("Selected(ProductionLifecycleCompletionSelectionV1)", 2),
+        ("Ordinary(LifecycleCurrentRunnerTurn<'cursor>)", 1),
+        ("Ready(ProductionLifecycleReadyCompletionTurnV1<'cursor>)", 1),
         ("Selected(ProductionLifecycleIngressSelectionV1)", 1),
         ("Ordinary(ProductionPreparedOrdinaryIngressTurnV1)", 1),
     ):
@@ -2361,73 +2501,126 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
                 f"forbidden token {forbidden!r}"
             )
 
-    completion_items = [
-        rust_item
-        for rust_item in rust_items(sources["driver"], "drive_completion_turn")
-        if rust_item.brace_context
-        == (("impl", "LaunchedProductionLifecycleV1"),)
-    ]
-    if len(completion_items) != 1:
-        errors.append(
-            f"{paths['driver']}: unified lifecycle Completion turn driver must "
-            f"have one launched owner; found {len(completion_items)}"
-        )
-        completion = None
-    else:
-        completion = completion_items[0]
+    def launched_completion_item(name: str, description: str):
+        matches = [
+            rust_item
+            for rust_item in rust_items(sources["driver"], name)
+            if rust_item.brace_context
+            == (("impl", "LaunchedProductionLifecycleV1"),)
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{paths['driver']}: {description} must have one launched owner; "
+                f"found {len(matches)}"
+            )
+            return None
+        return matches[0]
+
+    completion_pre_gate = launched_completion_item(
+        "drive_completion_pre_gate",
+        "lifecycle Completion parked/physical pre-gate",
+    )
+    ready_completion = launched_completion_item(
+        "drive_ready_completion_turn",
+        "lifecycle Completion fresh Ready dispatcher",
+    )
+    completion = launched_completion_item(
+        "drive_completion_turn",
+        "composed lifecycle Completion turn driver",
+    )
     require_order(
         "driver",
-        completion,
-        "unified lifecycle Completion parked-owner and Ready order",
+        completion_pre_gate,
+        "lifecycle Completion parked-owner and physical-head pre-gate order",
         (
             "self.recovered_decision_apply_deferred.take()",
             "self.recovered_lifecycle_sign_completion.is_some()",
             "self.recovered_decision_fetch_body_completion.is_some()",
             "self.services.take_next_recovered_lifecycle_completion()",
-            "self.owner.classify_completion_ready_work()",
+            "ProductionLifecycleCompletionPreGateV1::Ready(",
         ),
     )
-    if completion is not None:
-        completion_tokens = rust_code_tokens(completion.source)
-        for token, count, label in (
-            (
-                "self.services.take_next_recovered_lifecycle_completion()",
-                1,
-                "unified lifecycle Completion single-head classifier",
-            ),
-            (
-                "if result.is_err() { self.close_output_for_restart(); }",
-                2,
-                "unified lifecycle Completion selected-dispatch failure closure",
-            ),
-        ):
-            observed = _token_sequence_count(completion_tokens, rust_code_tokens(token))
-            if observed != count:
-                errors.append(
-                    f"{paths['driver']}:{completion.line}: {label} must contain "
-                    f"{token!r} exactly {count} time(s); found {observed}"
-                )
     require_tokens(
         "driver",
-        completion,
-        "unified lifecycle Completion pass-through ownership",
+        completion_pre_gate,
+        "lifecycle Completion physical-head ownership",
         (
             "RecoveredLifecycleCompletionTakeV1::PassThrough",
-            "ProductionCompletionReadyWorkV1::PassThrough",
+            "RecoveredLifecycleCompletionTakeV1::CertifiedServe(completion)",
         ),
     )
-    if completion is not None:
-        completion_pass_throughs = _token_sequence_count(
-            rust_code_tokens(completion.source),
-            rust_code_tokens(
-                "return ProductionLifecycleCompletionTurnV1::PassThrough(runner)"
-            ),
+    if completion_pre_gate is not None:
+        ordinary_returns = _token_sequence_count(
+            rust_code_tokens(completion_pre_gate.source),
+            rust_code_tokens("ProductionLifecycleCompletionPreGateV1::Ordinary(runner)"),
         )
-        if completion_pass_throughs != 3:
+        if ordinary_returns != 2:
             errors.append(
-                f"{paths['driver']}:{completion.line}: unified lifecycle Completion "
-                "pass-through ownership must preserve exactly three early-return "
-                f"sites; found {completion_pass_throughs}"
+                f"{paths['driver']}:{completion_pre_gate.line}: lifecycle Completion "
+                "pre-gate must return the exact ordinary cursor for both a foreign "
+                f"runner rank and an ordinary physical head; found {ordinary_returns} sites"
+            )
+    require_order(
+        "driver",
+        ready_completion,
+        "fresh lifecycle Completion Ready-work dispatch",
+        (
+            "self.owner.classify_completion_ready_work()",
+            "ProductionCompletionReadyWorkV1::PassThrough",
+            "ProductionLifecycleCompletionTurnV1::PassThrough(runner)",
+            "ProductionCompletionReadyWorkV1::RecoveredIo",
+            "dispatch_recovered_completion_with_runner_debt",
+            "ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast",
+            "refanout_recovered_lifecycle_signed_broadcast_with_runner_debt",
+        ),
+    )
+    require_order(
+        "driver",
+        completion,
+        "composed lifecycle Completion pre-gate and Ready order",
+        (
+            "self.drive_completion_pre_gate(runner, lane_work)",
+            "ProductionLifecycleCompletionPreGateV1::Selected(selected)",
+            "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+            "ProductionLifecycleCompletionPreGateV1::Ready(ready)",
+            "self.drive_ready_completion_turn(ready)",
+        ),
+    )
+    for target, token, count, label in (
+        (
+            completion_pre_gate,
+            "self.services.take_next_recovered_lifecycle_completion()",
+            1,
+            "lifecycle Completion single physical-head classifier",
+        ),
+        (
+            ready_completion,
+            "self.owner.classify_completion_ready_work()",
+            1,
+            "lifecycle Completion single fresh Ready census",
+        ),
+        (
+            completion,
+            "self.drive_completion_pre_gate(runner, lane_work)",
+            1,
+            "composed lifecycle Completion single pre-gate",
+        ),
+        (
+            completion,
+            "self.drive_ready_completion_turn(ready)",
+            1,
+            "composed lifecycle Completion single Ready dispatch",
+        ),
+    ):
+        if target is None:
+            continue
+        observed = _token_sequence_count(
+            rust_code_tokens(target.source), rust_code_tokens(token)
+        )
+        if observed != count:
+            errors.append(
+                f"{paths['driver']}:{target.line}: {label} must contain {token!r} "
+                f"exactly {count} time(s); found {observed}"
             )
 
     completion_head = item("worker", "take_next_recovered_lifecycle_completion")
@@ -2956,7 +3149,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "census.select_apply(ordinal)",
             "census.select_sign(ordinal)",
             "census.select_fetch(ordinal)",
-            "registration.commit(prepared)",
+            "registration.commit(prepared, wait_source)",
             "output.commit()",
         ),
     )
@@ -2994,12 +3187,12 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             )
     require_order(
         "driver",
-        completion,
-        "unified recovered Completion composite dispatch",
+        ready_completion,
+        "fresh lifecycle Completion Ready composite dispatch",
         (
             "ProductionCompletionReadyWorkV1::RecoveredIo",
             "owner.dispatch_recovered_completion_with_runner_debt(",
-            "if result.is_err()",
+            "if let Err(error) = &result",
             "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",
         ),
     )
@@ -3335,10 +3528,15 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "executor.has_retained_certified_body_response()",
             "outer_ingress_turns(limit, context_id, height)",
             "LifecycleRunnerRankTarget::Completion",
-            "activated.drive_completion_turn(current_turn, lane_work)",
-            "services.drain_completions(executor)?",
+            "activated.drive_completion_pre_gate(current_turn, lane_work)",
+            "PreGate::Ordinary(ordinary_turn)",
+            "drain_one_ordinary_completion_after_lifecycle_pass_through",
+            "PreGate::Selected(selected)",
+            "PreGate::Ready(ready)",
+            "producer_claim == LifecycleProducerClaimDispositionV1::Eligible",
+            "activated.drive_ready_completion_turn(ready)",
             "completion_selection_stops_batch(&selected)",
-            "return Ok(())",
+            "LifecycleV2IngressDrainDispositionV1::ready(producer_claim)",
             "LifecycleRunnerRankTarget::Runtime",
             "advance_executor(receiver, executor, services, 1)?",
             "LifecycleRunnerRankTarget::Ingress",
@@ -3351,17 +3549,23 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         lifecycle_height_driver,
         "activated lifecycle ordinary batch selected outcomes",
         (
-            "ProductionLifecycleCompletionTurnV1::PassThrough(ordinary_turn,)",
-            "ProductionLifecycleCompletionTurnV1::Selected(selected,)",
+            "ProductionLifecycleCompletionPreGateV1 as PreGate",
+            "ProductionLifecycleCompletionTurnV1 as CompletionTurn",
+            "CompletionTurn::PassThrough(empty_turn)",
+            "CompletionTurn::Selected(selected)",
             "selected.restart_required()",
             "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
             "ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch",
+            "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending",
+            "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry",
+            "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCompetingReady",
             "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeCompetingReady",
             "ProductionLifecycleIngressSelectionV1::CertifiedServeQueued",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeReplayQueued",
             "ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal",
-            "ProductionLifecycleIngressSelectionV1::CapacityPending",
-            "ProductionLifecycleIngressSelectionV1::Retry",
-            "ProductionLifecycleIngressSelectionV1::OrdinaryRetained",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeRetry",
             "ProductionLifecycleIngressSelectionV1::RestartRequired",
         ),
     )
@@ -3787,6 +3991,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "tag: reducer::EventTag",
         "round: wire::ConsensusRound",
         "subject: wire::BlockSubject",
+        "fn from_authenticated_durable_current_round(",
+        "adapter.reducer.durable_state().proposal_intent(round)",
         "fn from_control(control: &RecoveredWalControlSign) -> Option<Self>",
         "request: SignRequest::Proposal(proposal)",
         "fn exactly_matches_directive(",
@@ -3825,9 +4031,10 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         proposal_factory,
         "recovered local-Proposal owner factory dispatch",
         (
+            "RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round( &adapter, )",
             "RecoveredWalStartupAuthorityV1::ControlSign(control)",
             "Self::open_recovered_control_authority_branch(",
-            "verified, adapter, effects, control, body_store,",
+            "verified, adapter, effects, control, local_proposal_attempt, body_store,",
         ),
     )
     proposal_control = item(

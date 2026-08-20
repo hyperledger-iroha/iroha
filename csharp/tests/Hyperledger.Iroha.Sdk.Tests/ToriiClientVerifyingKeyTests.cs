@@ -349,7 +349,7 @@ public sealed partial class ToriiClientTests
                 operation,
                 "transaction_payload_b64",
                 $$"""{"submitted":false,"transaction_payload_b64":"AQID","signing_message_b64":"{{nonCanonicalPayloadSigningBase64}}"}""",
-                "canonical nine-field",
+                "canonical ten-field",
             };
             yield return new object?[]
             {

@@ -254,13 +254,12 @@ let mut exact_incumbent = candidate_semantic_identity
 if let Some(incumbent) = exact_incumbent.as_ref()
     && incumbent != &*evidence
 {
-    return Err(EffectExecutorError::Contract(
-        "one semantic candidate lifecycle attempted exact owner replacement"
-            .to_owned(),
-    ));
+    *evidence = incumbent
+        .adopt_incumbent_candidate_for_semantic_retry(evidence, effect)
+        .map_err(EffectExecutorError::Contract)?;
 }
 """,
-        "same semantic candidate lifecycle must reject exact owner replacement before refinement",
+        "same semantic candidate lifecycle must retain its exact incumbent owner before refinement",
         errors,
     )
     _require_rust_token_sequence(
@@ -1064,7 +1063,8 @@ ownership
             """
 match relation {
     RuntimeFetchAuthorityRelation::Upgrade => incoming_statement,
-    RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
+    RuntimeFetchAuthorityRelation::Same => None,
+    RuntimeFetchAuthorityRelation::Stale => {
         if retained_owner != *ownership.owner() {
             self.latch_fail_closed(
                 "coalesced body completion changed its exact lifecycle owner",
@@ -1075,7 +1075,7 @@ match relation {
     }
 }
 """,
-            "same or stale terminal retries must reject a foreign owner while an authority upgrade remains separately reviewed",
+            "stale terminal retries must reject a foreign owner while same authority stutters and upgrades remain separately reviewed",
             errors,
         )
 

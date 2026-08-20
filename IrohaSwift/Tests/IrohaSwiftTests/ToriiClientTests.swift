@@ -540,6 +540,10 @@ final class ToriiClientTests: XCTestCase {
             "instructions": .object([:]),
             "time_to_live_ms": .number(100_000),
             "fee_payment": feePayment,
+            "admission_intent": .object([
+                "intent": .string("ordinary"),
+                "value": .null,
+            ]),
             "metadata": .object([:]),
             "attachments": .null,
         ]

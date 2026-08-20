@@ -286,14 +286,20 @@ struct V2StartupFinalityVerificationInventory {
     hash_only_heights: BTreeSet<u64>,
     entries: BTreeMap<u64, VerifiedV2StartupFinalityEntry>,
     replay_sidecars: Vec<V2StartupReplaySidecarsAtHeight>,
+    /// Authenticated artifact exactly at the durable block tip, retained only
+    /// for replay authorization at that height.
     durable_tip_artifact: Option<V2FinalityArtifact>,
+    /// Highest authenticated durable finality artifact, retained independently
+    /// because finality may legitimately trail the durable block tip.
+    highest_verified_finality_artifact: Option<V2FinalityArtifact>,
 }
 /// Kura-minted identity binding carried from replay planning into active-height
 /// recovery.
 ///
-/// The binding never retains historical block bodies or full historical
-/// finality artifacts. It carries fixed-size projections for history and the
-/// sole durable-tip artifact needed for exact lane-completion validation. Its
+/// The binding never retains historical block bodies. It carries fixed-size
+/// finality projections, the sole durable-tip artifact exposed for exact
+/// lane-completion validation, and at most one highest verified artifact kept
+/// internally for status hydration when finality trails the block tip. Its
 /// fields are private so callers cannot construct a replay authorization
 /// without Kura's complete startup audit.
 #[derive(Debug, Clone)]

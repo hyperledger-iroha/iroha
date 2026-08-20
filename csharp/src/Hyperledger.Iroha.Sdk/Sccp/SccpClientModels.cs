@@ -673,6 +673,7 @@ internal static class SccpSubmitValidation
         var timeToLive = cursor.TakeField("time_to_live_ms");
         var nonce = cursor.TakeField("nonce");
         var feePayment = cursor.TakeField("fee_payment");
+        var admissionIntent = cursor.TakeField("admission_intent");
         var metadata = cursor.TakeField("metadata");
         var attachments = cursor.TakeField("attachments");
         if (!cursor.IsFinished
@@ -705,6 +706,7 @@ internal static class SccpSubmitValidation
         RequireDefaultTimeToLive(timeToLive);
         RequireAbsentOption(nonce, "nonce");
         RequireCanonicalFeePayment(feePayment, expectedFeePayment);
+        RequireQueuePlanSyncedAdmissionIntent(admissionIntent);
         RequireCanonicalMetadata(metadata);
         RequireAbsentOption(attachments, "attachments");
     }
@@ -1046,6 +1048,7 @@ internal static class SccpSubmitValidation
         var timeToLive = cursor.TakeField("time_to_live_ms");
         var nonce = cursor.TakeField("nonce");
         var feePayment = cursor.TakeField("fee_payment");
+        var admissionIntent = cursor.TakeField("admission_intent");
         var metadata = cursor.TakeField("metadata");
         var attachments = cursor.TakeField("attachments");
         if (!cursor.IsFinished
@@ -1080,6 +1083,7 @@ internal static class SccpSubmitValidation
         RequireDefaultTimeToLive(timeToLive);
         RequireAbsentOption(nonce, "nonce");
         RequireCanonicalFeePayment(feePayment, expectedFeePayment);
+        RequireQueuePlanSyncedAdmissionIntent(admissionIntent);
         RequireCanonicalMetadata(metadata);
         RequireAbsentOption(attachments, "attachments");
     }
@@ -1629,6 +1633,16 @@ internal static class SccpSubmitValidation
 
     internal static void RequireEmptyTransactionMetadata(ReadOnlySpan<byte> payload) =>
         RequireCanonicalMetadata(payload);
+
+    internal static void RequireQueuePlanSyncedAdmissionIntent(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != sizeof(uint)
+            || BinaryPrimitives.ReadUInt32LittleEndian(payload) != 1)
+        {
+            throw new ArgumentException(
+                "Transaction admission_intent must be QueuePlanSynced.");
+        }
+    }
 
     private static void RequireCanonicalFeePayment(
         ReadOnlySpan<byte> payload,

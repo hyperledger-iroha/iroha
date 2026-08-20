@@ -64,6 +64,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_config/src/parameters/user.rs'): (
         Path('user/kura.rs'),
+        Path('user_soranet_handshake_tests.rs'),
         Path('user/torii_peer_geo.rs'),
         Path('user/torii_soranet_privacy_ingest.rs'),
         Path('user/torii_tx_history.rs'),
@@ -451,6 +452,12 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_adapter_04b_lifecycle_startup.rs'),
         Path('v2_adapter_05_direct_lifecycle.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs'): (
+        Path('v2_adapter_04_wal_recovery_decision_classifier_cases.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs'): (
+        Path('v2_adapter_04b_lifecycle_startup_tail.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_04.rs'): (
         Path('v2_adapter_01_replay_and_registry.rs'),
         Path('v2_adapter_02_view_and_lock_progress.rs'),
@@ -501,9 +508,15 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
 assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 52
+<<<<<<< HEAD
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 7
 assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 7
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 45
+=======
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 6
+assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 6
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 46
+>>>>>>> origin/optimizations
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
@@ -2015,15 +2028,13 @@ def test_recovered_lifecycle_proposal_owner_semantics_survive_digest_refresh(
         tmp_path
         / "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs"
     )
-    test_name = (
-        "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner"
-    )
+    test_name = "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade"
     mutate_rust_item_source(
         module,
         replay_path,
         test_name,
-        'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
-        "let foreign_lock = directive(Some(subject), None);",
+        "recovered.exactly_matches_directive(upgraded_lock),",
+        "!recovered.exactly_matches_directive(upgraded_lock),",
     )
     item = module.rust_items(
         replay_path.read_text(encoding="utf-8"), test_name
@@ -2037,7 +2048,7 @@ def test_recovered_lifecycle_proposal_owner_semantics_survive_digest_refresh(
     )
 
     assert any(
-        "the recovered-attempt regression must prove exact, affine runner binding and reject foreign locks, rounds, and decisions"
+        "the recovered-attempt regression must prove affine same-view suppression across a lock upgrade while rejecting foreign rounds and decisions"
         in error
         for error in errors
     ), errors

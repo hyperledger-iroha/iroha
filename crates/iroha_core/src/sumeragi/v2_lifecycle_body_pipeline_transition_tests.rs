@@ -1186,9 +1186,10 @@ mod tests {
         );
         let foreign_store_owner = bind_adapter_effect_batch_ownership(
             core::slice::from_ref(&store_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(
+            vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
                 foreign_owner_tag,
                 99,
+                b"foreign Store-to-Validate lineage",
             )],
         )
         .expect("bind foreign Store owner")
@@ -1235,9 +1236,9 @@ mod tests {
             incumbent_key.context(),
             incumbent_key.round(),
             incumbent_key.proposal_round(),
-            Some(super::super::LifecycleDigest::new([0xF1; 32])),
+            incumbent_key.subject(),
             LifecyclePhase::Store,
-            incumbent_key.execution_commitment(),
+            Some(super::super::LifecycleDigest::new([0xF1; 32])),
         );
         lease.key = foreign_key;
         coordinator.active_lease = Some(lease.clone());

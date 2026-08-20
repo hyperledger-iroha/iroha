@@ -230,8 +230,11 @@ the shared Norito codecs shipped in `norito-java`:
 
 ```java
 TransactionPayload payload = TransactionPayload.builder()
+    .setNetworkId(NetworkId.parse("<canonical-network-id>"))
     .setAuthority("<i105-account-id>")
     .setInstructionBytes(KotodamaCompiler.compile(contract))
+    .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
+    .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
     .build();
 
 TransactionPayload decoded =
@@ -244,7 +247,10 @@ TransactionPayload decoded =
 
 The helper encodes and decodes via the supplied `NoritoCodecAdapter`, keeping
 schema hashes aligned with the Rust server while sparing app code from manual
-byte handling.
+byte handling. Unlike `TransactionBuilder.encodeAndSign`, this direct codec
+path does not rewrite the intent, so public submission callers must set the
+typed `QUEUE_PLAN_SYNCED` value before signing. Missing or unknown intent bytes
+are rejected; metadata is never an admission-mode fallback.
 
 ## 5. Telemetry observers & redaction
 

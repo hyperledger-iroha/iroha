@@ -5,12 +5,19 @@ def test_release_inventory_constants_match_current_source_seal(
 ) -> None:
     """Every release consumer binds the current production and focus seals."""
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 860
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 865
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
+<<<<<<< HEAD
         "b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
         "517f8e9e8dc7b522144fc1d6f05ecd0f99142630d5a3dcb456e512ef45b44030"
+=======
+        "9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a"
+    )
+    assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
+        "37d89b45597ce3ba1c1ca81a0e58192177c396b53a1c1b305458a45acd4faebd"
+>>>>>>> origin/optimizations
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -18,11 +25,32 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 527
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 528
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 530
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 531
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
+<<<<<<< HEAD
         "db96b6b781b450c4b04dbe1f6d4068a4a2a4f13cea3f0fbd868f50dbce4baabb"
+=======
+        "e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474"
+>>>>>>> origin/optimizations
     )
+    assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
+        "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
+            "66d33b07c062bd6dc4a1b879b0b3624bc0403e59305cbc44763d409f97d109fc"
+        ),
+        "LockedPreparedFairIngressExactDequeue::commit": (
+            "2df7516317611dcc3fc0f959cca1e80a7b6aa3670a90d2add798f744cfebbd4c"
+        ),
+        "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit": (
+            "da01b212e5b3db1163c100f1088e943c074aa124c2f225a4c068052d79e499f9"
+        ),
+        "locked_publication_fence_serializes_unrelated_append_and_preserves_it": (
+            "3f863e16e284ffd980a06b45cd16d3ee4cfd4559a8f7ff23687a55d32ff7481b"
+        ),
+        "dropping_locked_publication_fence_releases_producer_without_dequeue": (
+            "4375aa5205367018773fec586aefb2c44940f502e6de1ae94b8e6e221a350d6f"
+        ),
+    }
     assert (
         "_production_liveness_release_inventory_guard_errors"
         in module._production_liveness_release_inventory_errors.__code__.co_names
@@ -174,9 +202,9 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 860
-    assert receipt_module._G_UNIT_TEST_COUNT == 527
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 860
+    assert receipt_module._PRODUCTION_TEST_COUNT == 865
+    assert receipt_module._G_UNIT_TEST_COUNT == 530
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 865
     receipt_module_counts = {
         module_name: count
         for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
@@ -187,6 +215,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert receipt_module_counts["sumeragi::v2_effects::tests"] == 71
     assert receipt_module_counts["sumeragi::v2_lane_work::tests"] == 63
     assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 65
+<<<<<<< HEAD
     assert receipt_module_counts["sumeragi::v2_lifecycle_coordinator"] == 39
     assert (
         receipt_module_counts["sumeragi::v2_certified_serve_payload_store::tests"]
@@ -199,11 +228,17 @@ def test_release_inventory_constants_match_current_source_seal(
         ]
         == 1
     )
+=======
+    assert receipt_module_counts["sumeragi::v2_certified_serve_payload_store::tests"] == 11
+    assert receipt_module_counts["sumeragi::v2_lifecycle_coordinator"] == 39
+    assert receipt_module_counts["sumeragi::v2_runner::tests"] == 37
+    assert receipt_module_counts["sumeragi::v2_runner::lifecycle_height_driver::tests"] == 1
+>>>>>>> origin/optimizations
     assert receipt_module_counts["sumeragi::v2_worker::tests"] == 88
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 527
+        == 530
     )
 
 @pytest.mark.parametrize(
@@ -371,6 +406,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     runtime_source = read_reviewed_source_bundle(
         "crates/iroha_core/src/sumeragi/v2_runtime.rs"
     )
+    lifecycle_coordinator_source = read_reviewed_source_bundle("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs")
     worker_source = read_reviewed_source_bundle(
         "crates/iroha_core/src/sumeragi/v2_worker.rs"
     )
@@ -1857,16 +1893,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             "stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal",
             runtime_source,
         ),
-        (
-            "sumeragi::v2_runtime::tests::",
-            "restored_serve_high_watermark_precedes_startup_runtime_owner",
-            runtime_source,
-        ),
-        (
-            "sumeragi::v2_runtime::tests::",
-            "full_runtime_churn_cannot_cross_an_exact_serve_ordinal",
-            runtime_source,
-        ),
+        ("sumeragi::v2_lifecycle_coordinator::tests::", "restart_seeds_high_water_and_rollover_preserves_it", lifecycle_coordinator_source),
+        ("sumeragi::v2_lifecycle_coordinator::tests::", "producer_handoff_blocks_later_work_without_making_serve_a_global_barrier", lifecycle_coordinator_source),
     )
     assert len(deterministic_ownership_inventory_additions) == 13
     production_inventory_additions = tuple(
@@ -2064,8 +2092,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_inventory) == 860
-    assert len(set(production_inventory)) == 860
+    assert len(production_inventory) == 865
+    assert len(set(production_inventory)) == 865
     native_merge_projection_regressions = {
         "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
         "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
@@ -2107,46 +2135,49 @@ kura.claim_autonomous_lifecycle_process_generation(
         in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
     exact_certified_serve_regressions = {
-        "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_required_serve_gate_precedes_open",
+        "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::turn_cut_dequeues_exact_winner_once_and_preserves_ready_rotation",
         "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve",
         "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn",
         "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
-        "sumeragi::v2_worker::tests::exact_serve_predecessor_admission_services_older_local_without_admitting_later_io",
-        "sumeragi::v2_worker::tests::repeated_exact_serve_admissions_close_all_older_sources_before_later_io",
-        "sumeragi::v2_worker::tests::dropping_exact_serve_predecessor_admission_closes_transient_aperture",
-        "sumeragi::v2_worker::tests::exact_serve_predecessor_admission_is_transient_and_barrier_bound",
-        "sumeragi::v2_worker::tests::exact_serve_admission_waits_out_full_control_prefix_before_older_causal_work",
-        "sumeragi::v2_worker::tests::fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers",
-        "sumeragi::v2_worker::tests::drained_exact_retransmission_gets_fresh_scheduler_ordinal",
-        "sumeragi::v2_worker::tests::fair_ingress_gate_overflow_closes_without_partial_admission",
-        "sumeragi::v2_worker::tests::fair_ingress_classifies_current_historical_future_and_unauthenticated_requests",
-        "sumeragi::v2_worker::tests::fair_ingress_rollover_retires_ticket_before_old_service_teardown",
-        "sumeragi::v2_worker::tests::fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission",
-        "sumeragi::v2_worker::tests::fair_ingress_full_prefix_materializes_exact_serve_before_later_churn",
-        "sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack",
-        "sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection",
-        "sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission",
-        "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_locally_completes_without_retry",
-        "sumeragi::v2_worker::tests::durable_coalesced_retransmission_restart_locally_completes_without_retry",
-        "sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source",
-        "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion",
-        "sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay",
-        "sumeragi::v2_worker::tests::durable_serve_seal_survives_post_before_physical_ack",
-        "sumeragi::v2_worker::tests::durable_serve_corruption_fails_closed_without_highwater_reset",
-        "sumeragi::v2_worker::tests::durable_serve_frame_bound_covers_max_layout_manifest_hashes",
-        "sumeragi::v2_worker::tests::durable_higher_view_abort_republishes_displaced_terminal_before_restart",
-        "sumeragi::v2_worker::tests::durable_higher_view_admission_crash_locally_completes_successor_union",
-        "sumeragi::v2_worker::tests::durable_serve_restore_rejects_capacity_owner_swap_across_replacement",
-        "sumeragi::v2_worker::tests::durable_serve_state_is_pruned_only_with_successor_rollover_root",
-        "sumeragi::v2_worker::tests::certified_serve_future_slot_blocks_control_and_consensus_replenishment",
-        "sumeragi::v2_worker::tests::certified_serve_cross_relay_retry_replays_one_terminal_tombstone",
-        "sumeragi::v2_worker::tests::certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_owner",
-        "sumeragi::v2_worker::tests::certified_serve_observer_owner_contains_prepare_and_commit_subfamilies",
-        "sumeragi::v2_worker::tests::certified_serve_higher_view_abort_restores_terminal_high_watermark",
-        "sumeragi::v2_worker::tests::certified_serve_receiver_close_aborts_reserved_replacement_without_orphan",
-        "sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect",
+        "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner",
+        "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_symlink_replacement",
+        "sumeragi::v2_certified_serve_payload_store::tests::capacity_is_checked_before_a_second_file_is_published",
+        "sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_certified_responder_authority",
+        "sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_durable_body_receipt_and_bytes",
+        "sumeragi::v2_certified_serve_payload_store::tests::negative_terminal_is_idempotent_and_cannot_be_replaced",
+        "sumeragi::v2_certified_serve_payload_store::tests::only_the_call_that_created_pending_owns_preledger_abort_authority",
+        "sumeragi::v2_certified_serve_payload_store::tests::pending_receipt_requires_verified_qc_and_local_retention_authority",
+        "sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reauthenticates_request_qc_and_typed_negative",
+        "sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reconstructs_and_authenticates_completed_response",
+        "sumeragi::v2_lifecycle_coordinator::ledger::tests::frame_roundtrip_is_canonical_and_preserves_high_water",
+        "sumeragi::v2_lifecycle_coordinator::ledger::tests::one_signed_serve_request_cannot_own_two_lifecycle_pairs",
+        "sumeragi::v2_lifecycle_coordinator::ledger::tests::orphan_serve_or_producer_records_are_rejected",
+        "sumeragi::v2_lifecycle_coordinator::projection::tests::cancelled_certified_serve_tombstone_replays_with_its_terminal_producer_pair",
+        "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_completion_settles_from_the_post_fsync_response_receipt",
+        "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_negative_settlement_requires_the_exact_post_fsync_receipt",
+        "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_rejects_a_receipt_for_another_signed_request",
+        "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_terminal_family_mismatch_fails_without_state_mutation",
+        "sumeragi::v2_lifecycle_coordinator::projection::tests::pending_certified_serve_admits_one_ready_serve_and_adjacent_dormant_producer",
+        "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records",
+        "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::recovered_serve_states_reconstruct_one_common_source_per_replay_pair",
+        "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::post_cut_append_preserves_geometry_but_pre_cut_mutation_fails_cas",
+        "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::prepared_commit_preserves_unrelated_post_cut_append",
+        "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit",
+        "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::locked_publication_fence_serializes_unrelated_append_and_preserves_it",
+        "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::dropping_locked_publication_fence_releases_producer_without_dequeue",
+        "sumeragi::v2_lifecycle_coordinator::launch::turn_driver::ordinary_ingress_token_tests::armed_token_closes_output_before_releasing_dequeued_carrier_and_serve_result",
+        "sumeragi::v2_lifecycle_coordinator::open::recovery_tests::complete_tip_serve_reconciliation_binds_the_exact_source_frame",
+        "sumeragi::v2_lifecycle_coordinator::open::recovery_tests::complete_tip_serve_reconciliation_rejects_missing_final_cut_coverage",
+        "sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_claim_rolls_back_when_its_exact_carrier_drifted",
+        "sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_scheduler_creates_exactly_one_live_claim",
+        "sumeragi::v2_lifecycle_coordinator::tests::capacity_fence_freezes_the_complete_serve_companion",
+        "sumeragi::v2_lifecycle_coordinator::tests::durable_rollover_rejects_live_serve_without_payload_cancellation_receipt",
+        "sumeragi::v2_lifecycle_coordinator::tests::recovery_requires_a_bijective_atomic_serve_producer_pair",
+        "sumeragi::v2_lifecycle_coordinator::tests::restart_derives_ready_producer_debt_from_terminal_serve",
+        "sumeragi::v2_lifecycle_coordinator::tests::serve_and_producer_share_one_reconstruction_source",
+        "sumeragi::v2_lifecycle_coordinator::tests::serve_and_producer_terminalization_fail_closed_without_the_atomic_debt",
     }
-    assert len(exact_certified_serve_regressions) == 38
+    assert len(exact_certified_serve_regressions) == 41
     assert exact_certified_serve_regressions <= set(production_inventory)
     assert exact_certified_serve_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
@@ -2160,7 +2191,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         "sumeragi::v2_runtime::tests::post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target",
         "sumeragi::v2_runtime::tests::pre_dequeue_probe_validates_unfrozen_leader_wire_identity",
         "sumeragi::v2_runtime::tests::busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation",
-        "sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity",
+        "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_rejects_foreign_target_and_rolls_back_capacity_wait",
     }
     assert final_replenishment_lasso_regressions <= set(production_inventory)
     assert final_replenishment_lasso_regressions <= set(
@@ -2175,23 +2206,31 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert deterministic_ownership_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    late_passive_fetch_regression = (
-        "sumeragi::v2_effects::tests::"
-        "late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps"
-    )
-    assert late_passive_fetch_regression in production_inventory
-    assert late_passive_fetch_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
+    recovered_decision_fetch_regression = "sumeragi::v2_lifecycle_coordinator::launch::tests::recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit"
+    assert recovered_decision_fetch_regression in production_inventory
+    assert recovered_decision_fetch_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     autonomous_retirement_regression = (
         "sumeragi::v2_worker::tests::"
-        "applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only"
+        "applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically"
     )
     assert autonomous_retirement_regression in production_inventory
     assert (
         autonomous_retirement_regression
         in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 441
-    assert "readonly expected_production_liveness_test_count=860" in release_source
+    for predecessor_durability_regression in (
+        "sumeragi::v2_worker::tests::"
+        "applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output",
+        "sumeragi::v2_worker::tests::"
+        "applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate",
+    ):
+        assert predecessor_durability_regression in production_inventory
+        assert (
+            predecessor_durability_regression
+            in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
+        )
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 446
+    assert "readonly expected_production_liveness_test_count=865" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -2201,7 +2240,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 860" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 865" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -2211,7 +2250,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 860
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 865
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -2388,6 +2427,9 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert "sumeragi::v2_core::network_simulation" not in production_modules
     assert "sumeragi::v2_block_sync::tests" in production_modules
     assert "sumeragi::v2_apply::tests" in production_modules
+    assert "sumeragi::v2_certified_serve_payload_store::tests" in production_modules
+    assert "sumeragi::v2_lifecycle_coordinator" in production_modules
+    assert "sumeragi::v2_runner::lifecycle_height_driver::tests" in production_modules
     assert "sumeragi_v2_runner" in production_modules
     assert "peer::run::tests" in production_modules
     assert "network::tests" in production_modules
@@ -3056,21 +3098,17 @@ kura.claim_autonomous_lifecycle_process_generation(
         ),
         (
             "sumeragi::v2_runner::tests::"
-            "dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester",
+            "drain_decided_lane_recovery_ingress_retains_current_serve_for_lifecycle",
             "sumeragi::v2_runner::tests::"
-            "deferred_startup_producer_turn_is_retained_until_one_exclusive_claim",
+            "drain_decided_lane_recovery_ingress_retains_current_serve_for_lifecycle_mutant",
         ),
         (
-            "sumeragi::v2_worker::tests::"
-            "durable_raw_admission_restart_locally_seals_before_later_producers",
-            "sumeragi::v2_worker::tests::"
-            "durable_raw_admission_restart_reuses_lifecycle_and_excludes_family_replacement",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::completed_certified_serve_tombstone_replays_without_a_serve_carrier",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::completed_certified_serve_tombstone_replays_without_a_serve_carrier_mutant",
         ),
         (
-            "sumeragi::v2_worker::tests::"
-            "durable_serve_state_v5_rejects_v4_header_and_payload_layouts",
-            "sumeragi::v2_worker::tests::"
-            "durable_serve_state_v4_rejects_v3_header_and_payload_layouts",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast_mutant",
         ),
         (
             "network::inbound_source_memory_bound_tests::"
@@ -3079,16 +3117,16 @@ kura.claim_autonomous_lifecycle_process_generation(
             "reliable_actor_waiter_geometry_rejects_zero_and_combined_overflow",
         ),
         (
-            "sumeragi::v2_worker::tests::"
-            "durable_serve_restart_before_terminal_seal_locally_completes_without_retry",
-            "sumeragi::v2_worker::tests::"
-            "durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
+            "sumeragi::v2_lifecycle_coordinator::projection::tests::"
+            "certified_serve_negative_settlement_requires_the_exact_post_fsync_receipt",
+            "sumeragi::v2_lifecycle_coordinator::projection::tests::"
+            "certified_serve_negative_settlement_requires_the_exact_post_fsync_receipt_mutant",
         ),
         (
-            "sumeragi::v2_worker::tests::"
-            "durable_coalesced_retransmission_restart_locally_completes_without_retry",
-            "sumeragi::v2_worker::tests::"
-            "durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
+            "sumeragi::v2_lifecycle_coordinator::projection::tests::"
+            "certified_serve_rejects_a_receipt_for_another_signed_request",
+            "sumeragi::v2_lifecycle_coordinator::projection::tests::"
+            "certified_serve_rejects_a_receipt_for_another_signed_request_mutant",
         ),
         (
             "sumeragi::authoritative_runtime_gate_tests::"
@@ -3153,64 +3191,59 @@ kura.claim_autonomous_lifecycle_process_generation(
     ), late_lane_baseline_errors
     late_lane_recovery_mutations = (
         (
+            "adapter.proposal_body_available(&proposal)",
+            "!adapter.proposal_body_available(&proposal)",
+            "late canonical lane recovery must distinguish global body application from lane-certificate durability",
+        ),
+        (
+            "0,\n            \"no certificate exists yet to persist\"",
+            "1,\n            \"no certificate exists yet to persist\"",
+            "late canonical lane recovery must retain incomplete certificate progress in the active predecessor",
+        ),
+        (
             "retained_prepare_qc = lane_qc_for_phase("
             "&proposal, &keys[..3], CertPhase::Prepare);",
             "retained_prepare_qc = lane_qc_for_phase("
             "&proposal, &keys[..3], CertPhase::Commit);",
-            "late canonical lane recovery must transfer an exact retained "
-            "PrepareQC owner into successor rollover authority",
+            "late canonical lane recovery must retain incomplete certificate progress in the active predecessor",
         ),
         (
-            "let subsumed_prepare_vote = signed_lane_vote("
-            "&proposal, CertPhase::Prepare, &keys[3]);",
-            "let subsumed_prepare_vote = signed_lane_vote("
-            "&proposal, CertPhase::Commit, &keys[3]);",
-            "late canonical lane recovery must retire only an authenticated "
-            "same-phase vote subsumed by retained quorum evidence",
+            "inspect incomplete decided-lane authority\")\n                .is_none()",
+            "inspect incomplete decided-lane authority\")\n                .is_some()",
+            "late canonical lane recovery must retain incomplete certificate progress in the active predecessor",
         ),
         (
-            "!authority\n                .uses_retained_source",
-            "authority\n                .uses_retained_source",
-            "late canonical lane recovery must retire only an authenticated "
-            "same-phase vote subsumed by retained quorum evidence",
+            ".schedule_retransmission()\n"
+            "            .expect(\"schedule exact missing-certificate discovery\");",
+            "let _ = &adapter;",
+            "late canonical lane recovery must expose one bounded exact certificate-discovery source",
         ),
         (
-            "forged_subsumed_vote.bls_signature[0] ^= 0x80;",
-            "forged_subsumed_vote.bls_signature[0] ^= 0x00;",
-            "late canonical lane recovery must reject forged and phase-distinct "
-            "vote retirement",
+            "message: BlockMessage::LaneBlockProposal(pending),",
+            "message: BlockMessage::LaneBlockVote(pending),",
+            "late canonical lane recovery must expose one bounded exact certificate-discovery source",
         ),
         (
-            "let unique_commit_vote = signed_lane_vote("
-            "&proposal, CertPhase::Commit, &keys[3]);",
-            "let unique_commit_vote = signed_lane_vote("
-            "&proposal, CertPhase::Prepare, &keys[3]);",
-            "late canonical lane recovery must reject forged and phase-distinct "
-            "vote retirement",
+            "V2LaneIngressOutcome::Inserted\n        );",
+            "V2LaneIngressOutcome::Rejected\n        );",
+            "late canonical lane recovery must release successor activation only after the exact certificate",
         ),
         (
-            "&BlockMessage::LaneBlockQc(recovered.prepare_qc.clone()),",
-            "&BlockMessage::LaneBlockQc(retained_prepare_qc.clone()),",
-            "late canonical lane recovery must carry an alternate valid "
-            "PrepareQC while retaining phase-distinct Commit progress",
+            ".expect(\"persist recovered certificate and application receipt\"),\n"
+            "            1\n        );",
+            ".expect(\"persist recovered certificate and application receipt\"),\n"
+            "            0\n        );",
+            "late canonical lane recovery must release successor activation only after the exact certificate",
         ),
         (
-            "&BlockMessage::LaneBlockQc(recovered.commit_qc.clone()),",
-            "&BlockMessage::LaneBlockQc(recovered.prepare_qc.clone()),",
-            "late canonical lane recovery must carry an alternate valid "
-            "PrepareQC while retaining phase-distinct Commit progress",
+            ".lane_block_application_receipt_available(&proposal)",
+            ".lane_block_application_receipt_available(&proposal) && false",
+            "late canonical lane recovery must release successor activation only after the exact certificate",
         ),
         (
-            ".contains(&retained_prepare_qc),",
-            ".contains(&recovered.commit_qc),",
-            "late canonical lane recovery must retain the exact successor-owned "
-            "QC and reject forged aggregate variants",
-        ),
-        (
-            "forged_rollover_qc.bls_aggregate_signature[0] ^= 0x80;",
-            "forged_rollover_qc.bls_aggregate_signature[0] ^= 0x00;",
-            "late canonical lane recovery must retain the exact successor-owned "
-            "QC and reject forged aggregate variants",
+            "build recovered decided-lane rollover authority\")\n                .is_some()",
+            "build recovered decided-lane rollover authority\")\n                .is_none()",
+            "late canonical lane recovery must release successor activation only after the exact certificate",
         ),
     )
     for reviewed_source, mutation, expected_error in late_lane_recovery_mutations:
@@ -3534,7 +3567,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=860"
+    canonical_declaration = "readonly canonical_production_test_count=865"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -3555,7 +3588,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=860"
+    canonical = "readonly expected_production_liveness_test_count=865"
     weakened = "readonly expected_production_liveness_test_count=859"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
     baseline = subprocess.run(
@@ -3602,7 +3635,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         (
             canonical_declaration,
             "readonly canonical_production_test_count=859",
-            "must seal exactly 860 production tests",
+            "must seal exactly 865 production tests",
         ),
         (
             '    "sumeragi::v2_effects::tests": 71,',
@@ -3625,7 +3658,11 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
+<<<<<<< HEAD
             '    "b6457553bc8d41f74ebc708ea3d4e618"',
+=======
+            '    "baf080f72349404d56b6a4eff0c6ad1b"',
+>>>>>>> origin/optimizations
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),

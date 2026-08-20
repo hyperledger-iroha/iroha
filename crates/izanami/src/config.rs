@@ -14,7 +14,7 @@ use iroha_config::{
         Nexus as ActualNexus, Sumeragi as ActualSumeragi,
     },
 };
-use iroha_crypto::Hash;
+use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
     block::consensus_v2::{
@@ -23,7 +23,9 @@ use iroha_data_model::{
     nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
 };
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
-use std::{ops::RangeInclusive, path::PathBuf, sync::OnceLock, time::Duration};
+use std::{
+    collections::BTreeMap, ops::RangeInclusive, path::PathBuf, sync::OnceLock, time::Duration,
+};
 use toml::{Table, Value};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 /// Command-line arguments exposed by the `izanami` binary.
@@ -705,6 +707,10 @@ fn resolve_embedded_asset_selector(
 }
 impl NexusProfile {
     /// Load the embedded Sora profile and expose both typed values and a TOML layer.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "profile projection verifies every operator-owned file source before substituting non-runtime identities"
+    )]
     pub fn sora_defaults() -> Result<Self> {
         const DEFAULT_CONFIG: &str = include_str!("../../../defaults/nexus/config.toml");
         let config_str = DEFAULT_CONFIG.replace("\\0", "");
@@ -716,6 +722,98 @@ impl NexusProfile {
         // so discard the whole legacy Sumeragi table and let the strict v2 defaults
         // populate the node-local timeout, limits, key policy, and NPoS policy.
         raw_table.remove("sumeragi");
+        // The checked-in profile deliberately keeps every private identity file-backed. Verify
+        // those operator-owned sources exactly, then substitute deterministic in-memory keys only
+        // for this typed Nexus/Sumeragi projection; none are copied into `config_layer`.
+        const VALIDATOR_PRIVATE_KEY_FILE: &str = "/run/secrets/iroha/nexus-validator-private-key";
+        const VALIDATOR_PROJECTION_PRIVATE_KEY: &str =
+            "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F";
+        const SORANET_TRANSPORT_PRIVATE_KEY_FILE: &str =
+            "/run/secrets/iroha/nexus-soranet-transport-private-key";
+        const STREAMING_PRIVATE_KEY_FILE: &str =
+            "/run/secrets/iroha/nexus-streaming-identity-private-key";
+        if raw_table.contains_key("private_key") {
+            return Err(eyre!(
+                "embedded Nexus signing profile must source its validator private key from the operator-owned file"
+            ));
+        }
+        let validator_private_key_file = raw_table
+            .remove("private_key_file")
+            .ok_or_else(|| eyre!("embedded Nexus signing profile lacks private_key_file"))?;
+        if validator_private_key_file.as_str() != Some(VALIDATOR_PRIVATE_KEY_FILE) {
+            return Err(eyre!(
+                "embedded Nexus signing profile must retain private_key_file = `{VALIDATOR_PRIVATE_KEY_FILE}`"
+            ));
+        }
+        raw_table.insert(
+            "private_key".to_owned(),
+            Value::String(VALIDATOR_PROJECTION_PRIVATE_KEY.to_owned()),
+        );
+        if raw_table.contains_key("soranet_transport_private_key") {
+            return Err(eyre!(
+                "embedded Nexus signing profile must source its SoraNet transport private key from the operator-owned file"
+            ));
+        }
+        let soranet_transport_private_key_file = raw_table
+            .remove("soranet_transport_private_key_file")
+            .ok_or_else(|| {
+                eyre!("embedded Nexus signing profile lacks soranet_transport_private_key_file")
+            })?;
+        if soranet_transport_private_key_file.as_str() != Some(SORANET_TRANSPORT_PRIVATE_KEY_FILE) {
+            return Err(eyre!(
+                "embedded Nexus signing profile must retain soranet_transport_private_key_file = `{SORANET_TRANSPORT_PRIVATE_KEY_FILE}`"
+            ));
+        }
+        let soranet_transport_key_pair = KeyPair::try_from_seed(
+            b"Izanami Nexus-profile SoraNet transport projection only".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .map_err(|error| eyre!("failed to derive projection-only SoraNet identity: {error}"))?;
+        raw_table.insert(
+            "soranet_transport_public_key".to_owned(),
+            Value::String(soranet_transport_key_pair.public_key().to_string()),
+        );
+        raw_table.insert(
+            "soranet_transport_private_key".to_owned(),
+            Value::String(
+                ExposedPrivateKey(soranet_transport_key_pair.private_key().clone()).to_string(),
+            ),
+        );
+        let streaming = raw_table
+            .get_mut("streaming")
+            .and_then(Value::as_table_mut)
+            .ok_or_else(|| eyre!("embedded Nexus signing profile lacks the streaming table"))?;
+        if streaming.contains_key("identity_private_key") {
+            return Err(eyre!(
+                "embedded Nexus signing profile must source its streaming private key from the operator-owned file"
+            ));
+        }
+        let streaming_private_key_file =
+            streaming
+                .remove("identity_private_key_file")
+                .ok_or_else(|| {
+                    eyre!(
+                        "embedded Nexus signing profile lacks streaming.identity_private_key_file"
+                    )
+                })?;
+        if streaming_private_key_file.as_str() != Some(STREAMING_PRIVATE_KEY_FILE) {
+            return Err(eyre!(
+                "embedded Nexus signing profile must retain streaming.identity_private_key_file = `{STREAMING_PRIVATE_KEY_FILE}`"
+            ));
+        }
+        let streaming_key_pair = KeyPair::try_from_seed(
+            b"Izanami Nexus-profile streaming projection only".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .map_err(|error| eyre!("failed to derive projection-only streaming identity: {error}"))?;
+        streaming.insert(
+            "identity_public_key".to_owned(),
+            Value::String(streaming_key_pair.public_key().to_string()),
+        );
+        streaming.insert(
+            "identity_private_key".to_owned(),
+            Value::String(ExposedPrivateKey(streaming_key_pair.private_key().clone()).to_string()),
+        );
         let default_p2p_addr = canonical_addr_literal("127.0.0.1:1337")?;
         let default_torii_addr = canonical_addr_literal("127.0.0.1:8080")?;
         // Provide safe defaults for required network addresses and drop unsupported nested sections
@@ -755,21 +853,37 @@ impl NexusProfile {
             );
             raw_table.insert("torii".to_string(), Value::Table(torii));
         }
-        let expected_hash = raw_table
+        const EXPECTED_HASH_FILE: &str = "/run/iroha/genesis.expected_hash";
+        let genesis = raw_table
             .get_mut("genesis")
             .and_then(Value::as_table_mut)
-            .and_then(|genesis| genesis.get_mut("expected_hash"))
-            .ok_or_else(|| eyre!("embedded Nexus signing profile lacks genesis.expected_hash"))?;
-        if expected_hash.as_str() != Some("REPLACE_WITH_GENESIS_EXPECTED_HASH") {
+            .ok_or_else(|| eyre!("embedded Nexus signing profile lacks the genesis table"))?;
+        if genesis.contains_key("expected_hash") {
             return Err(eyre!(
-                "embedded Nexus signing profile must retain its explicit genesis hash placeholder"
+                "embedded Nexus signing profile must source its genesis hash from the operator-owned file"
+            ));
+        }
+        let expected_hash_file = genesis.remove("expected_hash_file").ok_or_else(|| {
+            eyre!("embedded Nexus signing profile lacks genesis.expected_hash_file")
+        })?;
+        if expected_hash_file.as_str() != Some(EXPECTED_HASH_FILE) {
+            return Err(eyre!(
+                "embedded Nexus signing profile must retain genesis.expected_hash_file = `{EXPECTED_HASH_FILE}`"
             ));
         }
         // Izanami parses the complete profile only to project Nexus and Sumeragi fields below;
-        // genesis is never copied into `config_layer`. Keep the checked-in profile unrunnable and
-        // use a deterministic in-memory value solely to satisfy complete-config normalization.
-        *expected_hash =
-            Value::String(Hash::new(b"Izanami Nexus-profile policy projection only").to_string());
+        // genesis is never copied into `config_layer`. Keep the checked-in profile intentionally
+        // not self-contained and use a deterministic in-memory value solely to satisfy
+        // complete-config normalization.
+        genesis.insert(
+            "expected_hash".to_owned(),
+            Value::String(norito::literal::format(
+                "hash",
+                &Hash::new(b"Izanami Nexus-profile policy projection only")
+                    .to_string()
+                    .to_ascii_uppercase(),
+            )),
+        );
         let reader = ConfigReader::new().with_toml_source(TomlSource::inline(raw_table.clone()));
         let actual = iroha_config::parameters::user::Root::read_and_complete(reader)
             .map_err(|err| eyre!("failed to load embedded nexus config: {err:?}"))?
@@ -804,25 +918,32 @@ impl NexusProfile {
     }
 }
 fn derive_bootstrap_public_lanes(nexus: &ActualNexus) -> Vec<LaneId> {
-    let lanes: Vec<LaneId> = if nexus.lane_catalog.lanes().is_empty() {
-        vec![LaneId::SINGLE]
-    } else {
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect()
-    };
-    lanes
+    if nexus.lane_catalog.lanes().is_empty() {
+        return matches!(
+            nexus
+                .staking
+                .validator_mode(LaneId::SINGLE, &nexus.lane_catalog),
+            LaneValidatorMode::StakeElected
+        )
+        .then_some(LaneId::SINGLE)
         .into_iter()
-        .filter(|lane| {
-            matches!(
-                nexus.staking.validator_mode(*lane, &nexus.lane_catalog),
-                LaneValidatorMode::StakeElected
-            )
-        })
-        .collect()
+        .collect();
+    }
+    let mut owner_by_dataspace = BTreeMap::new();
+    for lane in nexus.lane_catalog.lanes().iter().filter(|lane| {
+        matches!(
+            nexus.staking.validator_mode(lane.id, &nexus.lane_catalog),
+            LaneValidatorMode::StakeElected
+        )
+    }) {
+        owner_by_dataspace
+            .entry(lane.dataspace_id)
+            .and_modify(|owner: &mut LaneId| *owner = (*owner).min(lane.id))
+            .or_insert(lane.id);
+    }
+    let mut owners = owner_by_dataspace.into_values().collect::<Vec<_>>();
+    owners.sort_unstable();
+    owners
 }
 fn normalize_lane_metadata(raw: &mut Table) {
     if let Some(nexus) = raw.get_mut("nexus").and_then(Value::as_table_mut) {
@@ -1408,6 +1529,10 @@ mod tests {
     #[test]
     fn nexus_profile_emits_only_node_local_sumeragi_v2_configuration() {
         let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
+        assert!(
+            !profile.config_layer.contains_key("genesis"),
+            "the operator-owned genesis identity must not leak into Izanami's projected layer"
+        );
         let sumeragi = profile
             .config_layer
             .get("sumeragi")
@@ -1429,12 +1554,20 @@ mod tests {
         assert!(!sumeragi.contains_key("npos"));
     }
     #[test]
-    fn nexus_profile_derives_bootstrap_public_lanes() {
+    fn nexus_profile_deduplicates_bootstrap_staking_owners_for_shared_dataspace() {
         let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
+        assert!(
+            profile
+                .lane_catalog
+                .lanes()
+                .iter()
+                .all(|lane| lane.dataspace_id == DataSpaceId::UNIVERSAL),
+            "the fixture must exercise several lanes sharing one physical dataspace"
+        );
         assert_eq!(
             profile.bootstrap_public_lanes,
-            vec![LaneId::new(0), LaneId::new(1), LaneId::new(2)],
-            "embedded nexus profile should expose every stake-elected bootstrap lane"
+            vec![LaneId::new(0)],
+            "only the lowest stake-elected lane may own shared-dataspace staking state"
         );
     }
     #[test]

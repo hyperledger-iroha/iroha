@@ -1390,7 +1390,6 @@ fn pending_merge_entry(
         activation_root: Hash::new(b"v2 apply decided-sidecar activations"),
         lane_snapshots: Vec::new(),
         lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
         execution_batch: None,
         global_state_root: Hash::new(label),
         merge_qc: MergeQuorumCertificate::new(

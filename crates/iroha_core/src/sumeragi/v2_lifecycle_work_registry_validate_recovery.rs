@@ -133,7 +133,7 @@ pub(in crate::sumeragi) struct PreparedReadyDurableValidateAdapterPreview<'regis
 #[must_use = "a persisted Validate Sign has not entered lifecycle publication"]
 pub(super) struct PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter> {
     _registry: PreparedReadyDurableValidateExecution<'registry>,
-    _adapter: PreparedReadyDurableValidatePersistedSign<'adapter>,
+    _adapter: Box<PreparedReadyDurableValidatePersistedSign<'adapter>>,
 }
 /// Pre-fsync live registry publication using the recovered-WAL exclusive
 /// detached-parent/child-vacancy reservation.
@@ -144,32 +144,91 @@ pub(super) struct PreparedReadyDurableValidatePersistedSignPreAdmission<'registr
 /// a volatile Validate row after the WAL may be durable.
 #[must_use = "a live Validate-to-Sign registry publication awaits LedgerV1 fsync"]
 pub(super) struct PreparedLiveValidateSignRegistryPublication<'registry, 'adapter> {
-    reservation: LiveValidateSignRegistryReservation<'registry>,
-    adapter: PreparedReadyDurableValidatePersistedSign<'adapter>,
+    reservation: Box<LiveValidateSignRegistryReservation<'registry>>,
+    adapter: Box<PreparedReadyDurableValidatePersistedSign<'adapter>>,
 }
 /// Opaque fail-stop error from live Sign registry preparation.
 #[must_use = "failed live Sign registry preparation retains post-WAL authority"]
 pub(super) struct LiveValidateSignRegistryPublicationError<'registry, 'adapter> {
-    _failure: LiveValidateSignRegistryPublicationFailure<'registry, 'adapter>,
+    _failure: Box<LiveValidateSignRegistryPublicationFailure<'registry, 'adapter>>,
 }
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum LiveValidateSignRegistryPublicationFailure<'registry, 'adapter> {
     AdapterWork {
         _registry: PreparedReadyDurableValidateExecution<'registry>,
-        _adapter: PreparedReadyDurableValidatePersistedSign<'adapter>,
+        _adapter: Box<PreparedReadyDurableValidatePersistedSign<'adapter>>,
     },
     InvalidCoordinates {
         _registry: PreparedReadyDurableValidateExecution<'registry>,
-        _adapter: PreparedReadyDurableValidatePersistedSign<'adapter>,
+        _adapter: Box<PreparedReadyDurableValidatePersistedSign<'adapter>>,
     },
     Detach {
         _registry: PreparedReadyDurableValidateExecution<'registry>,
-        _adapter: PreparedReadyDurableValidatePersistedSign<'adapter>,
+        _adapter: Box<PreparedReadyDurableValidatePersistedSign<'adapter>>,
     },
     Reservation {
-        _reservation: LiveValidateSignRegistryReservation<'registry>,
-        _adapter: PreparedReadyDurableValidatePersistedSign<'adapter>,
+        _reservation: Box<LiveValidateSignRegistryReservation<'registry>>,
+        _adapter: Box<PreparedReadyDurableValidatePersistedSign<'adapter>>,
     },
+}
+impl<'registry, 'adapter> LiveValidateSignRegistryPublicationError<'registry, 'adapter> {
+    #[cold]
+    #[inline(never)]
+    fn adapter_work(
+        registry: PreparedReadyDurableValidateExecution<'registry>,
+        adapter: Box<PreparedReadyDurableValidatePersistedSign<'adapter>>,
+    ) -> Self {
+        Self {
+            _failure: Box::new(LiveValidateSignRegistryPublicationFailure::AdapterWork {
+                _registry: registry,
+                _adapter: adapter,
+            }),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn invalid_coordinates(
+        registry: PreparedReadyDurableValidateExecution<'registry>,
+        adapter: Box<PreparedReadyDurableValidatePersistedSign<'adapter>>,
+    ) -> Self {
+        Self {
+            _failure: Box::new(
+                LiveValidateSignRegistryPublicationFailure::InvalidCoordinates {
+                    _registry: registry,
+                    _adapter: adapter,
+                },
+            ),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn detach(
+        registry: PreparedReadyDurableValidateExecution<'registry>,
+        adapter: Box<PreparedReadyDurableValidatePersistedSign<'adapter>>,
+    ) -> Self {
+        Self {
+            _failure: Box::new(LiveValidateSignRegistryPublicationFailure::Detach {
+                _registry: registry,
+                _adapter: adapter,
+            }),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn reservation(
+        reservation: Box<LiveValidateSignRegistryReservation<'registry>>,
+        adapter: Box<PreparedReadyDurableValidatePersistedSign<'adapter>>,
+    ) -> Self {
+        Self {
+            _failure: Box::new(LiveValidateSignRegistryPublicationFailure::Reservation {
+                _reservation: reservation,
+                _adapter: adapter,
+            }),
+        }
+    }
 }
 /// One-shot authority for consuming the nested post-WAL Sign into closed
 /// ordinary registry work.
@@ -409,7 +468,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateAdapterPreview<'registry, 
         match adapter.append_live_wal() {
             Ok(adapter) => Ok(PreparedReadyDurableValidatePersistedSignPreAdmission {
                 _registry: registry,
-                _adapter: adapter,
+                _adapter: Box::new(adapter),
             }),
             Err(error) => Err(ReadyDurableValidateSignPreAdmissionError {
                 failure: ReadyDurableValidateSignPreAdmissionFailure::Wal {
@@ -869,12 +928,9 @@ impl<'registry, 'adapter>
             match adapter.prepare_registry_work(LiveValidateSignWorkProjectionPermit::new()) {
                 Ok(adapter) => adapter,
                 Err(adapter) => {
-                    return Err(LiveValidateSignRegistryPublicationError {
-                        _failure: LiveValidateSignRegistryPublicationFailure::AdapterWork {
-                            _registry: registry,
-                            _adapter: adapter,
-                        },
-                    });
+                    return Err(LiveValidateSignRegistryPublicationError::adapter_work(
+                        registry, adapter,
+                    ));
                 }
             };
         let child_address = ConcreteWorkAddress::new(lease.owner(), child_ordinal, child_slot);
@@ -895,35 +951,27 @@ impl<'registry, 'adapter>
                 child_digest,
             );
         if !coordinates_are_exact {
-            return Err(LiveValidateSignRegistryPublicationError {
-                _failure: LiveValidateSignRegistryPublicationFailure::InvalidCoordinates {
-                    _registry: registry,
-                    _adapter: adapter,
-                },
-            });
+            return Err(
+                LiveValidateSignRegistryPublicationError::invalid_coordinates(registry, adapter),
+            );
         }
         let child_address = child_address.expect("exact coordinates retain one child address");
         let cut = match registry.into_recovered_wal_validate_registry_cut() {
             Ok(cut) => cut,
             Err(registry) => {
-                return Err(LiveValidateSignRegistryPublicationError {
-                    _failure: LiveValidateSignRegistryPublicationFailure::Detach {
-                        _registry: registry,
-                        _adapter: adapter,
-                    },
-                });
+                return Err(LiveValidateSignRegistryPublicationError::detach(
+                    registry, adapter,
+                ));
             }
         };
         let mut reservation = cut
             .into_live_validate_sign_reservation()
             .expect("validated recovered cut transfers both retained fields");
         if !reservation.bind_exact_child(child_address, child_digest) {
-            return Err(LiveValidateSignRegistryPublicationError {
-                _failure: LiveValidateSignRegistryPublicationFailure::Reservation {
-                    _reservation: reservation,
-                    _adapter: adapter,
-                },
-            });
+            return Err(LiveValidateSignRegistryPublicationError::reservation(
+                reservation,
+                adapter,
+            ));
         }
         Ok(PreparedLiveValidateSignRegistryPublication {
             reservation,
@@ -2060,20 +2108,21 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
     /// Taking both optional fields disarms the recovery cut's restoring Drop.
     /// The returned parent is retained opaquely and is never reinstalled: any
     /// later error must restart through the durable WAL.
+    #[inline(never)]
     fn into_live_validate_sign_reservation(
         mut self,
-    ) -> Option<LiveValidateSignRegistryReservation<'registry>> {
+    ) -> Option<Box<LiveValidateSignRegistryReservation<'registry>>> {
         let registry = self.registry.take()?;
         let parent = self.work.take()?;
         let parent_address = self.address;
-        Some(LiveValidateSignRegistryReservation {
+        Some(Box::new(LiveValidateSignRegistryReservation {
             reservation: RecoveredWalValidateRegistryReservation {
                 registry,
                 parent_address,
                 child: None,
             },
             _detached_parent: parent,
-        })
+        }))
     }
     #[cfg(test)]
     fn detached_work_is_exact_for_test(&self) -> bool {

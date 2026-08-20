@@ -13,11 +13,12 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 
-/** Safe local handoff from a verified alias plan to the ordinary transaction pipeline. */
+/** Safe local handoff from a verified alias plan to the public transaction pipeline. */
 public final class AliasPlanApply {
   private AliasPlanApply() {}
 
@@ -44,7 +45,7 @@ public final class AliasPlanApply {
         metadata);
   }
 
-  /** Builds one ordinary transaction containing every exact planner frame. */
+  /** Builds one transaction containing every exact planner frame. */
   public static TransactionPayload buildTransactionPayload(
       final AliasSetupPlanRequestV1 request,
       final AliasTransactionPlanV1 plan,
@@ -90,11 +91,12 @@ public final class AliasPlanApply {
         .setTimeToLiveMs(plan.body().validUntilMs() - creationTimeMs)
         .setNonce(nonce)
         .setFeePayment(feePayment)
+        .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
         .setMetadata(metadata == null ? Collections.emptyMap() : metadata)
         .build();
   }
 
-  /** Locally signs a verified plan and submits it through the normal transaction endpoint. */
+  /** Locally signs a verified plan and submits it through the public transaction endpoint. */
   public static CompletableFuture<ClientResponse> signAndSubmit(
       final IrohaClient client,
       final AliasSetupPlanRequestV1 request,

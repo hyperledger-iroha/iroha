@@ -10891,11 +10891,12 @@ fileprivate enum ToriiVerifyingKeyDraftValidation {
         let timeToLive = try transaction.takeField("time_to_live_ms")
         let nonce = try transaction.takeField("nonce")
         let feePayment = try transaction.takeField("fee_payment")
+        let admissionIntent = try transaction.takeField("admission_intent")
         let metadata = try transaction.takeField("metadata")
         let attachments = try transaction.takeField("attachments")
         guard transaction.isFinished,
               creationTime.count == MemoryLayout<UInt64>.size else {
-            throw invalid("transaction_payload_b64 must contain exactly one canonical nine-field TransactionPayload")
+            throw invalid("transaction_payload_b64 must contain exactly one canonical ten-field TransactionPayload")
         }
 
         let decodedNetworkId = try decodeNetworkDomain(domain)
@@ -10924,6 +10925,9 @@ fileprivate enum ToriiVerifyingKeyDraftValidation {
             try SccpSubmitValidation.requireEmptyTransactionMetadata(metadata)
         } catch {
             throw invalid("verifying-key transaction fee payment or metadata is not canonical")
+        }
+        guard admissionIntent == TransactionAdmissionIntentV1.queuePlanSynced.norito else {
+            throw invalid("verifying-key transaction admission intent is not QueuePlanSynced")
         }
         try requireAbsentOption(attachments, field: "attachments")
         try requireRequestedInstruction(
@@ -25726,11 +25730,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
         let allowedFields: Set<String> = [
             "domain", "authority", "creation_time_ms", "instructions",
-            "time_to_live_ms", "nonce", "fee_payment", "metadata", "attachments",
+            "time_to_live_ms", "nonce", "fee_payment", "admission_intent", "metadata", "attachments",
         ]
         let requiredFields: Set<String> = [
             "domain", "authority", "creation_time_ms", "instructions",
+<<<<<<< HEAD
             "time_to_live_ms", "fee_payment", "metadata", "attachments",
+=======
+            "time_to_live_ms", "fee_payment", "admission_intent", "metadata",
+>>>>>>> origin/optimizations
         ]
         guard Set(unsignedPayload.keys).isSubset(of: allowedFields),
               requiredFields.isSubset(of: Set(unsignedPayload.keys)) else {
@@ -25776,6 +25784,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         _ = try feeValue.decode(as: FeePaymentIntent.self)
+        guard case let .object(admissionIntent)? = unsignedPayload["admission_intent"],
+              Set(admissionIntent.keys) == Set(["intent", "value"]),
+              case let .string(intent)? = admissionIntent["intent"],
+              intent == "ordinary" || intent == "queue_plan_synced",
+              case .null? = admissionIntent["value"] else {
+            throw ToriiClientError.invalidPayload(
+                "unsignedPayload.admission_intent must be an exact TransactionAdmissionIntent object."
+            )
+        }
         guard case let .number(timeToLiveMs)? = unsignedPayload["time_to_live_ms"],
               timeToLiveMs.isFinite,
               timeToLiveMs > 0,

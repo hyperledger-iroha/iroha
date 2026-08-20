@@ -12,7 +12,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
     ),
     "fair_v2_ingress_required_capacity": (
-        "eec628b52b06d4e8d2238cc1d05f3b18a53347e186c438723fc4861d442db550"
+        "b3786ae53f4632d7035fc68d122a7dc542df6d26d2cc00ece1f6681840045105"
     ),
     "fair_v2_ingress_current_protected_slots": (
         "58767f7d72045788225efb6019570df5e4f34d0aa4520a414d225f0ea1449549"
@@ -21,7 +21,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "9ded1cd333e6cdb7415aced353a72caca4965fd74c705d11d3916faf251e4af8"
     ),
     "fair_v2_ingress_required_byte_capacity": (
-        "f3b4cfc1017778a7d7ba68b1e4c3a24c2f00f5f20252d3375eded1e986bd0799"
+        "fa729db8b386470f3dec0dcb0d9ce6b2917ca1de67a1ea185a4b6ab0db717c00"
     ),
     "fair_v2_ingress_compact_len_prefix_bytes": (
         "50cd13b1d620e26eb0502ae9650b7cb66e489073ab407d95a5217177de517d95"
@@ -155,7 +155,7 @@ if matches!(
     ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
         | ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
         | ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }
-        | ExactOutputRolloverClaim::HistoricalAutonomousLaneCertification { .. }
+        | ExactOutputRolloverClaim::HistoricalLaneCertification { .. }
         | ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse { .. }
 ) {
     return durable_history_source_covers(
@@ -469,26 +469,13 @@ let served = serve_block_sync_while_guarded(
     services_output_guard.as_ref(),
     || block_sync_server.serve_historical_body(kura, request, &sender, local_key),
 """,
-    "lane_durable_or_retained_source": """
+    "lane_durable_predecessor_source": """
 let durable = self.kura.read_certified_lane_block_artifact(
     descriptor.lane_id,
     descriptor.lane_block_height,
 );
 let Some(durable) = durable else {
-    let retained = durable_sessions.get(&proposal.proposal_hash);
-    if !matches!(
-        retained,
-        Some(DurableLaneSessionSource::Retained {
-            proposal: retained_proposal,
-            ..
-        }) if retained_proposal == proposal
-    ) {
-        return Err(V2LaneWorkError::Persistence(
-            "unfinished winning lane proposal has no bounded successor owner"
-                .to_owned(),
-        ));
-    }
-    continue;
+    return Ok(None);
 };
 let autonomous_anchor = self.canonical_autonomous_anchor_matches_kura(proposal);
 let autonomous_certificate = require_lane_certificate_execution_role_matches_anchor(
@@ -524,7 +511,7 @@ let application_receipt = if autonomous_payload.is_some() {
     )
 };
 """,
-    "lane_complete_rollover_authority": """
+    "lane_complete_durable_rollover_authority": """
 let source = if let Some(payload) = autonomous_payload {
     if payload.origin_proposal != *proposal {
         return Err(V2LaneWorkError::Persistence(
@@ -556,6 +543,190 @@ Ok(Some(DurableLaneRolloverAuthority::new(
     durable_sessions,
 )))
 """,
+    "root_parse_exact_output_geometry": """
+let lane_profile = network.lane_profile;
+let reply_source_capacity = network
+    .max_total_connections
+    .or(lane_profile.derived_limits().max_total_connections)
+    .map_or(
+        lane_profile.defaults().max_total_connections,
+        NonZeroUsize::get,
+    );
+let remote_trusted_peer_count = trusted_peers.value().others.len();
+if remote_trusted_peer_count > reply_source_capacity {
+    emitter.emit(
+        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+            "trusted-peer full fanout requires {remote_trusted_peer_count} remote connections, above the effective network connection capacity {reply_source_capacity}"
+        )),
+    );
+}
+if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {
+    emitter.emit(
+        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+            "sumeragi.queues.authenticated_non_validator_sources ({}) exceeds configured network authenticated-source capacity {reply_source_capacity}",
+            sumeragi.queues.authenticated_non_validator_sources,
+        )),
+    );
+}
+let effect_work_capacity = (sumeragi.queues.commands.get()
+    / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+    .max(1);
+let validator_roster_len = trusted_peers.value().validator_roster_len();
+let authenticated_non_validator_source_capacity =
+    sumeragi.queues.authenticated_non_validator_sources.get();
+match actual::sumeragi_v2_body_ingress_required_message_capacity(
+    validator_roster_len,
+    authenticated_non_validator_source_capacity,
+) {
+    Some(required_bodies) if sumeragi.queues.bodies.get() < required_bodies => {
+        emitter.emit(
+            Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                "Sumeragi v2 canonical outer-ingress message capacity {} is below the roster-aware minimum {required_bodies}; configured validator roster is {validator_roster_len}, and authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}",
+                sumeragi.queues.bodies,
+            )),
+        );
+    }
+    None => {
+        emitter.emit(
+            Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                "Sumeragi v2 roster-aware canonical outer-ingress message minimum overflowed; configured validator roster is {validator_roster_len}, and authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}",
+            )),
+        );
+    }
+    Some(_) => {}
+}
+let body_source_bytes = sumeragi.queues.body_source_bytes.get();
+match actual::sumeragi_v2_body_ingress_required_byte_capacity(
+    validator_roster_len,
+    authenticated_non_validator_source_capacity,
+    body_source_bytes,
+) {
+    Some(required_body_bytes)
+        if sumeragi.queues.body_bytes.get() < required_body_bytes =>
+    {
+        emitter.emit(
+            Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                "Sumeragi v2 aggregate canonical outer-ingress wire-byte capacity {} is below the roster-aware minimum {required_body_bytes}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}, and each source requires {body_source_bytes} bytes",
+                sumeragi.queues.body_bytes,
+            )),
+        );
+    }
+    None => {
+        emitter.emit(
+            Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                "Sumeragi v2 roster-aware aggregate canonical outer-ingress wire-byte minimum overflowed; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}, and each source requires {body_source_bytes} bytes",
+            )),
+        );
+    }
+    Some(_) => {}
+}
+if let Err(error) = actual::sumeragi_v2_lifecycle_capacity_geometry(
+    validator_roster_len,
+    effect_work_capacity,
+    sumeragi.queues.bodies.get(),
+    sumeragi.queues.authenticated_non_validator_sources.get(),
+) {
+    emitter.emit(
+        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+            "{error}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {}, and certified-request capacity is {}",
+            sumeragi.queues.authenticated_non_validator_sources,
+            sumeragi.queues.bodies,
+        )),
+    );
+}
+let geometry = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
+    effect_work_capacity,
+    sumeragi.queues.bodies.get(),
+)
+.and_then(|shared_capacity| {
+    actual::validate_sumeragi_v2_exact_output_geometry(
+        shared_capacity,
+        reply_source_capacity,
+    )
+});
+if let Err(error) = geometry {
+    emitter.emit(
+        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+            "{error}; configured network reply-source capacity is {reply_source_capacity}"
+        )),
+    );
+}
+""",
+    "pending_lifecycle_rollover_wait": """
+let rollover_ready = activated.with_runner_runtime(
+    &mut active_runner,
+    |executor, _services, lane_work| {
+        super::preflight_finalized_lane_rollover(
+            executor,
+            lane_work,
+            &mut canonical_lane_body_recovered,
+        )
+    },
+)?;
+if !rollover_ready {
+    activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
+        committed_lane_status_publisher.publish_if_changed(lane_work)
+    });
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
+    continue;
+}
+""",
+    "finalized_output_rollover": """
+let _ = retry_exact_output_and_apply_sidecar_admissions(
+    &mut lane_work,
+    services,
+    control_queue_capacity,
+)?;
+let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
+lane_work.persist_anchored_sessions()?;
+let _ = lane_work.service_next_historical_recovery()?;
+if lane_work.has_pending_historical_recovery() {
+    return Err(V2RunnerError::Service(
+        "finalized lane output still owns predecessor-height recovery".to_owned(),
+    ));
+}
+if !lane_work.durable_completion_matches_finality(artifact)? {
+    return Err(V2RunnerError::Service(
+        "finalized lane output has not crossed its local durable completion boundary"
+            .to_owned(),
+    ));
+}
+lane_work.prepare_canonical_lane_rollover(artifact)?;
+let durable_lane_authority = lane_work
+    .durable_lane_rollover_authority(artifact)?
+    .ok_or_else(|| {
+        V2RunnerError::Service(
+            "finalized lane output has not crossed its local durable reconstruction boundary"
+                .to_owned(),
+        )
+    })?;
+lane_work.prune_finalized_merge_sidecars()?;
+lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;
+drain_finalized_lane_work_output(
+    &mut lane_work,
+    services,
+    receipt,
+    artifact,
+    &durable_lane_authority,
+    control_queue_capacity,
+)?;
+if lane_work.has_pending_committed_output_handoff()
+    || lane_work.effect_count() != 0
+    || services
+        .has_pending_exact_output()
+        .map_err(V2RunnerError::Service)?
+{
+    return Err(V2RunnerError::Service(
+        "finalized output remained owned after durable handoff".to_owned(),
+    ));
+}
+let exact_output_handoff = services
+    .seal_applied_height_output_handoff(receipt, artifact, &durable_lane_authority)
+    .map_err(V2RunnerError::Service)?;
+lane_work
+    .into_retained_merge_sidecars(exact_output_handoff, artifact, successor)
+    .map_err(V2RunnerError::from)
+""",
 }
 _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
     "classify": (
@@ -564,7 +735,7 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "new_with_source_geometry_and_transport_frame_caps": (
-        "cba2c2eeb60d74bfb010d1bd58bc0836d4f7b3a72ab9f51ffe32895b72856c2b"
+        "575c36d584134403c1cba15a5bf4baba4c051da6041cb943e0940774ed485766"
     ),
     "configure_roster_for_context": (
         "19c00b3b692c6dba9ada1003dff9483ea7a90a47263a506dd6c764f1d24fc68c"
@@ -576,7 +747,7 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "5009fc5c34fbcd3f75897ef7f37e7c331e948ac00e555b749ca1a4bff85cadf7"
     ),
     "try_push_at": (
-        "25626a4ac381ecbb009da41b2cef05892683135f26af5d7a50a90eec37045917"
+        "a49c580b3629511260af545ce2d5b5916dd63f20a61a7ddba50d77b4d8f6a908"
     ),
     "try_recv_if_at_checked": (
         "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
@@ -591,6 +762,28 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
     "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (
         "9fdace5f2d7203c48221a9ea47be4bf0522a126403cb3dfd6d9397fefd63e989"
+    ),
+}
+
+# Exact first-release publication-fence items. The two move-only methods bind
+# the final queue preflight and assertion-only dequeue across LedgerV1 fsync;
+# the three regressions make same-wire, unrelated-append, and abort behavior
+# part of both production inventory and G-UNIT.
+_PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 = {
+    "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
+        "66d33b07c062bd6dc4a1b879b0b3624bc0403e59305cbc44763d409f97d109fc"
+    ),
+    "LockedPreparedFairIngressExactDequeue::commit": (
+        "2df7516317611dcc3fc0f959cca1e80a7b6aa3670a90d2add798f744cfebbd4c"
+    ),
+    "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit": (
+        "da01b212e5b3db1163c100f1088e943c074aa124c2f225a4c068052d79e499f9"
+    ),
+    "locked_publication_fence_serializes_unrelated_append_and_preserves_it": (
+        "3f863e16e284ffd980a06b45cd16d3ee4cfd4559a8f7ff23687a55d32ff7481b"
+    ),
+    "dropping_locked_publication_fence_releases_producer_without_dequeue": (
+        "4375aa5205367018773fec586aefb2c44940f502e6de1ae94b8e6e221a350d6f"
     ),
 }
 

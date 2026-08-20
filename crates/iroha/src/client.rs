@@ -12501,6 +12501,7 @@ impl Client {
         self.apply_transaction_defaults_with_rng(&mut builder, rng)?;
         builder
             .with_metadata(metadata)
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .into_payload()
             .wrap_err("build exact unsigned client transaction payload")
     }
@@ -12521,6 +12522,7 @@ impl Client {
         self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
         tx_builder
             .with_metadata(metadata)
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .try_sign(self.key_pair.private_key())
             .wrap_err("sign client transaction")
     }
@@ -12590,6 +12592,7 @@ impl Client {
         self.apply_transaction_defaults_with_rng(&mut builder, &mut rand::rngs::OsRng)?;
         builder
             .with_metadata(metadata)
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .into_payload()
             .wrap_err("build exact unsigned client transaction payload from items")
     }
@@ -12610,6 +12613,7 @@ impl Client {
         self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
         tx_builder
             .with_metadata(metadata)
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .try_sign(self.key_pair.private_key())
             .wrap_err("sign client transaction from instruction items")
     }
@@ -15325,6 +15329,9 @@ impl Client {
             FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         )?;
+        let payload = TransactionBuilder::from_payload(payload)?
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+            .into_payload()?;
         let transaction = self.quote_and_sign_transaction_payload(payload)?;
         let resp = self
             .default_request(HttpMethod::POST, url)

@@ -387,7 +387,7 @@ fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
     ));
 }
 #[test]
-fn recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner() {
+fn recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade() {
     let (context, _) = context();
     let tag = EventTag::new(context.height, 3, Generation::new(9));
     let round = wire::ConsensusRound {
@@ -438,8 +438,11 @@ fn recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner(
     let exact_lock = directive(Some(subject), None);
     assert!(recovered.exactly_matches_directive(exact_lock));
 
-    let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
-    assert!(!recovered.exactly_matches_directive(foreign_lock));
+    let upgraded_lock = directive(Some(proposal_subject(b"upgraded replay lock")), None);
+    assert!(
+        recovered.exactly_matches_directive(upgraded_lock),
+        "a same-view lock upgrade cannot reopen that view's one proposal slot"
+    );
     let mismatched_round = super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(
         tag,
         wire::ConsensusRound { view: 2, ..round },

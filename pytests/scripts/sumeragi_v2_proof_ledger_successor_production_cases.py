@@ -409,7 +409,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
         "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
         "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeQueued,",
-        "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CapacityPending,",
+        "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending,",
         "production lifecycle finalization behavior must preserve exact production order",
     ),
     (
@@ -624,10 +624,10 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "pub(in crate::sumeragi) fn drive_completion_turn<'cursor>(",
+        "pub(in crate::sumeragi) fn drive_ready_completion_turn<'cursor>(",
         "owner.dispatch_recovered_completion_with_runner_debt(",
         "owner.dispatch_recovered_decision_apply_with_runner_debt(",
-        "unified recovered Completion composite dispatch",
+        "fresh lifecycle Completion Ready-work dispatch",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
@@ -710,7 +710,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         "Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::Service {",
         "ProductionLifecycleIngressSelectionV1::RestartRequired",
-        "ProductionLifecycleIngressSelectionV1::Retry",
+        "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry",
         "recovered Fetch Phase-A service failure",
     ),
     (
@@ -1043,8 +1043,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "fn retire(&mut self) -> Result<(), String>",
-        "self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
-        "self.ingress.unbind_unreviewed_leader_wire_lifecycle_gate(&gate)",
+        "self.ingress.retire_leader_wire_lifecycle_gate(&gate)",
+        "self.ingress.retire_unreviewed_leader_wire_lifecycle_gate(&gate)",
         "sealed leader-wire launch binding omits production refinement tokens",
     ),
     (
@@ -1526,8 +1526,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
         "fn open_recovered_phase_vote_branch(",
-        "Self::prepare_recovered_phase_vote_cold_adapter_stage(persisted, &body_store)",
-        "Self::prepare_recovered_phase_vote_cold_adapter_stage_unchecked(persisted, &body_store)",
+        "Self::prepare_recovered_phase_vote_cold_adapter_stage(",
+        "Self::prepare_recovered_phase_vote_cold_adapter_stage_unchecked(",
         "cold recovered phase owner handoff",
     ),
     (
@@ -1764,7 +1764,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         "fn dispatch_recovered_completion_with_runner_debt(",
-        "registration.commit(prepared)",
+        "registration.commit(prepared, wait_source)",
         "registration.abort(prepared)",
         "lifecycle-owned recovered Decision Fetch dispatch must preserve exact production order",
     ),
@@ -1833,7 +1833,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-        "fn exactly_matches_successor_owner(",
+        "fn matches_successor_owner_ledger(",
         ".validate_authenticated_cut(&owner.serve_payloads)",
         ".validate_authenticated_cut_for_mutation(&owner.serve_payloads)",
         "CompleteTip canonical predecessor store join omits production refinement tokens",
@@ -2146,7 +2146,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "fn retire(&mut self) -> Result<(), String>",
-        "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
+        "self.ingress.retire_leader_wire_lifecycle_gate(&gate)?",
         "self.gate = None;",
         "sealed leader-wire launch binding omits production refinement tokens",
     ),
@@ -2621,15 +2621,13 @@ def test_replayed_proposal_owner_semantics_survive_digest_refresh(
         tmp_path
         / "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs"
     )
-    test_name = (
-        "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner"
-    )
+    test_name = "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade"
     mutate_rust_item_source(
         module,
         replay_path,
         test_name,
-        'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
-        "let foreign_lock = directive(Some(subject), None);",
+        "recovered.exactly_matches_directive(upgraded_lock),",
+        "!recovered.exactly_matches_directive(upgraded_lock),",
     )
     item = module.rust_items(
         replay_path.read_text(encoding="utf-8"), test_name
@@ -2643,7 +2641,7 @@ def test_replayed_proposal_owner_semantics_survive_digest_refresh(
     )
 
     assert any(
-        "the replay-owner regression must reject foreign subjects, mismatched rounds, and decided lifecycles"
+        "the recovered-attempt regression must prove affine same-view suppression across a lock upgrade while rejecting foreign rounds and decisions"
         in error
         for error in errors
     ), errors

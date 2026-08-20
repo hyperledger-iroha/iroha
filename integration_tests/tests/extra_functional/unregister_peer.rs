@@ -22,6 +22,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_block_cadence(PIPELINE_TIME)
         .with_peers(4)
+        .with_max_validator_capacity(5)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )));
@@ -81,7 +82,10 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     .await?;
     let genesis = network.genesis();
     if let Err(err) = new_peer
-        .start(network.config_layers(), Some(&genesis))
+        .start(
+            network.config_layers_with_additional_peers([&new_peer]),
+            Some(&genesis),
+        )
         .await
     {
         if let Some(reason) = sandbox::sandbox_reason(&err) {

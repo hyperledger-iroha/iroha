@@ -26,7 +26,7 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                 &queue,
                 &state,
                 &dir,
-                accepted_tx_by_someone(&time_source),
+                accepted_queue_plan_tx_by_someone(&time_source),
             );
         }
         let scope = lane_reservation_scope(
@@ -148,7 +148,7 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                     &queue,
                     &state,
                     &dir,
-                    accepted_tx_by_someone(&time_source),
+                    accepted_queue_plan_tx_by_someone(&time_source),
                 );
             }
             let scope = lane_reservation_scope(
@@ -369,7 +369,7 @@ fn ambiguous_reservation_compaction_fails_closed_after_terminal_application() {
         &queue,
         &state,
         &dir,
-        accepted_tx_by_someone(&time_source),
+        accepted_queue_plan_tx_by_someone(&time_source),
     );
     let key = *queue
         .reserve_transactions_for_lane(

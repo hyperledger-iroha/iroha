@@ -25,6 +25,7 @@ import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.MAX_CONTRACT_ARGUMENT_RECORD_BYTES
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.LanePrivacyMerkleWitness
 import org.hyperledger.iroha.sdk.core.model.instructions.LanePrivacyProof
@@ -55,6 +56,7 @@ internal class TransactionPayloadAdapter private constructor(
             encodeSizedField(encoder, TTL_ADAPTER, Optional.ofNullable(value.timeToLiveMs))
             encodeSizedField(encoder, NONCE_ADAPTER, Optional.ofNullable(value.nonce))
             encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment)
+            encodeSizedField(encoder, ADMISSION_INTENT_ADAPTER, value.admissionIntent)
             encodeSizedField(encoder, METADATA_ADAPTER, value.metadata)
             encodeSizedField(
                 encoder,
@@ -76,6 +78,7 @@ internal class TransactionPayloadAdapter private constructor(
             }
             val nonceRaw: Optional<Long> = decodeSizedField(decoder, NONCE_ADAPTER)
             val feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER)
+            val admissionIntent = decodeSizedField(decoder, ADMISSION_INTENT_ADAPTER)
             val metadata = LinkedHashMap(decodeSizedField(decoder, METADATA_ADAPTER))
             val attachments: Optional<List<ProofAttachment>> =
                 decodeSizedField(decoder, ATTACHMENTS_OPTION_ADAPTER)
@@ -88,6 +91,7 @@ internal class TransactionPayloadAdapter private constructor(
                 timeToLiveMs = ttl.get(),
                 nonce = nonceRaw.orElse(null),
                 feePayment = feePayment,
+                admissionIntent = admissionIntent,
                 metadata = metadata,
                 attachments = attachments.orElse(null),
             )
@@ -852,6 +856,27 @@ internal class TransactionPayloadAdapter private constructor(
         }
     }
 
+    private class TransactionAdmissionIntentAdapter : TypeAdapter<TransactionAdmissionIntent> {
+        override fun encode(encoder: NoritoEncoder, value: TransactionAdmissionIntent) {
+            val tag = when (value) {
+                TransactionAdmissionIntent.ORDINARY -> TRANSACTION_ADMISSION_ORDINARY_TAG
+                TransactionAdmissionIntent.QUEUE_PLAN_SYNCED ->
+                    TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG
+            }
+            ENUM_TAG_ADAPTER.encode(encoder, tag)
+        }
+
+        override fun decode(decoder: NoritoDecoder): TransactionAdmissionIntent =
+            when (val tag = ENUM_TAG_ADAPTER.decode(decoder)) {
+                TRANSACTION_ADMISSION_ORDINARY_TAG -> TransactionAdmissionIntent.ORDINARY
+                TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG ->
+                    TransactionAdmissionIntent.QUEUE_PLAN_SYNCED
+                else -> throw IllegalArgumentException(
+                    "Unknown TransactionAdmissionIntent discriminant: $tag",
+                )
+            }
+    }
+
     private class IvmBytecodeAdapter : TypeAdapter<ByteArray> {
         override fun encode(encoder: NoritoEncoder, value: ByteArray) {
             encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, value)
@@ -941,13 +966,14 @@ internal class TransactionPayloadAdapter private constructor(
             return TransactionPayloadAdapter(chainDiscriminant)
         }
 
-        fun validateCanonicalPayloadBytes(encoded: ByteArray) {
+        fun validateCanonicalPayloadBytes(encoded: ByteArray): TransactionPayload {
             val validator = forChain(CANONICAL_VALIDATION_DISCRIMINANT)
             val decoded = NoritoCodec.decodeAdaptive(encoded, validator)
             val reencoded = NoritoCodec.encodeAdaptive(decoded, validator).payload()
             require(encoded.contentEquals(reencoded)) {
                 "transaction payload bytes are not the exact canonical encoding"
             }
+            return decoded
         }
 
         private fun requiredChainDiscriminant(): Int =
@@ -1020,6 +1046,8 @@ internal class TransactionPayloadAdapter private constructor(
         private val ENUM_TAG_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(32)
         private const val TRANSACTION_DOMAIN_NETWORK_TAG = 0L
         private const val TRANSACTION_DOMAIN_GENESIS_TAG = 1L
+        private const val TRANSACTION_ADMISSION_ORDINARY_TAG = 0L
+        private const val TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1L
         private const val EXECUTABLE_INSTRUCTIONS_TAG = 0L
         private const val EXECUTABLE_CONTRACT_CALL_TAG = 1L
         private const val EXECUTABLE_IVM_TAG = 2L
@@ -1042,6 +1070,8 @@ internal class TransactionPayloadAdapter private constructor(
         private val SPONSOR_FEE_PAYMENT_ADAPTER: TypeAdapter<FeePaymentIntent.Sponsor> =
             SponsorFeePaymentAdapter()
         private val FEE_PAYMENT_ADAPTER: TypeAdapter<FeePaymentIntent> = FeePaymentIntentAdapter()
+        private val ADMISSION_INTENT_ADAPTER: TypeAdapter<TransactionAdmissionIntent> =
+            TransactionAdmissionIntentAdapter()
         private val EXECUTABLE_ADAPTER: TypeAdapter<Executable> = ExecutableAdapter()
         private val METADATA_ADAPTER: TypeAdapter<Map<String, JsonValue>> = MetadataAdapter()
         private val PROOF_BOX_ADAPTER: TypeAdapter<ProofBoxValue> = ProofBoxAdapter()

@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 
 /** Minimal JSON parser for Torii contract deploy/call responses. */
@@ -329,7 +330,8 @@ public final class ContractJsonParser {
     final byte[] transactionPayload = Base64.getDecoder().decode(transactionPayloadB64);
     final byte[] signingMessage = Base64.getDecoder().decode(signingMessageB64);
     try {
-      NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(transactionPayload);
+      NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(
+          transactionPayload, TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
     } catch (final Exception ex) {
       throw new IllegalStateException(
           context + ".transaction_payload_b64 must contain one canonical TransactionPayload", ex);

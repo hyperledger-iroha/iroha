@@ -1,3 +1,23 @@
+fn pending_binding_with_distinct_root(
+    effect: &AdapterEffect,
+    tag: EventTag,
+    ordinal: u128,
+    semantic_identity: &[u8],
+) -> PendingRuntimeEffectBinding {
+    bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(effect),
+        vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+            tag,
+            ordinal,
+            semantic_identity,
+        )],
+    )
+    .expect("bind replay fixture with a distinct semantic root")
+    .pop()
+    .expect("one distinct-root replay fixture owner")
+    .pending_adapter_effect_binding(effect)
+    .expect("mint exact distinct-root pending binding")
+}
 #[test]
 fn every_stage_has_one_canonical_round_trip_and_exact_record_mapping() {
     let fixture = Fixture::new();
@@ -219,15 +239,20 @@ fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
         Some(true)
     );
     assert_eq!(
-        recovered_decision_body_continuation_is_exact(
+        store.authority, validate.authority,
+        "the fixed Store/Validate pair intentionally shares one body replay envelope"
+    );
+    assert!(
+        !super::super::body_pipeline_transition::durable_continuation_successor_is_exact(
             DurableContinuationEdge::FetchToStore,
-            &fetch.authority,
-            fetch.payload,
-            &validate.authority,
-            validate.payload,
+            fetch.work_class,
+            fetch.key,
+            fetch.stage,
+            validate.work_class,
+            validate.key,
+            validate.stage,
         ),
-        Some(false),
-        "the recovered lineage cannot skip Store"
+        "the typed recovered lineage cannot skip Store"
     );
     let causal_root = CausalRoot::new(digest_from_hash(&Hash::new(
         b"recovered Decision Apply test root",
@@ -802,7 +827,17 @@ fn certified_fetch_store_validate_evidence_retains_one_canonical_origin_and_fram
         &receipt,
         &validate_pending,
     ));
-    let foreign_pending = pending_binding(&validate_effect, tag, 82);
+    let foreign_pending = pending_binding_with_distinct_root(
+        &validate_effect,
+        tag,
+        82,
+        b"foreign certified Validate root",
+    );
+    assert!(foreign_pending.exactly_binds_adapter_effect(&validate_effect));
+    assert_ne!(
+        foreign_pending.causal_lifecycle_key(),
+        validate_pending.causal_lifecycle_key()
+    );
     assert!(!validate.exactly_matches_validate_pending(
         &validate_effect,
         &receipt,
@@ -1104,7 +1139,17 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         &validate_effect,
         &validate_pending,
     ));
-    let foreign_pending = pending_binding(&validate_effect, tag, 71);
+    let foreign_pending = pending_binding_with_distinct_root(
+        &validate_effect,
+        tag,
+        71,
+        b"foreign local Validate root",
+    );
+    assert!(foreign_pending.exactly_binds_adapter_effect(&validate_effect));
+    assert_ne!(
+        foreign_pending.causal_lifecycle_key(),
+        validate_pending.causal_lifecycle_key()
+    );
     assert!(!seal.exactly_projects_validate(
         &store_effect,
         &manifest,
@@ -1206,7 +1251,11 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         .expect("local Validate root rebinds to exact ProposalIntent");
     let foreign_ownership = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(&proposal_intent),
-        vec![RuntimeEffectOwnership::fresh_for_test(tag, 72)],
+        vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+            tag,
+            72,
+            b"foreign local proposal intent owner",
+        )],
     )
     .expect("bind foreign ProposalIntent owner")
     .pop()
@@ -1741,6 +1790,17 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
         "exactly_binds_validate_sign_pending(&self)",
         "project_validate_apply_successor(predecessor_effect, &self.effect)",
         "exactly_matches_apply_effect(&self.effect, receipt)",
+    ] {
+        assert!(live.contains(required), "live WAL seal omitted {required}");
+    }
+    let live_projection = production
+        .split("fn exact_live_wal_replay_projection(")
+        .nth(1)
+        .expect("live WAL role projection has one definition")
+        .split("fn canonical_wal_source(")
+        .next()
+        .expect("live WAL role projection stays bounded");
+    for required in [
         "ReplayWalRoleV1::PROPOSAL_INTENT",
         "ReplayWalRoleV1::PREPARE_INTENT",
         "ReplayWalRoleV1::LOCK_AND_COMMIT",
@@ -1748,7 +1808,10 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
         "ReplayWalRoleV1::DECISION",
         "ReplayWalRoleV1::INSTALL_TIMEOUT",
     ] {
-        assert!(live.contains(required), "live WAL seal omitted {required}");
+        assert!(
+            live_projection.contains(required),
+            "live WAL role projection omitted {required}"
+        );
     }
     for forbidden in [
         "#[derive(Clone",
@@ -1787,15 +1850,34 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
         adapter
             .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
             .count(),
-        2,
-        "only the generic persisted cut and sealed Ready-Sign cut mint live replay authority"
+        3,
+        "only recovered Proposal-Prepare, generic persistence, and sealed Ready-Sign cuts mint live replay authority"
     );
     assert_eq!(
         adapter
             .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
             .count(),
-        2,
-        "the same two closed post-fsync cuts derive frame-bound placeholder owners"
+        3,
+        "the same three closed post-fsync cuts derive frame-bound placeholder owners"
+    );
+    let recovered_proposal_prepare = adapter
+        .split("pub(in crate::sumeragi) fn append_recovered_lifecycle_proposal_prepare_wal(")
+        .nth(1)
+        .expect("recovered Proposal-Prepare WAL append has one implementation")
+        .split("/// Project an inert exact-body lookup for the reducer-produced next Vote.")
+        .next()
+        .expect("recovered Proposal-Prepare WAL append stays bounded");
+    assert_eq!(
+        recovered_proposal_prepare
+            .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        recovered_proposal_prepare
+            .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
+            .count(),
+        1
     );
     let ready_sign = adapter
         .split("// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN")
@@ -2126,9 +2208,9 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
             )
             .is_err()
     );
-    let local_store = fixture.cases().remove(5);
-    let LifecycleReplaySourceV1::BodyPipeline(local_source) = local_store.authority.source else {
-        panic!("sixth fixture authority is a local body source")
+    let local_source = BodyPipelineReplaySourceV1 {
+        tag: fixture.tag,
+        origin: BodyPipelineOriginV1::LocalBody(fixture.proposal.manifest.clone()),
     };
     assert!(matches!(
         local_source.project(

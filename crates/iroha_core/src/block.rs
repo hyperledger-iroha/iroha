@@ -6503,7 +6503,7 @@ pub(crate) mod valid {
             ) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Err(error) = Self::validate_staged_merge_reference(&block, state_block) {
+            if let Err(error) = Self::validate_staged_execution_controls(&block, state_block) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let exec_witness_guard = (!state_block.replay_compatibility)
@@ -6562,7 +6562,7 @@ pub(crate) mod valid {
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Err(error) = Self::validate_staged_merge_reference(&block, state_block) {
+            if let Err(error) = Self::validate_staged_execution_controls(&block, state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
                     status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
@@ -6819,7 +6819,7 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
         ) -> Result<Option<[u8; 32]>, BlockValidationError> {
-            Self::validate_staged_merge_reference(&block, state_block)?;
+            Self::validate_staged_execution_controls(&block, state_block)?;
             let exec_witness_guard = (!state_block.replay_compatibility)
                 .then(crate::sumeragi::witness::exec_witness_guard);
             Self::validate_and_record_transactions_with_prepared(
@@ -6844,9 +6844,31 @@ pub(crate) mod valid {
             state: &'state State,
             soft_fork: bool,
         ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
-            let merge_reference = block
-                .execution_context()
-                .and_then(|bundle| bundle.merge_entry.as_ref());
+            let execution_context = block.execution_context();
+            let merge_reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
+            let queue_plan_admissions = execution_context
+                .map(|bundle| bundle.queue_plan_admissions())
+                .unwrap_or_default();
+            if merge_reference.is_some() && !queue_plan_admissions.is_empty() {
+                return Err(Self::execution_context_error(
+                    "a carrier cannot mix proposal-native QueuePlan controls with a certified merge entry",
+                ));
+            }
+            if !queue_plan_admissions.is_empty() {
+                if soft_fork {
+                    return Err(Self::execution_context_error(
+                        "soft-fork replacement cannot safely apply QueuePlan admission controls",
+                    ));
+                }
+                return state
+                    .block_with_queue_plan_admissions(block.header(), queue_plan_admissions)
+                    .map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "QueuePlan admission controls could not be staged: {error}"
+                        ))
+                    })
+                    .map(Box::new);
+            }
             if let Some(reference) = merge_reference {
                 if soft_fork {
                     return Err(Self::execution_context_error(
@@ -6871,17 +6893,29 @@ pub(crate) mod valid {
                 state.block(block.header())
             }))
         }
-        fn validate_staged_merge_reference(
+        fn validate_staged_execution_controls(
             block: &SignedBlock,
             state_block: &StateBlock<'_>,
         ) -> Result<(), BlockValidationError> {
-            let reference = block
-                .execution_context()
-                .and_then(|bundle| bundle.merge_entry.as_ref());
+            let execution_context = block.execution_context();
+            let reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
+            let native_queue_plan_admissions = execution_context
+                .map(|bundle| bundle.queue_plan_admissions())
+                .unwrap_or_default();
+            if reference.is_some() && !native_queue_plan_admissions.is_empty() {
+                return Err(Self::execution_context_error(
+                    "a carrier cannot mix proposal-native QueuePlan controls with a certified merge entry",
+                ));
+            }
+            if native_queue_plan_admissions != state_block.staged_queue_plan_admissions() {
+                return Err(Self::execution_context_error(
+                    "staged QueuePlan admission controls differ from the block execution context",
+                ));
+            }
             let staged = state_block.staged_merge_entry();
             let entry = match (reference, staged) {
-                (None, None) => return Ok(()),
-                (Some(reference), Some(entry)) if reference.matches_entry(entry) => entry,
+                (None, None) => None,
+                (Some(reference), Some(entry)) if reference.matches_entry(entry) => Some(entry),
                 (Some(_), None) => {
                     return Err(Self::execution_context_error(
                         "certified merge reference was not staged on the execution overlay",
@@ -6898,22 +6932,77 @@ pub(crate) mod valid {
                     ));
                 }
             };
-            let Some(batch) = entry.execution_batch.as_ref() else {
-                return Ok(());
-            };
-            let merge_entrypoints = batch
-                .lanes
-                .iter()
-                .flat_map(|execution| execution.entrypoint_hashes.iter().copied())
-                .collect::<BTreeSet<_>>();
-            if block
-                .external_entrypoints_cloned()
-                .map(|entrypoint| Hash::from(entrypoint.hash()))
-                .any(|hash| merge_entrypoints.contains(&hash))
-            {
-                return Err(Self::execution_context_error(
-                    "ordinary block entrypoint duplicates a certified merge-batch entrypoint",
-                ));
+            if let Some(batch) = entry.and_then(|entry| entry.execution_batch.as_ref()) {
+                let merge_entrypoints = batch
+                    .lanes
+                    .iter()
+                    .flat_map(|execution| execution.entrypoint_hashes.iter().copied())
+                    .collect::<BTreeSet<_>>();
+                if block
+                    .external_entrypoints_cloned()
+                    .map(|entrypoint| Hash::from(entrypoint.hash()))
+                    .any(|hash| merge_entrypoints.contains(&hash))
+                {
+                    return Err(Self::execution_context_error(
+                        "ordinary block entrypoint duplicates a certified merge-batch entrypoint",
+                    ));
+                }
+            }
+            state_block
+                .require_queue_plan_admission_intents_from_block(block)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "QueuePlan admission intent is not satisfied: {error}"
+                    ))
+                })?;
+            if let Some(bundle) = block.execution_context() {
+                for (index, (entrypoint, context)) in block
+                    .external_entrypoints_cloned()
+                    .zip(bundle.external.iter())
+                    .enumerate()
+                {
+                    if entrypoint.admission_intent()
+                        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+                    {
+                        continue;
+                    }
+                    let binding = state_block
+                        .queue_plan_pending_binding_for_entrypoint(entrypoint.hash())
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "QueuePlan binding lookup failed at index {index}: {error}"
+                            ))
+                        })?
+                        .ok_or_else(|| {
+                            Self::execution_context_error(format!(
+                                "QueuePlan entrypoint at index {index} has no pending immutable binding"
+                            ))
+                        })?;
+                    let routing_plan = binding.routing_plan().map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "QueuePlan binding routing plan is invalid at index {index}: {error}"
+                        ))
+                    })?;
+                    binding
+                        .validate_for_request(state_block.network_id(), &entrypoint, &routing_plan)
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "QueuePlan entrypoint differs from its binding at index {index}: {error}"
+                            ))
+                        })?;
+                    let coordinator = routing_plan.coordinator_route();
+                    if context.entrypoint_hash != entrypoint.hash()
+                        || context.lane_id != coordinator.lane_id
+                        || context.dataspace_id != coordinator.dataspace_id
+                        || context.routing_plan_digest != routing_plan.digest()
+                        || context.routing_plan_legs
+                            != crate::queue::execution_context_legs_for_routing_plan(&routing_plan)
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "QueuePlan execution context differs from its immutable binding at index {index}"
+                        )));
+                    }
+                }
             }
             Ok(())
         }
@@ -7164,7 +7253,7 @@ pub(crate) mod valid {
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
             }
-            if let Err(error) = Self::validate_staged_merge_reference(&block, &state_block) {
+            if let Err(error) = Self::validate_staged_execution_controls(&block, &state_block) {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                 emit_rejection(&block, &error);
@@ -14935,7 +15024,7 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<ValidBlock> {
-            Self::validate_staged_merge_reference(&block, state_block)
+            Self::validate_staged_execution_controls(&block, state_block)
                 .expect("unchecked certified merge block requires its exact pre-staged sidecar");
             let exec_witness_guard = (!state_block.replay_compatibility)
                 .then(crate::sumeragi::witness::exec_witness_guard);
@@ -27138,7 +27227,7 @@ mod tests {
     #[test]
     fn merge_capable_validation_paths_source_bind_post_effect_authorization() {
         let source = include_str!("block.rs");
-        let staged_reference_needle = ["Self::validate_staged_merge_reference", "("].concat();
+        let staged_reference_needle = ["Self::validate_staged_execution_controls", "("].concat();
         let post_effect_authorization_needle =
             ["Self::validate_staged_merge_execution_authorization", "("].concat();
         let staged_reference_calls = source.matches(&staged_reference_needle).count();

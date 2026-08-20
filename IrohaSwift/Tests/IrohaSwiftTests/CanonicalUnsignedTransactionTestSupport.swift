@@ -11,6 +11,7 @@ enum CanonicalUnsignedTransactionTestSupport {
     timeToLiveMs: UInt64?,
     nonce: UInt32? = nil,
     feePayment: FeePaymentIntent,
+    admissionIntent: TransactionAdmissionIntentV1 = .queuePlanSynced,
     metadata: [String: ToriiJSONValue] = [:]
   ) throws -> Data {
     var domain = CompactNoritoWriter()
@@ -32,6 +33,7 @@ enum CanonicalUnsignedTransactionTestSupport {
       try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32)
     )
     payload.writeField(try feePayment.compactNorito())
+    payload.writeField(admissionIntent.norito)
     payload.writeField(try encodeMetadata(metadata))
     payload.writeField(Data([0]))
     return payload.data

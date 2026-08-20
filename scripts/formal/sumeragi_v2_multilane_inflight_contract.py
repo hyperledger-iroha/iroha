@@ -1852,6 +1852,9 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "NonRetireableLaneTransport",
             "target: PeerId",
             "message_hash: HashOf<BlockMessage>",
+            "HistoricalLaneCertification",
+            "source_height: u64",
+            "lane_block_height: u64",
         ),
     ),
     (
@@ -1891,6 +1894,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "BlockMessage::LaneBlockNewViewVote",
             "BlockMessage::LaneBlockNewViewCertificate",
             "ExactOutputRolloverClaim::NonRetireableLaneTransport",
+            "ExactOutputRolloverClaim::HistoricalLaneCertification",
             "message_hash: HashOf::new(message)",
             "lane_output_identity(message)",
         ),

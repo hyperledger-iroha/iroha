@@ -3,5 +3,9 @@ chain_id: iroha3-taira
 block_cadence_ms: 4000
 vrf_seed: 9DA3880072B44387B94BC02414E4E84AAE99F70966F8C247C092647109AFCBF3
 peers_with_pop: 7
+<<<<<<< HEAD
 consensus_fingerprint: 0x0cbe9f23d02faae8cdb64ca14ccd4fa3f9703c15d10fb78826170d76ec8f19ad
+=======
+consensus_fingerprint: 0xd7a4259ec9f2d49973b7fa6674e3fcbe416af5dde6506149fdc9541e30a3da37
+>>>>>>> origin/optimizations
 kagami_version: 2.0.0-rc.2.0

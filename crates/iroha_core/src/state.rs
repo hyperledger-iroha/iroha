@@ -37,6 +37,10 @@ use iroha_data_model::{
         },
         proofs::{BlockProofs, BlockReceiptProof, ExecutionReceiptProof},
     },
+    block::{
+        MAX_QUEUE_PLAN_ADMISSION_BYTES, MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK,
+        queue_plan_admissions_within_limits,
+    },
     bridge::{
         SccpGovernedRouteV1, SccpInboundAnchorHighWaterKeyV1, SccpOutboundMessageIndexKeyV1,
         SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpOutboundPendingUsageV1,
@@ -83,7 +87,6 @@ use iroha_data_model::{
         MAX_MERGE_EXECUTION_ENTRYPOINTS, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
         MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution,
         MergeLaneSignerProof, MergeLaneSnapshot, MergeLedgerEntry,
-        merge_queue_plan_admissions_within_limits,
     },
     metadata::Metadata,
     musubi::{
@@ -239,14 +242,12 @@ const QUEUE_PLAN_PENDING_ROUTE_MEMBER_DOMAIN_V1: &[u8] =
 // One bounded admission certificate supplies the embedded binding. A second
 // certificate-sized envelope conservatively covers fixed identity copies and
 // at most 256 compact, deduplicated route projections.
-const MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES: usize =
-    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES * 2;
+const MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES: usize = MAX_QUEUE_PLAN_ADMISSION_BYTES * 2;
 const MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES: usize = 1024;
 // One carrier can authenticate at most this many QueuePlan controls. Reusing
 // the same consensus ceiling for an exact route roster gives deterministic
 // backpressure and bounds every route-prefix scan.
-const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize =
-    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS;
+const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize = MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK;
 /// Maximum canonical drain-state bytes stored in one lane metadata value.
 const MAX_AUTOSCALE_DRAIN_STATE_BYTES: usize = 32 * 1024;
 /// Maximum canonical pinned-committee bytes stored in one lane metadata value.
@@ -2562,23 +2563,6 @@ fn validate_merge_snapshot_carrier_bounds(
     }
     Ok(())
 }
-fn merge_entry_is_queue_plan_admission_only(entry: &MergeLedgerEntry) -> bool {
-    !entry.queue_plan_admissions.is_empty()
-        && entry.lane_snapshots.is_empty()
-        && entry.execution_batch.is_none()
-        && entry.lane_drain_certificates.is_empty()
-}
-fn merge_candidate_is_queue_plan_admission_only(
-    candidate: &crate::merge::MergeLedgerCandidate,
-) -> bool {
-    !candidate.queue_plan_admissions.is_empty()
-        && candidate.lane_snapshots.is_empty()
-        && candidate.execution_batch.is_none()
-        && candidate.lane_drain_certificates.is_empty()
-}
-fn merge_effective_empty_global_state_root() -> Hash {
-    crate::merge::reduce_merge_hint_roots(&[])
-}
 fn validate_merge_binding_transition(
     previous: &MergeLedgerEntry,
     current: &MergeLedgerEntry,
@@ -2709,7 +2693,6 @@ struct MergeAdmissionState {
 struct MergeAdmissionSnapshot {
     expected_epoch: u64,
     previous_view: u64,
-    previous_global_state_root: Hash,
     latest_lane_snapshots: BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot>,
     latest_execution_heights: BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
 }
@@ -2719,9 +2702,6 @@ impl MergeAdmissionSnapshot {
     }
     fn previous_view(&self) -> u64 {
         self.previous_view
-    }
-    fn previous_global_state_root(&self) -> Hash {
-        self.previous_global_state_root
     }
 }
 impl MergeAdmissionState {
@@ -2735,17 +2715,10 @@ impl MergeAdmissionState {
     fn previous_view(&self) -> u64 {
         self.latest_entry().map_or(0, |entry| entry.merge_qc.view)
     }
-    fn previous_global_state_root(&self) -> Hash {
-        self.latest_entry()
-            .map_or_else(merge_effective_empty_global_state_root, |entry| {
-                entry.global_state_root
-            })
-    }
     fn snapshot(&self) -> MergeAdmissionSnapshot {
         MergeAdmissionSnapshot {
             expected_epoch: self.expected_epoch(),
             previous_view: self.previous_view(),
-            previous_global_state_root: self.previous_global_state_root(),
             latest_lane_snapshots: self.latest_lane_snapshots.clone(),
             latest_execution_heights: self.latest_execution_heights.clone(),
         }
@@ -2757,14 +2730,6 @@ impl MergeAdmissionState {
             return Err(MergeLedgerCommitError::NonMonotonicEpoch {
                 expected: expected_epoch,
                 attempted: entry.epoch_id,
-            });
-        }
-        if merge_entry_is_queue_plan_admission_only(entry)
-            && entry.global_state_root != self.previous_global_state_root()
-        {
-            return Err(MergeLedgerCommitError::MergeQCDigestMismatch {
-                expected: self.previous_global_state_root(),
-                actual: entry.global_state_root,
             });
         }
         validate_merge_lane_snapshot_progression_against(
@@ -11670,6 +11635,10 @@ pub struct StateBlock<'state> {
     direct_committed_entrypoints: HashSet<HashOf<TransactionEntrypoint>>,
     /// Resolved certified merge entry staged before ordinary carrier-block effects.
     staged_merge_entry: Option<MergeLedgerEntry>,
+    /// Exact proposal-native QueuePlan certificates staged before ordinary
+    /// carrier-block effects. These controls are ordered by the Sumeragi QC,
+    /// independently from the Nexus merge ledger.
+    staged_queue_plan_admissions: Vec<Vec<u8>>,
     /// Single-use canonical WSV publication authority for an autonomous execution batch.
     canonical_wsv_merge_commit_authorization: Option<CanonicalWsvMergeCommitAuthorization>,
     /// Single-use authority for exact post-finality carrier metadata.
@@ -25791,6 +25760,7 @@ impl State {
             autoscale_sample_history_dirty: false,
             direct_committed_entrypoints: HashSet::new(),
             staged_merge_entry: None,
+            staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
             canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
@@ -26697,6 +26667,7 @@ impl State {
             autoscale_sample_history_dirty: false,
             direct_committed_entrypoints: HashSet::new(),
             staged_merge_entry: None,
+            staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
             canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
@@ -26813,6 +26784,7 @@ impl State {
             autoscale_sample_history_dirty: false,
             direct_committed_entrypoints: HashSet::new(),
             staged_merge_entry: None,
+            staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
             canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
@@ -27760,27 +27732,17 @@ impl State {
                     ));
                 }
                 if !entry.lane_drain_certificates.is_empty()
-                    && (entry.execution_batch.is_some()
-                        || !entry.lane_snapshots.is_empty()
-                        || !entry.queue_plan_admissions.is_empty())
+                    && (entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty())
                 {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "durable lane drain entry mixes snapshots, execution, or QueuePlan admission controls"
-                            .to_owned(),
+                        "durable lane drain entry mixes snapshots or execution".to_owned(),
                     ));
                 }
                 if entry.lane_snapshots.is_empty()
                     && entry.execution_batch.is_none()
                     && entry.lane_drain_certificates.is_empty()
-                    && entry.queue_plan_admissions.is_empty()
                 {
                     return Err(MergeLedgerCommitError::EmptyEntry);
-                }
-                if !merge_queue_plan_admissions_within_limits(&entry.queue_plan_admissions) {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "durable queue-plan admission controls exceed their count or byte bounds"
-                            .to_owned(),
-                    ));
                 }
                 if entry.execution_batch.is_some() && !entry.lane_snapshots.is_empty() {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -27796,18 +27758,6 @@ impl State {
                     entry.activation_root,
                     &entry.lane_snapshots,
                 )?;
-                self.validate_merge_queue_plan_admissions_with_canonical_history(
-                    &entry.queue_plan_admissions,
-                    &entry.active_lanes,
-                    entry.merge_qc.carrier_height,
-                    false,
-                    |authority_height| {
-                        usize::try_from(authority_height)
-                            .ok()
-                            .and_then(NonZeroUsize::new)
-                            .and_then(|height| self.kura.get_durable_block_hash(height))
-                    },
-                )?;
                 self.validate_merge_quorum_certificate(entry, false, false)?;
                 self.validate_merge_lane_drain_certificate_payload(
                     &entry.lane_drain_certificates,
@@ -27815,11 +27765,8 @@ impl State {
                     &entry.active_lanes,
                     false,
                 )?;
-                let expected_global = if merge_entry_is_queue_plan_admission_only(entry) {
-                    durable_admission.previous_global_state_root()
-                } else {
-                    crate::merge::reduce_merge_hint_roots(&entry.merge_hint_roots())
-                };
+                let expected_global =
+                    crate::merge::reduce_merge_hint_roots(&entry.merge_hint_roots());
                 if expected_global != entry.global_state_root {
                     return Err(MergeLedgerCommitError::MergeQCDigestMismatch {
                         expected: expected_global,
@@ -28071,12 +28018,6 @@ impl State {
                         carrier.block_height
                     )));
                 }
-            }
-            if !self.queue_plan_admission_registry_already_applied(&entry)? {
-                return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
-                    "queue-plan admission controls {entry_hash} are durable at carrier {} but absent from WSV; replay the exact carrier block",
-                    carrier.block_height
-                )));
             }
         }
         Ok(())
@@ -30338,242 +30279,11 @@ impl State {
             lane_snapshots: Vec::new(),
             execution_batch: Some(batch),
             lane_drain_certificates: Vec::new(),
-            queue_plan_admissions: Vec::new(),
             global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
         };
         self.validate_merge_candidate_for_global_round(&candidate, &parent_header, global_view)
             .ok()?;
         Some(candidate)
-    }
-    /// Attach a deterministic bounded prefix of pending QueuePlan admissions
-    /// to one existing merge candidate, or build a controls-only candidate.
-    pub(crate) fn merge_candidate_with_queue_plan_admissions(
-        &self,
-        parent_header: &BlockHeader,
-        global_view: u64,
-        base: Option<crate::merge::MergeLedgerCandidate>,
-        pending: Vec<Vec<u8>>,
-    ) -> Result<Option<crate::merge::MergeLedgerCandidate>, MergeLedgerCommitError> {
-        if pending.is_empty() {
-            return Ok(base);
-        }
-        if base
-            .as_ref()
-            .is_some_and(|candidate| !candidate.lane_drain_certificates.is_empty())
-        {
-            // Drain certificates are intentionally standalone. Admission is
-            // fenced once the drain closes, and any pre-existing pending
-            // certificate already blocks drain-certificate production.
-            return Ok(base);
-        }
-        let consensus = self.merge_consensus_snapshot();
-        let carrier_height = parent_header.height().get().checked_add(1).ok_or_else(|| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(
-                "queue-plan admission carrier height overflow".to_owned(),
-            )
-        })?;
-        let active_lanes = if let Some(candidate) = base.as_ref() {
-            if !candidate.queue_plan_admissions.is_empty() {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "base merge candidate already carries queue-plan admissions".to_owned(),
-                ));
-            }
-            candidate.active_lanes.clone()
-        } else {
-            let lifecycle = &consensus.lifecycle;
-            lifecycle
-                .nexus
-                .lane_catalog
-                .lanes()
-                .iter()
-                .map(|lane| {
-                    Ok(MergeLaneBinding {
-                        lane_id: lane.id,
-                        dataspace_id: lane.dataspace_id,
-                        lane_config_hash: merge_lane_config_hash(lane),
-                        incarnation: *lifecycle
-                            .incarnations
-                            .get(&lane.id)
-                            .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
-                        activation_height: lifecycle
-                            .activation_heights
-                            .get(&lane.id)
-                            .and_then(|height| height.checked_add(1))
-                            .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
-                    })
-                })
-                .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?
-        };
-        let mut ordered = pending
-            .into_iter()
-            .map(|bytes| {
-                let validated =
-                    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-                        &self.network_id,
-                        &bytes,
-                    )
-                    .map_err(|error| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                            "pending queue-plan admission certificate is invalid: {error}"
-                        ))
-                    })?;
-                Ok((validated.registry_key, validated.registry_value, bytes))
-            })
-            .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
-        ordered.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then_with(|| left.1.cmp(&right.1))
-                .then_with(|| left.2.cmp(&right.2))
-        });
-        let mut canonical = Vec::with_capacity(ordered.len());
-        for (registry_key, registry_value, bytes) in ordered {
-            if let Some((previous_key, _, _)) = canonical.last() {
-                if previous_key == &registry_key {
-                    // One byte-identical ingress retry can acquire more than one fully valid
-                    // certificate before its entrypoint has a committed registry marker.  A
-                    // different authority frontier, enqueue timestamp, or signer subset changes
-                    // the binding/certificate bytes without changing the global source identity.
-                    // The WSV registry is the compare-and-set arbiter for that identity, so retain
-                    // exactly one representative here.  Sorting by registry value and complete
-                    // certificate bytes above makes the winner independent of arrival order for
-                    // any one leader's pending set.  Followers validate that chosen certificate;
-                    // they do not need an identical pending inventory.  Once its marker commits,
-                    // normal pending-certificate reconciliation classifies
-                    // every competing binding as a definitive conflict and retires its exact queue
-                    // claim.  Certificate validation and the one-key/one-value invariant of a
-                    // signed merge candidate remain unchanged.
-                    continue;
-                }
-            }
-            canonical.push((registry_key, registry_value, bytes));
-        }
-        let mut candidate = if let Some(candidate) = base {
-            candidate
-        } else {
-            let incarnation_entries = active_lanes
-                .iter()
-                .map(
-                    |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
-                        lane_id: binding.lane_id,
-                        incarnation: binding.incarnation,
-                    },
-                )
-                .collect::<Vec<_>>();
-            crate::merge::MergeLedgerCandidate {
-                version: crate::merge::MergeLedgerCandidate::VERSION,
-                epoch_id: consensus.admission.expected_epoch(),
-                view: global_view,
-                carrier_height,
-                carrier_parent_hash: parent_header.hash(),
-                lane_catalog_hash: merge_lane_catalog_hash(&consensus.lifecycle.nexus.lane_catalog),
-                active_lanes: active_lanes.clone(),
-                incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
-                activation_root: crate::merge::merge_activation_root(&active_lanes),
-                lane_snapshots: Vec::new(),
-                execution_batch: None,
-                lane_drain_certificates: Vec::new(),
-                queue_plan_admissions: Vec::new(),
-                global_state_root: consensus.admission.previous_global_state_root(),
-            }
-        };
-        let unsigned_limit = MAX_MERGE_LEDGER_ENTRY_BYTES.saturating_sub(MAX_MERGE_QC_BYTES);
-        let base_len = candidate.canonical_bytes().len();
-        let available = unsigned_limit.saturating_sub(base_len);
-        let mut selected_raw_bytes = 0_usize;
-        let mut selected_framed_bytes = 0_usize;
-        for (_, _, bytes) in canonical {
-            let framed_estimate = bytes.len().saturating_add(16);
-            if candidate.queue_plan_admissions.len()
-                == iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS
-                || selected_raw_bytes
-                    .checked_add(bytes.len())
-                    .is_none_or(|total| {
-                        total > iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES
-                    })
-                || selected_framed_bytes
-                    .checked_add(framed_estimate)
-                    .is_none_or(|total| total > available)
-            {
-                break;
-            }
-            selected_raw_bytes = selected_raw_bytes.saturating_add(bytes.len());
-            selected_framed_bytes = selected_framed_bytes.saturating_add(framed_estimate);
-            candidate.queue_plan_admissions.push(bytes);
-        }
-        while !candidate.queue_plan_admissions.is_empty()
-            && candidate.canonical_bytes().len() > unsigned_limit
-        {
-            candidate.queue_plan_admissions.pop();
-        }
-        if candidate.queue_plan_admissions.is_empty() {
-            return Ok((candidate.execution_batch.is_some()
-                || !candidate.lane_snapshots.is_empty()
-                || !candidate.lane_drain_certificates.is_empty())
-            .then_some(candidate));
-        }
-        self.bind_queue_plan_admissions_into_merge_execution_candidate(&mut candidate)?;
-        self.validate_merge_candidate_for_global_round(&candidate, parent_header, global_view)?;
-        Ok(Some(candidate))
-    }
-    /// Recompute the marker-inclusive execution write-set and post-state
-    /// commitments after attaching QueuePlan controls.
-    ///
-    /// Reservation eligibility is validated against committed pre-carrier WSV
-    /// before this overlay is built. The admission registry writes are then
-    /// staged after deterministic transaction execution and execution markers,
-    /// so the signed final write-set commits both effects without allowing a
-    /// same-candidate control to authorize its own execution.
-    fn bind_queue_plan_admissions_into_merge_execution_candidate(
-        &self,
-        candidate: &mut crate::merge::MergeLedgerCandidate,
-    ) -> Result<(), MergeLedgerCommitError> {
-        let Some(mut batch) = candidate.execution_batch.clone() else {
-            return Ok(());
-        };
-        let consensus = self.merge_consensus_snapshot();
-        self.validate_merge_execution_batch(
-            &candidate.active_lanes,
-            &batch,
-            &consensus.admission.latest_execution_heights,
-            true,
-        )?;
-        let sources = batch
-            .lanes
-            .iter()
-            .map(Self::merge_execution_source_from_embedded)
-            .collect::<Result<Vec<_>, _>>()?;
-        let (mut state_block, actual_lanes) = self
-            .preexecute_merge_execution_sources(batch.application_block_header.clone(), sources)?;
-        if actual_lanes != batch.lanes {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "ordered execution results differ while binding QueuePlan admissions".to_owned(),
-            ));
-        }
-        state_block.stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
-        state_block
-            .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)?;
-        if state_block.merge_execution_write_set_root() != batch.application_write_set_root {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "canonical application write set differs while binding QueuePlan admissions"
-                    .to_owned(),
-            ));
-        }
-        state_block.stage_merge_execution_markers(candidate.epoch_id, &batch)?;
-        state_block.stage_queue_plan_admissions(
-            &candidate.queue_plan_admissions,
-            &candidate.active_lanes,
-            candidate.carrier_height,
-        )?;
-        batch.write_set_root = state_block.merge_execution_write_set_root();
-        batch.expected_post_state_hash = crate::merge::merge_expected_post_state_hash(
-            batch.base_state_height,
-            batch.base_state_hash,
-            batch.write_set_root,
-        );
-        batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
-        candidate.execution_batch = Some(batch);
-        Ok(())
     }
     fn build_merge_execution_batch_for_consensus(
         &self,
@@ -31158,13 +30868,39 @@ impl State {
             lane_snapshots: Vec::new(),
             execution_batch: None,
             lane_drain_certificates: vec![certificate],
-            queue_plan_admissions: Vec::new(),
             global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
         };
         self.validate_merge_candidate_for_global_round(&candidate, parent_header, global_view)?;
         Ok(candidate)
     }
-    fn validate_merge_queue_plan_admissions(
+    fn queue_plan_active_lane_bindings(
+        &self,
+    ) -> Result<Vec<MergeLaneBinding>, MergeLedgerCommitError> {
+        let lifecycle = self.lane_consensus_lifecycle_snapshot();
+        lifecycle
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                Ok(MergeLaneBinding {
+                    lane_id: lane.id,
+                    dataspace_id: lane.dataspace_id,
+                    lane_config_hash: merge_lane_config_hash(lane),
+                    incarnation: *lifecycle
+                        .incarnations
+                        .get(&lane.id)
+                        .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
+                    activation_height: lifecycle
+                        .activation_heights
+                        .get(&lane.id)
+                        .and_then(|height| height.checked_add(1))
+                        .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
+                })
+            })
+            .collect()
+    }
+    fn validate_queue_plan_admissions_for_carrier(
         &self,
         admissions: &[Vec<u8>],
         active_lanes: &[MergeLaneBinding],
@@ -31175,7 +30911,7 @@ impl State {
         MergeLedgerCommitError,
     > {
         let block_hashes = self.block_hashes.view();
-        self.validate_merge_queue_plan_admissions_with_canonical_history(
+        self.validate_queue_plan_admissions_with_canonical_history(
             admissions,
             active_lanes,
             carrier_height,
@@ -31188,7 +30924,7 @@ impl State {
             },
         )
     }
-    fn validate_merge_queue_plan_admissions_with_canonical_history(
+    fn validate_queue_plan_admissions_with_canonical_history(
         &self,
         admissions: &[Vec<u8>],
         active_lanes: &[MergeLaneBinding],
@@ -31199,7 +30935,7 @@ impl State {
         Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2>,
         MergeLedgerCommitError,
     > {
-        if !merge_queue_plan_admissions_within_limits(admissions) {
+        if !queue_plan_admissions_within_limits(admissions) {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "queue-plan admission controls exceed their count or byte bounds".to_owned(),
             ));
@@ -31280,48 +31016,6 @@ impl State {
             validated.push(admission);
         }
         Ok(validated)
-    }
-    fn ensure_queue_plan_admission_registry_compatible(
-        &self,
-        admissions: &[crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2],
-    ) -> Result<(), MergeLedgerCommitError> {
-        let state_view = self.view();
-        for admission in admissions {
-            let key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
-            if let Some(payload) = state_view.world().smart_contract_state().get(&key) {
-                let current =
-                    Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)?;
-                if current != admission.registry_value {
-                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                        "queue-plan admission registry key is claimed by a different binding: `{key}`"
-                    )));
-                }
-                if Self::queue_plan_admission_application_state(&state_view, admission)?
-                    == QueuePlanAdmissionApplicationState::PendingStale
-                {
-                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                        "queue-plan admission registry owner names a retired or recreated lane incarnation: `{key}`"
-                    )));
-                }
-            } else {
-                let obligation = Self::queue_plan_pending_obligation_from_admission(admission)?;
-                let obligation_key = Self::queue_plan_pending_obligation_marker_key(
-                    obligation.network_id_digest,
-                    obligation.entrypoint_hash,
-                )?;
-                if state_view
-                    .world()
-                    .smart_contract_state()
-                    .get(&obligation_key)
-                    .is_some()
-                {
-                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                        "queue-plan pending obligation exists without registry owner: `{obligation_key}`"
-                    )));
-                }
-            }
-        }
-        Ok(())
     }
     pub(crate) fn pending_queue_plan_admission_registry_lookup(
         &self,
@@ -31433,7 +31127,7 @@ impl State {
                         .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
                     let encoded = vec![bytes.to_vec()];
                     if self
-                        .validate_merge_queue_plan_admissions(
+                        .validate_queue_plan_admissions_for_carrier(
                             &encoded,
                             &active_lanes,
                             carrier_height,
@@ -31449,6 +31143,65 @@ impl State {
             }
         };
         Ok((admission, disposition))
+    }
+    /// Index authenticated QueuePlan certificates which are waiting for their
+    /// canonical registry marker by exact binding hash.
+    ///
+    /// Transaction gossip uses this bounded snapshot to carry the transaction
+    /// body only together with its quorum certificate. Future, stale,
+    /// conflicting, and already-applied certificates are deliberately omitted.
+    pub(crate) fn pending_queue_plan_admission_gossip_certificates(
+        &self,
+    ) -> Result<BTreeMap<Hash, Arc<Vec<u8>>>, MergeLedgerCommitError> {
+        let carrier_height = u64::try_from(self.committed_height())
+            .map_err(|_| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "committed height does not fit QueuePlan gossip classification".to_owned(),
+                )
+            })?
+            .checked_add(1)
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "QueuePlan gossip carrier height overflowed".to_owned(),
+                )
+            })?;
+        let pending = self
+            .kura
+            .pending_queue_plan_admission_certificates_bounded(
+                self.kura.pending_queue_plan_admission_capacity(),
+            )
+            .map_err(MergeLedgerCommitError::Persistence)?;
+        let mut certificates = BTreeMap::new();
+        for (_, bytes) in pending {
+            let (admission, disposition) =
+                self.classify_pending_queue_plan_admission(&bytes, carrier_height)?;
+            let exact_pending = disposition == PendingQueuePlanAdmissionDisposition::Exact
+                && Self::queue_plan_admission_application_state(&self.view(), &admission)?
+                    == QueuePlanAdmissionApplicationState::Pending;
+            if disposition == PendingQueuePlanAdmissionDisposition::EligibleAbsent || exact_pending
+            {
+                certificates
+                    .entry(admission.certificate.binding.canonical_hash())
+                    .or_insert_with(|| Arc::new(bytes));
+            }
+        }
+        Ok(certificates)
+    }
+    /// Return whether an exact QueuePlan certificate's transaction has been
+    /// canonically applied and no longer needs body-handoff evidence.
+    pub(crate) fn queue_plan_admission_certificate_transaction_applied(
+        &self,
+        bytes: &[u8],
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let (admission, registry_match) =
+            self.pending_queue_plan_admission_registry_lookup(bytes)?;
+        if registry_match != QueuePlanAdmissionRegistryMatch::Exact {
+            return Ok(false);
+        }
+        Ok(
+            Self::queue_plan_admission_application_state(&self.view(), &admission)?
+                == QueuePlanAdmissionApplicationState::Applied,
+        )
     }
     fn validate_merge_candidate_round_binding(
         &self,
@@ -31501,13 +31254,10 @@ impl State {
             ));
         }
         if !candidate.lane_drain_certificates.is_empty()
-            && (candidate.execution_batch.is_some()
-                || !candidate.lane_snapshots.is_empty()
-                || !candidate.queue_plan_admissions.is_empty())
+            && (candidate.execution_batch.is_some() || !candidate.lane_snapshots.is_empty())
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "lane drain certificate entries must not mix snapshots, execution, or QueuePlan admission controls"
-                    .to_owned(),
+                "lane drain certificate entries must not mix snapshots or execution".to_owned(),
             ));
         }
         if candidate.execution_batch.is_some() && !candidate.lane_snapshots.is_empty() {
@@ -31518,14 +31268,8 @@ impl State {
         if candidate.execution_batch.is_none()
             && candidate.lane_snapshots.is_empty()
             && candidate.lane_drain_certificates.is_empty()
-            && candidate.queue_plan_admissions.is_empty()
         {
             return Err(MergeLedgerCommitError::EmptyEntry);
-        }
-        if !merge_queue_plan_admissions_within_limits(&candidate.queue_plan_admissions) {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "queue-plan admission controls exceed their count or byte bounds".to_owned(),
-            ));
         }
         validate_merge_entry_snapshot_order(&candidate.lane_snapshots)?;
         validate_merge_snapshot_carrier_bounds(
@@ -31544,30 +31288,13 @@ impl State {
             candidate.lane_catalog_hash,
             &candidate.active_lanes,
         )?;
-        let queue_plan_admissions = self.validate_merge_queue_plan_admissions(
-            &candidate.queue_plan_admissions,
+        self.validate_merge_lane_snapshots_against_lifecycle(
+            &consensus.lifecycle,
+            candidate.lane_catalog_hash,
             &candidate.active_lanes,
-            candidate.carrier_height,
-            true,
+            &candidate.lane_snapshots,
+            candidate.global_state_root,
         )?;
-        self.ensure_queue_plan_admission_registry_compatible(&queue_plan_admissions)?;
-        if merge_candidate_is_queue_plan_admission_only(candidate) {
-            let expected = consensus.admission.previous_global_state_root();
-            if candidate.global_state_root != expected {
-                return Err(MergeLedgerCommitError::MergeQCDigestMismatch {
-                    expected,
-                    actual: candidate.global_state_root,
-                });
-            }
-        } else {
-            self.validate_merge_lane_snapshots_against_lifecycle(
-                &consensus.lifecycle,
-                candidate.lane_catalog_hash,
-                &candidate.active_lanes,
-                &candidate.lane_snapshots,
-                candidate.global_state_root,
-            )?;
-        }
         self.validate_merge_lane_drain_certificate_payload(
             &candidate.lane_drain_certificates,
             candidate.carrier_height,
@@ -31728,11 +31455,6 @@ impl State {
             ));
         }
         state_block.stage_merge_execution_markers(candidate.epoch_id, batch)?;
-        state_block.stage_queue_plan_admissions(
-            &candidate.queue_plan_admissions,
-            &candidate.active_lanes,
-            candidate.carrier_height,
-        )?;
         let actual_write_set_root = state_block.merge_execution_write_set_root();
         let actual_post_state_hash = crate::merge::merge_expected_post_state_hash(
             batch.base_state_height,
@@ -31940,7 +31662,6 @@ impl State {
             lane_snapshots,
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
-            queue_plan_admissions: Vec::new(),
             global_state_root,
         }]
     }
@@ -34341,6 +34062,86 @@ impl State {
         }
         Ok(true)
     }
+    /// Return the exact active QueuePlan binding which still owns application
+    /// of one entrypoint.
+    ///
+    /// `None` means no immutable owner exists, or the exact owner was already
+    /// applied. Malformed, stale, or partially replicated marker state fails
+    /// closed.
+    pub(crate) fn queue_plan_pending_binding_for_entrypoint(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+        Self::queue_plan_pending_binding_in_view(&self.view(), entrypoint_hash)
+    }
+    pub(crate) fn queue_plan_pending_binding_in_view(
+        state_view: &impl StateReadOnlyWithTransactions,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+        if entrypoint_hash.as_ref().iter().all(|byte| *byte == 0) {
+            return Err(
+                "QueuePlan pending-binding lookup contains a zero entrypoint identity".to_owned(),
+            );
+        }
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(state_view.network_id());
+        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            network_id_digest,
+            entrypoint_hash: entrypoint_hash.clone(),
+        };
+        let marker_key = Self::queue_plan_admission_registry_marker_key(&registry_key)
+            .map_err(|error| error.to_string())?;
+        let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+            network_id_digest,
+            entrypoint_hash.clone(),
+        )
+        .map_err(|error| error.to_string())?;
+        let storage = state_view.world().smart_contract_state();
+        let Some(marker_payload) = storage.get(&marker_key) else {
+            if storage.get(&obligation_key).is_some() {
+                return Err(
+                    "QueuePlan pending obligation exists without an immutable registry owner"
+                        .to_owned(),
+                );
+            }
+            return Ok(None);
+        };
+        let registry_value =
+            Self::decode_exact_queue_plan_admission_registry_marker(&marker_key, marker_payload)
+                .map_err(|error| error.to_string())?;
+        match Self::queue_plan_registry_owner_application_state_in_view(
+            state_view,
+            network_id_digest,
+            entrypoint_hash,
+            registry_value.binding_hash,
+        )
+        .map_err(|error| error.to_string())?
+        {
+            QueuePlanAdmissionApplicationState::Applied => Ok(None),
+            QueuePlanAdmissionApplicationState::PendingStale => Err(
+                "QueuePlan pending binding names a retired or recreated lane incarnation"
+                    .to_owned(),
+            ),
+            QueuePlanAdmissionApplicationState::Pending => {
+                let obligation_payload = storage.get(&obligation_key).ok_or_else(|| {
+                    "QueuePlan registry owner lost its pending application obligation".to_owned()
+                })?;
+                let obligation = Self::decode_exact_queue_plan_pending_obligation_marker(
+                    &obligation_key,
+                    obligation_payload,
+                )
+                .map_err(|error| error.to_string())?;
+                if obligation.binding_hash != registry_value.binding_hash {
+                    return Err(
+                        "QueuePlan pending binding differs from its immutable registry owner"
+                            .to_owned(),
+                    );
+                }
+                Ok(Some(obligation.binding))
+            }
+        }
+    }
     /// Compare one structurally valid, exact-network-bound QueuePlan admission binding
     /// with its immutable WSV registry projection.
     ///
@@ -35988,43 +35789,6 @@ impl State {
         }
         Ok(true)
     }
-    fn queue_plan_admission_registry_already_applied(
-        &self,
-        entry: &MergeLedgerEntry,
-    ) -> Result<bool, MergeLedgerCommitError> {
-        let admissions = self.validate_merge_queue_plan_admissions(
-            &entry.queue_plan_admissions,
-            &entry.active_lanes,
-            entry.merge_qc.carrier_height,
-            false,
-        )?;
-        let state_view = self.view();
-        let mut present = 0_usize;
-        for admission in &admissions {
-            let key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
-            let Some(payload) = state_view.world().smart_contract_state().get(&key) else {
-                continue;
-            };
-            present = present.saturating_add(1);
-            let current = Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)?;
-            if current != admission.registry_value {
-                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                    "queue-plan admission registry marker `{key}` has a conflicting binding"
-                )));
-            }
-            Self::queue_plan_admission_application_state(&state_view, admission)?;
-        }
-        if present == 0 {
-            return Ok(admissions.is_empty());
-        }
-        if present != admissions.len() {
-            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
-                "durable merge entry has a partial queue-plan admission registry marker set"
-                    .to_owned(),
-            ));
-        }
-        Ok(true)
-    }
     fn record_merge_execution_fee_receipts(&self, batch: &MergeExecutionBatch) {
         self.settled_nexus_fee_receipts.write().extend(
             batch
@@ -37336,26 +37100,17 @@ impl State {
             ));
         }
         if !entry.lane_drain_certificates.is_empty()
-            && (entry.execution_batch.is_some()
-                || !entry.lane_snapshots.is_empty()
-                || !entry.queue_plan_admissions.is_empty())
+            && (entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty())
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "lane drain certificate entries must not mix snapshots, execution, or QueuePlan admission controls"
-                    .to_owned(),
+                "lane drain certificate entries must not mix snapshots or execution".to_owned(),
             ));
         }
         if entry.execution_batch.is_none()
             && entry.lane_snapshots.is_empty()
             && entry.lane_drain_certificates.is_empty()
-            && entry.queue_plan_admissions.is_empty()
         {
             return Err(MergeLedgerCommitError::EmptyEntry);
-        }
-        if !merge_queue_plan_admissions_within_limits(&entry.queue_plan_admissions) {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "queue-plan admission controls exceed their count or byte bounds".to_owned(),
-            ));
         }
         validate_merge_entry_snapshot_order(&entry.lane_snapshots)?;
         validate_merge_entry_incarnation_context(
@@ -37371,31 +37126,14 @@ impl State {
             entry.lane_catalog_hash,
             &entry.active_lanes,
         )?;
-        let queue_plan_admissions = self.validate_merge_queue_plan_admissions(
-            &entry.queue_plan_admissions,
-            &entry.active_lanes,
-            entry.merge_qc.carrier_height,
-            true,
-        )?;
-        self.ensure_queue_plan_admission_registry_compatible(&queue_plan_admissions)?;
         self.validate_merge_quorum_certificate(entry, true, true)?;
-        if merge_entry_is_queue_plan_admission_only(entry) {
-            let expected = consensus.admission.previous_global_state_root();
-            if entry.global_state_root != expected {
-                return Err(MergeLedgerCommitError::MergeQCDigestMismatch {
-                    expected,
-                    actual: entry.global_state_root,
-                });
-            }
-        } else {
-            self.validate_merge_lane_snapshots_against_lifecycle(
-                &consensus.lifecycle,
-                entry.lane_catalog_hash,
-                &entry.active_lanes,
-                &entry.lane_snapshots,
-                entry.global_state_root,
-            )?;
-        }
+        self.validate_merge_lane_snapshots_against_lifecycle(
+            &consensus.lifecycle,
+            entry.lane_catalog_hash,
+            &entry.active_lanes,
+            &entry.lane_snapshots,
+            entry.global_state_root,
+        )?;
         self.validate_merge_lane_drain_certificate_payload(
             &entry.lane_drain_certificates,
             entry.merge_qc.carrier_height,
@@ -37568,17 +37306,9 @@ impl State {
         }
         let expected_hint_roots = entry.merge_hint_roots();
         let world = self.world.view();
-        let metadata_matches = if merge_entry_is_queue_plan_admission_only(entry) {
-            world
-                .merge_global_state_root()
-                .as_ref()
-                .copied()
-                .unwrap_or_else(merge_effective_empty_global_state_root)
-                == entry.global_state_root
-        } else {
-            world.merge_hint_roots().as_slice() == expected_hint_roots.as_slice()
-                && world.merge_global_state_root().as_ref() == Some(&entry.global_state_root)
-        };
+        let metadata_matches = world.merge_hint_roots().as_slice()
+            == expected_hint_roots.as_slice()
+            && world.merge_global_state_root().as_ref() == Some(&entry.global_state_root);
         if !metadata_matches {
             return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
                 "merge entry {entry_hash} metadata is absent or conflicts with WSV"
@@ -37611,11 +37341,6 @@ impl State {
         {
             return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
                 "merge settlement {entry_hash} is durable but absent from WSV"
-            )));
-        }
-        if !self.queue_plan_admission_registry_already_applied(entry)? {
-            return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
-                "queue-plan admissions from merge entry {entry_hash} are absent from WSV"
             )));
         }
         Ok(())
@@ -37657,12 +37382,6 @@ impl State {
             admission.validate_next(entry)?;
             admission.record(entry);
         }
-        let queue_plan_admissions = self.validate_merge_queue_plan_admissions(
-            &entry.queue_plan_admissions,
-            &entry.active_lanes,
-            entry.merge_qc.carrier_height,
-            false,
-        )?;
         let mut world = self.world.block();
         if let Some(batch) = entry.execution_batch.as_ref() {
             for (key, payload) in Self::merge_execution_marker_payloads(entry.epoch_id, batch)? {
@@ -37687,16 +37406,6 @@ impl State {
             {
                 world.smart_contract_state.insert(key, payload);
             }
-        }
-        for admission in queue_plan_admissions {
-            let key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
-            let payload =
-                Self::queue_plan_admission_registry_marker_payload(&admission.registry_value)?;
-            world.smart_contract_state.insert(key, payload);
-            Self::stage_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
-                &admission,
-            )?;
         }
         world.commit();
         self.update_merge_metadata(entry);
@@ -37744,6 +37453,27 @@ impl State {
             state_block.stage_certified_merge_reference(reference)
         })
     }
+    /// Stage proposal-native QueuePlan certificates on the pristine carrier
+    /// overlay before running deterministic start-of-block effects.
+    #[inline(never)]
+    pub(crate) fn block_with_queue_plan_admissions(
+        &self,
+        carrier_header: BlockHeader,
+        admission_bytes: &[Vec<u8>],
+    ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            carrier_header.height().get(),
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "persisted active runtime ABI is incompatible with this node: {error:?}"
+            ))
+        })?;
+        self.block_with_pristine_stage(carrier_header, |state_block| {
+            state_block.stage_queue_plan_admissions_for_carrier(admission_bytes)
+        })
+    }
     /// Append a merge-ledger entry to the in-memory cache and persist it via Kura.
     ///
     /// # Errors
@@ -37773,14 +37503,10 @@ impl State {
         if entry.lane_snapshots.is_empty()
             && entry.execution_batch.is_none()
             && entry.lane_drain_certificates.is_empty()
-            && entry.queue_plan_admissions.is_empty()
         {
             return Err(MergeLedgerCommitError::EmptyEntry);
         }
-        if entry.execution_batch.is_some()
-            || !entry.lane_drain_certificates.is_empty()
-            || !entry.queue_plan_admissions.is_empty()
-        {
+        if entry.execution_batch.is_some() || !entry.lane_drain_certificates.is_empty() {
             return Err(MergeLedgerCommitError::ExecutionRequiresGlobalBlock);
         }
         validate_merge_entry_snapshot_order(&entry.lane_snapshots)?;
@@ -38066,9 +37792,6 @@ impl State {
         }
     }
     fn update_merge_metadata(&self, entry: &MergeLedgerEntry) {
-        if merge_entry_is_queue_plan_admission_only(entry) {
-            return;
-        }
         let entry_merge_hint_roots = entry.merge_hint_roots();
         let should_update_roots = {
             let current = self.world.merge_hint_roots.view();
@@ -46921,9 +46644,10 @@ impl<'state> StateBlock<'state> {
         append_merge_write_set_component(&mut encoded, &entrypoint_membership.encode());
         Hash::new_from_chunks(&[MERGE_EXECUTION_WRITE_SET_DOMAIN, encoded.as_slice()])
     }
-    fn ensure_pristine_certified_merge_stage(&self) -> Result<(), MergeLedgerCommitError> {
+    fn ensure_pristine_execution_control_stage(&self) -> Result<(), MergeLedgerCommitError> {
         if self.start_of_block_effects_applied
             || self.staged_merge_entry.is_some()
+            || !self.staged_queue_plan_admissions.is_empty()
             || self.canonical_wsv_merge_commit_authorization.is_some()
             || self
                 .canonical_carrier_commit_metadata_authorization
@@ -46976,7 +46700,16 @@ impl<'state> StateBlock<'state> {
         &mut self,
         entry: &MergeLedgerEntry,
     ) -> Result<(), MergeLedgerCommitError> {
+<<<<<<< HEAD
         self.ensure_pristine_certified_merge_stage()?;
+=======
+        self.ensure_pristine_execution_control_stage()?;
+        if !self.state_ref.nexus_snapshot().enabled {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "certified merge entry requires Nexus multilane mode".to_owned(),
+            ));
+        }
+>>>>>>> origin/optimizations
         if entry.merge_qc.carrier_height != self._curr_block.height().get()
             || Some(entry.merge_qc.carrier_parent_hash) != self._curr_block.prev_block_hash()
             || entry.merge_qc.view != self._curr_block.view_change_index()
@@ -47003,7 +46736,6 @@ impl<'state> StateBlock<'state> {
                 .state_ref
                 .prepare_nexus_fee_settlement_for_merge(entry)?;
             self.stage_nexus_fee_settlement_plan(settlement_plan)?;
-            self.stage_queue_plan_admission_registry(entry)?;
             self.update_merge_metadata(entry);
             self.staged_merge_entry = Some(entry.clone());
             return Ok(());
@@ -47059,7 +46791,6 @@ impl<'state> StateBlock<'state> {
             ));
         }
         self.stage_merge_execution_markers(entry.epoch_id, batch)?;
-        self.stage_queue_plan_admission_registry(entry)?;
         let actual_write_set_root = self.merge_execution_write_set_root();
         let actual_post_state_hash = crate::merge::merge_expected_post_state_hash(
             batch.base_state_height,
@@ -47101,6 +46832,30 @@ impl<'state> StateBlock<'state> {
     /// Return the resolved merge entry retained for carrier persistence.
     pub(crate) fn staged_merge_entry(&self) -> Option<&MergeLedgerEntry> {
         self.staged_merge_entry.as_ref()
+    }
+    /// Stage proposal-native QueuePlan certificates before any ordinary block
+    /// effect. Their registry writes are authorized by this block's Sumeragi
+    /// quorum, never by a merge-committee entry.
+    pub(crate) fn stage_queue_plan_admissions_for_carrier(
+        &mut self,
+        admission_bytes: &[Vec<u8>],
+    ) -> Result<(), MergeLedgerCommitError> {
+        self.ensure_pristine_execution_control_stage()?;
+        if admission_bytes.is_empty() {
+            return Ok(());
+        }
+        let active_lanes = self.state_ref.queue_plan_active_lane_bindings()?;
+        self.stage_queue_plan_admissions(
+            admission_bytes,
+            &active_lanes,
+            self._curr_block.height().get(),
+        )?;
+        self.staged_queue_plan_admissions = admission_bytes.to_vec();
+        Ok(())
+    }
+    /// Return the exact native QueuePlan control bytes staged on this overlay.
+    pub(crate) fn staged_queue_plan_admissions(&self) -> &[Vec<u8>] {
+        &self.staged_queue_plan_admissions
     }
     fn canonical_wsv_merge_commit_authorization_matches(
         authorization: &CanonicalWsvMergeCommitAuthorization,
@@ -47372,23 +47127,13 @@ impl<'state> StateBlock<'state> {
         }
         Ok(())
     }
-    fn stage_queue_plan_admission_registry(
-        &mut self,
-        entry: &MergeLedgerEntry,
-    ) -> Result<(), MergeLedgerCommitError> {
-        self.stage_queue_plan_admissions(
-            &entry.queue_plan_admissions,
-            &entry.active_lanes,
-            entry.merge_qc.carrier_height,
-        )
-    }
     fn stage_queue_plan_admissions(
         &mut self,
         admission_bytes: &[Vec<u8>],
         active_lanes: &[MergeLaneBinding],
         carrier_height: u64,
     ) -> Result<(), MergeLedgerCommitError> {
-        let admissions = self.state_ref.validate_merge_queue_plan_admissions(
+        let admissions = self.state_ref.validate_queue_plan_admissions_for_carrier(
             admission_bytes,
             active_lanes,
             carrier_height,
@@ -47437,23 +47182,6 @@ impl<'state> StateBlock<'state> {
         markers.apply();
         Ok(())
     }
-    fn resolve_queue_plan_pending_obligations_for_entrypoints(
-        &mut self,
-        entrypoint_hashes: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
-    ) -> Result<(), MergeLedgerCommitError> {
-        let network_id_digest =
-            crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
-        let mut markers = self.world.smart_contract_state.transaction();
-        for entrypoint_hash in entrypoint_hashes {
-            State::resolve_queue_plan_pending_obligation_in_storage(
-                &mut markers,
-                network_id_digest,
-                entrypoint_hash,
-            )?;
-        }
-        markers.apply();
-        Ok(())
-    }
     fn resolve_required_queue_plan_pending_obligations(
         &mut self,
         pending_obligations: impl IntoIterator<Item = (HashOf<TransactionEntrypoint>, Hash)>,
@@ -47491,15 +47219,99 @@ impl<'state> StateBlock<'state> {
         markers.apply();
         Ok(())
     }
+    #[cfg(test)]
+    fn resolve_queue_plan_pending_obligations_for_entrypoints(
+        &mut self,
+        entrypoint_hashes: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
+        let mut markers = self.world.smart_contract_state.transaction();
+        for entrypoint_hash in entrypoint_hashes {
+            State::resolve_queue_plan_pending_obligation_in_storage(
+                &mut markers,
+                network_id_digest,
+                entrypoint_hash,
+            )?;
+        }
+        markers.apply();
+        Ok(())
+    }
+    fn required_queue_plan_pending_obligations_for_entrypoints(
+        &self,
+        entrypoints: impl IntoIterator<Item = TransactionEntrypoint>,
+    ) -> Result<Vec<(HashOf<TransactionEntrypoint>, Hash)>, MergeLedgerCommitError> {
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
+        let markers = &self.world.smart_contract_state;
+        let mut required = Vec::new();
+        for entrypoint in entrypoints {
+            if entrypoint.admission_intent()
+                != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+            {
+                continue;
+            }
+            let entrypoint_hash = entrypoint.hash();
+            let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+                network_id_digest,
+                entrypoint_hash: entrypoint_hash.clone(),
+            };
+            let marker_key = State::queue_plan_admission_registry_marker_key(&registry_key)?;
+            let marker_payload = markers.get(&marker_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan-synchronized entrypoint has no immutable admission owner: `{marker_key}`"
+                ))
+            })?;
+            let registry_value = State::decode_exact_queue_plan_admission_registry_marker(
+                &marker_key,
+                marker_payload,
+            )?;
+            let obligation_key = State::queue_plan_pending_obligation_marker_key(
+                network_id_digest,
+                entrypoint_hash.clone(),
+            )?;
+            let obligation_payload = markers.get(&obligation_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan-synchronized entrypoint has no pending application obligation: `{obligation_key}`"
+                ))
+            })?;
+            let obligation = State::decode_exact_queue_plan_pending_obligation_marker(
+                &obligation_key,
+                obligation_payload,
+            )?;
+            if obligation.binding_hash != registry_value.binding_hash {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending obligation differs from immutable admission owner: `{obligation_key}`"
+                )));
+            }
+            required.push((entrypoint_hash, registry_value.binding_hash));
+        }
+        Ok(required)
+    }
+    pub(crate) fn queue_plan_pending_binding_for_entrypoint(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+        State::queue_plan_pending_binding_in_view(self, entrypoint_hash)
+    }
+    pub(crate) fn require_queue_plan_admission_intents_from_block(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<(), MergeLedgerCommitError> {
+        self.required_queue_plan_pending_obligations_for_entrypoints(
+            block.external_entrypoints_cloned(),
+        )
+        .map(|_| ())
+    }
     pub(crate) fn resolve_queue_plan_pending_obligations_from_block(
         &mut self,
         block: &SignedBlock,
     ) -> Result<(), MergeLedgerCommitError> {
-        self.resolve_queue_plan_pending_obligations_for_entrypoints(
-            block
-                .external_entrypoints_cloned()
-                .map(|entrypoint| entrypoint.hash()),
-        )
+        let required = self.required_queue_plan_pending_obligations_for_entrypoints(
+            block.external_entrypoints_cloned(),
+        )?;
+        self.resolve_required_queue_plan_pending_obligations(required)
     }
     fn stage_merge_execution_markers(
         &mut self,
@@ -49538,10 +49350,7 @@ impl<'state> StateBlock<'state> {
                 "drain commitment carrier must contain exactly one certificate".to_owned(),
             ));
         };
-        if entry.execution_batch.is_some()
-            || !entry.lane_snapshots.is_empty()
-            || !entry.queue_plan_admissions.is_empty()
-        {
+        if entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty() {
             return Err(LaneLifecycleError::Storage(
                 "drain commitment carrier must be certificate-only".to_owned(),
             ));
@@ -50379,9 +50188,6 @@ impl<'state> StateBlock<'state> {
         }
     }
     fn update_merge_metadata(&mut self, entry: &MergeLedgerEntry) {
-        if merge_entry_is_queue_plan_admission_only(entry) {
-            return;
-        }
         let entry_merge_hint_roots = entry.merge_hint_roots();
         self.stage_merge_metadata_values(&entry_merge_hint_roots, entry.global_state_root);
     }

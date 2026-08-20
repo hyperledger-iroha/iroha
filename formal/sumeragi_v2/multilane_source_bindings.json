@@ -2167,10 +2167,13 @@
         "path": "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
         "kind": "enum",
         "symbol": "ExactOutputRolloverClaim",
-        "required_tokens": [
-          "NonRetireableLaneTransport",
-          "target: PeerId",
-          "message_hash: HashOf<BlockMessage>"
+          "required_tokens": [
+            "NonRetireableLaneTransport",
+            "target: PeerId",
+            "message_hash: HashOf<BlockMessage>",
+            "HistoricalLaneCertification",
+            "source_height: u64",
+            "lane_block_height: u64"
         ]
       },
       {
@@ -2210,9 +2213,10 @@
         "required_tokens": [
           "BlockMessage::LaneExecutablePayload",
           "BlockMessage::LaneBlockNewViewVote",
-          "BlockMessage::LaneBlockNewViewCertificate",
-          "ExactOutputRolloverClaim::NonRetireableLaneTransport",
-          "message_hash: HashOf::new(message)",
+            "BlockMessage::LaneBlockNewViewCertificate",
+            "ExactOutputRolloverClaim::NonRetireableLaneTransport",
+            "ExactOutputRolloverClaim::HistoricalLaneCertification",
+            "message_hash: HashOf::new(message)",
           "lane_output_identity(message)"
         ]
       },
@@ -6118,6 +6122,10 @@
             "source_id: body.source_id",
             "tx_entrypoint_hash: body.tx_entrypoint_hash",
             "plan_digest: body.plan_digest",
+<<<<<<< HEAD
+=======
+            "context_id: body.round.context_id",
+>>>>>>> origin/optimizations
             "round_height: body.round.height",
             "epoch: body.epoch",
             "network_id: body.network_id",
@@ -11129,16 +11137,14 @@
         {
           "path": "crates/iroha_torii/src/lib.rs",
           "kind": "fn",
-          "symbol": "persist_and_wait_for_queue_plan_admission",
+          "symbol": "persist_queue_plan_admission_certificate",
           "required_tokens": [
             "QueuePlanAdmissionCertificateStrengthV2::Quorum",
+            "queue_plan_admission_binding_registry_match",
             "persist_pending_queue_plan_admission_certificate",
+            "disseminate_queue_plan_admission_publication",
             "notify_pending_queue_plan_admission",
-            "wait_for_exact_queue_plan_admission_registry",
-            "QueuePlanAdmissionRegistryWaitOutcome::Exact",
-            "QueuePlanAdmissionRegistryWaitOutcome::Conflict",
-            "QueuePlanAdmissionRegistryWaitOutcome::Malformed",
-            "QueuePlanAdmissionRegistryWaitOutcome::TimedOut"
+            "torii_proxy_snapshot_to_response"
           ]
         },
         {
@@ -11222,6 +11228,7 @@
             "pending_queue_plan_admission_inventory_paths_unlocked",
             "limit.min(self.pending_control_sidecar_limits.queue_plan_admissions)",
             "read_pending_queue_plan_admission_path"
+<<<<<<< HEAD
           ]
         },
         {
@@ -11233,6 +11240,18 @@
             "pending_queue_plan_admission_paths_unlocked",
             "combined_bytes_within_limit(merge_bytes, admission_bytes)",
             "invalid_pending_queue_plan_admission_error"
+=======
+>>>>>>> origin/optimizations
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/queue_plan_admission_batch.rs",
+          "kind": "fn",
+          "symbol": "pending_queue_plan_admission_inventory_paths_unlocked",
+          "required_tokens": [
+            "pending_merge_entry_paths_unlocked",
+            "pending_queue_plan_admission_paths_unlocked",
+            "combined_bytes_within_limit(merge_bytes, admission_bytes)"
           ]
         },
         {
@@ -11312,12 +11331,69 @@
         {
           "path": "crates/iroha_torii/src/lib.rs",
           "kind": "fn",
-          "symbol": "submit_signed_transaction_for_ingress_globally_synced",
+          "symbol": "submit_signed_transaction_for_ingress_queue_plan_certified",
           "required_tokens": [
             "durable_plan_admission_claim_with_state",
             "route_plan_with_state",
             "execute_torii_transaction_via_proxy",
             "queue_plan_synced_transport_unavailable"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/execution_context.rs",
+          "kind": "struct",
+          "symbol": "BlockExecutionContextBundle",
+          "required_tokens": [
+            "version",
+            "external",
+            "autonomous_lane_payloads",
+            "lane_payload_ownerships",
+            "queue_plan_admissions",
+            "merge_entry"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/execution_context.rs",
+          "kind": "method",
+          "symbol": "BlockExecutionContextBundle::with_queue_plan_admissions",
+          "required_tokens": [
+            "queue_plan_admissions: Vec<Vec<u8>>",
+            "self.queue_plan_admissions = queue_plan_admissions",
+            "self"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
+          "symbol": "candidate_attachments",
+          "required_tokens": [
+            "queue_plan_admissions: Vec<Vec<u8>>",
+            "if queue_plan_admissions.is_empty()",
+            "select_pending_certified_merge_entry_for_round",
+            "None",
+            "queue_plan_admissions"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "fn",
+          "symbol": "state_block_for_execution",
+          "required_tokens": [
+            "bundle.queue_plan_admissions()",
+            "merge_reference.is_some() && !queue_plan_admissions.is_empty()",
+            "block_with_queue_plan_admissions",
+            "block_with_certified_merge_reference"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "fn",
+          "symbol": "validate_staged_execution_controls",
+          "required_tokens": [
+            "bundle.queue_plan_admissions()",
+            "reference.is_some() && !native_queue_plan_admissions.is_empty()",
+            "native_queue_plan_admissions != state_block.staged_queue_plan_admissions()",
+            "staged_merge_entry"
           ]
         },
         {
@@ -11552,16 +11628,6 @@
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
-          "symbol": "ensure_queue_plan_admission_registry_compatible",
-          "required_tokens": [
-            "queue_plan_admission_application_state",
-            "== QueuePlanAdmissionApplicationState::PendingStale",
-            "retired or recreated lane incarnation"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/state.rs",
-          "kind": "fn",
           "symbol": "queue_plan_admission_registry_entrypoint_present",
           "required_tokens": [
             "queue_plan_registry_owner_application_state_in_view",
@@ -11644,9 +11710,20 @@
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
+          "symbol": "stage_queue_plan_admissions_for_carrier",
+          "required_tokens": [
+            "ensure_pristine_execution_control_stage",
+            "queue_plan_active_lane_bindings",
+            "stage_queue_plan_admissions",
+            "staged_queue_plan_admissions"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
           "symbol": "stage_queue_plan_admissions",
           "required_tokens": [
-            "validate_merge_queue_plan_admissions",
+            "validate_queue_plan_admissions_for_carrier",
             "queue_plan_pending_obligation_from_admission",
             "queue_plan_pending_obligation_matches_active_lifecycle",
             ".collect::<Result<Vec<_>, MergeLedgerCommitError>>()?",
@@ -12100,9 +12177,9 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/queue_plan_admission_handoff.rs",
           "kind": "fn",
-          "symbol": "refresh_merge_candidates",
+          "symbol": "reconcile_pending_queue_plan_admissions",
           "required_tokens": [
             "reconcile_pending_queue_plan_admissions(active_view)",
             "drive_lane_drain(active_view)"
@@ -12121,7 +12198,12 @@
             "reject_exact_queue_plan_admission_claim",
             "remove_pending_queue_plan_admission_certificate",
             "PendingQueuePlanAdmissionDisposition::EligibleAbsent",
+<<<<<<< HEAD
             "PendingQueuePlanAdmissionDisposition::Future"
+=======
+            "MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK",
+            "MAX_QUEUE_PLAN_ADMISSIONS_BYTES"
+>>>>>>> origin/optimizations
           ]
         }
       ]

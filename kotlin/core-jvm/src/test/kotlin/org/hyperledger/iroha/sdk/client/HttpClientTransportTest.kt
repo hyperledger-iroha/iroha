@@ -36,6 +36,7 @@ import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
@@ -2514,6 +2515,13 @@ class HttpClientTransportTest {
                 authority = testAccountId(0x59),
             ),
         )
+        expectReject(
+            verifyingKeyTransactionPayload(
+                request,
+                VerifyingKeyDraftOperation.REGISTER,
+                admissionIntent = TransactionAdmissionIntent.ORDINARY,
+            ),
+        )
 
         val changedRecord = LinkedHashMap(request)
         changedRecord["curve"] = "pasta"
@@ -3678,6 +3686,7 @@ class HttpClientTransportTest {
         networkId: NetworkId = verifyingKeyNetworkId,
         authority: String = request["authority"] as String,
         instructions: List<InstructionBox>? = null,
+        admissionIntent: TransactionAdmissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
     ): ByteArray {
         val discriminant = requireNotNull(AccountAddress.detectI105Discriminant(authority))
         val instructionList = instructions ?: listOf(
@@ -3692,6 +3701,7 @@ class HttpClientTransportTest {
                 timeToLiveMs = 5_000L,
                 nonce = 1L,
                 feePayment = testFeePayment(),
+                admissionIntent = admissionIntent,
             ),
         )
     }
@@ -3728,6 +3738,7 @@ class HttpClientTransportTest {
                 timeToLiveMs = 5_000L,
                 nonce = seed.toLong() + 1L,
                 feePayment = testFeePayment(),
+                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 metadata = mapOf("note" to JsonValue.string("tx-$seed")),
             ),
         )

@@ -54,6 +54,7 @@ use iroha_executor_data_model::permission::{
     governance::CanManageParliament,
     parameter::CanSetParameters,
     peer::CanManagePeers,
+    query::CanReadAllLedgerData,
     role::CanManageRoles,
     trigger::CanRegisterTrigger,
 };
@@ -705,6 +706,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         )),
         InstructionBox::from(Grant::account_permission(
             CanSetParameters,
+            alice_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
+            CanReadAllLedgerData,
             alice_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(
@@ -2174,7 +2179,12 @@ mod tests {
         let block = genesis(Vec::new(), topology, vec![entry]);
         let mut saw_soracloud_permission = false;
         let mut saw_parliament_permission = false;
+<<<<<<< HEAD
         for tx in block.0.external_transactions() {
+=======
+        let mut saw_read_all_permission = false;
+        for tx in block.0.transactions_vec() {
+>>>>>>> origin/optimizations
             let Executable::Instructions(instrs) = tx.instructions() else {
                 continue;
             };
@@ -2189,8 +2199,11 @@ mod tests {
                 if grant.destination == *ALICE_ID && grant.object.name() == "CanManageParliament" {
                     saw_parliament_permission = true;
                 }
+                if grant.destination == *ALICE_ID && grant.object.name() == "CanReadAllLedgerData" {
+                    saw_read_all_permission = true;
+                }
             }
-            if saw_soracloud_permission && saw_parliament_permission {
+            if saw_soracloud_permission && saw_parliament_permission && saw_read_all_permission {
                 break;
             }
         }
@@ -2201,6 +2214,10 @@ mod tests {
         assert!(
             saw_parliament_permission,
             "default test-network genesis should grant ALICE_ID CanManageParliament"
+        );
+        assert!(
+            saw_read_all_permission,
+            "default test-network genesis should grant ALICE_ID CanReadAllLedgerData"
         );
     }
     #[test]

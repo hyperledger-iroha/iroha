@@ -166,6 +166,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             wal_path,
             chunk_root,
             lifecycle_root,
+            successor_floor,
             ..
         } = storage;
         let owner = self.open_production_lifecycle_owner_v1_at_authenticated_roots(
@@ -176,6 +177,16 @@ impl AuthenticatedRecoveredAdapterStartup {
             body_store,
             &local_signer,
         )?;
+        let owner = match successor_floor {
+            Some(floor) => owner
+                .authenticate_recovered_successor_floor(floor)
+                .map_err(|error| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::SuccessorFloor(error),
+                    )
+                })?,
+            None => owner,
+        };
         let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 {
             kura_identity,
             wal_path,
@@ -218,11 +229,23 @@ impl AuthenticatedRecoveredAdapterStartup {
             proofs_of_possession: adapter.proofs_of_possession.clone(),
             parent_verification: adapter.parent_verification.clone(),
         };
+        let local_proposal_attempt =
+            RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round(
+                &adapter,
+            )
+            .map_err(|_| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::RecoveredLocalProposal(
+                        "current-round durable ProposalIntent projection is inconsistent",
+                    ),
+                )
+            })?;
         match authority {
             RecoveredWalStartupAuthorityV1::None => Self::open_recovered_no_authority_branch(
                 verified,
                 adapter,
                 effects,
+                local_proposal_attempt,
                 body_store,
                 config,
                 reply_route_source_capacity,
@@ -236,6 +259,7 @@ impl AuthenticatedRecoveredAdapterStartup {
                     adapter,
                     effects,
                     control,
+                    local_proposal_attempt,
                     body_store,
                     config,
                     reply_route_source_capacity,
@@ -245,6 +269,10 @@ impl AuthenticatedRecoveredAdapterStartup {
                 )
             }
             RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) => {
+                // A Decision terminally suppresses proposal work through the
+                // reducer directive. Its startup branch intentionally accepts
+                // no runner-local proposal-attempt owner.
+                drop(local_proposal_attempt);
                 Self::open_recovered_decision_authority_branch(
                     verified,
                     adapter,
@@ -269,6 +297,7 @@ impl AuthenticatedRecoveredAdapterStartup {
                 Self::open_recovered_phase_vote_branch(
                     phase_startup,
                     verified,
+                    local_proposal_attempt,
                     body_store,
                     config,
                     reply_route_source_capacity,
@@ -303,6 +332,7 @@ impl AuthenticatedRecoveredAdapterStartup {
         adapter: SumeragiV2Adapter,
         effects: Vec<AdapterEffect>,
         control: RecoveredWalControlSign,
+        local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>,
         body_store: super::v2_body_store::RevalidatedV2BodyStore,
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
@@ -310,8 +340,20 @@ impl AuthenticatedRecoveredAdapterStartup {
         serve_payload_root: &std::path::Path,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
-        let local_proposal_attempt =
-            RecoveredLifecycleLocalProposalAttemptV1::from_control(&control);
+        if let Some(control_attempt) =
+            RecoveredLifecycleLocalProposalAttemptV1::from_control(&control)
+            && local_proposal_attempt.as_ref().is_none_or(|durable| {
+                durable.tag != control_attempt.tag
+                    || durable.round != control_attempt.round
+                    || durable.subject != control_attempt.subject
+            })
+        {
+            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredLocalProposal(
+                    "Proposal Sign differs from its durable current-round ProposalIntent",
+                ),
+            ));
+        }
         let projected =
             crate::sumeragi::v2_runtime::project_recovered_wal_control_sign(&verified, control)
                 .map_err(|_control| {
@@ -589,6 +631,7 @@ impl AuthenticatedRecoveredAdapterStartup {
         verified: VerifiedHeightContext,
         adapter: SumeragiV2Adapter,
         effects: Vec<AdapterEffect>,
+        local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>,
         body_store: super::v2_body_store::RevalidatedV2BodyStore,
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
@@ -611,7 +654,11 @@ impl AuthenticatedRecoveredAdapterStartup {
             reply_route_source_capacity,
             payload_store,
             serve_payloads,
-            ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+            ProductionLifecycleAdapterStartupV1::recovered_with_local_proposal_attempt(
+                adapter,
+                effects,
+                local_proposal_attempt,
+            ),
         )
         .map_err(|error| {
             ProductionLifecycleOwnerStartupErrorV1::new(
@@ -738,6 +785,7 @@ impl AuthenticatedRecoveredAdapterStartup {
     fn prepare_recovered_phase_vote_cold_adapter_stage<'registry>(
         persisted: Box<PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>>,
         body_store: &super::v2_body_store::V2BodyStore,
+        local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>,
     ) -> Result<
         Box<ColdPreparedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>>,
         ProductionLifecycleOwnerStartupErrorV1,
@@ -752,7 +800,12 @@ impl AuthenticatedRecoveredAdapterStartup {
             proofs_of_possession: adapter.proofs_of_possession.clone(),
             parent_verification: adapter.parent_verification.clone(),
         };
-        let adapter_startup = ProductionLifecycleAdapterStartupV1::recovered(adapter, effects);
+        let adapter_startup =
+            ProductionLifecycleAdapterStartupV1::recovered_with_local_proposal_attempt(
+                adapter,
+                effects,
+                local_proposal_attempt,
+            );
         let (adapter_startup, persisted) = persisted
             .prepare_cold_adapter_startup(&verified, adapter_startup, body_store)
             .map_err(|reason| {
@@ -833,6 +886,7 @@ impl AuthenticatedRecoveredAdapterStartup {
     fn open_recovered_phase_vote_branch(
         phase_startup: AuthenticatedRecoveredAdapterStartup,
         verified: VerifiedHeightContext,
+        local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>,
         body_store: super::v2_body_store::RevalidatedV2BodyStore,
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
@@ -856,8 +910,11 @@ impl AuthenticatedRecoveredAdapterStartup {
             ledger_root,
         )?;
         let persisted = Self::persist_recovered_phase_vote_stage(authenticated)?;
-        let prepared =
-            Self::prepare_recovered_phase_vote_cold_adapter_stage(persisted, &body_store)?;
+        let prepared = Self::prepare_recovered_phase_vote_cold_adapter_stage(
+            persisted,
+            &body_store,
+            local_proposal_attempt,
+        )?;
         let installed = Self::install_recovered_phase_vote_sign_stage(prepared)?;
         let paired = Self::open_recovered_phase_vote_seals_stage(
             installed,

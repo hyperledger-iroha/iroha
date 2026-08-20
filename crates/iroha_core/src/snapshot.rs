@@ -54,8 +54,6 @@ fn serialize_state_snapshot(
 ) {
     let view = state.view();
     let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
-    let commit_topology = view.commit_topology.to_vec();
-    let prev_commit_topology = view.prev_commit_topology.to_vec();
     let nexus_runtime = SnapshotNexusRuntime::from_nexus_with_autoscale_history(
         &view.nexus,
         &view.lane_incarnations,
@@ -179,18 +177,16 @@ fn serialize_state_snapshot(
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&commit_topology, out);
+    state.commit_topology.json_serialize(out);
     out.push(',');
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&prev_commit_topology, out);
+    state.prev_commit_topology.json_serialize(out);
     out.push('}');
 }
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     let world = state.world();
     let block_hashes: Vec<HashOf<BlockHeader>> = state.block_hashes().iter().copied().collect();
-    let commit_topology = state.commit_topology.to_vec();
-    let prev_commit_topology = state.prev_commit_topology.to_vec();
     let nexus_runtime = SnapshotNexusRuntime::from_nexus_with_autoscale_history(
         &state.nexus,
         &state.lane_incarnations,
@@ -295,11 +291,11 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&commit_topology, out);
+    state.commit_topology.json_serialize(out);
     out.push(',');
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&prev_commit_topology, out);
+    state.prev_commit_topology.json_serialize(out);
     out.push('}');
 }
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.

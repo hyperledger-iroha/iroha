@@ -501,6 +501,10 @@ def _build_untrusted_governance_authority_request_v1(
         "schema": REQUEST_SCHEMA,
         "schema_version": SCHEMA_VERSION,
         "transaction": {
+            "admission_intent": {
+                "intent": "queue_plan_synced",
+                "value": None,
+            },
             "attachments": None,
             "authority_account_id": genesis_authority,
             "creation_time_millis": creation_time,
@@ -587,6 +591,7 @@ _REQUEST_RUN_FIELDS = (
     "replay_namespace",
 )
 _REQUEST_TRANSACTION_FIELDS = (
+    "admission_intent",
     "attachments",
     "authority_account_id",
     "creation_time_millis",
@@ -721,6 +726,8 @@ def _validated_untrusted_request_value_v1(
         or transaction["executable_kind"] != TRANSACTION_EXECUTABLE_KIND
         or transaction["payload_codec"] != TRANSACTION_PAYLOAD_CODEC
         or transaction["payload_prehash"] != TRANSACTION_PAYLOAD_PREHASH
+        or transaction["admission_intent"]
+        != {"intent": "queue_plan_synced", "value": None}
         or transaction["attachments"] is not None
         or transaction["metadata"] != {}
         or transaction["fee_payment"]

@@ -72,7 +72,9 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
 async fn register_offline_peer() -> Result<()> {
     const N_PEERS: usize = 4;
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_peers(N_PEERS),
+        NetworkBuilder::new()
+            .with_peers(N_PEERS)
+            .with_max_validator_capacity(N_PEERS + 1),
         stringify!(register_offline_peer),
     )
     .await?

@@ -21,7 +21,7 @@ const ROLLOUT_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy_rollout_observation.v1
 const FROZEN_CARGO_LOCK_SHA256_V1: &str =
     "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79";
 const EXACT12_MATRIX_SHA256_V1: &str =
-    "7336d0221fddc51486ee53d4203f5a92d560d0ec9104a49de25896a8b10673d0";
+    "f75eeba824067aaf903fd8060c967190e37073dc07e487c81c265018a1c00f38";
 
 const ENDPOINTS_V1: [&str; 5] = [
     "public-torii",

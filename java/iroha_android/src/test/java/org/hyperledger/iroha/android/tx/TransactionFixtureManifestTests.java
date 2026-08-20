@@ -1017,6 +1017,8 @@ public final class TransactionFixtureManifestTests {
     final byte[] ttlField = readField(decoder, name + ".payload.time_to_live_ms");
     final byte[] nonceField = readField(decoder, name + ".payload.nonce");
     final byte[] feePaymentField = readField(decoder, name + ".payload.fee_payment");
+    final byte[] admissionIntentField =
+        readField(decoder, name + ".payload.admission_intent");
     final byte[] metadataField = readField(decoder, name + ".payload.metadata");
     final byte[] attachmentsField = readField(decoder, name + ".payload.attachments");
     if (decoder.remaining() != 0) {
@@ -1053,6 +1055,14 @@ public final class TransactionFixtureManifestTests {
         decodeFieldPayload(nonceField, NONCE_ADAPTER, name + ".payload.nonce");
     if (feePaymentField.length == 0) {
       throw new IllegalStateException(name + ": payload fee_payment must not be empty");
+    }
+    final long admissionIntent =
+        decodeFieldPayload(
+            admissionIntentField,
+            UINT32_ADAPTER,
+            name + ".payload.admission_intent");
+    if (admissionIntent != 0L) {
+      throw new IllegalStateException(name + ": canonical fixture admission intent must be Ordinary");
     }
     validateMetadataField(metadataField, name + ".payload.metadata");
     decodeOptionField(name + ".payload.attachments", attachmentsField);

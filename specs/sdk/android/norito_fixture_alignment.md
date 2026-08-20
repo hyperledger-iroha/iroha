@@ -1,9 +1,9 @@
 # Norito fixture alignment
 
-- Canonical: `fixtures/norito_rpc/transaction_fixtures.manifest.json` (fixtures: 27, fingerprint: `f4f93f7ca4c6c244130e7bbd5b518df8`, age_hours: 0.52)
+- Canonical: `fixtures/norito_rpc/transaction_fixtures.manifest.json` (fixtures: 27, fingerprint: `013d1e8e697c0b8f9c504f9b169d76ae`, age_hours: 1.42)
 
 | SDK | Status | Missing | Extra | Mismatched | Age (h) | Fingerprint |
 |-----|--------|---------|-------|------------|---------|-------------|
-| android | ok | — | — | — | 0.52 | `f4f93f7ca4c6c244130e7bbd5b518df8` |
-| python | ok | — | — | — | 0.52 | `f4f93f7ca4c6c244130e7bbd5b518df8` |
-| swift | ok | — | — | — | 0.52 | `f4f93f7ca4c6c244130e7bbd5b518df8` |
+| android | ok | — | — | — | 1.42 | `013d1e8e697c0b8f9c504f9b169d76ae` |
+| python | ok | — | — | — | 1.42 | `013d1e8e697c0b8f9c504f9b169d76ae` |
+| swift | ok | — | — | — | 1.42 | `013d1e8e697c0b8f9c504f9b169d76ae` |

@@ -15,7 +15,10 @@ use iroha_data_model::{
         MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
         PrivacyProtocolLifecycleV1,
     },
-    transaction::{Executable, FeePaymentIntent, TransactionBuilder, TransactionDomain},
+    transaction::{
+        Executable, FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder,
+        TransactionDomain,
+    },
 };
 use norito::json::{Map, Value};
 use std::num::NonZeroU32;
@@ -87,6 +90,7 @@ const RUN_FIELDS_V1: &[&str] = &[
     "replay_namespace",
 ];
 const TRANSACTION_FIELDS_V1: &[&str] = &[
+    "admission_intent",
     "attachments",
     "authority_account_id",
     "creation_time_millis",
@@ -104,6 +108,7 @@ const TRANSACTION_FIELDS_V1: &[&str] = &[
     "payload_sha256",
     "time_to_live_millis",
 ];
+const ADMISSION_INTENT_FIELDS_V1: &[&str] = &["intent", "value"];
 const FEE_FIELDS_V1: &[&str] = &["charge_limits", "gas_limit", "payer"];
 /// Independently pinned semantic inputs which a future retained-key service must own.
 ///
@@ -236,6 +241,8 @@ pub(super) fn validate_privacy_governance_request_v1(
     let genesis = nested_object(request, "genesis", GENESIS_FIELDS_V1)?;
     let run = nested_object(request, "run", RUN_FIELDS_V1)?;
     let transaction = nested_object(request, "transaction", TRANSACTION_FIELDS_V1)?;
+    let admission_intent =
+        nested_object(transaction, "admission_intent", ADMISSION_INTENT_FIELDS_V1)?;
     let fee = nested_object(transaction, "fee_payment", FEE_FIELDS_V1)?;
     require_sha256_axis(
         candidate,
@@ -343,7 +350,9 @@ pub(super) fn validate_privacy_governance_request_v1(
             "transaction contract",
         ));
     }
-    if !required_null(transaction, "attachments")?
+    if required_str(admission_intent, "intent")? != "queue_plan_synced"
+        || !required_null(admission_intent, "value")?
+        || !required_null(transaction, "attachments")?
         || !required_empty_object(transaction, "metadata")?
         || required_str(fee, "payer")? != "authority"
         || !required_empty_array(fee, "charge_limits")?
@@ -764,11 +773,12 @@ fn validate_transaction_payload(
         &payload.fee_payment,
         FeePaymentIntent::Authority(payment)
             if payment.charge_limits.is_empty() && payment.gas_limit.is_none()
-    ) || !payload.metadata.is_empty()
+    ) || payload.admission_intent != TransactionAdmissionIntent::QueuePlanSynced
+        || !payload.metadata.is_empty()
         || payload.attachments.is_some()
     {
         return Err(PrivacyGovernanceSemanticErrorV1::TransactionIntent(
-            "fee, metadata, or attachments",
+            "admission intent, fee, metadata, or attachments",
         ));
     }
     let Executable::Instructions(instructions) = &payload.instructions else {
@@ -1118,7 +1128,12 @@ mod tests {
         transaction::{ExecutableBatchItem, TransactionPayload},
     };
     use iroha_primitives::json::Json;
-    use std::{num::NonZeroU64, time::Duration};
+    use std::{
+        fs,
+        num::NonZeroU64,
+        path::{Path, PathBuf},
+        time::Duration,
+    };
     const TEST_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
     const FOREIGN_PUBLIC_KEY: &str =
@@ -1191,6 +1206,7 @@ mod tests {
             context.genesis_authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_instructions([RegisterPrivacyProtocolActivationV1::new(context.activation)]);
         builder
             .set_creation_time(Duration::from_millis(context.issued_at_unix_millis))
@@ -1393,6 +1409,13 @@ mod tests {
             (
                 "transaction",
                 object([
+                    (
+                        "admission_intent",
+                        object([
+                            ("intent", Value::from("queue_plan_synced")),
+                            ("value", Value::Null),
+                        ]),
+                    ),
                     ("attachments", Value::Null),
                     ("authority_account_id", Value::from(authority)),
                     (
@@ -1545,6 +1568,39 @@ mod tests {
         assert_eq!(
             decoded.payload_hash_bytes(),
             validated.transaction_payload_hash
+        );
+    }
+    #[test]
+    #[ignore = "explicit owner for the Taira privacy-governance request fixture"]
+    fn write_cross_language_fixture_to_external_stage() {
+        const STAGE_ENV: &str = "IROHA_TAIRA_PRIVACY_GOVERNANCE_FIXTURE_STAGE";
+        const RELATIVE: &str = "scripts/tests/fixtures/taira_privacy_governance_request_v1.json";
+        let requested = PathBuf::from(std::env::var_os(STAGE_ENV).expect("stage env is required"));
+        assert!(requested.is_absolute(), "stage root must be absolute");
+        let metadata = fs::symlink_metadata(&requested).expect("stage root must exist");
+        assert!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "stage root must be a non-symlink directory"
+        );
+        let stage = requested.canonicalize().expect("canonical stage root");
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("irohad is inside the workspace")
+            .canonicalize()
+            .expect("canonical workspace root");
+        assert!(
+            !stage.starts_with(&workspace),
+            "fixture owner writes only to an external stage"
+        );
+        let output = stage.join(RELATIVE);
+        assert!(!output.exists(), "staged output must not preexist");
+        fs::create_dir_all(output.parent().expect("fixture has a parent"))
+            .expect("create staged fixture directory");
+        fs::write(&output, valid_request(&fixture_context())).expect("write staged fixture");
+        assert_eq!(
+            fs::read(output).expect("reread staged fixture"),
+            valid_request(&fixture_context())
         );
     }
     #[test]

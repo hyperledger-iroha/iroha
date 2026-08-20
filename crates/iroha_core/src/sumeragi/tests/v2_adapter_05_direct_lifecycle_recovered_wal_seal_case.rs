@@ -51,6 +51,9 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
         "pub(crate) fn authenticate_final_wal_startup_authority(",
         "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
         "if !self.effects.is_empty()",
+        "RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round(",
+        "ProductionLifecycleAdapterStartupV1::recovered_with_local_proposal_attempt(",
+        "drop(local_proposal_attempt)",
         "enum RecoveredWalStartupAuthorityV1",
         "PhaseVote(RecoveredWalVoteSign)",
         "ControlSign(RecoveredWalControlSign)",
@@ -96,7 +99,7 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
     for required in [
         "Self::authenticate_recovered_phase_vote_stage(",
         "Self::persist_recovered_phase_vote_stage(authenticated)",
-        "Self::prepare_recovered_phase_vote_cold_adapter_stage(persisted, &body_store)",
+        "Self::prepare_recovered_phase_vote_cold_adapter_stage(",
         "Self::install_recovered_phase_vote_sign_stage(prepared)",
         "Self::open_recovered_phase_vote_seals_stage(",
         "Self::finish_recovered_phase_vote_owner_stage(",

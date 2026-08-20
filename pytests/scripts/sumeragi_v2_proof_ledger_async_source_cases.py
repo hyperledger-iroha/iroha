@@ -2469,8 +2469,8 @@ def test_lifecycle_certified_serve_production_contract_is_current(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
             "retire",
             "launch:ProductionLeaderWireIngressBindingV1::retire",
-            "self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
-            "self.ingress.unbind_unreviewed_leader_wire_lifecycle_gate(&gate)",
+            "self.ingress.retire_leader_wire_lifecycle_gate(&gate)",
+            "self.ingress.retire_unreviewed_leader_wire_lifecycle_gate(&gate)",
             "leader-wire-only lifecycle ingress retirement must retain ordered marker",
         ),
         (
@@ -2525,7 +2525,7 @@ def test_lifecycle_certified_serve_completion_failure_survives_item_reseal(
     mutate_rust_item_source_in_context(
         module,
         path,
-        "drive_completion_turn",
+        "drive_completion_pre_gate",
         context,
         "iroha_logger::error!(\n                            %reason,\n                            \"lifecycle Certified-Serve completion failed closed\"\n                        );",
         "let _ = reason;",
@@ -2533,11 +2533,11 @@ def test_lifecycle_certified_serve_completion_failure_survives_item_reseal(
     (mutated,) = [
         item
         for item in module.rust_items(
-            path.read_text(encoding="utf-8"), "drive_completion_turn"
+            path.read_text(encoding="utf-8"), "drive_completion_pre_gate"
         )
         if item.brace_context == context
     ]
-    key = "turn:LaunchedProductionLifecycleV1::drive_completion_turn"
+    key = "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate"
     module._LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256[key] = (
         module._rust_item_token_sha256(mutated)
     )

@@ -183,18 +183,18 @@ function readField(input, offset) {
 }
 
 function replacePayloadMetadata(payload, archive) {
-  return replacePayloadField(payload, 7, archive);
+  return replacePayloadField(payload, 8, archive);
 }
 
 function replacePayloadField(payload, fieldIndex, archive) {
   const fields = [];
   let offset = 0;
-  for (let index = 0; index < 9; index += 1) {
+  for (let index = 0; index < 10; index += 1) {
     const decoded = readField(payload, offset);
     fields.push(decoded.value);
     offset = decoded.next;
   }
-  assert.equal(offset, payload.length, "test payload must contain exactly nine fields");
+  assert.equal(offset, payload.length, "test payload must contain exactly ten fields");
   fields[fieldIndex] = archive;
   return struct(fields);
 }
@@ -443,6 +443,29 @@ test("browser payload pins canonical TransactionDomain::Network wire and rejects
   expectCodecError(
     () => validate(replaceDomain(Buffer.concat([u32(0), field(Buffer.alloc(31, 1))]))),
     "malformed_payload",
+  );
+});
+
+test("browser payload requires signature-bound QueuePlan admission", () => {
+  const payload = buildBrowserTransferPayload(sampleInput());
+  let offset = 0;
+  for (let index = 0; index <= 7; index += 1) {
+    const fieldValue = readField(payload, offset);
+    offset = fieldValue.next;
+    if (index === 7) {
+      assert.deepEqual(fieldValue.value, u32(1));
+    }
+  }
+
+  expectCodecError(
+    () =>
+      validateBrowserTransferSignable({
+        networkId: NETWORK_ID,
+        payloadBytes: replacePayloadField(payload, 7, u32(0)),
+        authority: AUTHORITY,
+        signingPublicKey: PUBLIC_KEY,
+      }),
+    "unsupported_payload",
   );
 });
 

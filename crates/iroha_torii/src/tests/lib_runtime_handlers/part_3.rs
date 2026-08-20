@@ -319,59 +319,6 @@ fn torii_proxy_hosted_http_request_kind_uses_route_timeout() {
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
-fn queue_plan_synced_runtime_timing_uses_the_complete_remaining_route_budget() {
-    assert_eq!(
-        super::queue_plan_synced_runtime_timing(Duration::from_millis(1), DEFAULT_ROUTE_TIMEOUT,),
-        (
-            Duration::from_millis(25),
-            DEFAULT_ROUTE_TIMEOUT.saturating_sub(Duration::from_millis(25)),
-        ),
-    );
-    assert_eq!(
-        super::queue_plan_synced_runtime_timing(Duration::from_secs(1), DEFAULT_ROUTE_TIMEOUT,),
-        (
-            Duration::from_millis(250),
-            DEFAULT_ROUTE_TIMEOUT.saturating_sub(Duration::from_millis(250)),
-        ),
-    );
-    assert_eq!(
-        super::queue_plan_synced_runtime_timing(Duration::from_secs(1), Duration::from_secs(13),),
-        (Duration::from_millis(250), Duration::from_millis(12_750)),
-    );
-    let (poll_interval, carrier_wait) =
-        super::queue_plan_synced_runtime_timing(Duration::MAX, DEFAULT_ROUTE_TIMEOUT);
-    assert!(
-        DEFAULT_ROUTE_TIMEOUT >= carrier_wait.saturating_add(poll_interval),
-        "the request deadline must outlive the canonical carrier wait and its final poll"
-    );
-    assert!(
-        carrier_wait > Duration::from_secs(12),
-        "a one-round prediction must not cause a premature 503 while finality is progressing"
-    );
-    assert_eq!(
-        super::queue_plan_synced_runtime_timing(Duration::from_secs(1), Duration::ZERO),
-        (Duration::from_millis(250), Duration::ZERO),
-    );
-}
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-#[test]
-fn durable_queue_plan_carrier_waits_when_owner_wake_is_deferred() {
-    assert_eq!(
-        super::durable_queue_plan_wake_disposition(Some(false)),
-        super::DurableQueuePlanWakeDisposition::Deferred,
-        "a transient missed wake must not turn a durable certificate into an immediate 503"
-    );
-    assert_eq!(
-        super::durable_queue_plan_wake_disposition(Some(true)),
-        super::DurableQueuePlanWakeDisposition::Delivered
-    );
-    assert_eq!(
-        super::durable_queue_plan_wake_disposition(None),
-        super::DurableQueuePlanWakeDisposition::OwnerMissing
-    );
-}
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-#[test]
 fn queue_plan_synced_max_roster_is_not_serialized_by_proxy_hedging() {
     let roster_len = iroha_data_model::consensus::MAX_LANE_CONSENSUS_VALIDATORS;
     let byzantine_prefix = roster_len.saturating_sub(1) / 3;
@@ -661,40 +608,72 @@ fn incoming_proxy_submit_fixture(
     seed: u8,
     admission: ToriiProxyTransactionAdmissionV2,
 ) -> (SharedAppState, ToriiProxyRequestV6) {
+    let local_signer = checked_torii_test_keypair_from_seed_byte(
+        seed,
+        Algorithm::BlsNormal,
+        "derive incoming proxy validator fixture key",
+    );
+    incoming_proxy_submit_fixture_with_validator_signers(seed, admission, &[local_signer])
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn incoming_proxy_submit_fixture_with_validator_signers(
+    seed: u8,
+    admission: ToriiProxyTransactionAdmissionV2,
+    validator_signers: &[KeyPair],
+) -> (SharedAppState, ToriiProxyRequestV6) {
+    let local_signer = validator_signers
+        .first()
+        .expect("incoming proxy fixture requires at least one validator signer");
     let keypair =
         checked_torii_test_ed25519_keypair(seed, "derive incoming proxy Submit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let ingress_peer_id = PeerId::from(keypair.public_key().clone());
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     {
-        let local_signer = checked_torii_test_keypair_from_seed_byte(
-            seed,
-            Algorithm::BlsNormal,
-            "derive incoming proxy validator fixture key",
-        );
-        let local_validator = AccountId::new(local_signer.public_key().clone());
         let local_peer_id = PeerId::from(local_signer.public_key().clone());
+        let validator_bindings = validator_signers
+            .iter()
+            .map(|signer| {
+                (
+                    AccountId::new(signer.public_key().clone()),
+                    PeerId::from(signer.public_key().clone()),
+                )
+            })
+            .collect::<Vec<_>>();
         let app =
             Arc::get_mut(&mut app).expect("incoming proxy fixture app must be uniquely owned");
         app.torii_proxy_bridge_signer = local_signer.clone();
         app.local_peer_id = Some(local_peer_id.clone());
         let state = Arc::get_mut(&mut app.state)
             .expect("incoming proxy fixture state must be uniquely owned");
-        ensure_runtime_peer_binding_for_test(
-            state,
-            &local_validator,
-            &local_signer,
-            "incoming-proxy",
-        );
+        for (index, (signer, (validator, _))) in validator_signers
+            .iter()
+            .zip(&validator_bindings)
+            .enumerate()
+        {
+            ensure_runtime_peer_binding_for_test(
+                state,
+                validator,
+                signer,
+                &format!("incoming-proxy-{index}"),
+            );
+        }
         let mut topology = state.commit_topology.block();
         topology.clear();
-        topology.push(local_peer_id.clone());
+        for (_, peer_id) in &validator_bindings {
+            topology.push(peer_id.clone());
+        }
         topology.commit();
         install_lane_manifest_registry_for_test(
             state,
-            &[(LaneId::SINGLE, vec![(local_validator, local_peer_id)])],
+            &[(LaneId::SINGLE, validator_bindings)],
         );
     }
+    let admission_intent = if admission == ToriiProxyTransactionAdmissionV2::QueuePlanSynced {
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    } else {
+        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+    };
     let transaction = TransactionEntrypoint::External(
         TransactionBuilder::new(
             *app.state.network_id_ref(),
@@ -705,6 +684,7 @@ fn incoming_proxy_submit_fixture(
             Level::INFO,
             format!("incoming-proxy-submit-{seed:02x}"),
         )])
+        .with_admission_intent(admission_intent)
         .sign(keypair.private_key()),
     );
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
@@ -793,7 +773,6 @@ fn accepted_queue_hash_for_proxy_submit(
     .expect("proxy Submit fixture must pass canonical transaction admission")
     .hash()
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn exact_queue_plan_synced_acceptance_snapshot(
     app: &SharedAppState,
     request: &ToriiProxyRequestV6,
@@ -1514,46 +1493,114 @@ async fn queue_plan_synced_candidates_use_exact_bound_roster_and_count_local_quo
     );
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[test]
+fn queue_plan_synced_local_authority_stays_in_shared_quorum_aggregation() {
+    let (app, request) =
+        incoming_proxy_submit_fixture(0xe6, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+    let local_peer_id = app
+        .local_peer_id
+        .clone()
+        .expect("strict fixture configures a local peer");
+    let first_remote_peer_id = PeerId::from(
+        checked_torii_test_ed25519_keypair(
+            0xe7,
+            "derive strict local-aggregation first remote fixture key",
+        )
+        .public_key()
+        .clone(),
+    );
+    let second_remote_peer_id = PeerId::from(
+        checked_torii_test_ed25519_keypair(
+            0xe8,
+            "derive strict local-aggregation second remote fixture key",
+        )
+        .public_key()
+        .clone(),
+    );
+    let mut candidates = vec![
+        ToriiProxyCandidate::P2p(first_remote_peer_id.clone()),
+        ToriiProxyCandidate::Local(local_peer_id.clone()),
+        ToriiProxyCandidate::P2p(second_remote_peer_id.clone()),
+    ];
+    assert_eq!(
+        super::take_local_torii_proxy_fast_path(&request, &mut candidates),
+        None,
+        "one local durable attestation is not an f+1 QueuePlan certificate"
+    );
+    assert_eq!(
+        candidates,
+        vec![
+            ToriiProxyCandidate::Local(local_peer_id.clone()),
+            ToriiProxyCandidate::P2p(first_remote_peer_id.clone()),
+            ToriiProxyCandidate::P2p(second_remote_peer_id.clone()),
+        ],
+        "strict admission must execute the local authority first without reordering remotes"
+    );
+
+    let ordinary = signed_query_proxy_request_for_test(
+        Hash::new(b"ordinary-local-fast-path"),
+        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+    );
+    let mut ordinary_candidates = vec![
+        ToriiProxyCandidate::P2p(first_remote_peer_id.clone()),
+        ToriiProxyCandidate::Local(local_peer_id.clone()),
+        ToriiProxyCandidate::P2p(second_remote_peer_id.clone()),
+    ];
+    assert_eq!(
+        super::take_local_torii_proxy_fast_path(&ordinary, &mut ordinary_candidates),
+        Some(local_peer_id),
+        "ordinary requests must retain the established local fast path"
+    );
+    assert!(
+        ordinary_candidates
+            .iter()
+            .all(|candidate| !matches!(candidate, ToriiProxyCandidate::Local(_))),
+        "the ordinary fast path must remove its local candidate from fallback dispatch"
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quorum_receipt() {
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let journal_dir = tempfile::tempdir().expect("create real-local quorum journal directory");
     let journal_path = journal_dir.path().join("queue_plan_journal.norito");
-    let (app, mut request) =
-        incoming_proxy_submit_fixture(0x90, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+    let authority_signers = [
+        checked_torii_test_keypair_from_seed_byte(
+            0x90,
+            Algorithm::BlsNormal,
+            "derive real-local quorum local fixture key",
+        ),
+        checked_torii_test_keypair_from_seed_byte(
+            0x91,
+            Algorithm::BlsNormal,
+            "derive real-local quorum first remote fixture key",
+        ),
+        checked_torii_test_keypair_from_seed_byte(
+            0x92,
+            Algorithm::BlsNormal,
+            "derive real-local quorum second remote fixture key",
+        ),
+        checked_torii_test_keypair_from_seed_byte(
+            0x93,
+            Algorithm::BlsNormal,
+            "derive real-local quorum third remote fixture key",
+        ),
+    ];
+    let (app, mut request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0x90,
+        ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+        &authority_signers,
+    );
     assert_eq!(
         app.queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install real-local quorum queue plan journal"),
         0
     );
-    let authority_signers = [
-        app.torii_proxy_bridge_signer.clone(),
-        checked_torii_test_ed25519_keypair(
-            0x91,
-            "derive real-local quorum first remote fixture key",
-        ),
-        checked_torii_test_ed25519_keypair(
-            0x92,
-            "derive real-local quorum second remote fixture key",
-        ),
-        checked_torii_test_ed25519_keypair(
-            0x93,
-            "derive real-local quorum third remote fixture key",
-        ),
-    ];
     let authorities = authority_signers
         .iter()
         .map(|signer| PeerId::new(signer.public_key().clone()))
         .collect::<Vec<_>>();
-    {
-        let mut topology = app.state.commit_topology.block();
-        topology.clear();
-        for authority in &authorities {
-            topology.push(authority.clone());
-        }
-        topology.commit();
-    }
     let routing_plan = RoutingPlan::single(route);
     let admission_context = app
         .queue
@@ -1561,9 +1608,11 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
         .expect("capture real-local quorum admission context");
     let admission_authorities = single_route_queue_plan_authorities(&admission_context);
     assert_eq!(
-        admission_authorities, authorities,
-        "the durable receiver and aggregator must bind the same n=4 authority roster"
+        admission_authorities.iter().cloned().collect::<BTreeSet<_>>(),
+        authorities.iter().cloned().collect::<BTreeSet<_>>(),
+        "the durable receiver and aggregator must bind the exact same n=4 authority set"
     );
+    assert_eq!(admission_authorities.len(), 4);
     let ToriiProxyRequestKindV4::SubmitTransaction {
         transaction,
         admission_binding,
@@ -1604,6 +1653,8 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
         queue_plan_synced_test_certificate_snapshot(&request, vec![remote_receipt]);
     let app_for_local = Arc::clone(&app);
     let remote_peer_for_dispatch = remote_peer_id.clone();
+    let completion_count = Arc::new(AtomicUsize::new(0));
+    let completion_count_for_dispatch = Arc::clone(&completion_count);
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![
             ToriiProxyCandidate::Local(local_peer_id.clone()),
@@ -1639,10 +1690,20 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
                 }
             }
         },
-        |_request_id| async move {},
+        move |_request_id| {
+            let completion_count = Arc::clone(&completion_count_for_dispatch);
+            async move {
+                completion_count.fetch_add(1, Ordering::SeqCst);
+            }
+        },
     )
     .await;
     assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        completion_count.load(Ordering::SeqCst),
+        1,
+        "strict local-plus-remote aggregation must complete the request exactly once"
+    );
     assert_eq!(
         app.queue.active_len(),
         1,
@@ -1676,7 +1737,9 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
     let certificate_signers = certificate
         .attestations
         .iter()
-        .map(|attestation| authorities[usize::from(attestation.validator_index)].clone())
+        .map(|attestation| {
+            admission_authorities[usize::from(attestation.validator_index)].clone()
+        })
         .collect::<BTreeSet<_>>();
     assert_eq!(
         certificate_signers,
@@ -2311,30 +2374,47 @@ fn queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity() {
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
-async fn queue_plan_synced_registry_timeout_never_returns_accepted() {
+async fn queue_plan_quorum_is_accepted_before_registry_application() {
     let (app, request) =
         incoming_proxy_submit_fixture(0xde, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
     let expected = super::queue_plan_synced_acceptance_expectation(&request)
-        .expect("timeout fixture must be valid")
-        .expect("timeout fixture must require synchronized admission");
-    let outcome = super::wait_for_exact_queue_plan_admission_registry(
-        app.state.as_ref(),
-        &expected.admission_binding,
-        Duration::from_millis(1),
-        Duration::ZERO,
-    )
-    .await;
+        .expect("durable-acceptance fixture must be valid")
+        .expect("durable-acceptance fixture must require QueuePlan admission");
     assert_eq!(
-        outcome,
-        super::QueuePlanAdmissionRegistryWaitOutcome::TimedOut
+        app.state
+            .queue_plan_admission_binding_registry_match(&expected.admission_binding)
+            .expect("inspect pristine QueuePlan registry"),
+        QueuePlanAdmissionRegistryMatch::Absent,
+        "the fixture must prove acceptance before block application"
     );
-    let response = super::queue_plan_outcome_unknown_response(
-        expected.entrypoint_hash,
-        "test timeout before canonical WSV publication",
+    let receipt =
+        exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 40_003);
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]);
+    let certificate_hash = Hash::new(&snapshot.body);
+    let response = super::persist_queue_plan_admission_certificate(
+        &app,
+        super::torii_proxy_snapshot_to_response(snapshot.clone()),
+        &expected.admission_binding,
     );
-    assert_ne!(response.status(), StatusCode::ACCEPTED);
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(super::is_queue_plan_outcome_unknown_response(&response));
+    let response = response.await;
+    assert_eq!(
+        response.status(),
+        StatusCode::ACCEPTED,
+        "a locally durable f+1 certificate is Accepted even without WSV application or a Sumeragi owner"
+    );
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(certificate_hash)
+            .expect("read durable QueuePlan certificate"),
+        Some(snapshot.body),
+    );
+    assert_eq!(
+        app.state
+            .queue_plan_admission_binding_registry_match(&expected.admission_binding)
+            .expect("inspect unapplied QueuePlan registry"),
+        QueuePlanAdmissionRegistryMatch::Absent,
+        "Accepted is a durable-admission receipt, not an Applied receipt"
+    );
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]

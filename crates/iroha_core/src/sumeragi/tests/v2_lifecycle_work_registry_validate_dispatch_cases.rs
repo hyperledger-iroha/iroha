@@ -137,8 +137,7 @@
         marker: u8,
     ) -> CandidateAdmission {
         let context = LifecycleContext::new(LifecycleDigest::new([0x31; 32]), 7);
-        let replay =
-            super::super::replay_authority::exact_record_fixture(context, stage_kind, marker);
+        let replay = super::super::replay_authority::exact_record_fixture(context, stage_kind, marker);
         assert_eq!((replay.key.phase(), replay.work_class), (phase, work_class));
         let root = super::super::CausalRoot::new(LifecycleDigest::new([0x34; 32]));
         let slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
@@ -279,8 +278,7 @@
             LifecycleStageKind::StoreBody,
             0x63,
         );
-        let context =
-            LifecycleContext::new(candidate.key.context(), candidate.key.round().height());
+        let context = LifecycleContext::new(candidate.key.context(), candidate.key.round().height());
         let mut coordinator = LifecycleCoordinator::new(
             context,
             0,
@@ -848,6 +846,20 @@
         V2BodyStore,
         DurableBodyReceipt,
     ) {
+        durable_validate_store_fixture_at_view_with_commitment(marker, view, None)
+    }
+
+    #[cfg(feature = "bls")]
+    fn durable_validate_store_fixture_at_view_with_commitment(
+        marker: u8,
+        view: wire::View,
+        execution_commitment: Option<wire::ExecutionCommitment>,
+    ) -> (
+        DurableValidateFixture,
+        TempDir,
+        V2BodyStore,
+        DurableBodyReceipt,
+    ) {
         let mut fixture = durable_validate_fixture_at_view(marker, view);
         let directory = TempDir::new().expect("temporary detached Validate body store");
         let mut store = V2BodyStore::open(directory.path(), fixture.verified.context().clone())
@@ -856,64 +868,43 @@
             .store(fixture.manifest.clone(), fixture.canonical_wire.clone())
             .expect("persist detached Validate fixture body");
         assert_eq!(durable.manifest_hash(), fixture.expected_manifest_hash);
-        let work = fixture
-            .registry
-            .entries
-            .get_mut(&fixture.address)
-            .expect("detached Validate fixture retains its closed row");
-        let digest = work.digest;
-        let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &mut work.kind else {
-            unreachable!("detached Validate fixture retains one closed Validate")
-        };
-        validate.durable_receipt = durable.clone();
-        assert!(validate.validates(digest));
-        assert!(work.validates_at(fixture.address));
-        (fixture, directory, store, durable)
-    }
-
-    #[cfg(feature = "bls")]
-    fn seal_validate_fixture_commitment(
-        fixture: &mut DurableValidateFixture,
-        execution_commitment: wire::ExecutionCommitment,
-    ) {
         let AdapterEffect::ValidateBody {
             tag,
             round,
             subject,
         } = fixture.effect.clone()
         else {
-            unreachable!("fixture retains one Validate effect")
+            unreachable!("detached Validate fixture retains one Validate effect")
+        };
+        let mut certificate =
+            certified_pipeline_prepare_certificate_for_test(&fixture.manifest, &durable);
+        if let Some(execution_commitment) = execution_commitment {
+            certificate.execution_commitment = execution_commitment;
+        }
+        let fetch_effect = AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(certificate.clone()),
         };
         let store_effect = AdapterEffect::StoreBody {
             tag,
             round,
             subject,
         };
-        let certified_fetch = AdapterEffect::FetchBody {
-            tag,
-            round,
-            subject,
-            manifest: Some(fixture.manifest.clone()),
-            certified_sources: Vec::new(),
-            certificate: Some(wire::QuorumCertificate {
-                round,
-                proposal_round: round,
-                phase: wire::GlobalPhase::Commit,
-                subject,
-                execution_commitment,
-                signers: Vec::new(),
-                aggregate_signature: Vec::new(),
-            }),
-        };
-        let certified_fetch_owner = bind_adapter_effect_batch_ownership(
-            core::slice::from_ref(&certified_fetch),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag, 60_001)],
+        let ordinal = fixture.lease.ordinal();
+        let fetch_ownership = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&fetch_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
         )
-        .expect("bind one commitment-authorized Fetch")
+        .expect("bind persisted Validate Fetch fixture")
         .pop()
-        .expect("one commitment-authorized Fetch owner");
-        let incoming_store_owner = certified_fetch_owner
+        .expect("one persisted Validate Fetch fixture owner");
+        let store_ownership = fetch_ownership
             .rebind_as_inherited_adapter_effect(&store_effect)
+<<<<<<< HEAD
             .expect("carry commitment authority into Store");
         let adopted_store_owner = fixture
             .store_ownership
@@ -924,51 +915,82 @@
             .expect("seal commitment-authorized Store producer")
             .mint_pending_binding();
         let upgraded_validate = upgraded_store
+=======
+            .expect("carry persisted Fetch authority into Validate parent Store");
+        let store_pending = store_ownership
+            .pending_adapter_effect_binding(&store_effect)
+            .expect("mint persisted Validate parent binding");
+        let pending = store_pending
+>>>>>>> origin/optimizations
             .project_store_validate_successor(&store_effect, &fixture.effect)
-            .expect("carry commitment authority into Validate");
-
-        let work = fixture
+            .expect("project persisted Store-to-Validate fixture lineage");
+        let (_store_replay, validate_replay) =
+            certified_pipeline_replay_evidence_with_certificate_for_test(
+                tag,
+                &fixture.manifest,
+                &durable,
+                &pending,
+                certificate,
+            )
+            .expect("bind persisted Validate replay to its exact body receipt");
+        let replay_evidence = DurableValidateReplayEvidenceV1::certified(validate_replay);
+        let candidate = replay_evidence
+            .project_installed_validate_candidate(
+                InstalledBodyCandidateProjectionPermit::new(),
+                &fixture.verified,
+                &fixture.effect,
+                &durable,
+                &pending,
+            )
+            .expect("project persisted replay-authorized Validate fixture");
+        let (physical_slots, slot_universe, consumed_slots) = candidate
+            .physical_geometry
+            .normalized()
+            .expect("normalize persisted Validate fixture geometry");
+        assert_eq!(slot_universe, consumed_slots);
+        assert_eq!(physical_slots.len(), 1);
+        let (&slot, &digest) = physical_slots
+            .first_key_value()
+            .expect("one persisted Validate fixture slot");
+        let owner = OwnerId::new(candidate.causal_root, ordinal);
+        let address = ConcreteWorkAddress::new(owner, ordinal, slot)
+            .expect("exact persisted Validate registry address");
+        let removed = fixture
             .registry
             .entries
-            .get_mut(&fixture.address)
-            .expect("commitment fixture retains exact Validate row");
-        let digest = work.digest;
-        let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &mut work.kind else {
-            unreachable!("commitment fixture retains one closed Validate")
+            .remove(&fixture.address)
+            .expect("replace the synthetic Validate fixture after persistence");
+        assert!(fixture.registry.entries.is_empty());
+        drop(removed);
+        let validate = DurableValidateBody {
+            address,
+            effect: fixture.effect.clone(),
+            pending,
+            durable_receipt: durable.clone(),
+            expected_manifest_hash: fixture.expected_manifest_hash,
+            replay_evidence,
         };
-        let (_store_replay, validate_replay) = certified_pipeline_replay_evidence_for_test(
-            tag,
-            &fixture.manifest,
-            &validate.durable_receipt,
-            &upgraded_validate,
-        )
-        .expect("rebind certified Validate replay to upgraded pending authority");
-        validate.pending = upgraded_validate;
-        validate.replay_evidence = DurableValidateReplayEvidenceV1::certified(validate_replay);
         assert!(validate.validates(digest));
-
-        let candidate = validate
-            .project_candidate(&fixture.verified)
-            .expect("project commitment-authorized Validate fixture");
-        assert!(fixture.registry.entries[&fixture.address].validates_at(fixture.address));
-        assert_eq!(candidate.causal_root, fixture.lease.owner().causal_root());
-        assert_eq!(candidate.work_class, fixture.lease.work_class());
-        assert_eq!(candidate.stage, fixture.lease.stage());
-        assert_eq!(
-            candidate
-                .physical_geometry
-                .normalized()
-                .expect("normalize commitment-authorized Validate geometry")
-                .0,
-            *fixture.lease.physical_slots()
-        );
+        let work = ConcreteLifecycleWork {
+            digest,
+            kind: ConcreteLifecycleWorkKind::DurableValidateBody(validate),
+        };
+        assert!(work.validates_at(address));
+        fixture.address = address;
+        fixture.slot = slot;
+        fixture.lease.owner = owner;
         fixture.lease.key = candidate.key;
+        fixture.lease.work_class = candidate.work_class;
+        fixture.lease.stage = candidate.stage;
+        fixture.lease.physical_slots = physical_slots;
+        fixture.store_ownership = store_ownership;
+        assert!(work.validates_at(fixture.address));
+        assert!(fixture.registry.entries.insert(address, work).is_none());
+        (fixture, directory, store, durable)
     }
 
     #[cfg(feature = "bls")]
-    fn claimed_durable_validate_coordinator(
-        fixture: &DurableValidateFixture,
-    ) -> LifecycleCoordinator {
+    fn claimed_durable_validate_coordinator(fixture: &DurableValidateFixture) -> LifecycleCoordinator {
         let work = fixture
             .registry
             .entries
@@ -1109,8 +1131,7 @@
         } = waiting_durable_validate_fixture_at_view(marker, view);
         let executed = match outcome {
             ReadyDurableValidateFixtureOutcome::Validated => {
-                let commitment =
-                    ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
+                let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
                 dispatch
                     .execute(&mut store, |_| Ok::<_, DetachedValidationError>(commitment))
                     .expect("execute successful Ready Validate fixture")

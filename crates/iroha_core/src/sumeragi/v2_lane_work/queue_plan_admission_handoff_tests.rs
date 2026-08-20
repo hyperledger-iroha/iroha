@@ -164,6 +164,39 @@ fn queue_plan_leader_stages_exact_handoff_idempotently() {
 }
 
 #[test]
+fn queue_plan_exact_marker_retains_certificate_until_transaction_application() {
+    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    prepare_queue_plan_test(&mut adapter, &keys);
+    let (binding, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x46);
+    adapter
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&bytes)
+        .expect("persist exact-marker handoff");
+    adapter
+        .state
+        .install_queue_plan_pending_binding_for_test(&binding)
+        .expect("install exact marker and pending transaction obligation");
+
+    assert!(
+        adapter
+            .reconcile_pending_queue_plan_admissions(0)
+            .expect("reconcile exact pending marker")
+            .is_empty()
+    );
+    assert_queue_plan_kura_source(&adapter, &bytes);
+    let indexed = adapter
+        .state
+        .pending_queue_plan_admission_gossip_certificates()
+        .expect("index exact pending handoff");
+    assert_eq!(
+        indexed
+            .get(&binding.canonical_hash())
+            .map(|certificate| certificate.as_slice()),
+        Some(bytes.as_slice())
+    );
+}
+
+#[test]
 fn queue_plan_handoff_rejects_nonleader_future_stale_conflict_and_corrupt() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
     prepare_queue_plan_test(&mut adapter, &keys);

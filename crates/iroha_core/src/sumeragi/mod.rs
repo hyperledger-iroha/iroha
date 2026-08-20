@@ -3423,11 +3423,18 @@ fn fair_v2_ingress_required_capacity(
     else {
         return roster_len.checked_mul(5);
     };
+<<<<<<< HEAD
     roster_len.checked_mul(5).and_then(|required| {
         authenticated_non_validator_source_capacity
             .checked_mul(3)
             .and_then(|authenticated_sources| required.checked_add(authenticated_sources))
     })
+=======
+    iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
+        roster_len,
+        authenticated_non_validator_source_capacity,
+    )
+>>>>>>> origin/optimizations
 }
 fn fair_v2_ingress_reserve_ordinary_lifecycle_ordinal(
     state: &FairV2IngressState,
@@ -3479,9 +3486,17 @@ fn fair_v2_ingress_required_byte_capacity(
     authenticated_non_validator_source_capacity: Option<usize>,
     source_byte_capacity: usize,
 ) -> Option<usize> {
+<<<<<<< HEAD
     roster_len
         .checked_add(authenticated_non_validator_source_capacity.unwrap_or(0))
         .and_then(|source_count| source_count.checked_mul(source_byte_capacity))
+=======
+    iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
+        roster_len,
+        authenticated_non_validator_source_capacity.unwrap_or(0),
+        source_byte_capacity,
+    )
+>>>>>>> origin/optimizations
 }
 fn fair_v2_ingress_compact_len_prefix_bytes(value: usize) -> Option<usize> {
     let value = u64::try_from(value).ok()?;
@@ -4010,6 +4025,15 @@ pub(crate) struct FairV2Ingress {
     /// Serializes consumers while allowing expensive admission checks to run
     /// without blocking producers on the ingress-state mutex.
     service_lock: Mutex<()>,
+    /// Excludes producer mutation only while an exact dequeue crosses durable
+    /// lifecycle publication.
+    ///
+    /// Lock order is `service_lock`, then `producer_publication_lock`, then
+    /// `state`. Producers acquire only `producer_publication_lock`, then
+    /// `state`. Ordinary selector preparation deliberately does not acquire
+    /// this fence, so a concurrent producer can still invalidate its
+    /// pre-publication compare-and-swap witness.
+    producer_publication_lock: Mutex<()>,
     state: Mutex<FairV2IngressState>,
 }
 impl FairV2Ingress {
@@ -4087,6 +4111,7 @@ impl FairV2Ingress {
             outbound_high_frame_byte_capacity,
             authenticated_non_validator_source_capacity,
             service_lock: Mutex::new(()),
+            producer_publication_lock: Mutex::new(()),
             state: Mutex::new(FairV2IngressState {
                 roster: BTreeSet::new(),
                 lanes,
@@ -4831,28 +4856,97 @@ impl FairV2Ingress {
         self.debug_assert_consistent(&state);
         Ok(retiring.len())
     }
-    /// Detach a closed height's durable productive-wire owner.
-    pub(crate) fn unbind_leader_wire_lifecycle_gate(
+    /// Seal one height, durably park its queued productive carriers, and detach.
+    ///
+    /// `service_lock` excludes a consumer whose predicate snapshot temporarily
+    /// lives outside the state mutex. Closing under the state mutex then excludes
+    /// every producer. Productive carriers are returned to Dormant before any
+    /// volatile queue bytes disappear; auxiliary and future packets own no
+    /// height lifecycle and may be retransmitted into the successor ingress.
+    pub(crate) fn retire_leader_wire_lifecycle_gate(
         &self,
         gate: &Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>,
     ) -> Result<(), String> {
+        let _service_guard = self.service_lock.lock();
         let mut state = self.state.lock();
-        if state.open || state.len != 0 {
-            return Err(
-                "leader-wire lifecycle gate cannot unbind from nonempty open ingress".to_owned(),
-            );
-        }
-        let Some(bound) = state.leader_wire_lifecycle_gate.as_ref() else {
-            return Ok(());
-        };
-        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(bound, gate) {
+        state.open = false;
+        let bound = state
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "leader-wire lifecycle gate was already unbound".to_owned())?;
+        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(&bound, gate) {
             return Err("leader-wire lifecycle gate changed per-height ownership".to_owned());
         }
+        let (context_id, height) = state
+            .leader_wire_context
+            .ok_or_else(|| "leader-wire lifecycle gate lost its height context".to_owned())?;
+        let mut carriers = BTreeMap::new();
+        for entry in state.lanes.values().flat_map(|lane| lane.entries.iter()) {
+            let Some(inbound_ownership) = entry.inbound.ingress_ownership() else {
+                return Err("sealed leader-wire ingress lost queued ownership evidence".to_owned());
+            };
+            if !inbound_ownership.validate_exact()
+                || !entry.ownership_snapshot.validate_exact()
+                || entry.leader_wire_token.as_ref() != inbound_ownership.leader_wire_token()
+                || entry.leader_wire_token.as_ref() != entry.ownership_snapshot.leader_wire_token()
+            {
+                return Err(
+                    "sealed leader-wire ingress changed a queued ownership projection".to_owned(),
+                );
+            }
+            let Some(token) = entry.leader_wire_token.as_ref() else {
+                continue;
+            };
+            if token.identity.context_id != context_id
+                || token.identity.height != height
+                || carriers.insert(token.slot.clone(), token.clone()).is_some()
+            {
+                return Err(
+                    "sealed leader-wire ingress changed its exact retiring carrier set".to_owned(),
+                );
+            }
+        }
+        let mirrored_ingress = state
+            .leader_wire_lifecycles
+            .iter()
+            .filter_map(|(slot, record)| {
+                (record.status == FairV2IngressLeaderWireStatus::Ingress)
+                    .then(|| (slot.clone(), record.token.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        if carriers != mirrored_ingress {
+            return Err(
+                "sealed leader-wire ingress disagreed with live carrier ownership".to_owned(),
+            );
+        }
+        let retirement = bound.park_sealed_ingress(carriers)?;
+
+        let mut empty_lanes = state
+            .roster
+            .iter()
+            .cloned()
+            .map(|peer| {
+                (
+                    FairV2IngressSource::Validator(peer),
+                    FairV2IngressLane::default(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        empty_lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
+        state.lanes = empty_lanes;
+        state.pending_wire_owners.clear();
+        state.ready.clear();
+        state.len = 0;
+        state.bytes = 0;
+        state.nonempty_since = None;
+        state.last_service_attempt_at = None;
+        state.leader_wire_lifecycles.clear();
         state.leader_wire_lifecycle_gate = None;
         state.leader_wire_lifecycle_ordinals = None;
         state.leader_wire_context = None;
-        state.leader_wire_lifecycles.clear();
         self.debug_assert_consistent(&state);
+        retirement.complete();
         Ok(())
     }
     /// Open admission for the already-configured immutable height.
@@ -5319,6 +5413,12 @@ impl FairV2Ingress {
             origin: inbound.sender.clone(),
             hash: wire_hash,
         });
+        // The exact lifecycle dequeue retains this fence from its final
+        // pre-publication comparison through LedgerV1 fsync and physical
+        // removal. Encoding and protocol-shape validation above remain
+        // outside the fence; every queue-state mutation below is serialized
+        // with that durable publication window.
+        let _producer_publication_guard = self.producer_publication_lock.lock();
         let mut state = self.state.lock();
         if !state.open {
             return Err(FairV2IngressPushError::Closed(inbound));
@@ -6683,8 +6783,7 @@ impl SumeragiHandle {
         }
         if let LaneRelayMessage::QueuePlanAdmissionCertificate { certificate, .. } = &message
             && (certificate.is_empty()
-                || certificate.len()
-                    > iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES)
+                || certificate.len() > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES)
         {
             iroha_logger::debug!(
                 bytes = certificate.len(),
@@ -8972,6 +9071,31 @@ mod authoritative_runtime_gate_tests {
         assert_eq!(first_owner.runtime_physical_cut(), Some(2));
     }
     include!("tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs");
+    #[test]
+    fn fair_v2_ingress_production_message_capacity_delegates_to_config_geometry() {
+        for (roster_len, authenticated_sources) in [(0, 0), (4, 2), (5, 2), (31, 2)] {
+            assert_eq!(
+                super::fair_v2_ingress_required_capacity(
+                    roster_len,
+                    Some(authenticated_sources),
+                ),
+                iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
+                    roster_len,
+                    authenticated_sources,
+                ),
+            );
+        }
+        assert_eq!(
+            super::fair_v2_ingress_required_capacity(0, None),
+            Some(1),
+            "the test-only anonymous geometry remains unchanged",
+        );
+        assert_eq!(
+            super::fair_v2_ingress_required_capacity(4, None),
+            Some(22),
+            "the test-only roster geometry remains unchanged",
+        );
+    }
     #[test]
     fn v2_ingress_rejects_capacity_without_per_validator_progress_reservations() {
         let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(19);

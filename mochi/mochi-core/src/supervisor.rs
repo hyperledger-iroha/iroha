@@ -100,6 +100,11 @@ const LOCAL_MULTI_PEER_POW_PUZZLE_MEMORY_KIB: i64 = 4_096;
 const LOCAL_MULTI_PEER_POW_PUZZLE_TIME_COST: i64 = 1;
 const LOCAL_MULTI_PEER_POW_PUZZLE_LANES: i64 = 1;
 const LOCAL_MULTI_PEER_POW_DIFFICULTY: i64 = 1;
+// Keep `iroha_config` out of Mochi's production dependency graph. A dev-only contract test pins
+// these generator literals and the checked formula below to the shared configuration defaults.
+const GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize = 2;
+const GENERATED_SUMERAGI_BODY_SOURCE_BYTES: usize = 33 * 1024 * 1024;
+const GENERATED_SUMERAGI_BODY_BYTES_FLOOR: usize = 231 * 1024 * 1024;
 const MANAGED_RANS_TABLE_RELATIVE_PATH: &str = "codec/rans/tables/rans_seed0.toml";
 const MANAGED_RANS_SEED0_TABLE: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -1880,6 +1885,92 @@ fn merge_table(target: &mut toml::Table, overlay: &toml::Table) {
     for (key, value) in overlay {
         target.insert(key.clone(), value.clone());
     }
+}
+fn generated_sumeragi_body_ingress_required_byte_capacity(
+    validator_count: usize,
+    authenticated_non_validator_sources: usize,
+    body_source_bytes: usize,
+) -> Option<usize> {
+    validator_count
+        .checked_add(authenticated_non_validator_sources)
+        .and_then(|source_count| source_count.checked_add(1))
+        .and_then(|source_count| source_count.checked_mul(body_source_bytes))
+}
+fn generated_sumeragi_queue_capacity(
+    queues: &toml::Table,
+    field: &'static str,
+    default: usize,
+) -> Result<usize> {
+    let Some(value) = queues.get(field) else {
+        return Ok(default);
+    };
+    let value = value.as_integer().ok_or_else(|| {
+        SupervisorError::Config(format!(
+            "sumeragi.queues.{field} must be a positive integer"
+        ))
+    })?;
+    usize::try_from(value)
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            SupervisorError::Config(format!(
+                "sumeragi.queues.{field} must be a positive integer"
+            ))
+        })
+}
+fn ensure_generated_sumeragi_body_bytes(
+    root: &mut toml::Table,
+    validator_count: usize,
+) -> Result<()> {
+    let sumeragi = root
+        .entry("sumeragi")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| SupervisorError::Config("sumeragi must be a table".to_owned()))?;
+    let queues = sumeragi
+        .entry("queues")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| SupervisorError::Config("sumeragi.queues must be a table".to_owned()))?;
+    let authenticated_non_validator_sources = generated_sumeragi_queue_capacity(
+        queues,
+        "authenticated_non_validator_sources",
+        GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+    )?;
+    let body_source_bytes = generated_sumeragi_queue_capacity(
+        queues,
+        "body_source_bytes",
+        GENERATED_SUMERAGI_BODY_SOURCE_BYTES,
+    )?;
+    let configured_body_bytes = generated_sumeragi_queue_capacity(
+        queues,
+        "body_bytes",
+        GENERATED_SUMERAGI_BODY_BYTES_FLOOR,
+    )?;
+    let required_body_bytes = generated_sumeragi_body_ingress_required_byte_capacity(
+        validator_count,
+        authenticated_non_validator_sources,
+        body_source_bytes,
+    )
+    .ok_or_else(|| {
+        SupervisorError::Config(format!(
+            "Mochi Sumeragi body-byte capacity overflowed for {validator_count} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {body_source_bytes} bytes per source"
+        ))
+    })?;
+    let effective_body_bytes = configured_body_bytes
+        .max(required_body_bytes)
+        .max(GENERATED_SUMERAGI_BODY_BYTES_FLOOR);
+    if effective_body_bytes != configured_body_bytes || !queues.contains_key("body_bytes") {
+        queues.insert(
+            "body_bytes".into(),
+            toml::Value::Integer(i64::try_from(effective_body_bytes).map_err(|_| {
+                SupervisorError::Config(format!(
+                    "Mochi Sumeragi body-byte capacity {effective_body_bytes} exceeds the TOML integer range"
+                ))
+            })?),
+        );
+    }
+    Ok(())
 }
 fn restore_streaming_soranet_defaults(table: &mut toml::Table) {
     // `StreamingSoranet` is read as one nested value. Once Mochi emits that
@@ -3956,6 +4047,10 @@ impl PeerSpec {
         for overlay in extra_layers {
             merge_table(&mut root, overlay);
         }
+        // Apply the generator invariant after the shallow overlays have selected their effective
+        // queue table. This preserves later authored values whenever they already cover the
+        // generated PoP roster while raising only an under-budget aggregate capacity.
+        ensure_generated_sumeragi_body_bytes(&mut root, all_peers.len())?;
         if let Some(expected) = managed_account_onboarding.as_ref() {
             let configured = root
                 .get("torii")

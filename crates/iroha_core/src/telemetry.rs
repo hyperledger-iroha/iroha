@@ -13,7 +13,7 @@ use crate::{
     gossiper::{GossipPlane, gossip_plane_label},
     governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
     json_macros::{JsonDeserialize, JsonSerialize},
-    kura::Kura,
+    kura::{DurableV2FinalityTelemetrySummary, Kura},
     nexus::space_directory::SpaceDirectoryManifestSet,
     queue::{Queue, QueueLimits},
     state::{State, WorldReadOnly},
@@ -569,6 +569,40 @@ pub struct AxtRejectHint {
     /// Reason label for the rejection (e.g., `era`, `sub_nonce`, `expiry`).
     pub reason: AxtRejectReason,
 }
+struct CommitQcTelemetryPublisher {
+    metrics: Arc<Metrics>,
+    update: StdRwLock<()>,
+}
+impl CommitQcTelemetryPublisher {
+    fn new(metrics: Arc<Metrics>) -> Self {
+        Self {
+            metrics,
+            update: StdRwLock::new(()),
+        }
+    }
+    fn publish(&self, summary: DurableV2FinalityTelemetrySummary) {
+        let _update_guard = self
+            .update
+            .write()
+            .expect("commit QC telemetry summary lock poisoned");
+        let current = (
+            self.metrics.sumeragi_commit_qc_height.get(),
+            self.metrics.sumeragi_commit_qc_view.get(),
+        );
+        if summary.position() < current {
+            return;
+        }
+        self.metrics.sumeragi_commit_qc_height.set(summary.height());
+        self.metrics.sumeragi_commit_qc_view.set(summary.view());
+        self.metrics.sumeragi_commit_qc_epoch.set(summary.epoch());
+        self.metrics
+            .sumeragi_commit_qc_signatures_total
+            .set(summary.signatures_total());
+        self.metrics
+            .sumeragi_commit_qc_validator_set_len
+            .set(summary.validator_set_len());
+    }
+}
 /// Slice of metrics used to be used from within [`State`].
 ///
 /// Needed to brake the circular dependency from [`Telemetry`] to [`State`].
@@ -576,6 +610,11 @@ pub struct AxtRejectHint {
 pub struct StateTelemetry {
     metrics: Arc<Metrics>,
     enabled: Arc<AtomicBool>,
+<<<<<<< HEAD
+=======
+    commit_qc_publisher: Arc<CommitQcTelemetryPublisher>,
+    nexus_enabled: Arc<AtomicBool>,
+>>>>>>> origin/optimizations
     time_source: TimeSource,
     lane_metadata: Arc<StdRwLock<BTreeMap<u32, LaneMetadataSnapshot>>>,
     dataspace_metadata: Arc<StdRwLock<BTreeMap<u64, DataspaceMetadataSnapshot>>>,
@@ -609,9 +648,15 @@ impl StateTelemetry {
         let soranet_privacy = Arc::new(
             SoranetSecureAggregator::new(privacy_config).expect("valid SoraNet privacy config"),
         );
+        let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
         let telemetry = Self {
             metrics,
             enabled: Arc::new(AtomicBool::new(enabled)),
+<<<<<<< HEAD
+=======
+            commit_qc_publisher,
+            nexus_enabled: Arc::new(AtomicBool::new(true)),
+>>>>>>> origin/optimizations
             time_source: TimeSource::new_system(),
             lane_metadata: Arc::new(StdRwLock::new(BTreeMap::new())),
             dataspace_metadata: Arc::new(StdRwLock::new(BTreeMap::new())),
@@ -2161,6 +2206,30 @@ impl StateTelemetry {
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
     }
+<<<<<<< HEAD
+=======
+    /// Publish a Kura-authenticated durable v2 finality summary monotonically.
+    pub(crate) fn record_durable_v2_finality_summary(
+        &self,
+        summary: DurableV2FinalityTelemetrySummary,
+    ) {
+        self.commit_qc_publisher.publish(summary);
+    }
+    /// Whether Nexus lane/dataspace telemetry is allowed.
+    #[inline]
+    pub fn nexus_enabled(&self) -> bool {
+        self.nexus_enabled.load(Ordering::Relaxed)
+    }
+    /// Enable or disable Nexus lane/dataspace telemetry.
+    #[inline]
+    pub fn set_nexus_enabled(&self, enabled: bool) {
+        self.nexus_enabled.store(enabled, Ordering::Relaxed);
+        if !enabled {
+            self.reset_nexus_lane_metrics();
+            self.clear_nexus_cache_state();
+        }
+    }
+>>>>>>> origin/optimizations
     /// Record the latest storage budget usage for a component.
     pub fn record_storage_budget_usage(&self, component: &'static str, used: u64, limit: u64) {
         if !self.is_enabled() {
@@ -4567,6 +4636,7 @@ pub struct Telemetry {
     last_reported_block: Arc<RwLock<Option<BlockCommitReport>>>,
     metrics: Arc<Metrics>,
     enabled: Arc<AtomicBool>,
+    commit_qc_publisher: Arc<CommitQcTelemetryPublisher>,
     sync_requested: Arc<AtomicBool>,
     time_source: TimeSource,
     soranet_privacy: Arc<SoranetSecureAggregator>,
@@ -4587,6 +4657,7 @@ impl Clone for Telemetry {
             last_reported_block: Arc::clone(&self.last_reported_block),
             metrics: Arc::clone(&self.metrics),
             enabled: Arc::clone(&self.enabled),
+            commit_qc_publisher: Arc::clone(&self.commit_qc_publisher),
             sync_requested: Arc::clone(&self.sync_requested),
             time_source: self.time_source.clone(),
             soranet_privacy: Arc::clone(&self.soranet_privacy),
@@ -4932,11 +5003,13 @@ impl Telemetry {
             SoranetSecureAggregator::new(PrivacyBucketConfig::default())
                 .expect("valid default SoraNet privacy config"),
         );
+        let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
         let telemetry = Telemetry {
             actor,
             last_reported_block: Arc::new(RwLock::new(None)),
             metrics,
             enabled: Arc::new(AtomicBool::new(enabled)),
+            commit_qc_publisher,
             sync_requested: Arc::new(AtomicBool::new(false)),
             time_source: TimeSource::new_system(),
             soranet_privacy,
@@ -7155,6 +7228,7 @@ impl From<StateTelemetry> for Telemetry {
             last_reported_block: Arc::new(RwLock::new(None)),
             metrics: st.metrics.clone(),
             enabled: st.enabled.clone(),
+            commit_qc_publisher: Arc::clone(&st.commit_qc_publisher),
             sync_requested: Arc::new(AtomicBool::new(false)),
             time_source: TimeSource::new_system(),
             soranet_privacy: st.soranet_privacy(),
@@ -7813,6 +7887,7 @@ pub fn start(
     let last_reported_block = Arc::new(RwLock::new(None));
     let enabled_arc = Arc::new(AtomicBool::new(enabled));
     let sync_requested = Arc::new(AtomicBool::new(false));
+    let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
     let soranet_privacy = Arc::new(
         SoranetSecureAggregator::new(PrivacyBucketConfig::default())
             .expect("valid default SoraNet privacy config"),
@@ -7823,6 +7898,7 @@ pub fn start(
             last_reported_block: last_reported_block.clone(),
             metrics: metrics.clone(),
             enabled: enabled_arc.clone(),
+            commit_qc_publisher,
             sync_requested: sync_requested.clone(),
             time_source: time_source.clone(),
             soranet_privacy: Arc::clone(&soranet_privacy),
@@ -8423,6 +8499,20 @@ mod tests {
         assert_eq!(metrics.torii_da_chunking_seconds.get_sample_count(), 1);
     }
     #[test]
+<<<<<<< HEAD
+=======
+    fn state_telemetry_conversion_shares_durable_qc_publisher() {
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        let state_telemetry = StateTelemetry::new(metrics, true);
+        let expected_publisher = Arc::clone(&state_telemetry.commit_qc_publisher);
+        let telemetry = Telemetry::from(state_telemetry);
+        assert!(Arc::ptr_eq(
+            &telemetry.commit_qc_publisher,
+            &expected_publisher
+        ));
+    }
+    #[test]
+>>>>>>> origin/optimizations
     fn isi_metrics_record_when_enabled() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);

@@ -455,7 +455,7 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         let Some(completion) = completion else {
             return Ok(false);
         };
-        completion
+        let _settlement = completion
             .settle_deliver_and_acknowledge(&mut self.launched.owner, &self.launched.services)
             .map_err(|_| "pending Kura Certified-Serve settlement requires restart".to_owned())?;
         Ok(true)
@@ -524,6 +524,7 @@ impl PendingKuraActivatedProductionLifecycleV1 {
                     evidence.stage()
                         != crate::sumeragi::v2_effects::PendingKuraApplyRecoveryStage::Completed
                 })
+<<<<<<< HEAD
             || self
                 .launched
                 .recovered_decision_fetch_body_completion
@@ -541,6 +542,10 @@ impl PendingKuraActivatedProductionLifecycleV1 {
                 .certified_fetch_ingress_capacity_wait
                 .is_some()
             || self.launched.certified_serve_capacity_wait.is_some()
+=======
+            || self.launched.pending_lifecycle_completion.is_some()
+            || self.launched.pending_ingress_capacity.is_some()
+>>>>>>> origin/optimizations
             || self.launched.completion_observer_activation.is_some()
             || !self
                 .launched
@@ -584,6 +589,7 @@ impl PendingKuraActivatedProductionLifecycleV1 {
             services,
             pending_kura_apply_replay,
             recovered_local_proposal_attempt,
+<<<<<<< HEAD
             recovered_decision_apply_deferred,
             recovered_decision_fetch_body_completion,
             certified_fetch_body_completion,
@@ -592,11 +598,16 @@ impl PendingKuraActivatedProductionLifecycleV1 {
             recovered_ingress_capacity_wait,
             certified_fetch_ingress_capacity_wait,
             certified_serve_capacity_wait,
+=======
+            pending_lifecycle_completion,
+            pending_ingress_capacity,
+>>>>>>> origin/optimizations
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
         debug_assert!(pending_kura_apply_replay.is_none());
         debug_assert!(recovered_local_proposal_attempt.is_none());
+<<<<<<< HEAD
         debug_assert!(recovered_decision_apply_deferred.is_none());
         debug_assert!(recovered_decision_fetch_body_completion.is_none());
         debug_assert!(certified_fetch_body_completion.is_none());
@@ -616,6 +627,15 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         drop(recovered_ingress_capacity_wait);
         drop(certified_fetch_ingress_capacity_wait);
         drop(certified_serve_capacity_wait);
+=======
+        debug_assert!(pending_lifecycle_completion.is_none());
+        debug_assert!(pending_ingress_capacity.is_none());
+        debug_assert!(completion_observer_activation.is_none());
+        drop(pending_kura_apply_replay);
+        drop(recovered_local_proposal_attempt);
+        drop(pending_lifecycle_completion);
+        drop(pending_ingress_capacity);
+>>>>>>> origin/optimizations
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
 

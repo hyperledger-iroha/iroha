@@ -7,6 +7,10 @@ pub use crate::peer::PeerOverride;
 const CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const BASE_PORT_P2P: u16 = 1337;
 const BASE_PORT_API: u16 = 8080;
+// Keep `iroha_config` out of the production dependency graph; a dev-only contract test below
+// pins these generator literals and their checked formula to the shared configuration defaults.
+const GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize = 2;
+const GENERATED_SUMERAGI_BODY_SOURCE_BYTES: usize = 33 * 1024 * 1024;
 /// Swarm error.
 #[derive(displaydoc::Display, Debug)]
 pub enum Error {
@@ -14,6 +18,11 @@ pub enum Error {
     InvalidPeerCount {
         /// Number of peers requested for the swarm manifest.
         actual: u16,
+    },
+    /// Sumeragi ingress byte capacity overflowed for {validators} validators.
+    SumeragiBodyByteCapacityOverflow {
+        /// Number of validators whose isolated ingress partitions were requested.
+        validators: usize,
     },
     /// Target file path points to a directory.
     TargetFileIsADirectory,
@@ -240,6 +249,7 @@ struct PeerSettings {
     chain: iroha_data_model::ChainId,
     network: std::collections::BTreeMap<u16, peer::PeerInfo>,
     topology: std::collections::BTreeSet<iroha_data_model::peer::Peer>,
+    sumeragi_body_bytes: Option<usize>,
     prepared_runtime: Option<std::collections::BTreeMap<u16, PreparedRuntimeConfig>>,
 }
 #[derive(Debug)]
@@ -262,6 +272,15 @@ struct PreparedSecretSource {
     source: path::RelativePath,
 }
 impl PeerSettings {
+    fn sumeragi_body_bytes(validator_count: usize) -> Result<usize, Error> {
+        validator_count
+            .checked_add(GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
+            .and_then(|source_count| source_count.checked_add(1))
+            .and_then(|source_count| source_count.checked_mul(GENERATED_SUMERAGI_BODY_SOURCE_BYTES))
+            .ok_or(Error::SumeragiBodyByteCapacityOverflow {
+                validators: validator_count,
+            })
+    }
     fn is_valid_runtime_target(target: &str) -> bool {
         let Some(relative) = target.strip_prefix("/config/runtime/") else {
             return false;
@@ -333,6 +352,7 @@ impl PeerSettings {
         healthcheck: bool,
     ) -> Result<Self, Error> {
         Self::validate_committee_size(count.get())?;
+        let sumeragi_body_bytes = Self::sumeragi_body_bytes(usize::from(count.get()))?;
         if seed.is_empty() {
             return Err(Error::EmptyDevelopmentSeed);
         }
@@ -390,6 +410,7 @@ impl PeerSettings {
             chain: peer::chain(),
             network,
             topology,
+            sumeragi_body_bytes: Some(sumeragi_body_bytes),
             prepared_runtime: None,
         })
     }
@@ -541,6 +562,7 @@ impl PeerSettings {
             chain,
             network,
             topology,
+            sumeragi_body_bytes: None,
             prepared_runtime: Some(prepared_runtime),
         })
     }
@@ -669,6 +691,11 @@ impl From<path::Error> for Error {
 mod tests {
     #![allow(clippy::too_many_lines, clippy::needless_raw_string_hashes)]
     use crate::{
+<<<<<<< HEAD
+=======
+        GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+        GENERATED_SUMERAGI_BODY_SOURCE_BYTES, PeerSettings, PreparedBuildLine,
+>>>>>>> origin/optimizations
         PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile, PreparedValidator,
         Swarm, base64_standard,
         peer::{self, PeerOverride},
@@ -912,6 +939,72 @@ mod tests {
         assert_eq!(output.matches("pull_policy: never").count(), 6);
         assert!(output.contains("irohad0:"));
         assert_runtime_genesis_artifact_contract(&output, 7);
+    }
+    #[test]
+    fn generated_sumeragi_body_bytes_cover_every_legal_roster_scale() {
+        for validator_count in [4_u16, 7, 31] {
+            let output = build_as_string(
+                std::num::NonZeroU16::new(validator_count)
+                    .expect("legal validator count is non-zero"),
+                false,
+                None,
+                false,
+                None,
+            );
+            let expected = PeerSettings::sumeragi_body_bytes(usize::from(validator_count))
+                .expect("legal roster byte geometry is representable")
+                .to_string();
+            let configured = output
+                .lines()
+                .filter_map(|line| {
+                    line.trim()
+                        .strip_prefix("SUMERAGI_QUEUES_BODY_BYTES:")
+                        .map(str::trim)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                configured.len(),
+                usize::from(validator_count),
+                "every generated validator must receive the aggregate ingress budget"
+            );
+            for value in configured {
+                assert_eq!(
+                    value.trim_matches(|character| character == '\'' || character == '"'),
+                    expected,
+                    "generated aggregate ingress budget must scale with the validator roster"
+                );
+            }
+        }
+    }
+    #[test]
+    fn generated_sumeragi_capacity_contract_matches_config_defaults() {
+        assert_eq!(
+            GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+            iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+                .get()
+        );
+        assert_eq!(
+            GENERATED_SUMERAGI_BODY_SOURCE_BYTES,
+            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get()
+        );
+        for validator_count in [4_usize, 7, 31] {
+            assert_eq!(
+                PeerSettings::sumeragi_body_bytes(validator_count)
+                    .expect("legal local geometry is representable"),
+                iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
+                    validator_count,
+                    GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+                    GENERATED_SUMERAGI_BODY_SOURCE_BYTES,
+                )
+                .expect("legal shared geometry is representable")
+            );
+        }
+        assert!(matches!(
+            PeerSettings::sumeragi_body_bytes(usize::MAX),
+            Err(crate::Error::SumeragiBodyByteCapacityOverflow {
+                validators: usize::MAX
+            })
+        ));
     }
     #[test]
     fn minimum_committee_pull_healthcheck() {
@@ -1576,6 +1669,7 @@ mod tests {
     }
     #[test]
     fn prepared_mode_uses_concrete_read_only_genesis_artifacts() {
+        const AUTHORED_BODY_BYTES: usize = 555_555_555;
         let temp = TempDir::new("prepared_artifacts");
         let bundle = temp.path().join("bundle");
         let deployment = temp.path().join("deployment");
@@ -1597,7 +1691,13 @@ mod tests {
                 let runtime_config = bundle.join(format!("peer{index}.runtime.toml"));
                 std::fs::write(
                     &runtime_config,
-                    format!("chain = \"prepared\"\n# container projection for peer {index}\n"),
+                    format!(
+                        "chain = \"prepared\"\n# container projection for peer {index}\n\
+                         [sumeragi.queues]\n\
+                         authenticated_non_validator_sources = 5\n\
+                         body_source_bytes = 34603008\n\
+                         body_bytes = {AUTHORED_BODY_BYTES}\n"
+                    ),
                 )
                 .expect("write projected runtime config fixture");
                 let mut validator = prepared_validator(index);
@@ -1664,6 +1764,16 @@ mod tests {
         );
         assert!(!output.contains("environment:"));
         assert!(!output.contains("PRIVATE_KEY:"));
+        assert!(
+            !output.contains("SUMERAGI_QUEUES_BODY_BYTES"),
+            "prepared runtime TOML must retain its admitted queue policy without a Compose environment rewrite"
+        );
+        assert!(
+            std::fs::read_to_string(bundle.join("peer0.runtime.toml"))
+                .expect("read authored runtime config")
+                .contains(&format!("body_bytes = {AUTHORED_BODY_BYTES}")),
+            "building Compose must not rewrite the authored prepared runtime capacity"
+        );
         assert!(output.contains("../bundle/peer0.runtime.toml"));
         assert!(!output.contains("container projection for peer 0"));
         assert_eq!(

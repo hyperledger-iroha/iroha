@@ -11,6 +11,7 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
@@ -222,6 +223,7 @@ class NexusAppClient @JvmOverloads constructor(
             timeToLiveMs = normalized.ttlMs,
             nonce = normalized.nonce,
             feePayment = normalized.feePayment,
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             metadata = normalized.metadata.mapValues { JsonValue.string(it.value) },
         )
         val payloadBytes = codecAdapter.encodeTransaction(payload)

@@ -821,8 +821,254 @@ fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() 
         assert_eq!(recovery_work.autonomous_lane_payloads.len(), 1);
         adapter.next_autonomous_producer_tick = Instant::now();
         adapter
+<<<<<<< HEAD
             .schedule_autonomous_lane_production(0, limits)
             .expect("non-empty retry drives the idempotent lane producer");
+=======
+            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+            .expect("run tightly bounded autonomous producer tick");
+        let payload = adapter
+            .pending_autonomous_anchor_payloads
+            .values()
+            .next()
+            .expect("bounded producer publishes one payload");
+        assert_eq!(payload.entrypoints, expected_entrypoints[..1]);
+        assert_eq!(payload.reservation_keys.len(), 1);
+        assert_eq!(queue.live_lane_reservations().len(), 1);
+        assert_eq!(queue.queued_len(), 2);
+    }
+    fn autonomous_carrier_block(
+        adapter: &V2LaneWorkAdapter,
+        keys: &[KeyPair],
+        payload: &LaneExecutablePayloadV1,
+    ) -> SignedBlock {
+        let envelope = autonomous_lane_payload_envelope(
+            payload,
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("encode autonomous carrier envelope");
+        let header = BlockHeader::new(
+            NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
+            adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            None,
+            None,
+            adapter.context.height,
+            0,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(Vec::new())
+                .with_autonomous_lane_payloads(vec![envelope]),
+        ));
+        let leader = usize::try_from(adapter.context.leader(0)).expect("global leader index");
+        builder.build_with_signature(
+            u64::try_from(leader).expect("global leader index fits u64"),
+            keys[leader].private_key(),
+        )
+    }
+    /// Exact record-backed autonomous lane certificate shared with worker handoff tests.
+    pub(in crate::sumeragi) struct HistoricalAutonomousLaneCertificateFixture {
+        /// Kura containing the immutable historical autonomous recovery record.
+        pub(in crate::sumeragi) kura: Arc<Kura>,
+        /// Full autonomous Prepare/Commit certificate covered by that record.
+        pub(in crate::sumeragi) certificate: LaneBlockCertificateV1,
+        /// Historical global context which owns the recovery record.
+        pub(in crate::sumeragi) context: wire::HeightContext,
+        /// Validator keys used only by deterministic tests.
+        pub(in crate::sumeragi) validators: Vec<KeyPair>,
+    }
+    /// Persist one record-backed autonomous certificate without an application receipt.
+    pub(in crate::sumeragi) fn historical_autonomous_lane_certificate_fixture(
+    ) -> HistoricalAutonomousLaneCertificateFixture {
+        let (adapter, keys) =
+            fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+        let (source_block, mut proposal) =
+            planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        proposal.payload_block_hint = None;
+        let entrypoint = source_block
+            .external_entrypoints_cloned()
+            .next()
+            .expect("historical autonomous fixture entrypoint");
+        let (payload, _) = signed_autonomous_payload_for_entrypoint(
+            &adapter,
+            &keys,
+            &proposal,
+            entrypoint,
+            b"historical-autonomous-queue-plan-admission-binding",
+            b"historical-autonomous-reservation-owner",
+            "deterministic historical autonomous producer",
+            "historical autonomous producer key",
+            "signed historical autonomous payload",
+        );
+        let carrier = autonomous_carrier_block(&adapter, &keys, &payload);
+        adapter
+            .kura
+            .store_block(carrier.clone())
+            .expect("persist historical autonomous carrier");
+        let finality = verified_finality_artifact_for_block(&adapter, &keys, &carrier);
+        let finality_receipt = adapter
+            .kura
+            .store_v2_finality_artifact(&finality)
+            .expect("persist historical autonomous carrier finality");
+        assert_eq!(finality_receipt.height(), adapter.context.height);
+        assert_eq!(finality_receipt.block_hash(), carrier.hash());
+        let committed = ValidBlock::committed_from_replay_signed_block(carrier.clone());
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        install_finalized_vrf_epoch(&adapter, adapter.context.epoch, adapter.context.height);
+
+        let payload = payload
+            .attach_global_hint_exact(
+                LaneBlockProposalPayloadHintV1 {
+                    proposal_height: adapter.context.height,
+                    proposal_view: carrier.header().view_change_index(),
+                    proposal_block_hash: carrier.hash(),
+                },
+                adapter.native_network_id(),
+                adapter.context.epoch,
+            )
+            .expect("attach exact historical autonomous carrier hint");
+        let proposal = payload.origin_proposal.clone();
+        let execution_commitment = finality.commit_qc.execution_commitment;
+        let mut install = HistoricalAutonomousReservationInstallV1 {
+            version: HistoricalAutonomousReservationInstallV1::VERSION,
+            recovery_id: Hash::prehashed([0; Hash::LENGTH]),
+            canonical_body: CanonicalExecutedBlockNeedV1 {
+                height: adapter.context.height,
+                block_hash: carrier.hash(),
+                finality_artifact_hash: HashOf::new(&finality),
+                execution_commitment,
+                executed_block_wire_len: execution_commitment.executed_block_wire_len,
+                executed_block_wire_hash: execution_commitment.executed_block_wire_hash,
+            },
+            historical_context: adapter.context.clone(),
+            historical_context_id: adapter.context.id(),
+            historical_context_hash: HashOf::new(&adapter.context),
+            carrier_view: carrier.header().view_change_index(),
+            payload: payload.clone(),
+            reservation_group: LaneQueueReservationReconciliationGroupV1 {
+                identity: LaneQueueReservationGroupIdentityV1::from_key(
+                    payload
+                        .reservation_keys
+                        .first()
+                        .expect("historical autonomous reservation group is non-empty"),
+                ),
+                ordered_keys: payload.reservation_keys.clone(),
+            },
+        };
+        install.recovery_id = install.computed_recovery_id();
+        assert_eq!(
+            install_historical_autonomous_lane_recovery(
+                adapter.state.as_ref(),
+                adapter.kura.as_ref(),
+                &install,
+            )
+            .expect("persist exact historical autonomous recovery record"),
+            HistoricalAutonomousLaneRecoveryInstallOutcome::Installed,
+        );
+        assert!(
+            adapter
+                .kura
+                .read_lane_block_application_receipt(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_none(),
+            "autonomous record authority must not borrow an ordinary application receipt"
+        );
+        let prepare_votes = keys[..3]
+            .iter()
+            .map(|key| signed_autonomous_prepare_vote(&proposal, &payload, key, &keys))
+            .collect::<Vec<_>>();
+        let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            proposal.vote_body(CertPhase::Prepare),
+            proposal.descriptor.validator_set.clone(),
+            &prepare_votes,
+        )
+        .expect("historical autonomous READY votes form PrepareQC");
+        let certificate = LaneBlockCertificateV1 {
+            proposal: proposal.clone(),
+            prepare_qc,
+            commit_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Commit),
+        };
+        HistoricalAutonomousLaneCertificateFixture {
+            kura: Arc::clone(&adapter.kura),
+            certificate,
+            context: adapter.context.clone(),
+            validators: keys,
+        }
+    }
+    fn exercise_canonical_autonomous_carrier_after_direct_decision(local_signer_quorum: bool) {
+        let (mut adapter, keys) =
+            fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+        let quorum_keys = if local_signer_quorum {
+            &keys[..3]
+        } else {
+            &keys[1..]
+        };
+        let (source_block, mut proposal) =
+            planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        proposal.payload_block_hint = None;
+        let entrypoint = source_block
+            .external_entrypoints_cloned()
+            .next()
+            .expect("autonomous entrypoint");
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+            std::borrow::Cow::Owned(entrypoint.clone()),
+        );
+        let routing_plan = RoutingPlan::single(RoutingDecision::new(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+        ));
+        let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash: accepted.hash(),
+            entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"direct-decision-queue-plan-admission-binding",
+            ),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"direct-decision-reservation-owner"),
+            proposal_identity_hash: proposal.proposal_hash,
+        };
+        let producer = adapter
+            .expected_lane_author(&proposal)
+            .expect("deterministic autonomous producer")
+            .clone();
+        let producer_key = keys
+            .iter()
+            .find(|candidate| candidate.public_key() == producer.public_key())
+            .expect("autonomous producer key");
+        bind_canonical_autonomous_reservation_identity(
+            &adapter,
+            &proposal,
+            &producer,
+            &mut reservation,
+        );
+        let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+            adapter.native_network_id(),
+            adapter.context.epoch,
+            proposal.clone(),
+            vec![entrypoint],
+            vec![reservation],
+            vec![routing_plan],
+            vec![None],
+            producer.clone(),
+            producer_key.private_key(),
+        )
+        .expect("signed hint-free autonomous payload");
+>>>>>>> origin/optimizations
         assert_eq!(
             queue.live_lane_reservations(),
             exact_reservations,
@@ -1557,14 +1803,14 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
         Ok(()),
         "standalone CommitQC must recover PoPs from durable READY after cache and State pruning"
     );
-    assert!(
+    assert_eq!(
         durable_historical_lane_output_source_hash(
             adapter.kura.as_ref(),
             &BlockMessage::LaneBlockQc(alternative_commit),
         )
-        .expect("validate alternate autonomous quorum against durable READY authority")
-        .is_some(),
-        "a different valid 3-of-4 QC must survive rollover without mutable State PoPs"
+        .expect("classify autonomous output against ordinary historical durability"),
+        None,
+        "autonomous recovery must use its immutable record rather than ordinary certificate-and-application authority"
     );
     let alternative_prepare_votes = keys[1..]
         .iter()

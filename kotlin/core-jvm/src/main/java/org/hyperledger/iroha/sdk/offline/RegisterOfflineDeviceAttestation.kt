@@ -9,6 +9,7 @@ import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -59,6 +60,7 @@ class RegisterOfflineDeviceAttestation(
         timeToLiveMs = timeToLiveMs,
         nonce = nonce,
         feePayment = feePayment,
+        admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
         metadata = metadataSnapshot,
     )
 
@@ -73,6 +75,7 @@ class RegisterOfflineDeviceAttestation(
                 payload.timeToLiveMs == expected.timeToLiveMs &&
                 payload.nonce == expected.nonce &&
                 payload.feePayment == expected.feePayment &&
+                payload.admissionIntent == expected.admissionIntent &&
                 payload.metadata == expected.metadata &&
                 payload.attachments == expected.attachments &&
                 instructions != null &&

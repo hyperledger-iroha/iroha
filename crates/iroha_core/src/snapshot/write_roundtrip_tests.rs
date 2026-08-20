@@ -41,6 +41,18 @@ async fn can_read_snapshot_after_writing() {
 async fn generated_snapshot_passes_restart_validation_before_publication() {
     let state = state_factory();
     let snapshot_bytes = exact_snapshot_payload_bytes(&state);
+    let snapshot: json::Value =
+        json::from_slice(&snapshot_bytes).expect("writer snapshot must be canonical JSON");
+    let json::Value::Object(snapshot) = snapshot else {
+        panic!("writer snapshot must be an object");
+    };
+    for field in ["commit_topology", "prev_commit_topology"] {
+        let Some(json::Value::Object(cell)) = snapshot.get(field) else {
+            panic!("{field} must retain its exact MV cell envelope");
+        };
+        assert_eq!(cell.len(), 2, "{field} must retain exactly two MV roles");
+        assert!(cell.contains_key("revert") && cell.contains_key("blocks"));
+    }
     validate_generated_snapshot_for_restart(&state, &snapshot_bytes)
         .expect("writer-generated snapshot must survive restart initialization exactly");
 }

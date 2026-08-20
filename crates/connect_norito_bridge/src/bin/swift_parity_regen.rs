@@ -13,7 +13,10 @@ use iroha_data_model::{
     isi::{Burn, InstructionBox, Mint, Transfer},
     metadata::Metadata,
     name::Name,
-    transaction::{FeePaymentIntent, TransactionBuilder, signed::TransactionPayload},
+    transaction::{
+        FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder,
+        signed::TransactionPayload,
+    },
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
@@ -67,6 +70,7 @@ struct PayloadSpec {
     time_to_live_ms: u64,
     nonce: u32,
     fee_payment: FeePaymentSpec,
+    admission_intent: TransactionAdmissionIntent,
     metadata: BTreeMap<String, Value>,
 }
 #[derive(Debug, norito::json::JsonDeserialize)]
@@ -191,7 +195,13 @@ impl PayloadSpec {
             self.network_id,
             authority.clone(),
             self.fee_payment.to_intent()?,
-        );
+        )
+        .with_admission_intent(self.admission_intent);
+        if self.admission_intent != TransactionAdmissionIntent::QueuePlanSynced {
+            return Err(
+                "Swift public parity fixtures require QueuePlanSynced admission intent".to_owned(),
+            );
+        }
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         if self.time_to_live_ms == 0 {
             return Err("time_to_live_ms must be > 0".to_owned());
@@ -1334,6 +1344,7 @@ mod tests {
                     gas_limit: None,
                 },
             },
+            admission_intent: TransactionAdmissionIntent::QueuePlanSynced,
             metadata: BTreeMap::new(),
         }
     }
@@ -1513,6 +1524,7 @@ mod tests {
         assert!(decode_document(null).is_err());
     }
     #[test]
+<<<<<<< HEAD
     fn source_schema_requires_nullable_fee_gas_limit() {
         let mut missing = source_document();
         first_payload(&mut missing)
@@ -1526,6 +1538,29 @@ mod tests {
             .expect("fee-payment value object")
             .remove("gas_limit");
         assert!(decode_document(missing).is_err());
+=======
+    fn source_schema_requires_queue_plan_synced_admission_intent() {
+        let mut missing = source_document();
+        first_payload(&mut missing).remove("admission_intent");
+        assert!(decode_document(missing).is_err());
+
+        let mut ordinary = source_document();
+        first_payload(&mut ordinary).insert(
+            "admission_intent".into(),
+            json::to_value(&TransactionAdmissionIntent::Ordinary)
+                .expect("serialize ordinary admission intent"),
+        );
+        let payload = decode_document(ordinary)
+            .expect("ordinary intent is structurally valid")
+            .into_iter()
+            .next()
+            .expect("fixture exists")
+            .payload;
+        assert_eq!(
+            payload.to_builder().err().as_deref(),
+            Some("Swift public parity fixtures require QueuePlanSynced admission intent")
+        );
+>>>>>>> origin/optimizations
     }
     #[test]
     fn source_executable_and_instruction_schemas_are_closed() {

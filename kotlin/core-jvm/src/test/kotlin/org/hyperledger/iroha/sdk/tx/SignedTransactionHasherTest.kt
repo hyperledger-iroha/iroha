@@ -84,7 +84,7 @@ class SignedTransactionHasherTest {
     fun `transaction wire field counts match rust first release layout`() {
         val transaction = signed(adapter.encodeTransaction(samplePayload()), 0x44)
 
-        assertEquals(9, countSizedFields(transaction.encodedPayload()))
+        assertEquals(10, countSizedFields(transaction.encodedPayload()))
         assertEquals(3, countSizedFields(SignedTransactionEncoder.encode(transaction)))
     }
 

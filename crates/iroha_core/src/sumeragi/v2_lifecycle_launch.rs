@@ -35,13 +35,19 @@ pub(in crate::sumeragi) use preactivation::{
 #[cfg(test)]
 pub(in crate::sumeragi) use turn_driver::ProductionPreparedCertifiedServeTestSettlementV1;
 pub(in crate::sumeragi) use turn_driver::{
-    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
-    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
+    ProductionLifecycleCompletionPreGateV1, ProductionLifecycleCompletionSelectionV1,
+    ProductionLifecycleCompletionTurnV1, ProductionLifecycleIngressSelectionV1,
+    ProductionLifecycleIngressTurnV1, ProductionLifecycleReadyCompletionTurnV1,
     ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
 };
 
 use super::{
+<<<<<<< HEAD
     LifecycleDurableValidateDispatchKeyV1, PreparedLifecycleIngressSelector,
+=======
+    CertifiedFetchBodyPersistenceCompletionError, PreparedLifecycleIngressSelector,
+    ProductionIngressSchedulerInputsError, ProductionIngressTurnPreparation,
+>>>>>>> origin/optimizations
     ProductionLifecycleOwnerV1, ProductionRecoveredCompletionDispatchErrorV1,
     ProductionRecoveredCompletionDispatchV1, ProductionRecoveredDecisionFetchPersistenceErrorV1,
     ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
@@ -72,14 +78,18 @@ use crate::{
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
         v2_worker::{
             DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
+<<<<<<< HEAD
             LifecycleDurableValidateCapacityCaptureV1, LifecycleDurableValidateCompletionKindV1,
             LifecycleDurableValidateRetryV1, PreparedCertifiedFetchBodyPersistenceCompletion,
             PreparedLifecycleDurableValidateCompletionV1,
+=======
+            LifecycleCompletionTakeV1, PreparedCertifiedFetchBodyPersistenceCompletion,
+>>>>>>> origin/optimizations
             PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
-            RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleCompletionTakeV1,
-            RecoveredLifecycleProposalExactOutputCaptureV1, V2CleanupSupervisor,
+            RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleProposalExactOutputCaptureV1,
+            V2CleanupSupervisor,
         },
     },
 };
@@ -188,13 +198,11 @@ impl ProductionLeaderWireIngressBindingV1 {
         })
     }
     fn retire(&mut self) -> Result<(), String> {
-        let Some(gate) = self.gate.take() else {
+        let Some(gate) = self.gate.as_ref().cloned() else {
             return Ok(());
         };
-        self.ingress.close();
-        if let Err(error) = self.ingress.unbind_leader_wire_lifecycle_gate(&gate) {
-            return Err(error);
-        }
+        self.ingress.retire_leader_wire_lifecycle_gate(&gate)?;
+        self.gate = None;
         Ok(())
     }
 }
@@ -227,6 +235,7 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     // before live clocks can admit fresh local proposal work.
     recovered_local_proposal_attempt:
         Option<super::super::v2::RecoveredLifecycleLocalProposalAttemptV1>,
+<<<<<<< HEAD
     // Guarded completion/retry owners drop only after their exact service has
     // stopped, so their fail-stop queue identities remain representable.
     recovered_decision_apply_deferred: Option<RetainedRecoveredDecisionApplyDeferredV1>,
@@ -253,12 +262,98 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     // after it advances the full fair-ingress census is captured again.
     certified_serve_capacity_wait:
         Option<crate::sumeragi::v2_worker::LifecycleCertifiedServeCapacityWaitV1>,
+=======
+    // Exactly one guarded completion/retry owner may be parked. It drops only
+    // after its exact service has stopped, so fail-stop queue identity remains
+    // representable without parallel optional owner slots.
+    pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>,
+    // A single typed owner retains the exact selector and service-generation
+    // fence. The variant fixes which Phase-A transaction may resume it.
+    pending_ingress_capacity: Option<PendingIngressCapacityV1>,
+>>>>>>> origin/optimizations
     #[allow(dead_code)]
     completion_observer_activation: Option<ProductionV2CompletionObserverActivationPermitV1>,
     // Rust drops fields in declaration order. Keep this last so the service
     // worker has stopped before ingress closes and the durable gate detaches.
     #[allow(dead_code)]
     leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1,
+}
+
+/// Sole parked lifecycle completion owner for this height.
+#[allow(variant_size_differences)]
+enum PendingLifecycleCompletionV1 {
+    /// Recovered Apply awaits its exact missing-sidecar retry.
+    RecoveredDecisionApplyDeferred(RetainedRecoveredDecisionApplyDeferredV1),
+    /// Ordinary certified-Fetch persistence awaits Phase B publication.
+    CertifiedFetch(PreparedCertifiedFetchBodyPersistenceCompletion),
+    /// Recovered Decision Fetch persistence awaits Store settlement.
+    RecoveredDecisionFetch(PreparedRecoveredDecisionFetchBodyCompletionV1),
+    /// Recovered Sign persistence awaits its adapter-family settlement.
+    RecoveredSign(PreparedRecoveredLifecycleSignCompletionV1),
+}
+
+impl PendingLifecycleCompletionV1 {
+    fn take_certified_fetch(
+        slot: &mut Option<Self>,
+    ) -> Option<PreparedCertifiedFetchBodyPersistenceCompletion> {
+        match slot.take() {
+            Some(Self::CertifiedFetch(completion)) => Some(completion),
+            other => {
+                *slot = other;
+                None
+            }
+        }
+    }
+
+    fn take_recovered_decision_fetch(
+        slot: &mut Option<Self>,
+    ) -> Option<PreparedRecoveredDecisionFetchBodyCompletionV1> {
+        match slot.take() {
+            Some(Self::RecoveredDecisionFetch(completion)) => Some(completion),
+            other => {
+                *slot = other;
+                None
+            }
+        }
+    }
+
+    fn take_recovered_sign(
+        slot: &mut Option<Self>,
+    ) -> Option<PreparedRecoveredLifecycleSignCompletionV1> {
+        match slot.take() {
+            Some(Self::RecoveredSign(completion)) => Some(completion),
+            other => {
+                *slot = other;
+                None
+            }
+        }
+    }
+
+    fn recovered_sign(&self) -> Option<&PreparedRecoveredLifecycleSignCompletionV1> {
+        match self {
+            Self::RecoveredSign(completion) => Some(completion),
+            Self::RecoveredDecisionApplyDeferred(_)
+            | Self::CertifiedFetch(_)
+            | Self::RecoveredDecisionFetch(_) => None,
+        }
+    }
+}
+
+/// Sole retained lifecycle ingress-capacity owner for this height.
+#[allow(variant_size_differences)]
+enum PendingIngressCapacityV1 {
+    /// Resume through ordinary certified-Fetch persistence.
+    CertifiedFetch(super::PreparedProductionIngressCapacityWait),
+    /// Resume through recovered Decision-Fetch persistence.
+    RecoveredDecisionFetch(super::PreparedProductionIngressCapacityWait),
+    /// Resume current-height Certified-Serve after its worker fence advances.
+    CertifiedServe(crate::sumeragi::v2_worker::LifecycleCertifiedServeCapacityWaitV1),
+}
+
+#[derive(Clone, Copy)]
+enum PendingIngressCapacityKindV1 {
+    CertifiedFetch,
+    RecoveredDecisionFetch,
 }
 /// Result of draining one dedicated recovered Apply worker completion.
 #[allow(variant_size_differences)]
@@ -555,17 +650,21 @@ impl LaunchedProductionLifecycleV1 {
             owner,
             executor,
             services,
-            recovered_decision_fetch_body_completion,
+            pending_lifecycle_completion,
             leader_wire_ingress_binding,
             ..
         } = self;
-        let Some(completion) = recovered_decision_fetch_body_completion.take() else {
+        let Some(completion) = PendingLifecycleCompletionV1::take_recovered_decision_fetch(
+            pending_lifecycle_completion,
+        ) else {
             return ProductionRecoveredDecisionFetchStoreSettlementV1::None;
         };
         macro_rules! retry {
             ($failure:expr) => {{
-                assert!(recovered_decision_fetch_body_completion.is_none());
-                *recovered_decision_fetch_body_completion = Some(completion);
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion = Some(
+                    PendingLifecycleCompletionV1::RecoveredDecisionFetch(completion),
+                );
                 return ProductionRecoveredDecisionFetchStoreSettlementV1::Retry($failure);
             }};
         }
@@ -576,6 +675,8 @@ impl LaunchedProductionLifecycleV1 {
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Owner);
         };
         let key = completion.completion().dispatch_key();
+        let wait_source =
+            super::projection::certified_fetch_wait_source(completion.completion().request_hash());
         let response_hash = completion.completion().response_hash();
         let physical_ordinal = completion.completion().physical_admission_ordinal();
         let Some(body) = completion.completion().project_store_body_authority() else {
@@ -624,6 +725,7 @@ impl LaunchedProductionLifecycleV1 {
                 &owner.coordinator,
                 &lease,
                 key,
+                wait_source,
                 body,
             ) {
             Ok(authority) => authority,
@@ -648,6 +750,7 @@ impl LaunchedProductionLifecycleV1 {
                 &lease,
                 &owner.verified,
                 key,
+                wait_source,
                 adapter,
             ) {
             Ok(successor) => successor,
@@ -675,8 +778,10 @@ impl LaunchedProductionLifecycleV1 {
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
-            assert!(recovered_decision_fetch_body_completion.is_none());
-            *recovered_decision_fetch_body_completion = Some(completion);
+            assert!(pending_lifecycle_completion.is_none());
+            *pending_lifecycle_completion = Some(
+                PendingLifecycleCompletionV1::RecoveredDecisionFetch(completion),
+            );
             drop(locked_dequeue);
             drop(operation);
             return ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired;
@@ -731,14 +836,15 @@ impl LaunchedProductionLifecycleV1 {
     pub(in crate::sumeragi) fn retain_recovered_lifecycle_sign_completion(
         &mut self,
     ) -> Result<bool, String> {
-        if self.recovered_lifecycle_sign_completion.is_some() {
+        if self.pending_lifecycle_completion.is_some() {
             return Ok(false);
         }
         let drain = self.services.drain_recovered_lifecycle_sign_completion()?;
         let Some(completion) = drain.into_completion() else {
             return Ok(false);
         };
-        self.recovered_lifecycle_sign_completion = Some(completion);
+        self.pending_lifecycle_completion =
+            Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
         Ok(true)
     }
     /// Preflight the parked Sign's exact adapter successor.
@@ -758,10 +864,13 @@ impl LaunchedProductionLifecycleV1 {
     ) -> ProductionRecoveredLifecycleSignBroadcastPreparationV1 {
         let Self {
             executor,
-            recovered_lifecycle_sign_completion,
+            pending_lifecycle_completion,
             ..
         } = self;
-        let Some(completion) = recovered_lifecycle_sign_completion.as_ref() else {
+        let Some(completion) = pending_lifecycle_completion
+            .as_ref()
+            .and_then(PendingLifecycleCompletionV1::recovered_sign)
+        else {
             return ProductionRecoveredLifecycleSignBroadcastPreparationV1::None;
         };
         let Some(authority) = completion.project_adapter_completion_authority() else {
@@ -795,16 +904,19 @@ impl LaunchedProductionLifecycleV1 {
             owner,
             executor,
             services,
-            recovered_lifecycle_sign_completion,
+            pending_lifecycle_completion,
             ..
         } = self;
-        let Some(completion) = recovered_lifecycle_sign_completion.take() else {
+        let Some(completion) =
+            PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)
+        else {
             return ProductionRecoveredLifecycleSignBroadcastSettlementV1::None;
         };
         macro_rules! retry {
             () => {{
-                assert!(recovered_lifecycle_sign_completion.is_none());
-                *recovered_lifecycle_sign_completion = Some(completion);
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
                 return ProductionRecoveredLifecycleSignBroadcastSettlementV1::Retry;
             }};
         }
@@ -866,8 +978,9 @@ impl LaunchedProductionLifecycleV1 {
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
-            assert!(recovered_lifecycle_sign_completion.is_none());
-            *recovered_lifecycle_sign_completion = Some(completion);
+            assert!(pending_lifecycle_completion.is_none());
+            *pending_lifecycle_completion =
+                Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
             drop(operation);
             return ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired;
         }
@@ -890,16 +1003,19 @@ impl LaunchedProductionLifecycleV1 {
             owner,
             executor,
             services,
-            recovered_lifecycle_sign_completion,
+            pending_lifecycle_completion,
             ..
         } = self;
-        let Some(completion) = recovered_lifecycle_sign_completion.take() else {
+        let Some(completion) =
+            PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)
+        else {
             return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::None;
         };
         macro_rules! retry {
             () => {{
-                assert!(recovered_lifecycle_sign_completion.is_none());
-                *recovered_lifecycle_sign_completion = Some(completion);
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
                 return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::Retry;
             }};
         }
@@ -963,8 +1079,9 @@ impl LaunchedProductionLifecycleV1 {
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
-            assert!(recovered_lifecycle_sign_completion.is_none());
-            *recovered_lifecycle_sign_completion = Some(completion);
+            assert!(pending_lifecycle_completion.is_none());
+            *pending_lifecycle_completion =
+                Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
             drop(operation);
             return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::RestartRequired;
         }
@@ -988,10 +1105,12 @@ impl LaunchedProductionLifecycleV1 {
             owner,
             executor,
             services,
-            recovered_lifecycle_sign_completion,
+            pending_lifecycle_completion,
             ..
         } = self;
-        let Some(completion) = recovered_lifecycle_sign_completion.take() else {
+        let Some(completion) =
+            PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)
+        else {
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::None;
         };
         macro_rules! restart {
@@ -1043,8 +1162,9 @@ impl LaunchedProductionLifecycleV1 {
                 drop(authority);
                 drop(body);
                 drop(preview);
-                assert!(recovered_lifecycle_sign_completion.is_none());
-                *recovered_lifecycle_sign_completion = Some(completion);
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
                 return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable;
             }
             Err(_) => {
@@ -1098,7 +1218,7 @@ impl LaunchedProductionLifecycleV1 {
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
-            assert!(recovered_lifecycle_sign_completion.is_none());
+            assert!(pending_lifecycle_completion.is_none());
             drop(output);
             drop(completion);
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
@@ -1124,16 +1244,19 @@ impl LaunchedProductionLifecycleV1 {
             owner,
             executor,
             services,
-            recovered_lifecycle_sign_completion,
+            pending_lifecycle_completion,
             ..
         } = self;
-        let Some(completion) = recovered_lifecycle_sign_completion.take() else {
+        let Some(completion) =
+            PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)
+        else {
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::None;
         };
         macro_rules! retry {
             () => {{
-                assert!(recovered_lifecycle_sign_completion.is_none());
-                *recovered_lifecycle_sign_completion = Some(completion);
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
                 return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Retry;
             }};
         }
@@ -1186,8 +1309,9 @@ impl LaunchedProductionLifecycleV1 {
                 drop(authority);
                 drop(body);
                 drop(preview);
-                assert!(recovered_lifecycle_sign_completion.is_none());
-                *recovered_lifecycle_sign_completion = Some(completion);
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
                 return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable;
             }
             Err(_) => {
@@ -1226,8 +1350,9 @@ impl LaunchedProductionLifecycleV1 {
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
-            assert!(recovered_lifecycle_sign_completion.is_none());
-            *recovered_lifecycle_sign_completion = Some(completion);
+            assert!(pending_lifecycle_completion.is_none());
+            *pending_lifecycle_completion =
+                Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
             drop(output);
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
         }
@@ -1517,6 +1642,9 @@ pub(in crate::sumeragi) enum ProductionLifecycleFinalizationErrorV1 {
     /// The post-handoff registry or Certified-Serve census changed.
     #[error("finalized lifecycle retirement census failed: {0}")]
     RetirementCensus(String),
+    /// The retired ordinal floor could not initialize its exact successor.
+    #[error("finalized lifecycle successor ordinal floor failed: {0}")]
+    SuccessorFloor(#[source] super::ledger::LifecycleLedgerError),
 }
 
 /// Activated height after ingress retirement and reducer finalization.
@@ -1558,14 +1686,20 @@ pub(in crate::sumeragi) struct ProductionLifecycleCleanupReadyV1 {
     services: ProductionV2Services,
     receipt: KuraV2CommitReceipt,
     wal_retirement_warning: Option<String>,
+    retained_floor: super::super::v2::FinalizedLifecycleRetainedFloorV1,
 }
 
-/// Final local-cleanup diagnostics after every consensus owner was retired.
-#[derive(Clone, Debug)]
+/// Final cleanup diagnostics plus the still-sealed successor ordinal floor.
+///
+/// Production consumes the floor into H+1 storage before inspecting the
+/// diagnostics. Focused finalization tests may inspect and then drop this
+/// unpublished capability without opening successor work.
 #[must_use = "post-finality cleanup diagnostics must be observed"]
 pub(in crate::sumeragi) struct ProductionLifecycleFinalizationOutcomeV1 {
     cleanup: PostFinalityCleanupOutcome,
     wal_retirement_warning: Option<String>,
+    retained_floor: Option<super::super::v2::FinalizedLifecycleRetainedFloorV1>,
+    output_guard: Arc<ConsensusOutputGuard>,
 }
 
 impl ProductionLifecycleFinalizationOutcomeV1 {
@@ -1577,6 +1711,31 @@ impl ProductionLifecycleFinalizationOutcomeV1 {
     /// Borrow the ordered service/body/chunk cleanup diagnostics.
     pub(in crate::sumeragi) const fn cleanup(&self) -> &PostFinalityCleanupOutcome {
         &self.cleanup
+    }
+
+    /// Consume the live finalized floor into the already-derived H+1 storage seal.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn bind_successor_storage(
+        mut self,
+        storage: super::super::v2::RecoveredLifecycleStorageAuthorityV1,
+    ) -> Result<
+        (Self, super::super::v2::RecoveredLifecycleStorageAuthorityV1),
+        ProductionLifecycleFinalizationErrorV1,
+    > {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(ProductionLifecycleFinalizationErrorV1::OutputClosed)?;
+        let floor = self.retained_floor.take().ok_or_else(|| {
+            ProductionLifecycleFinalizationErrorV1::RetirementCensus(
+                "finalized lifecycle outcome lost its retained ordinal floor".to_owned(),
+            )
+        })?;
+        let storage = storage
+            .bind_finalized_predecessor_floor(floor)
+            .map_err(ProductionLifecycleFinalizationErrorV1::SuccessorFloor)?;
+        operation.complete();
+        Ok((self, storage))
     }
 }
 
@@ -1892,6 +2051,7 @@ impl ActivatedProductionLifecycleV1 {
         if !self.launched.executor.ready_to_finish()
             || self.launched.pending_kura_apply_replay.is_some()
             || self.launched.recovered_local_proposal_attempt.is_some()
+<<<<<<< HEAD
             || self
                 .launched
                 .recovered_decision_fetch_body_completion
@@ -1904,6 +2064,10 @@ impl ActivatedProductionLifecycleV1 {
                 .is_some()
             || self.launched.recovered_ingress_capacity_wait.is_some()
             || self.launched.certified_serve_capacity_wait.is_some()
+=======
+            || self.launched.pending_lifecycle_completion.is_some()
+            || self.launched.pending_ingress_capacity.is_some()
+>>>>>>> origin/optimizations
             || self.launched.completion_observer_activation.is_some()
             || !self
                 .launched
@@ -1938,6 +2102,7 @@ impl ActivatedProductionLifecycleV1 {
             services,
             pending_kura_apply_replay,
             recovered_local_proposal_attempt,
+<<<<<<< HEAD
             recovered_decision_apply_deferred,
             recovered_decision_fetch_body_completion,
             certified_fetch_body_completion,
@@ -1946,11 +2111,16 @@ impl ActivatedProductionLifecycleV1 {
             recovered_ingress_capacity_wait,
             certified_fetch_ingress_capacity_wait,
             certified_serve_capacity_wait,
+=======
+            pending_lifecycle_completion,
+            pending_ingress_capacity,
+>>>>>>> origin/optimizations
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
         debug_assert!(pending_kura_apply_replay.is_none());
         debug_assert!(recovered_local_proposal_attempt.is_none());
+<<<<<<< HEAD
         debug_assert!(recovered_decision_apply_deferred.is_none());
         debug_assert!(recovered_decision_fetch_body_completion.is_none());
         debug_assert!(certified_fetch_body_completion.is_none());
@@ -1959,10 +2129,15 @@ impl ActivatedProductionLifecycleV1 {
         debug_assert!(recovered_ingress_capacity_wait.is_none());
         debug_assert!(certified_fetch_ingress_capacity_wait.is_none());
         debug_assert!(certified_serve_capacity_wait.is_none());
+=======
+        debug_assert!(pending_lifecycle_completion.is_none());
+        debug_assert!(pending_ingress_capacity.is_none());
+>>>>>>> origin/optimizations
         debug_assert!(completion_observer_activation.is_none());
-        drop(recovered_decision_apply_deferred);
+        drop(pending_lifecycle_completion);
         drop(pending_kura_apply_replay);
         drop(recovered_local_proposal_attempt);
+<<<<<<< HEAD
         drop(recovered_decision_fetch_body_completion);
         drop(certified_fetch_body_completion);
         drop(lifecycle_durable_validate_completion);
@@ -1970,6 +2145,9 @@ impl ActivatedProductionLifecycleV1 {
         drop(recovered_ingress_capacity_wait);
         drop(certified_fetch_ingress_capacity_wait);
         drop(certified_serve_capacity_wait);
+=======
+        drop(pending_ingress_capacity);
+>>>>>>> origin/optimizations
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
 
@@ -2031,6 +2209,7 @@ impl ActivatedProductionLifecycleV1 {
             services,
             pending_kura_apply_replay,
             recovered_local_proposal_attempt,
+<<<<<<< HEAD
             recovered_decision_apply_deferred,
             recovered_decision_fetch_body_completion,
             certified_fetch_body_completion,
@@ -2039,11 +2218,16 @@ impl ActivatedProductionLifecycleV1 {
             recovered_ingress_capacity_wait,
             certified_fetch_ingress_capacity_wait,
             certified_serve_capacity_wait,
+=======
+            pending_lifecycle_completion,
+            pending_ingress_capacity,
+>>>>>>> origin/optimizations
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
         assert!(pending_kura_apply_replay.is_none());
         assert!(recovered_local_proposal_attempt.is_none());
+<<<<<<< HEAD
         assert!(recovered_decision_apply_deferred.is_none());
         assert!(recovered_decision_fetch_body_completion.is_none());
         assert!(certified_fetch_body_completion.is_none());
@@ -2052,10 +2236,15 @@ impl ActivatedProductionLifecycleV1 {
         assert!(recovered_ingress_capacity_wait.is_none());
         assert!(certified_fetch_ingress_capacity_wait.is_none());
         assert!(certified_serve_capacity_wait.is_none());
+=======
+        assert!(pending_lifecycle_completion.is_none());
+        assert!(pending_ingress_capacity.is_none());
+>>>>>>> origin/optimizations
         assert!(completion_observer_activation.is_none());
         drop(executor);
         drop(pending_kura_apply_replay);
         drop(recovered_local_proposal_attempt);
+<<<<<<< HEAD
         drop(recovered_decision_apply_deferred);
         drop(recovered_decision_fetch_body_completion);
         drop(certified_fetch_body_completion);
@@ -2064,6 +2253,10 @@ impl ActivatedProductionLifecycleV1 {
         drop(recovered_ingress_capacity_wait);
         drop(certified_fetch_ingress_capacity_wait);
         drop(certified_serve_capacity_wait);
+=======
+        drop(pending_lifecycle_completion);
+        drop(pending_ingress_capacity);
+>>>>>>> origin/optimizations
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
         ProductionLifecyclePostOutputHandoffV1 {
@@ -2205,7 +2398,13 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             kura_binding,
             apply_service,
             adapter_startup,
+            timeout_supersession_successor: _,
         } = owner;
+        let kura_binding = kura_binding.ok_or_else(|| {
+            ProductionLifecycleFinalizationErrorV1::RetirementCensus(
+                "finalized lifecycle owner lost its recovered Kura binding".to_owned(),
+            )
+        })?;
         let current =
             super::ledger::LifecycleLedgerV1::from_coordinator(&coordinator).map_err(|error| {
                 ProductionLifecycleFinalizationErrorV1::RetirementCensus(error.to_string())
@@ -2230,13 +2429,13 @@ impl ProductionLifecyclePostOutputHandoffV1 {
                 ProductionLifecycleFinalizationErrorV1::RetirementCensus(error.to_string())
             })?;
 
-        publication.consume_owners(registry);
+        let published_floor = publication.consume_owners(registry);
+        let retained_floor = kura_binding.bind_finalized_lifecycle_floor(published_floor);
         drop(retired_ingress);
         drop(verified);
         drop(payload_store);
         drop(body_store);
         drop(body_store_identity);
-        drop(kura_binding);
         drop(apply_service);
         drop(adapter_startup);
         operation.complete();
@@ -2244,6 +2443,7 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             services,
             receipt,
             wal_retirement_warning,
+            retained_floor,
         })
     }
 }
@@ -2255,6 +2455,7 @@ impl ProductionLifecycleCleanupReadyV1 {
         cleanup_timeout: Duration,
         supervisor: &mut V2CleanupSupervisor,
     ) -> ProductionLifecycleFinalizationOutcomeV1 {
+        let output_guard = self.services.lifecycle_output_guard();
         self.services.allow_clean_shutdown();
         let cleanup = self
             .services
@@ -2262,6 +2463,8 @@ impl ProductionLifecycleCleanupReadyV1 {
         ProductionLifecycleFinalizationOutcomeV1 {
             cleanup,
             wal_retirement_warning: self.wal_retirement_warning,
+            retained_floor: Some(self.retained_floor),
+            output_guard,
         }
     }
 }
@@ -2342,13 +2545,10 @@ impl ProductionLifecycleOwnerV1 {
             .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?
             .prepare_leader_wire_launch(launch_storage.wal_path())
             .map_err(|error| ProductionLifecycleLaunchErrorV1::LeaderWire(error.to_owned()))?;
-        let lifecycle_ordinals = ProductionV2Services::restore_lifecycle_ordinal_source(
-            &context,
-            launch_storage.chunk_root(),
-            inputs.network.reply_route_source_capacity().max(1),
-            inputs.auxiliary_io_capacity,
-        )
-        .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
+        // First-release production has no worker-owned scheduler to restore.
+        // The one actor-global source starts empty and is advanced through all
+        // durable leader-wire high-watermarks before ingress opens.
+        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
         if let Some(high_watermark) = leader_wire_launch.restored_producer_ordinal_high_watermark()
         {
             lifecycle_ordinals
@@ -2471,6 +2671,7 @@ impl ProductionLifecycleOwnerV1 {
             services,
             pending_kura_apply_replay,
             recovered_local_proposal_attempt,
+<<<<<<< HEAD
             recovered_decision_apply_deferred: None,
             recovered_decision_fetch_body_completion: None,
             certified_fetch_body_completion: None,
@@ -2479,6 +2680,10 @@ impl ProductionLifecycleOwnerV1 {
             recovered_ingress_capacity_wait: None,
             certified_fetch_ingress_capacity_wait: None,
             certified_serve_capacity_wait: None,
+=======
+            pending_lifecycle_completion: None,
+            pending_ingress_capacity: None,
+>>>>>>> origin/optimizations
             completion_observer_activation: Some(
                 ProductionV2CompletionObserverActivationPermitV1 {
                     _seal: ProductionV2CompletionObserverActivationPermitSealV1,

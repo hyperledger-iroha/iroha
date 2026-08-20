@@ -18,6 +18,8 @@ use iroha::{
         query::peer::prelude::FindPeers,
     },
 };
+use iroha_config::parameters::{actual, defaults};
+use iroha_config_base::toml::TomlSource;
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use iroha_test_network::{
     Program, fslock_ports::AllocatedPortBlock, init_instruction_registry, repo_root,
@@ -1619,6 +1621,11 @@ async fn setup_taira_harness<const STRICT_ALL_VALIDATORS: bool>(
         seed,
         packet_loss_percent,
     )?;
+    reserve_localnet_validator_body_ingress(
+        out_dir,
+        TAIRA_VALIDATORS,
+        usize::from(TAIRA_TOTAL_PORT_SLOTS),
+    )?;
     let irohad_bin = Program::Irohad
         .resolve()
         .wrap_err("resolve iroha3d binary")?;
@@ -1744,18 +1751,8 @@ fn build_joiner_peer(
             ExposedPrivateKey(soranet_transport_key.private_key().clone()).to_string(),
         ),
     );
-    if let Some(trusted_peers_pop) = root
-        .get_mut("trusted_peers_pop")
-        .and_then(TomlValue::as_array_mut)
-    {
-        let mut joiner_pop = Table::new();
-        joiner_pop.insert(
-            "public_key".into(),
-            TomlValue::String(peer_key.public_key().to_string()),
-        );
-        joiner_pop.insert("pop_hex".into(), TomlValue::String(hex::encode(&pop)));
-        trusted_peers_pop.push(TomlValue::Table(joiner_pop));
-    }
+    let p2p_addr = canonical_loopback_addr(p2p_port);
+    append_joiner_validator_and_scale_body_ingress(root, peer_key.public_key(), &pop, &p2p_addr)?;
     let stream_key = KeyPair::random();
     assert_ne!(
         soranet_transport_key.public_key(),
@@ -1771,7 +1768,6 @@ fn build_joiner_peer(
         "identity_private_key".into(),
         TomlValue::String(ExposedPrivateKey(stream_key.private_key().clone()).to_string()),
     );
-    let p2p_addr = canonical_loopback_addr(p2p_port);
     let network = get_subtable_mut(root, "network")?;
     network.insert("address".into(), TomlValue::String(p2p_addr.clone()));
     network.insert("public_address".into(), TomlValue::String(p2p_addr));
@@ -1783,22 +1779,7 @@ fn build_joiner_peer(
     let storage_root = out_dir.join("storage").join("joiner");
     fs::create_dir_all(&storage_root)
         .wrap_err_with(|| format!("create joiner storage root {}", storage_root.display()))?;
-    let kura = get_subtable_mut(root, "kura")?;
-    kura.insert(
-        "store_dir".into(),
-        TomlValue::String(storage_root.join("kura").to_string_lossy().into_owned()),
-    );
-    let tiered_state = get_subtable_mut(root, "tiered_state")?;
-    tiered_state.insert(
-        "cold_store_root".into(),
-        TomlValue::String(storage_root.join("tiered").to_string_lossy().into_owned()),
-    );
-    if tiered_state.contains_key("da_store_root") {
-        tiered_state.insert(
-            "da_store_root".into(),
-            TomlValue::String(storage_root.join("da").to_string_lossy().into_owned()),
-        );
-    }
+    rewrite_joiner_mutable_paths(root, &storage_root)?;
     let config_path = out_dir.join("joiner.toml");
     fs::write(
         &config_path,
@@ -1812,6 +1793,209 @@ fn build_joiner_peer(
         config_path,
         client,
     })
+}
+fn rewrite_joiner_mutable_paths(root: &mut Table, storage_root: &Path) -> Result<()> {
+    let path_value = |relative: &str| {
+        TomlValue::String(storage_root.join(relative).to_string_lossy().into_owned())
+    };
+    get_subtable_mut(root, "kura")?.insert("store_dir".into(), path_value("kura"));
+    get_subtable_mut(root, "soracloud_runtime")?
+        .insert("state_dir".into(), path_value("soracloud_runtime"));
+    let tiered_state = get_subtable_mut(root, "tiered_state")?;
+    tiered_state.insert("cold_store_root".into(), path_value("tiered_state"));
+    tiered_state.insert("da_store_root".into(), path_value("da_wsv_snapshots"));
+    let streaming = get_subtable_mut(root, "streaming")?;
+    streaming.insert("session_store_dir".into(), path_value("streaming"));
+    streaming
+        .get_mut("soranet")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[streaming.soranet]`"))?
+        .insert(
+            "provision_spool_dir".into(),
+            path_value("streaming/soranet_routes"),
+        );
+    streaming
+        .get_mut("soravpn")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[streaming.soravpn]`"))?
+        .insert(
+            "provision_spool_dir".into(),
+            path_value("streaming/soravpn_routes"),
+        );
+    let torii = get_subtable_mut(root, "torii")?;
+    torii.insert("data_dir".into(), path_value("torii"));
+    let da_ingest = torii
+        .get_mut("da_ingest")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[torii.da_ingest]`"))?;
+    da_ingest.insert(
+        "replay_cache_store_dir".into(),
+        path_value("torii/da_replay"),
+    );
+    da_ingest.insert(
+        "manifest_store_dir".into(),
+        path_value("torii/da_manifests"),
+    );
+    get_subtable_mut(root, "network")?
+        .get_mut("soranet_handshake")
+        .and_then(TomlValue::as_table_mut)
+        .and_then(|handshake| handshake.get_mut("pow"))
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[network.soranet_handshake.pow]`"))?
+        .insert(
+            "revocation_store_path".into(),
+            path_value("soranet/ticket_revocations.norito"),
+        );
+    let sorafs = get_subtable_mut(root, "sorafs")?;
+    sorafs
+        .get_mut("storage")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[sorafs.storage]`"))?
+        .insert("data_dir".into(), path_value("sorafs"));
+    sorafs
+        .get_mut("por")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[sorafs.por]`"))?
+        .insert("state_dir".into(), path_value("sorafs/por"));
+    Ok(())
+}
+fn append_joiner_validator_and_scale_body_ingress(
+    root: &mut Table,
+    public_key: &PublicKey,
+    pop: &[u8],
+    p2p_addr: &str,
+) -> Result<()> {
+    let trusted_peers = root
+        .get_mut("trusted_peers")
+        .and_then(TomlValue::as_array_mut)
+        .ok_or_else(|| eyre!("template peer config must define `trusted_peers`"))?;
+    trusted_peers.push(TomlValue::String(format!("{public_key}@{p2p_addr}")));
+    let validator_roster_len = {
+        let trusted_peers_pop = root
+            .get_mut("trusted_peers_pop")
+            .and_then(TomlValue::as_array_mut)
+            .ok_or_else(|| eyre!("template peer config must define `trusted_peers_pop`"))?;
+        let mut joiner_pop = Table::new();
+        joiner_pop.insert(
+            "public_key".into(),
+            TomlValue::String(public_key.to_string()),
+        );
+        joiner_pop.insert("pop_hex".into(), TomlValue::String(hex::encode(pop)));
+        trusted_peers_pop.push(TomlValue::Table(joiner_pop));
+        trusted_peers_pop.len()
+    };
+    ensure_sumeragi_body_ingress(root, validator_roster_len)
+}
+fn ensure_sumeragi_body_ingress(root: &mut Table, validator_roster_len: usize) -> Result<()> {
+    let authenticated_non_validator_sources = effective_sumeragi_queue_capacity(
+        root,
+        "authenticated_non_validator_sources",
+        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
+    )?;
+    let configured_bodies = effective_sumeragi_queue_capacity(
+        root,
+        "bodies",
+        defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
+    )?;
+    let body_source_bytes = effective_sumeragi_queue_capacity(
+        root,
+        "body_source_bytes",
+        defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+    )?;
+    let configured_body_bytes = effective_sumeragi_queue_capacity(
+        root,
+        "body_bytes",
+        defaults::sumeragi::QUEUE_BODY_BYTES.get(),
+    )?;
+    let required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+        validator_roster_len,
+        authenticated_non_validator_sources,
+    )
+    .ok_or_else(|| {
+        eyre!(
+            "Taira joiner Sumeragi body-message capacity overflowed for {validator_roster_len} validators and {authenticated_non_validator_sources} authenticated non-validator sources"
+        )
+    })?;
+    let required_body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+        validator_roster_len,
+        authenticated_non_validator_sources,
+        body_source_bytes,
+    )
+    .ok_or_else(|| {
+        eyre!(
+            "Taira joiner Sumeragi body-byte capacity overflowed for {validator_roster_len} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {body_source_bytes} bytes per source"
+        )
+    })?;
+    if required_bodies <= configured_bodies && required_body_bytes <= configured_body_bytes {
+        return Ok(());
+    }
+    let queues = root
+        .get_mut("sumeragi")
+        .and_then(TomlValue::as_table_mut)
+        .and_then(|sumeragi| sumeragi.get_mut("queues"))
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[sumeragi.queues]`"))?;
+    if required_bodies > configured_bodies {
+        queues.insert(
+            "bodies".into(),
+            TomlValue::Integer(i64::try_from(required_bodies).wrap_err(
+                "Taira joiner Sumeragi body-message capacity exceeds the TOML integer range",
+            )?),
+        );
+    }
+    if required_body_bytes > configured_body_bytes {
+        queues.insert(
+            "body_bytes".into(),
+            TomlValue::Integer(i64::try_from(required_body_bytes).wrap_err(
+                "Taira joiner Sumeragi body-byte capacity exceeds the TOML integer range",
+            )?),
+        );
+    }
+    Ok(())
+}
+fn effective_sumeragi_queue_capacity(root: &Table, key: &str, default: usize) -> Result<usize> {
+    let Some(value) = root
+        .get("sumeragi")
+        .and_then(TomlValue::as_table)
+        .and_then(|sumeragi| sumeragi.get("queues"))
+        .and_then(TomlValue::as_table)
+        .and_then(|queues| queues.get(key))
+    else {
+        return Ok(default);
+    };
+    let configured = value
+        .as_integer()
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| eyre!("`sumeragi.queues.{key}` must be a positive integer"))?;
+    Ok(configured)
+}
+fn reserve_localnet_validator_body_ingress(
+    out_dir: &Path,
+    peers: u16,
+    planned_validator_roster_len: usize,
+) -> Result<()> {
+    ensure!(
+        planned_validator_roster_len >= usize::from(peers),
+        "planned validator roster length {planned_validator_roster_len} must cover all {peers} bootstrap validators"
+    );
+    for idx in 0..peers {
+        let config_path = out_dir.join(format!("peer{idx}.toml"));
+        let config_text = fs::read_to_string(&config_path)
+            .wrap_err_with(|| format!("read peer config {}", config_path.display()))?;
+        let mut parsed: TomlValue = toml::from_str(&config_text)
+            .wrap_err_with(|| format!("parse peer config {}", config_path.display()))?;
+        let root = parsed
+            .as_table_mut()
+            .ok_or_else(|| eyre!("peer config root must be a TOML table"))?;
+        ensure_sumeragi_body_ingress(root, planned_validator_roster_len)?;
+        fs::write(
+            &config_path,
+            toml::to_string(&parsed).expect("serialize peer config TOML"),
+        )
+        .wrap_err_with(|| format!("write peer config {}", config_path.display()))?;
+    }
+    Ok(())
 }
 fn get_subtable_mut<'a>(root: &'a mut Table, key: &str) -> Result<&'a mut Table> {
     root.get_mut(key)
@@ -3372,6 +3556,466 @@ fn min_txs_approved_returns_lowest_counter() {
     let mut third = iroha::client::Status::default();
     third.txs_approved = 99;
     assert_eq!(min_txs_approved(&[first, second, third]), 17);
+}
+#[test]
+fn joiner_mutable_paths_are_rewritten_below_one_disjoint_root() {
+    fn path_table(field: &str) -> Table {
+        Table::from_iter([(
+            field.to_owned(),
+            TomlValue::String("/incumbent/shared-state".to_owned()),
+        )])
+    }
+    let mut streaming = path_table("session_store_dir");
+    streaming.insert(
+        "soranet".into(),
+        TomlValue::Table(path_table("provision_spool_dir")),
+    );
+    streaming.insert(
+        "soravpn".into(),
+        TomlValue::Table(path_table("provision_spool_dir")),
+    );
+    let pow = path_table("revocation_store_path");
+    let mut handshake = Table::new();
+    handshake.insert("pow".into(), TomlValue::Table(pow));
+    let mut network = Table::new();
+    network.insert("soranet_handshake".into(), TomlValue::Table(handshake));
+    let mut sorafs = Table::new();
+    sorafs.insert("storage".into(), TomlValue::Table(path_table("data_dir")));
+    sorafs.insert("por".into(), TomlValue::Table(path_table("state_dir")));
+    let mut torii = path_table("data_dir");
+    torii.insert(
+        "da_ingest".into(),
+        TomlValue::Table(Table::from_iter([
+            (
+                "replay_cache_store_dir".to_owned(),
+                TomlValue::String("/incumbent/shared-state".to_owned()),
+            ),
+            (
+                "manifest_store_dir".to_owned(),
+                TomlValue::String("/incumbent/shared-state".to_owned()),
+            ),
+        ])),
+    );
+    let mut root = Table::from_iter([
+        ("kura".to_owned(), TomlValue::Table(path_table("store_dir"))),
+        (
+            "soracloud_runtime".to_owned(),
+            TomlValue::Table(path_table("state_dir")),
+        ),
+        (
+            "tiered_state".to_owned(),
+            TomlValue::Table(Table::from_iter([
+                (
+                    "cold_store_root".to_owned(),
+                    TomlValue::String("/incumbent/shared-state".to_owned()),
+                ),
+                (
+                    "da_store_root".to_owned(),
+                    TomlValue::String("/incumbent/shared-state".to_owned()),
+                ),
+            ])),
+        ),
+        ("streaming".to_owned(), TomlValue::Table(streaming)),
+        ("torii".to_owned(), TomlValue::Table(torii)),
+        ("network".to_owned(), TomlValue::Table(network)),
+        ("sorafs".to_owned(), TomlValue::Table(sorafs)),
+    ]);
+    let temp_dir = tempfile::tempdir().expect("create path-isolation fixture directory");
+    let joiner_root = temp_dir.path().join("storage/joiner");
+    rewrite_joiner_mutable_paths(&mut root, &joiner_root)
+        .expect("rewrite every joiner-owned mutable store");
+
+    let lookup = |path: &[&str]| {
+        let mut table = &root;
+        for (index, key) in path.iter().enumerate() {
+            let value = table.get(*key).expect("configured joiner path component");
+            if index + 1 == path.len() {
+                return value.as_str().expect("configured joiner path string");
+            }
+            table = value.as_table().expect("configured joiner path table");
+        }
+        unreachable!("path fixture is non-empty")
+    };
+    let paths = [
+        lookup(&["kura", "store_dir"]),
+        lookup(&["soracloud_runtime", "state_dir"]),
+        lookup(&["tiered_state", "cold_store_root"]),
+        lookup(&["tiered_state", "da_store_root"]),
+        lookup(&["streaming", "session_store_dir"]),
+        lookup(&["streaming", "soranet", "provision_spool_dir"]),
+        lookup(&["streaming", "soravpn", "provision_spool_dir"]),
+        lookup(&["torii", "data_dir"]),
+        lookup(&["torii", "da_ingest", "replay_cache_store_dir"]),
+        lookup(&["torii", "da_ingest", "manifest_store_dir"]),
+        lookup(&[
+            "network",
+            "soranet_handshake",
+            "pow",
+            "revocation_store_path",
+        ]),
+        lookup(&["sorafs", "storage", "data_dir"]),
+        lookup(&["sorafs", "por", "state_dir"]),
+    ];
+    assert!(
+        paths
+            .iter()
+            .all(|path| Path::new(path).starts_with(&joiner_root)),
+        "every mutable joiner store must live below the disjoint joiner root: {paths:?}"
+    );
+    assert_eq!(
+        paths.iter().copied().collect::<BTreeSet<_>>().len(),
+        paths.len(),
+        "mutable joiner stores must not alias one another"
+    );
+}
+#[test]
+fn five_validator_joiner_config_scales_body_ingress_and_passes_actual_admission() {
+    let validators = (0..5)
+        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    let mut trusted_peers = Vec::new();
+    let mut trusted_peers_pop = Vec::new();
+    for (index, validator) in validators.iter().take(4).enumerate() {
+        let address = canonical_loopback_addr(
+            13_337_u16 + u16::try_from(index).expect("validator index fits u16"),
+        );
+        trusted_peers.push(TomlValue::String(format!(
+            "{}@{address}",
+            validator.public_key()
+        )));
+        let pop = bls_normal_pop_prove(validator.private_key()).expect("generate validator PoP");
+        let mut entry = Table::new();
+        entry.insert(
+            "public_key".into(),
+            TomlValue::String(validator.public_key().to_string()),
+        );
+        entry.insert("pop_hex".into(), TomlValue::String(hex::encode(pop)));
+        trusted_peers_pop.push(TomlValue::Table(entry));
+    }
+    let node = &validators[0];
+    let transport = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let streaming = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let genesis = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let body_source_bytes = defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+    let authenticated_non_validator_sources =
+        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get();
+    let four_validator_body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+        4,
+        authenticated_non_validator_sources,
+        body_source_bytes,
+    )
+    .expect("four-validator body budget");
+    let four_validator_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+        4,
+        authenticated_non_validator_sources,
+    )
+    .expect("four-validator message budget");
+    let mut queues = Table::new();
+    queues.insert(
+        "authenticated_non_validator_sources".into(),
+        TomlValue::Integer(
+            i64::try_from(authenticated_non_validator_sources).expect("fixture fits TOML"),
+        ),
+    );
+    queues.insert(
+        "body_source_bytes".into(),
+        TomlValue::Integer(i64::try_from(body_source_bytes).expect("fixture fits TOML")),
+    );
+    queues.insert(
+        "bodies".into(),
+        TomlValue::Integer(i64::try_from(four_validator_bodies).expect("fixture fits TOML")),
+    );
+    queues.insert(
+        "body_bytes".into(),
+        TomlValue::Integer(i64::try_from(four_validator_body_bytes).expect("fixture fits TOML")),
+    );
+    let mut sumeragi = Table::new();
+    sumeragi.insert("role".into(), TomlValue::String("validator".into()));
+    sumeragi.insert("queues".into(), TomlValue::Table(queues));
+    let mut network = Table::new();
+    network.insert(
+        "address".into(),
+        TomlValue::String(canonical_loopback_addr(13_337)),
+    );
+    network.insert(
+        "public_address".into(),
+        TomlValue::String(canonical_loopback_addr(13_337)),
+    );
+    network.insert("max_total_connections".into(), TomlValue::Integer(32));
+    let mut torii = Table::new();
+    torii.insert(
+        "address".into(),
+        TomlValue::String(canonical_loopback_addr(18_080)),
+    );
+    let mut genesis_config = Table::new();
+    genesis_config.insert(
+        "public_key".into(),
+        TomlValue::String(genesis.public_key().to_string()),
+    );
+    genesis_config.insert(
+        "expected_hash".into(),
+        TomlValue::String(
+            "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E".to_owned(),
+        ),
+    );
+    let mut streaming_config = Table::new();
+    streaming_config.insert(
+        "identity_public_key".into(),
+        TomlValue::String(streaming.public_key().to_string()),
+    );
+    streaming_config.insert(
+        "identity_private_key".into(),
+        TomlValue::String(ExposedPrivateKey(streaming.private_key().clone()).to_string()),
+    );
+    let mut root = Table::new();
+    root.insert(
+        "chain".into(),
+        TomlValue::String("00000000-0000-0000-0000-000000000000".into()),
+    );
+    root.insert(
+        "public_key".into(),
+        TomlValue::String(node.public_key().to_string()),
+    );
+    root.insert(
+        "private_key".into(),
+        TomlValue::String(ExposedPrivateKey(node.private_key().clone()).to_string()),
+    );
+    root.insert(
+        "soranet_transport_public_key".into(),
+        TomlValue::String(transport.public_key().to_string()),
+    );
+    root.insert(
+        "soranet_transport_private_key".into(),
+        TomlValue::String(ExposedPrivateKey(transport.private_key().clone()).to_string()),
+    );
+    root.insert("trusted_peers".into(), TomlValue::Array(trusted_peers));
+    root.insert(
+        "trusted_peers_pop".into(),
+        TomlValue::Array(trusted_peers_pop),
+    );
+    root.insert("sumeragi".into(), TomlValue::Table(sumeragi));
+    root.insert("network".into(), TomlValue::Table(network));
+    root.insert("torii".into(), TomlValue::Table(torii));
+    root.insert("genesis".into(), TomlValue::Table(genesis_config));
+    root.insert("streaming".into(), TomlValue::Table(streaming_config));
+
+    let required_body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+        5,
+        authenticated_non_validator_sources,
+        body_source_bytes,
+    )
+    .expect("five-validator body budget");
+    let required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+        5,
+        authenticated_non_validator_sources,
+    )
+    .expect("five-validator message budget");
+    ensure_sumeragi_body_ingress(&mut root, 5)
+        .expect("reserve the fifth validator partition before bootstrap");
+    assert_eq!(
+        required_body_bytes,
+        8 * body_source_bytes,
+        "five validators, two authenticated non-validator sources, and one anonymous source require eight isolated byte partitions"
+    );
+    let startup_emitted = toml::to_string(&root).expect("serialize incumbent validator config");
+    let startup_emitted = startup_emitted
+        .parse::<Table>()
+        .expect("incumbent validator config is TOML");
+    let startup_admitted = actual::Root::from_toml_source(TomlSource::inline(startup_emitted))
+        .expect("four-validator bootstrap config with reserved joiner capacity passes admission");
+    assert_eq!(
+        startup_admitted
+            .common
+            .trusted_peers
+            .value()
+            .validator_roster_len(),
+        4
+    );
+    assert_eq!(
+        startup_admitted.sumeragi.queues.bodies.get(),
+        required_bodies,
+        "incumbent validators must reserve the post-registration protected message slots"
+    );
+    assert_eq!(
+        startup_admitted.sumeragi.queues.body_bytes.get(),
+        required_body_bytes,
+        "incumbent validators must already cover the post-registration runtime roster"
+    );
+
+    let joiner = &validators[4];
+    let joiner_pop =
+        bls_normal_pop_prove(joiner.private_key()).expect("generate joiner validator PoP");
+    append_joiner_validator_and_scale_body_ingress(
+        &mut root,
+        joiner.public_key(),
+        &joiner_pop,
+        &canonical_loopback_addr(13_341),
+    )
+    .expect("append joiner and scale its ingress budget");
+    assert_eq!(
+        root.get("sumeragi")
+            .and_then(TomlValue::as_table)
+            .and_then(|sumeragi| sumeragi.get("queues"))
+            .and_then(TomlValue::as_table)
+            .and_then(|queues| queues.get("bodies"))
+            .and_then(TomlValue::as_integer),
+        Some(i64::try_from(required_bodies).expect("fixture fits TOML"))
+    );
+    assert_eq!(
+        root.get("sumeragi")
+            .and_then(TomlValue::as_table)
+            .and_then(|sumeragi| sumeragi.get("queues"))
+            .and_then(TomlValue::as_table)
+            .and_then(|queues| queues.get("body_bytes"))
+            .and_then(TomlValue::as_integer),
+        Some(i64::try_from(required_body_bytes).expect("fixture fits TOML"))
+    );
+    let emitted = toml::to_string(&root).expect("serialize emitted joiner config");
+    let emitted = emitted
+        .parse::<Table>()
+        .expect("emitted joiner config is TOML");
+    let admitted = actual::Root::from_toml_source(TomlSource::inline(emitted))
+        .expect("emitted five-validator joiner config passes canonical admission");
+    assert_eq!(
+        admitted.common.trusted_peers.value().validator_roster_len(),
+        5
+    );
+    assert_eq!(admitted.sumeragi.queues.bodies.get(), required_bodies);
+    assert_eq!(
+        admitted.sumeragi.queues.body_bytes.get(),
+        required_body_bytes
+    );
+}
+#[test]
+fn joiner_body_ingress_scaling_preserves_larger_authored_capacity() {
+    let body_source_bytes = defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+    let authenticated_non_validator_sources =
+        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get();
+    let authored_body_bytes = 9 * body_source_bytes;
+    let required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+        5,
+        authenticated_non_validator_sources,
+    )
+    .expect("five-validator message budget");
+    let authored_bodies = required_bodies + 7;
+    let mut queues = Table::new();
+    queues.insert(
+        "authenticated_non_validator_sources".into(),
+        TomlValue::Integer(
+            i64::try_from(authenticated_non_validator_sources).expect("fixture fits TOML"),
+        ),
+    );
+    queues.insert(
+        "body_source_bytes".into(),
+        TomlValue::Integer(i64::try_from(body_source_bytes).expect("fixture fits TOML")),
+    );
+    queues.insert(
+        "bodies".into(),
+        TomlValue::Integer(i64::try_from(authored_bodies).expect("fixture fits TOML")),
+    );
+    queues.insert(
+        "body_bytes".into(),
+        TomlValue::Integer(i64::try_from(authored_body_bytes).expect("fixture fits TOML")),
+    );
+    let mut sumeragi = Table::new();
+    sumeragi.insert("queues".into(), TomlValue::Table(queues));
+    let mut root = Table::new();
+    root.insert("sumeragi".into(), TomlValue::Table(sumeragi));
+
+    ensure_sumeragi_body_ingress(&mut root, 5).expect("larger authored budget is valid");
+    assert_eq!(
+        root.get("sumeragi")
+            .and_then(TomlValue::as_table)
+            .and_then(|sumeragi| sumeragi.get("queues"))
+            .and_then(TomlValue::as_table)
+            .and_then(|queues| queues.get("bodies"))
+            .and_then(TomlValue::as_integer),
+        Some(i64::try_from(authored_bodies).expect("fixture fits TOML"))
+    );
+    assert_eq!(
+        root.get("sumeragi")
+            .and_then(TomlValue::as_table)
+            .and_then(|sumeragi| sumeragi.get("queues"))
+            .and_then(TomlValue::as_table)
+            .and_then(|queues| queues.get("body_bytes"))
+            .and_then(TomlValue::as_integer),
+        Some(i64::try_from(authored_body_bytes).expect("fixture fits TOML"))
+    );
+}
+#[test]
+fn planned_validator_capacity_is_reserved_for_every_incumbent_config() {
+    let temp_dir = tempfile::tempdir().expect("create localnet fixture directory");
+    let body_source_bytes = defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+    let authenticated_non_validator_sources =
+        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get();
+    let bootstrap_body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+        usize::from(TAIRA_VALIDATORS),
+        authenticated_non_validator_sources,
+        body_source_bytes,
+    )
+    .expect("bootstrap body budget");
+    let bootstrap_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+        usize::from(TAIRA_VALIDATORS),
+        authenticated_non_validator_sources,
+    )
+    .expect("bootstrap message budget");
+    for idx in 0..TAIRA_VALIDATORS {
+        fs::write(
+            temp_dir.path().join(format!("peer{idx}.toml")),
+            format!(
+                "[sumeragi.queues]\nauthenticated_non_validator_sources = {authenticated_non_validator_sources}\nbodies = {bootstrap_bodies}\nbody_source_bytes = {body_source_bytes}\nbody_bytes = {bootstrap_body_bytes}\n"
+            ),
+        )
+        .expect("write incumbent config fixture");
+    }
+
+    reserve_localnet_validator_body_ingress(
+        temp_dir.path(),
+        TAIRA_VALIDATORS,
+        usize::from(TAIRA_TOTAL_PORT_SLOTS),
+    )
+    .expect("reserve planned joiner capacity");
+
+    let required_body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+        usize::from(TAIRA_TOTAL_PORT_SLOTS),
+        authenticated_non_validator_sources,
+        body_source_bytes,
+    )
+    .expect("post-registration body budget");
+    let required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+        usize::from(TAIRA_TOTAL_PORT_SLOTS),
+        authenticated_non_validator_sources,
+    )
+    .expect("post-registration message budget");
+    for idx in 0..TAIRA_VALIDATORS {
+        let config_path = temp_dir.path().join(format!("peer{idx}.toml"));
+        let config: TomlValue = toml::from_str(
+            &fs::read_to_string(&config_path).expect("read rewritten incumbent config"),
+        )
+        .expect("rewritten incumbent config is TOML");
+        assert_eq!(
+            config
+                .get("sumeragi")
+                .and_then(TomlValue::as_table)
+                .and_then(|sumeragi| sumeragi.get("queues"))
+                .and_then(TomlValue::as_table)
+                .and_then(|queues| queues.get("bodies"))
+                .and_then(TomlValue::as_integer),
+            Some(i64::try_from(required_bodies).expect("fixture fits TOML")),
+            "peer{idx} must reserve the joiner's protected message slots"
+        );
+        assert_eq!(
+            config
+                .get("sumeragi")
+                .and_then(TomlValue::as_table)
+                .and_then(|sumeragi| sumeragi.get("queues"))
+                .and_then(TomlValue::as_table)
+                .and_then(|queues| queues.get("body_bytes"))
+                .and_then(TomlValue::as_integer),
+            Some(i64::try_from(required_body_bytes).expect("fixture fits TOML")),
+            "peer{idx} must reserve the joiner's validator-source partition"
+        );
+    }
 }
 #[test]
 fn apply_queue_transaction_ttl_updates_queue_section() {

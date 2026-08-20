@@ -21,6 +21,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sccp.SccpLaneIdV1;
@@ -96,6 +97,7 @@ public final class SccpClientExactTests {
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
                       .setInstructions(Collections.emptyList())
+                      .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
                       .build());
     } catch (final Exception ex) {
       throw new IllegalStateException("encode exact SCCP transaction fixture", ex);
@@ -113,6 +115,7 @@ public final class SccpClientExactTests {
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
                       .setInstructions(Collections.emptyList())
+                      .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
                       .build());
     } catch (final Exception ex) {
       throw new IllegalStateException("encode fee-bound SCCP transaction fixture", ex);
@@ -154,6 +157,26 @@ public final class SccpClientExactTests {
             "creation_time_ms"));
     HttpClientTransport.preflightSccpBridgeSubmitJson(
         signedMessage.toJsonBytes(), "/v1/bridge/messages");
+    final String ordinaryTransaction;
+    try {
+      final NoritoJavaCodecAdapter codec =
+          new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+      ordinaryTransaction =
+          Base64.getEncoder()
+              .encodeToString(
+                  codec.encodeTransaction(
+                      codec
+                          .decodeTransaction(transactionBytes)
+                          .toBuilder()
+                          .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
+                          .build()));
+    } catch (final Exception ex) {
+      throw new IllegalStateException("encode ordinary SCCP transaction fixture", ex);
+    }
+    expectFailure(
+        () ->
+            destinationRequest(
+                AUTHORITY, artifact, signature, ordinaryTransaction, 7L));
     expectFailure(
         () ->
             HttpClientTransport.preflightSccpBridgeSubmitJson(
@@ -209,6 +232,7 @@ public final class SccpClientExactTests {
                 .setCreationTimeMs(7L)
                 .setInstructions(Collections.emptyList())
                 .setFeePayment(expectedFeePayment)
+                .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
                 .build());
     final TransactionPayload decoded = codec.decodeTransaction(encoded);
     final FeePaymentIntent.Sponsor decodedSponsor =
@@ -263,6 +287,7 @@ public final class SccpClientExactTests {
                   .setCreationTimeMs(7L)
                   .setInstructions(Collections.emptyList())
                   .setFeePayment(mutation)
+                  .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
                   .build());
       expectFailure(
           () ->
@@ -387,6 +412,7 @@ public final class SccpClientExactTests {
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
                       .setInstructions(Collections.emptyList())
+                      .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
                       .build());
     } catch (final Exception ex) {
       throw new IllegalStateException("encode exact SCCP transaction fixture", ex);
@@ -475,6 +501,7 @@ public final class SccpClientExactTests {
                               .setAuthority(AUTHORITY)
                               .setCreationTimeMs(7)
                               .setInstructions(Collections.emptyList())
+                              .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
                               .build()));
     } catch (final Exception ex) {
       throw new IllegalStateException("encode exact SCCP transaction fixture", ex);
@@ -504,6 +531,7 @@ public final class SccpClientExactTests {
                               .setAuthority(OTHER_AUTHORITY)
                               .setCreationTimeMs(7)
                               .setInstructions(Collections.emptyList())
+                              .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
                               .build()));
     } catch (final Exception ex) {
       throw new IllegalStateException("encode mismatched SCCP authority fixture", ex);
@@ -1352,6 +1380,7 @@ public final class SccpClientExactTests {
                     .setAuthority(AUTHORITY)
                     .setCreationTimeMs(10)
                     .setInstructions(Collections.emptyList())
+                    .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
                     .build());
     final Map<String, Object> response = map();
     response.put("submitted", false);
@@ -1373,6 +1402,27 @@ public final class SccpClientExactTests {
         SccpBridgeSubmitResponse.parse(jsonBytes(response));
     assert !parsed.submitted && parsed.payloadKind == SccpModels.PayloadKindV1.TRANSFER;
     assert parsed.routeConfigurationHashHex.equals(hash(0x41));
+
+    final byte[] ordinaryTransactionBytes =
+        new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+            .encodeTransaction(
+                new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+                    .decodeTransaction(transactionBytes)
+                    .toBuilder()
+                    .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
+                    .build());
+    response.put(
+        "transaction_payload_b64",
+        Base64.getEncoder().encodeToString(ordinaryTransactionBytes));
+    response.put(
+        "signing_message_b64",
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(ordinaryTransactionBytes)));
+    expectFailure(() -> SccpBridgeSubmitResponse.parse(jsonBytes(response)));
+    response.put(
+        "transaction_payload_b64", Base64.getEncoder().encodeToString(transactionBytes));
+    response.put(
+        "signing_message_b64",
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionBytes)));
 
     response.put("backend", "tron-groth16-bn254-v1");
     expectFailure(() -> SccpBridgeSubmitResponse.parse(jsonBytes(response)));

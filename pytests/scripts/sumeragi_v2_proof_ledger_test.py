@@ -14692,12 +14692,12 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             "the lane-duty regression must retain lane-author work after successor-global roster removal",
         ),
         (
-            "runner_replay_regression_accepts_foreign_subject",
+            "runner_replay_regression_reopens_same_view_after_lock_upgrade",
             "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs",
-            "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
-            'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
-            "let foreign_lock = directive(Some(subject), None);",
-            "the recovered-attempt regression must prove exact, affine runner binding and reject foreign locks, rounds, and decisions",
+            "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade",
+            "recovered.exactly_matches_directive(upgraded_lock),",
+            "!recovered.exactly_matches_directive(upgraded_lock),",
+            "the recovered-attempt regression must prove affine same-view suppression across a lock upgrade while rejecting foreign rounds and decisions",
         ),
         (
             "wal_high_subject",
@@ -22049,7 +22049,7 @@ def test_rollover_finalized_outputs_semantics_survive_reviewed_digest_refresh(
     errors = module._exact_output_production_source_fidelity_errors(tmp_path)
 
     assert any(
-        "finalized output rollover must durably reconstruct every predecessor owner"
+        "finalized output rollover must durably settle every predecessor owner"
         in error
         for error in errors
     ), errors
@@ -22112,148 +22112,6 @@ def test_exact_output_runner_inventory_is_exact_and_non_crashing(
         "exact-output runner source-seal inventory must be exact" in error
         for error in errors
     ), errors
-
-
-def test_test_only_height_ingress_wrappers_are_not_production_seals() -> None:
-    """Legacy runner bindings cannot re-enter the production seal inventory."""
-
-    module = load_checker()
-    assert set(module._PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256) == {
-        "runner::close_ingress_for_rollover",
-        "ingress::unbind_leader_wire_lifecycle_gate",
-        "ingress::close",
-    }
-    assert not hasattr(
-        module,
-        "_PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256",
-    )
-    assert not hasattr(
-        module,
-        "_PRODUCTION_CERTIFIED_SERVE_INGRESS_BINDING_ITEM_SHA256",
-    )
-
-
-@pytest.mark.parametrize(
-    (
-        "digest_key",
-        "relative_path",
-        "item_name",
-        "brace_context",
-        "old",
-        "new",
-        "expected_error",
-    ),
-    (
-        (
-            "runner::close_ingress_for_rollover",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "close_ingress_for_rollover",
-            (),
-            "ingress_ready.store(false, Ordering::Release);\n    block_ingress.close();",
-            "block_ingress.close();\n    ingress_ready.store(false, Ordering::Release);",
-            "rollover close must publish not-ready before closing",
-        ),
-        (
-            "ingress::unbind_leader_wire_lifecycle_gate",
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "unbind_leader_wire_lifecycle_gate",
-            (("impl", "FairV2Ingress"),),
-            "state.leader_wire_lifecycle_gate = None;",
-            "let _ = state.leader_wire_lifecycle_gate.as_ref();",
-            "standalone leader-wire unbind must require closed empty ingress",
-        ),
-        (
-            "ingress::unbind_leader_wire_lifecycle_gate",
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "unbind_leader_wire_lifecycle_gate",
-            (("impl", "FairV2Ingress"),),
-            "if state.open || state.len != 0 {",
-            "if false {",
-            "standalone leader-wire unbind must require closed empty ingress",
-        ),
-        (
-            "ingress::unbind_leader_wire_lifecycle_gate",
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "unbind_leader_wire_lifecycle_gate",
-            (("impl", "FairV2Ingress"),),
-            "if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(bound, gate) {",
-            "if false {",
-            "standalone leader-wire unbind must require closed empty ingress",
-        ),
-        (
-            "ingress::unbind_leader_wire_lifecycle_gate",
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "unbind_leader_wire_lifecycle_gate",
-            (("impl", "FairV2Ingress"),),
-            "state.leader_wire_lifecycle_ordinals = None;",
-            "let _ = state.leader_wire_lifecycle_ordinals.as_ref();",
-            "standalone leader-wire unbind must require closed empty ingress",
-        ),
-        (
-            "ingress::unbind_leader_wire_lifecycle_gate",
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "unbind_leader_wire_lifecycle_gate",
-            (("impl", "FairV2Ingress"),),
-            "state.leader_wire_context = None;",
-            "let _ = state.leader_wire_context.as_ref();",
-            "standalone leader-wire unbind must require closed empty ingress",
-        ),
-        (
-            "ingress::unbind_leader_wire_lifecycle_gate",
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "unbind_leader_wire_lifecycle_gate",
-            (("impl", "FairV2Ingress"),),
-            "state.leader_wire_lifecycles.clear();",
-            "let _ = &state.leader_wire_lifecycles;",
-            "standalone leader-wire unbind must require closed empty ingress",
-        ),
-        (
-            "ingress::close",
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "close",
-            (("impl", "FairV2Ingress"),),
-            "self.state.lock().open = false;",
-            "self.state.lock().open = true;",
-            "fair ingress close must make admission unavailable",
-        ),
-    ),
-)
-def test_leader_wire_height_ingress_semantics_survive_pending_digest_refresh(
-    tmp_path: Path,
-    digest_key: str,
-    relative_path: str,
-    item_name: str,
-    brace_context: tuple[tuple[str, ...], ...],
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    """Each leader-wire production retirement seam survives a refreshed digest."""
-
-    module = load_checker()
-    exact_output_production_fixture(tmp_path)
-    path = tmp_path / relative_path
-    mutate_rust_item_source_in_context(
-        module,
-        path,
-        item_name,
-        brace_context,
-        old,
-        new,
-    )
-    items = [
-        item
-        for item in module.rust_items(path.read_text(encoding="utf-8"), item_name)
-        if item.brace_context == brace_context
-    ]
-    assert len(items) == 1, digest_key
-    module._PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256[digest_key] = (
-        module._rust_item_token_sha256(items[0])
-    )
-
-    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
-
-    assert any(expected_error in error for error in errors), errors
 
 
 @pytest.mark.parametrize(

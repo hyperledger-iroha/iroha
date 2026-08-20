@@ -1168,7 +1168,6 @@ fn merge_native_projection_entry_and_carrier(
         ),
         execution_batch: Some(batch),
         lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
     };
     let signature =
         SignatureOf::try_from_hash(carrier_key.private_key(), application_block_header.hash())

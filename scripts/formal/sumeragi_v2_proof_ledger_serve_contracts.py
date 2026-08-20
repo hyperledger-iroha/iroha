@@ -994,24 +994,6 @@ SERVE_LIFECYCLE_FORBIDDEN_OPERATOR_TOKENS.update(
     }
 )
 
-_SERVE_LIFECYCLE_REGRESSION_TEST_SHA256 = {
-    "certified_serve_receiver_close_rolls_back_pending_capacity_replacement": (
-        "84b842c16236650617b87549fed2bb9e5749c37c10e1420c5106d9f43e27dae2"
-    ),
-    "certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement": (
-        "b25a9bde54862c23946d9a0565fd35f62eb94ef8f0eb31bee1487470fb164e95"
-    ),
-    "certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement": (
-        "20ebeffbe165ee149930b7acff321bf44b64e4fe07f03ba4dad541304f429ec6"
-    ),
-    "certified_serve_terminal_replay_source_retains_retired_route_and_reconnects": (
-        "500a95efa15a2105f4ed42cf80160fc7d1ba18173ecbcad7baf394a48db4894c"
-    ),
-    "certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo": (
-        "90c1c4bbb4c2cfea2f277d0864825da1eada534e2d18b383e800fb73dacc4c26"
-    ),
-}
-
 _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
     "v2_worker_reply_route_cases.rs": (
         "c742bc186239447a039bc823aa2efd3bd654291811f7508538bb0194aa660217"
@@ -1841,7 +1823,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
         "329002c5d70440e4b06c7d6b7953abefffad11e097f8a6f2be43df02a07d5701"
     ),
     "admit_authenticated_payload": (
-        "b4c6e1a0d4c6f726e59c20494d6c189813b2f9b5d34fe73811219e539968ecb6"
+        "dff3664ce598bb0123c85ddf22a760eed5a2c0f9e8cb98665ab60664cfebde07"
     ),
     "prune_ingress_records": (
         "380a67be7fc040a1424c45ebbdd08fac6087450df43acb1521fa756df5ca1db8"

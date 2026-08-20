@@ -415,7 +415,7 @@ fn recovery_control_decode_limits_v1(wire_limit: u64) -> Result<norito::DecodeLi
     ))
 }
 pub(crate) const MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES: usize =
-    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+    iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
 /// Release-default aggregate payload-byte bound used by the test-only indexed
 /// rewrite fixture.
 ///
@@ -470,6 +470,55 @@ fn default_fastpq_proof_sidecar_max_retries() -> usize {
     FASTPQ_DEFAULTS::PROOF_SIDECAR_MAX_RETRIES.get()
 }
 include!("kura/certified_bundle_capacity_reservation_types.rs");
+/// Telemetry projection minted only from a Kura-authenticated durable v2
+/// finality artifact.
+///
+/// Private fields and construction prevent an unverified network artifact from
+/// becoming status authority through the telemetry API.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DurableV2FinalityTelemetrySummary {
+    height: u64,
+    view: u64,
+    epoch: u64,
+    signatures_total: u64,
+    validator_set_len: u64,
+}
+impl DurableV2FinalityTelemetrySummary {
+    fn from_durable_artifact(artifact: &V2FinalityArtifact) -> Self {
+        Self {
+            height: artifact.height,
+            view: artifact.commit_qc.round.view,
+            epoch: artifact.height_context.epoch,
+            signatures_total: u64::try_from(artifact.commit_qc.signers.len()).unwrap_or(u64::MAX),
+            validator_set_len: u64::try_from(artifact.height_context.roster.len())
+                .unwrap_or(u64::MAX),
+        }
+    }
+    /// Return the monotonic finality position represented by this summary.
+    pub(crate) fn position(self) -> (u64, u64) {
+        (self.height, self.view)
+    }
+    /// Return the finalized block height.
+    pub(crate) fn height(self) -> u64 {
+        self.height
+    }
+    /// Return the finalized consensus view.
+    pub(crate) fn view(self) -> u64 {
+        self.view
+    }
+    /// Return the finalized epoch.
+    pub(crate) fn epoch(self) -> u64 {
+        self.epoch
+    }
+    /// Return the number of commit-QC signers.
+    pub(crate) fn signatures_total(self) -> u64 {
+        self.signatures_total
+    }
+    /// Return the authenticated validator roster length.
+    pub(crate) fn validator_set_len(self) -> u64 {
+        self.validator_set_len
+    }
+}
 /// The interface of Kura subsystem.
 ///
 /// Merge-ledger persistence requirements are tracked in
@@ -640,7 +689,14 @@ pub struct Kura {
     native_amx_evidence_prune_intent_max_bytes: usize,
     /// On-disk merge-ledger log and in-memory cache.
     merge_log: Mutex<MergeLedgerLog>,
+<<<<<<< HEAD
     /// Optional telemetry sink for storage budget reporting.
+=======
+    /// Durably persisted legacy roster projection for rollback auditing only.
+    #[allow(dead_code)]
+    roster_log: Arc<RwLock<CommitRosterJournal>>,
+    /// Optional telemetry sink for storage and durable finality reporting.
+>>>>>>> origin/optimizations
     telemetry: OnceLock<StateTelemetry>,
     /// Last fatal writer fault observed by the background persistence loop.
     writer_fault: Mutex<Option<String>>,
@@ -3070,9 +3126,27 @@ impl Kura {
             _temp_store_dir: Some(temp_store_dir),
         })
     }
-    /// Attach a telemetry sink for storage budget reporting.
+    /// Attach a telemetry sink for storage and durable finality reporting.
     pub fn attach_telemetry(&self, telemetry: StateTelemetry) {
         let _ = self.telemetry.set(telemetry);
+        self.hydrate_v2_finality_telemetry_from_startup_inventory();
+    }
+    fn record_durable_v2_finality_telemetry(&self, artifact: &V2FinalityArtifact) {
+        if let Some(telemetry) = self.telemetry.get() {
+            telemetry.record_durable_v2_finality_summary(
+                DurableV2FinalityTelemetrySummary::from_durable_artifact(artifact),
+            );
+        }
+    }
+    fn hydrate_v2_finality_telemetry_from_startup_inventory(&self) {
+        let highest_verified_finality_artifact = self
+            .v2_startup_finality_verification_inventory
+            .lock()
+            .as_ref()
+            .and_then(|inventory| inventory.highest_verified_finality_artifact.clone());
+        if let Some(artifact) = highest_verified_finality_artifact {
+            self.record_durable_v2_finality_telemetry(&artifact);
+        }
     }
     /// Return the current committed-lane status evidence revision.
     #[cfg(test)]
@@ -5779,6 +5853,18 @@ impl Kura {
             && Self::sidecar_file_metadata_unchanged(&left.file, &right.file)
             && Self::sidecar_directory_metadata_unchanged(&left.directory, &right.directory)
     }
+    fn stable_sidecar_file_binding_unchanged(
+        left: &StableSidecarMetadata,
+        right: &StableSidecarMetadata,
+    ) -> bool {
+        // A sibling publication legitimately advances the directory timestamps
+        // without changing this file. Single-file reads bind the directory by
+        // object identity; inventory scans use the stronger timestamp check in
+        // `stable_sidecar_metadata_unchanged` to detect sibling mutations.
+        left.canonical_path == right.canonical_path
+            && Self::sidecar_file_metadata_unchanged(&left.file, &right.file)
+            && Self::sidecar_directory_binding_unchanged(&left.directory, &right.directory)
+    }
     fn stable_sidecar_directory_metadata_unchanged(
         left: &StableSidecarDirectoryMetadata,
         right: &StableSidecarDirectoryMetadata,
@@ -7593,6 +7679,15 @@ impl Kura {
                 path.to_path_buf(),
             ));
         };
+        if !Self::sidecar_directory_binding_unchanged(&directory_before, &metadata.directory) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar directory changed before bounded read",
+                ),
+                path.to_path_buf(),
+            ));
+        }
         if metadata.file.len() > u64::try_from(byte_limit)? {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -7644,7 +7739,7 @@ impl Kura {
             || u64::try_from(bytes.len())? != metadata.file.len()
             || !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened_after)
             || !path_after.as_ref().is_some_and(|after| {
-                Self::stable_sidecar_metadata_unchanged(&metadata, after)
+                Self::stable_sidecar_file_binding_unchanged(&metadata, after)
                     && Self::sidecar_metadata_same_object(&directory_before, &after.directory)
             })
         {
@@ -13773,6 +13868,7 @@ impl Kura {
         let directory = finality_directory_path;
         let mut verified = Vec::with_capacity(finalized_heights.len());
         let mut durable_tip_artifact = None;
+        let mut highest_verified_finality_artifact = None;
         for batch in finalized_heights.chunks(V2_FINALITY_STARTUP_VERIFICATION_BATCH_SIZE) {
             let batch_results = batch
                 .par_iter()
@@ -13838,8 +13934,6 @@ impl Kura {
                         executed_block_wire_hash,
                     )?;
                     let projection = V2StartupFinalityProjection::from_artifact(&record.artifact);
-                    let tip_artifact =
-                        (height == durable_height).then_some(record.artifact.clone());
                     Ok::<_, Error>((
                         VerifiedV2StartupFinalityEntry {
                             finality,
@@ -13849,15 +13943,21 @@ impl Kura {
                             },
                             projection,
                         },
-                        tip_artifact,
+                        record.artifact,
                     ))
                 })
                 .collect::<Vec<_>>();
             for result in batch_results {
-                let (entry, tip_artifact) = result?;
+                let (entry, artifact) = result?;
                 self.remember_verified_v2_finality_entry(entry.finality.clone());
-                if tip_artifact.is_some() {
-                    durable_tip_artifact = tip_artifact;
+                if artifact.height == durable_height {
+                    durable_tip_artifact = Some(artifact.clone());
+                }
+                if highest_verified_finality_artifact
+                    .as_ref()
+                    .is_none_or(|current: &V2FinalityArtifact| artifact.height > current.height)
+                {
+                    highest_verified_finality_artifact = Some(artifact);
                 }
                 verified.push(entry);
             }
@@ -13908,6 +14008,7 @@ impl Kura {
                 .collect(),
             replay_sidecars,
             durable_tip_artifact,
+            highest_verified_finality_artifact,
         })
     }
     fn kagemusha_topup_finality_staging_dir_for(blocks_dir: &Path) -> PathBuf {
@@ -13999,6 +14100,7 @@ impl Kura {
         inventory: V2StartupFinalityVerificationInventory,
     ) {
         *self.v2_startup_finality_verification_inventory.lock() = Some(Arc::new(inventory));
+        self.hydrate_v2_finality_telemetry_from_startup_inventory();
     }
     /// Rebuild the complete startup finality inventory when a caller-created
     /// Kura (notably focused tests and embedders) did not run normal open-time
@@ -14638,6 +14740,7 @@ impl Kura {
                 height,
                 canonical_hash,
             )?;
+            self.record_durable_v2_finality_telemetry(&existing.artifact);
             return Ok(v2_commit_receipt(&existing.artifact));
         }
         let record = KuraV2FinalityRecord::new(canonical_header, artifact.clone());
@@ -14696,6 +14799,7 @@ impl Kura {
                 height,
                 canonical_hash,
             )?;
+            self.record_durable_v2_finality_telemetry(&existing.artifact);
             return Ok(v2_commit_receipt(&existing.artifact));
         }
         self.add_total_disk_usage_bytes(u64::try_from(bytes.len())?);
@@ -14705,6 +14809,7 @@ impl Kura {
             height,
             canonical_hash,
         )?;
+        self.record_durable_v2_finality_telemetry(artifact);
         Ok(v2_commit_receipt(artifact))
     }
     fn decode_v2_finality_record_at(
@@ -42384,6 +42489,25 @@ pub(crate) mod tests {
                 .len(),
             9
         );
+    }
+    #[test]
+    fn stable_bounded_sidecar_read_allows_sibling_publication() {
+        let root = tempfile::tempdir().expect("create bounded-read root");
+        let path = root.path().join("bounded.norito");
+        let bytes = [7_u8; 8];
+        std::fs::write(&path, bytes).expect("write admitted sidecar");
+        let sibling = root.path().join("concurrent-sibling.norito");
+        let snapshot = super::Kura::read_regular_sidecar_snapshot_for_with_admission_hook(
+            root.path(),
+            &path,
+            root.path(),
+            bytes.len(),
+            || std::fs::write(&sibling, [9_u8]).expect("publish sibling sidecar"),
+        )
+        .expect("sibling publication must not invalidate the bounded file read")
+        .expect("admitted sidecar remains present");
+        assert_eq!(snapshot.bytes, bytes);
+        assert_eq!(std::fs::read(sibling).expect("read sibling sidecar"), [9]);
     }
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");

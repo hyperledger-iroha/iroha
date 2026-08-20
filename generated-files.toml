@@ -446,6 +446,43 @@ inputs = [
 check = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- nexus-connect-fixture --check --output-root \"$PWD\""
 
 [[generated]]
+name = "privacy-exact12-v1-fixtures"
+kind = "file"
+outputs = [
+  "fixtures/privacy/exact12_v1.tsv",
+  "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64",
+]
+generator = "cargo run --locked --offline -p iroha_data_model --features dev-tools,privacy-exact12-conformance --bin privacy_exact12_fixtures -- --write --output-root \"${IROHA_PRIVACY_EXACT12_STAGE:?set an existing absolute external staging root}\""
+generator_sources = [
+  "crates/iroha_data_model/Cargo.toml",
+  "crates/iroha_data_model/src/bin/privacy_exact12_fixtures.rs",
+]
+inputs = [
+  "Cargo.lock",
+  "crates/iroha_data_model/src/privacy.rs",
+  "crates/iroha_data_model/src/privacy/**/*.rs",
+  "crates/iroha_data_model/src/transaction/**/*.rs",
+]
+check = "cargo run --locked --offline -p iroha_data_model --features dev-tools,privacy-exact12-conformance --bin privacy_exact12_fixtures -- --check --output-root \"$PWD\""
+
+[[generated]]
+name = "taira-privacy-governance-request-v1"
+kind = "file"
+outputs = [
+  "scripts/tests/fixtures/taira_privacy_governance_request_v1.json",
+]
+generator = "IROHA_TAIRA_PRIVACY_GOVERNANCE_FIXTURE_STAGE=\"${IROHA_TAIRA_PRIVACY_GOVERNANCE_FIXTURE_STAGE:?set an existing absolute external staging root}\" cargo test --locked --offline -p irohad external_software_signer::privacy_governance::tests::write_cross_language_fixture_to_external_stage -- --exact --ignored"
+generator_sources = [
+  "crates/irohad/src/external_software_signer/privacy_governance.rs",
+]
+inputs = [
+  "Cargo.lock",
+  "crates/iroha_data_model/src/privacy/**/*.rs",
+  "crates/iroha_data_model/src/transaction/**/*.rs",
+]
+check = "cargo test --locked --offline -p irohad external_software_signer::privacy_governance::tests::cross_language_fixture_is_the_exact_native_transaction_request -- --exact"
+
+[[generated]]
 name = "ivm-public-syscall-table"
 kind = "file"
 outputs = [

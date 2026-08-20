@@ -14,6 +14,7 @@ import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 
@@ -72,6 +73,7 @@ internal object AndroidFixtureSupport {
         "time_to_live_ms",
         "nonce",
         "fee_payment",
+        "admission_intent",
         "metadata",
     )
     private val MANIFEST_FIXTURE_FIELDS = setOf(
@@ -393,8 +395,25 @@ internal object AndroidFixtureSupport {
                 payload["fee_payment"],
                 "$name.payload.fee_payment",
             ),
+            admissionIntent = parseAdmissionIntent(
+                payload["admission_intent"],
+                "$name.payload.admission_intent",
+            ),
             metadata = metadata,
         )
+    }
+
+    private fun parseAdmissionIntent(value: Any?, context: String): TransactionAdmissionIntent {
+        val intent = asMap(value, context)
+        requireExactFields(intent, setOf("intent", "value"), context)
+        require(intent.containsKey("value") && intent["value"] == null) {
+            "$context.value must be null"
+        }
+        return when (requiredString(intent["intent"], "$context.intent")) {
+            "ordinary" -> TransactionAdmissionIntent.ORDINARY
+            "queue_plan_synced" -> TransactionAdmissionIntent.QUEUE_PLAN_SYNCED
+            else -> error("$context.intent is unknown")
+        }
     }
 
     private fun parseInstruction(value: Any?, context: String, fixtureName: String): InstructionBox {

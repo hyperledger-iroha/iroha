@@ -104,8 +104,11 @@ Dashboards and alert rules are versioned under `dashboards/` and documented in
   that diagnostics and archive paths contain no active reservation, QC,
   signing claim, marker, sidecar, or merge row from the retired incarnation
   before admitting traffic.
-- Production transaction admission requires the durable queue-plan journal.
-  If Torii reports `queue_plan_journal_outcome_unknown`, reconcile the exact
+- Production transaction admission requires a signature-bound
+  `QueuePlanSynced` intent and an exact `f + 1` QueuePlan certificate. Public
+  `202 Accepted` means that certificate is durable on the ingress node; a later
+  proposal-native carrier still has to apply its immutable WSV binding. If
+  Torii reports `queue_plan_journal_outcome_unknown`, reconcile the exact
   transaction hash before retrying; a blind resubmission can obscure which
   authority owns the durable admission. A journal durability fault blocks
   drain until restart repair either restores the record or leaves the lane

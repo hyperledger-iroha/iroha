@@ -274,13 +274,15 @@ struct PreparedFairIngressQueueSelection {
 }
 /// Prevalidated exact dequeue retaining the queue's exclusive service lock.
 ///
-/// Producers may append beyond the frozen cut, but no competing consumer can
-/// change or remove the selected prefix between this preflight and LedgerV1
-/// publication. Consequently the post-fsync dequeue is assertion-only.
+/// The producer-publication fence excludes every queue-state producer
+/// mutation between this final preflight and the post-LedgerV1 dequeue. No
+/// competing consumer can change or remove the selected prefix either.
+/// Consequently the post-fsync dequeue is assertion-only.
 #[must_use = "locked fair-ingress dequeue must commit or retain its witness"]
 pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
     queue: &'a FairV2Ingress,
     _service_guard: MutexGuard<'a, ()>,
+    _producer_publication_guard: MutexGuard<'a, ()>,
     witness: PreparedFairIngressQueueWitness,
     selection: PreparedFairIngressQueueSelection,
 }
@@ -344,6 +346,7 @@ impl PreparedFairIngressQueueWitness {
             return Err((FairIngressQueueCutError::QueueCutChanged, self));
         }
         let service_guard = queue.service_lock.lock();
+        let producer_publication_guard = queue.producer_publication_lock.lock();
         let selection = match self.revalidate_for_commit(queue) {
             Ok(selection) if selection.disposition == self.selected_disposition => selection,
             Ok(_) => return Err((FairIngressQueueCutError::QueueCutChanged, self)),
@@ -357,6 +360,7 @@ impl PreparedFairIngressQueueWitness {
         Ok(LockedPreparedFairIngressExactDequeue {
             queue,
             _service_guard: service_guard,
+            _producer_publication_guard: producer_publication_guard,
             witness: self,
             selection,
         })
@@ -595,13 +599,14 @@ impl LockedPreparedFairIngressExactDequeue<'_> {
         let Self {
             queue,
             _service_guard,
+            _producer_publication_guard,
             witness,
             selection,
         } = self;
         let mut state = queue.state.lock();
         assert!(
             witness.metadata_matches_locked(&state),
-            "locked recovered Fetch ingress prefix changed after LedgerV1 publication"
+            "locked lifecycle ingress prefix changed after LedgerV1 publication"
         );
         let dequeued = queue
             .dequeue_selected_locked(
@@ -613,8 +618,9 @@ impl LockedPreparedFairIngressExactDequeue<'_> {
                 true,
                 Instant::now(),
             )
-            .expect("prevalidated recovered Fetch dequeue is infallible after publication");
+            .expect("prevalidated lifecycle dequeue is infallible after publication");
         drop(state);
+        drop(_producer_publication_guard);
         drop(_service_guard);
         dequeued
     }
@@ -2228,7 +2234,7 @@ mod tests {
             b"lifecycle-ingress-foreign-context",
         )));
         let peer = PeerId::from(KeyPair::random().public_key().clone());
-        let ingress = FairV2Ingress::new(4, 1024 * 1024, 512 * 1024, 0, 0);
+        let ingress = FairV2Ingress::new(7, 1024 * 1024, 512 * 1024, 0, 0);
         ingress
             .configure_roster([peer.clone()])
             .expect("configure foreign-winner lane");
@@ -2326,7 +2332,7 @@ mod tests {
         )));
         let first = PeerId::from(KeyPair::random().public_key().clone());
         let second = PeerId::from(KeyPair::random().public_key().clone());
-        let ingress = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
+        let ingress = FairV2Ingress::new(16, 2 * 1024 * 1024, 512 * 1024, 0, 512 * 1024);
         ingress
             .configure_roster([first.clone(), second.clone()])
             .expect("two validator lanes fit the identity test queue");
@@ -2377,27 +2383,21 @@ mod tests {
         assert!(cut.pre_cut_is_intact());
         drop(cut);
 
-        let rotated = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
+        let rotated = FairV2Ingress::new(16, 3 * 1024 * 1024, 1024 * 1024, 0, 512 * 1024);
         rotated
             .configure_roster([first.clone(), second.clone()])
             .expect("two validator lanes fit the fair-selection rotation queue");
         rotated.state.lock().leader_wire_context = Some((context_id, HEIGHT));
         rotated.open().expect("open fair-selection rotation queue");
-        let first_message = certified_body_response(context_id, HEIGHT);
-        let mut second_same_source = first_message.clone();
-        let BlockMessage::V2(second_message) = &mut second_same_source else {
-            unreachable!("certified response fixture is Sumeragi V2")
-        };
-        let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) =
-            &mut second_message.payload
-        else {
-            unreachable!("certified response fixture retains its payload class")
-        };
-        response.signature[0] ^= 1;
+        let first_message = commit_certificate_request(context_id, HEIGHT, &first, 1);
+        let second_same_source = commit_certificate_request(context_id, HEIGHT, &first, 2);
         for (message, source) in [
             (first_message, first.clone()),
             (second_same_source, first.clone()),
-            (certified_body_response(context_id, HEIGHT), second.clone()),
+            (
+                commit_certificate_request(context_id, HEIGHT, &second, 3),
+                second.clone(),
+            ),
         ] {
             assert!(matches!(
                 rotated.try_push(InboundBlockMessage::from_authenticated_peer(
@@ -2820,6 +2820,160 @@ mod tests {
             before
         );
         assert!(find_entry_by_physical_ordinal(&state, ordinal).is_some());
+    }
+    #[test]
+    fn locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit() {
+        let (ingress, context, peer, message, ordinal) = single_commit_request_ingress(8);
+        let expected = message.clone();
+        let witness = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("capture target before final publication lock")
+            .into_prepared_witness();
+        let locked = match witness.lock_exact_dequeue_retaining(&ingress, context, ordinal) {
+            Ok(locked) => locked,
+            Err((error, _witness)) => panic!("final publication lock failed: {error:?}"),
+        };
+        assert!(
+            ingress.producer_publication_lock.try_lock().is_none(),
+            "the exact dequeue must retain the producer fence before publication"
+        );
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let ingress = &ingress;
+            scope.spawn(move || {
+                started_tx
+                    .send(())
+                    .expect("same-wire producer start receiver remains live");
+                let result = ingress.try_push(InboundBlockMessage::new(message, Some(peer)));
+                result_tx
+                    .send(result)
+                    .expect("same-wire producer result receiver remains live");
+            });
+            started_rx
+                .recv()
+                .expect("same-wire producer reaches the fenced operation");
+            std::thread::yield_now();
+            assert!(matches!(
+                result_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ));
+
+            let (dequeued, disposition) = locked.commit();
+            assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+            drop(dequeued);
+            assert!(matches!(
+                result_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("same-wire producer resumes after exact dequeue"),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+        });
+
+        let state = ingress.state.lock();
+        assert_eq!(state.len, 1);
+        assert!(state.last_admission_ordinal > ordinal);
+        let retained = find_entry_by_physical_ordinal(&state, state.last_admission_ordinal)
+            .expect("retransmission owns one new physical occurrence");
+        assert_same_v2_message(retained.inbound.message(), &expected);
+    }
+    #[test]
+    fn locked_publication_fence_serializes_unrelated_append_and_preserves_it() {
+        let (ingress, context, peer, _selected, ordinal) = single_commit_request_ingress(9);
+        let (context_id, height) = ingress
+            .state
+            .lock()
+            .leader_wire_context
+            .expect("fixture binds one exact wire context");
+        let appended = commit_certificate_request(context_id, height, &peer, 10);
+        let expected = appended.clone();
+        let witness = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("capture target before unrelated producer")
+            .into_prepared_witness();
+        let locked = match witness.lock_exact_dequeue_retaining(&ingress, context, ordinal) {
+            Ok(locked) => locked,
+            Err((error, _witness)) => panic!("final publication lock failed: {error:?}"),
+        };
+        assert!(ingress.producer_publication_lock.try_lock().is_none());
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let ingress = &ingress;
+            scope.spawn(move || {
+                started_tx
+                    .send(())
+                    .expect("append producer start receiver remains live");
+                let result = ingress.try_push(InboundBlockMessage::new(appended, Some(peer)));
+                result_tx
+                    .send(result)
+                    .expect("append producer result receiver remains live");
+            });
+            started_rx
+                .recv()
+                .expect("append producer reaches the fenced operation");
+            std::thread::yield_now();
+            assert!(matches!(
+                result_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ));
+
+            let (dequeued, disposition) = locked.commit();
+            assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+            drop(dequeued);
+            assert!(matches!(
+                result_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("append producer resumes after exact dequeue"),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+        });
+
+        assert_eq!(ingress.len(), 1);
+        let retained = ingress
+            .try_recv()
+            .expect("unrelated post-publication append remains queued");
+        assert_same_v2_message(retained.message(), &expected);
+    }
+    #[test]
+    fn dropping_locked_publication_fence_releases_producer_without_dequeue() {
+        let (ingress, context, peer, selected, ordinal) = single_commit_request_ingress(11);
+        let (context_id, height) = ingress
+            .state
+            .lock()
+            .leader_wire_context
+            .expect("fixture binds one exact wire context");
+        let appended = commit_certificate_request(context_id, height, &peer, 12);
+        let witness = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("capture target before droppable publication fence")
+            .into_prepared_witness();
+        let locked = match witness.lock_exact_dequeue_retaining(&ingress, context, ordinal) {
+            Ok(locked) => locked,
+            Err((error, _witness)) => panic!("final publication lock failed: {error:?}"),
+        };
+        assert!(ingress.producer_publication_lock.try_lock().is_none());
+        drop(locked);
+        assert!(
+            ingress.producer_publication_lock.try_lock().is_some(),
+            "dropping an unpublished exact dequeue releases its producer fence"
+        );
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(appended.clone(), Some(peer))),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+
+        assert_eq!(ingress.len(), 2);
+        let retained_selected = ingress
+            .try_recv()
+            .expect("dropping the locked preparation leaves the target queued");
+        assert_same_v2_message(retained_selected.message(), &selected);
+        let retained_append = ingress
+            .try_recv()
+            .expect("producer resumes after the unpublished preparation drops");
+        assert_same_v2_message(retained_append.message(), &appended);
     }
     #[test]
     fn prepared_commit_rejects_pre_cut_reorder_without_dequeue() {

@@ -3289,7 +3289,7 @@ build_write_canary_config() {
   local time_to_live_ms="$4"
   local status_timeout_ms="$5"
 
-  python3 - "$source_config" "$target_torii_url" "$output_config" "$time_to_live_ms" "$status_timeout_ms" "$EXPECTED_TAIRA_CHAIN_ID" <<'PY'
+  python3 - "$source_config" "$target_torii_url" "$output_config" "$time_to_live_ms" "$status_timeout_ms" "$EXPECTED_TAIRA_CHAIN_ID" "$OPERATOR_NETWORK_ID" <<'PY'
 import sys
 
 try:
@@ -3309,6 +3309,7 @@ except ModuleNotFoundError:
     time_to_live_ms,
     status_timeout_ms,
     expected_chain_id,
+    expected_network_id,
 ) = sys.argv[1:]
 with open(source_path, "rb") as handle:
     source = tomllib.load(handle)
@@ -3335,6 +3336,11 @@ if chain != expected_chain_id:
     )
 if not isinstance(network_id, str) or not network_id:
     raise SystemExit("write canary config is missing a top-level `network_id` value")
+if network_id != expected_network_id:
+    raise SystemExit(
+        "write canary config `network_id` must match the exact operator NetworkId "
+        f"`{expected_network_id}`"
+    )
 if not isinstance(public_key, str) or not public_key:
     raise SystemExit("write canary config is missing `account.public_key`")
 if not isinstance(private_key, str) or not private_key:
@@ -3475,6 +3481,7 @@ ensure_write_canary_config() {
     --onboarding-token-file "$ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE"
     --output-config "$WRITE_CONFIG"
     --chain-id "$EXPECTED_TAIRA_CHAIN_ID"
+    --network-id "$OPERATOR_NETWORK_ID"
     --alias-prefix "$ROLLOUT_CANARY_ALIAS_PREFIX"
     --time-to-live-ms "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
     --status-timeout-ms "$status_timeout_ms"

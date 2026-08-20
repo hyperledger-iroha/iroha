@@ -832,8 +832,14 @@ openapi.transaction_payload.required	6372656174696f6e5f74696d655f6d73
 openapi.transaction_payload.required	696e737472756374696f6e73
 openapi.transaction_payload.required	74696d655f746f5f6c6976655f6d73
 openapi.transaction_payload.required	6665655f7061796d656e74
+openapi.transaction_payload.required	61646d697373696f6e5f696e74656e74
 openapi.transaction_payload.required	6d65746164617461
+<<<<<<< HEAD
 openapi.transaction_payload.required	6174746163686d656e7473
+=======
+openapi.transaction_admission_intent.labels	6f7264696e617279
+openapi.transaction_admission_intent.labels	71756575655f706c616e5f73796e636564
+>>>>>>> origin/optimizations
 openapi.offline_request.properties.1	616d6f756e74
 openapi.offline_request.properties.1	61727469666163745f62696e64696e67
 openapi.offline_request.properties.1	6173736574

@@ -350,7 +350,7 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
             "AcceptedTransaction::accept_entrypoint_at_time(",
             "queue_plan_replay_reservation_owner(",
             "let state_committed = state_view.transactions.get(&hash).is_some();",
-            "let global_registry_match =",
+            "let (global_registry_match, canonical_pending_handoff) =",
             "self.is_expired_at_with_enqueue_timestamp(",
             "resolve_routing_plan_for_queue_admission(",
             "prepare_checked_for_enqueue(",

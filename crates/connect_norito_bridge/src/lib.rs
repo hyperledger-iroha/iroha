@@ -59,8 +59,8 @@ use iroha_data_model::{
     rwa::RwaId,
     smart_contract::manifest::ContractManifest,
     transaction::{
-        Executable, FeePaymentIntent, SignedTransaction, TransactionSubmissionReceipt,
-        signed::TransactionBuilder,
+        Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
+        TransactionSubmissionReceipt, signed::TransactionBuilder,
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
@@ -3432,6 +3432,7 @@ where
     if !metadata.is_empty() {
         builder = builder.with_metadata(metadata);
     }
+    builder = builder.with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
     if let Some(ttl) = ttl_duration {
         builder.set_ttl(ttl);
     }
@@ -3468,6 +3469,7 @@ where
     if !metadata.is_empty() {
         builder = builder.with_metadata(metadata);
     }
+    builder = builder.with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
     if let Some(ttl) = ttl_duration {
         builder.set_ttl(ttl);
     }
@@ -22644,32 +22646,7 @@ mod kagemusha_bridge_tests {
             unsafe { parse_fee_payment_intent_bridge(legacy.as_ptr(), legacy.len() as c_ulong) };
         assert!(matches!(invalid, Err(BridgeError::FeePayment)));
     }
-    #[test]
-    fn bridge_asset_transaction_checked_signing_verifies() {
-        let keypair = fixture_key_pair(0x5A);
-        let authority = AccountId::new(keypair.public_key().clone());
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-                iroha_data_model::block::BlockHeader,
-            >::from_untyped_unchecked(Hash::new(
-                b"bridge-checked-signing-genesis",
-            ))),
-            authority.clone(),
-            1_736_000_000_000,
-            None,
-            FeePaymentIntent::authority(Vec::new(), None),
-            keypair.private_key().clone(),
-            || Executable::from(Vec::<InstructionBox>::new()),
-        )
-        .expect("checked bridge transaction signing should succeed");
-        let signed =
-            decode_signed_transaction(&signed_bytes).expect("decode versioned signed transaction");
-        assert_eq!(hash_bytes, *signed.hash().as_ref());
-        assert_eq!(signed.authority(), &authority);
-        signed
-            .verify_signature()
-            .expect("checked bridge transaction signature should verify");
-    }
+    include!("queue_plan_admission_bridge_tests.rs");
 }
 // ---------------- EnvelopeV1 encode helpers (selected variants) ----------------
 #[unsafe(no_mangle)]

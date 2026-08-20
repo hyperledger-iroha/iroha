@@ -434,6 +434,40 @@ pub(in crate::sumeragi) fn launch_non_pending_lifecycle_height_and_shutdown_for_
     Ok(context_id)
 }
 
+#[cfg(test)]
+/// Launch and activate one ordinary or CompleteTip lifecycle fixture.
+///
+/// The returned owner has crossed the real runner publication boundary. Tests
+/// must consume it through finalized rollover or orderly active shutdown.
+pub(in crate::sumeragi) fn launch_non_pending_lifecycle_height_and_activate_for_test(
+    owner: crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
+    inputs: ProductionLifecycleLaunchInputsV1,
+    complete_tip: Option<RetiredRecoveredCompleteTipActivationAuthorityV1>,
+    ingress_ready: &Arc<AtomicBool>,
+    block_ingress: &Arc<FairV2Ingress>,
+) -> Result<(ActivatedProductionLifecycleV1, wire::HeightContextId), V2RunnerError> {
+    let activation = complete_tip
+        .map(|authority| PendingSuccessorActivation::RecoveredCompleteTip { authority });
+    let mut preactivation = launch_non_pending_lifecycle_height(
+        owner,
+        inputs,
+        activation,
+        ingress_ready,
+        block_ingress,
+    )?;
+    let mut setup_runner = ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+    let context_id = preactivation.with_runner_setup(&mut setup_runner, |executor, services| {
+        if !services.matches_lifecycle_executor_output_guard(executor) {
+            return Err(V2RunnerError::RestartRequired);
+        }
+        Ok(executor.context().id())
+    })?;
+    let (_directive, local_proposal) =
+        preactivation.initialize_recovered_local_proposal(setup_runner)?;
+    let activated = preactivation.activate(Instant::now(), local_proposal)?;
+    Ok((activated, context_id))
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn recover_canonical_bodies_before_activation(
     preactivation: &mut ProductionLifecyclePreActivationHeightV1,
@@ -619,6 +653,8 @@ fn run_lifecycle_active_height(
     let mut next_npos_vrf_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut block_sync_request = None;
     let mut admitted_discovered_commit_qc = false;
+    let mut producer_claim = LifecycleProducerClaimDispositionV1::initial();
+    let mut canonical_lane_body_recovered = false;
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -724,7 +760,7 @@ fn run_lifecycle_active_height(
             },
         )?;
 
-        drain_lifecycle_v2_ingress(
+        let drain_disposition = drain_lifecycle_v2_ingress(
             &mut activated,
             &mut active_runner,
             receiver,
@@ -736,9 +772,16 @@ fn run_lifecycle_active_height(
             &mut block_sync_request,
             npos_vrf,
             body_queue_capacity,
+            producer_claim,
         )?;
+        producer_claim = drain_disposition.producer_claim();
         if discovery_was_outstanding && block_sync_request.is_none() {
             admitted_discovered_commit_qc = true;
+        }
+        if drain_disposition.requires_yield() {
+            committed_lane_status_publisher.publish_if_changed(&lane_work);
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
         }
 
         let ready_to_finish = activated.with_runner_runtime(
@@ -846,7 +889,8 @@ fn run_lifecycle_active_height(
         let producer_turn =
             match activated.claim_producer_turn_for_local_proposal(&mut active_runner) {
                 Ok(claimed) => claimed,
-                Err(_) => {
+                Err(error) => {
+                    iroha_logger::error!(?error, "Sumeragi v2 ProducerTurn claim failed closed");
                     output_guard.close_admission_for_restart();
                     return Err(V2RunnerError::RestartRequired);
                 }
@@ -898,7 +942,32 @@ fn run_lifecycle_active_height(
             }
         }
 
-        if ready_to_finish {
+        let rollover_ready = if ready_to_finish {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, _local_proposal| {
+                    if !services.matches_lifecycle_lane_work(&lane_work) {
+                        return Err(V2RunnerError::Service(
+                            "finalized lifecycle borrowed a foreign lane-work adapter".to_owned(),
+                        ));
+                    }
+                    super::preflight_finalized_lane_rollover(
+                        executor,
+                        &mut lane_work,
+                        &mut canonical_lane_body_recovered,
+                    )
+                },
+            )?
+        } else {
+            false
+        };
+        if ready_to_finish && !rollover_ready {
+            committed_lane_status_publisher.publish_if_changed(&lane_work);
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
+        }
+
+        if rollover_ready {
             let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height(
                 activated,
                 &mut active_runner,
@@ -976,6 +1045,24 @@ fn run_lifecycle_active_height(
                     ))
                 },
             )?;
+            let PreparedLifecycleSuccessorV1 {
+                verified_context,
+                lifecycle_storage_authority,
+                pending_activation,
+                receipt_height,
+                receipt_context_id,
+                receipt_block_hash,
+            } = prepared_successor;
+            let (cleanup, lifecycle_storage_authority) =
+                cleanup.bind_successor_storage(lifecycle_storage_authority)?;
+            let prepared_successor = PreparedLifecycleSuccessorV1 {
+                verified_context,
+                lifecycle_storage_authority,
+                pending_activation,
+                receipt_height,
+                receipt_context_id,
+                receipt_block_hash,
+            };
             if let Some(warning) = cleanup.wal_retirement_warning() {
                 iroha_logger::warn!(
                     height = prepared_successor.receipt_height,

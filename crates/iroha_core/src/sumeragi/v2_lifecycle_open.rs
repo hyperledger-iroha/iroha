@@ -12,6 +12,10 @@ use super::{
     DurablePayloadReference, LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey,
     LifecycleStage, LifecycleStageKind, LifecycleState, LifecycleWorkClass, TerminalOutcome,
     authority::AuthenticatedEpisodeAuthority,
+    body_pipeline_transition::{
+        durable_continuation_payload_is_exact, durable_continuation_successor_is_exact,
+        durable_validate_payload_is_exact,
+    },
     ledger::{
         LifecycleLedgerError, LifecycleLedgerRecordV1, LifecycleLedgerStoreV1, LifecycleLedgerV1,
         RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
@@ -19,8 +23,14 @@ use super::{
     replay_authority::{
         CertifiedServeTerminalReplayAuthorityPairV1, LifecycleReplayAuthorityV1,
         PreparedDurableCertifiedFetchStartupV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+        recovered_decision_body_continuation_is_exact, signed_broadcast_continuation_is_exact,
     },
-    schema::{CausalRoot, DurableContinuation, DurableContinuationEdge},
+    schema::{
+        CausalRoot, DurableContinuation, DurableContinuationEdge, DurableRecordMetadata,
+        LifecycleRecord, MAX_PHYSICAL_SLOTS_PER_RECORD, PredecessorScope, RecoverySnapshot,
+        SchedulerEpisode, WaitSource, WaitToken, has_lifecycle_record_capacity,
+        serve_and_producer_keys_match,
+    },
     wal_recovery::{
         AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection, RecoveredDecisionFetchStoreProjectionV1,
@@ -1176,6 +1186,347 @@ impl PreparedLifecycleCoordinatorOpen {
     }
 }
 impl LifecycleCoordinator {
+    /// Rebuild records after seeding the ordinal high-water mark.
+    pub(super) fn reconcile_restart_inner(&mut self, snapshot: RecoverySnapshot) {
+        let pristine = self.fault.is_none()
+            && self.ledger_store.is_none()
+            && self.active_lease.is_none()
+            && self.records.is_empty()
+            && self.key_index.is_empty()
+            && self.owner_index.is_empty()
+            && self.ready_index.is_empty()
+            && self.admission_waits.is_empty()
+            && self.durable_records.is_empty()
+            && self.producer_debts.is_empty()
+            && self.observed_generation.is_empty()
+            && self.capacity_used.values().all(|used| *used == 0)
+            && self.high_water == snapshot.high_water;
+        if !pristine {
+            if self.fault.is_none() {
+                self.fault = Some(CoordinatorFault::RecoveryRejected);
+            }
+            return;
+        }
+        let mut rebuilt = Self::new_with_authority(self.episode_authority.clone(), self.high_water);
+        let mut rejected = snapshot.context != self.active_context
+            || !has_lifecycle_record_capacity(0, snapshot.records.len());
+        for recovered in snapshot.records {
+            rejected |= recovered.key.context != snapshot.context.id
+                || recovered.key.round.height != snapshot.context.height
+                || recovered
+                    .key
+                    .proposal_round
+                    .is_some_and(|round| round.height != snapshot.context.height)
+                || recovered.ordinal == 0
+                || recovered.ordinal > snapshot.high_water
+                || recovered.owner.first_admission_ordinal == 0
+                || recovered.owner.first_admission_ordinal > recovered.ordinal
+                || !recovered
+                    .work_class
+                    .accepts_stage(recovered.key.phase, recovered.stage)
+                || !recovered
+                    .payload
+                    .matches_terminal(recovered.work_class, recovered.terminal)
+                || !recovered.replay_authority_is_exact(snapshot.context)
+                || (recovered.work_class == LifecycleWorkClass::CertifiedServe
+                    && recovered.key.subject.is_none())
+                || rebuilt.key_index.contains_key(&recovered.key)
+                || rebuilt.records.contains_key(&recovered.ordinal)
+                || recovered.physical_slot_universe.len() > MAX_PHYSICAL_SLOTS_PER_RECORD
+                || !rebuilt.episode_authority.admits_slots(
+                    recovered.work_class.capacity_class(),
+                    &recovered.physical_slot_universe,
+                );
+            let episode_universe = rebuilt.episode_authority.universe_for(recovered.key);
+            rejected |= episode_universe.is_none();
+            if rejected {
+                break;
+            }
+            if let Some(known) = rebuilt.owner_index.get(&recovered.owner.causal_root) {
+                rejected |= *known != recovered.owner;
+            } else {
+                rebuilt
+                    .owner_index
+                    .insert(recovered.owner.causal_root, recovered.owner);
+            }
+            let state = if let Some(outcome) = recovered.terminal {
+                LifecycleState::Terminal(outcome)
+            } else if recovered.work_class == LifecycleWorkClass::ProducerTurn {
+                let serve_ordinal = snapshot
+                    .producer_debts
+                    .iter()
+                    .find_map(|(serve, producer)| {
+                        (*producer == recovered.ordinal).then_some(*serve)
+                    });
+                let Some(serve_ordinal) = serve_ordinal else {
+                    rejected = true;
+                    break;
+                };
+                LifecycleState::Waiting(WaitToken::new(WaitSource::ProducerTurn(serve_ordinal), 0))
+            } else {
+                LifecycleState::Waiting(WaitToken::new(
+                    WaitSource::Recovery(recovered.reconstruction_source),
+                    0,
+                ))
+            };
+            if !matches!(state, LifecycleState::Terminal(_)) {
+                let class = recovered.work_class.capacity_class();
+                let delta = BTreeMap::from([(class, 1)]);
+                if rebuilt.first_capacity_wait(&delta).is_some() {
+                    rejected = true;
+                    break;
+                }
+                rebuilt.apply_capacity_delta(&delta);
+            }
+            rebuilt.durable_records.insert(
+                recovered.ordinal,
+                DurableRecordMetadata::from_recovered(&recovered),
+            );
+            rebuilt.insert_record(LifecycleRecord {
+                key: recovered.key,
+                owner: recovered.owner,
+                ordinal: recovered.ordinal,
+                work_class: recovered.work_class,
+                stage: recovered.stage,
+                state,
+                physical_slots: BTreeMap::new(),
+                episode: SchedulerEpisode {
+                    universe: episode_universe.expect("validated recovery universe exists"),
+                    slot_universe: recovered.physical_slot_universe,
+                    consumed_slots: BTreeSet::new(),
+                    frozen_predecessors: BTreeSet::new(),
+                },
+            });
+        }
+        let recovered_nonterminal: BTreeSet<_> = rebuilt
+            .records
+            .iter()
+            .filter_map(|(ordinal, record)| {
+                (!matches!(record.state, LifecycleState::Terminal(_))).then_some(*ordinal)
+            })
+            .collect();
+        for record in rebuilt.records.values_mut() {
+            if !matches!(
+                record.stage.predecessor_scope,
+                PredecessorScope::Independent
+            ) {
+                record.episode.frozen_predecessors = recovered_nonterminal
+                    .range(..record.ordinal)
+                    .copied()
+                    .collect();
+            }
+        }
+        rebuilt.producer_debts = snapshot.producer_debts;
+        let mut continuation_successors = BTreeSet::new();
+        rejected |= rebuilt.records.values().any(|record| {
+            let metadata = &rebuilt.durable_records[&record.ordinal];
+            let terminal = match record.state {
+                LifecycleState::Terminal(outcome) => Some(outcome),
+                LifecycleState::Waiting(_) | LifecycleState::Ready | LifecycleState::Claimed(_) => {
+                    None
+                }
+            };
+            if record.work_class == LifecycleWorkClass::Validate
+                && !durable_validate_payload_is_exact(record.key, metadata.payload)
+            {
+                return true;
+            }
+            if !metadata.continuation.matches_record(
+                record.work_class,
+                terminal,
+                record.ordinal,
+                rebuilt.high_water,
+            ) {
+                return true;
+            }
+            let Some((edge, successor)) = metadata.continuation.successor_parts() else {
+                return metadata.continuation == DurableContinuation::AdvancedNoSuccessor
+                    && (metadata.reconstruction_source != record.owner.causal_root().digest()
+                        || !durable_validate_payload_is_exact(record.key, metadata.payload));
+            };
+            metadata.reconstruction_source != record.owner.causal_root().digest()
+                || !continuation_successors.insert(successor)
+                || rebuilt.records.get(&successor).is_none_or(|child| {
+                    let child_metadata = &rebuilt.durable_records[&successor];
+                    let payload_and_replay_are_exact =
+                        recovered_decision_body_continuation_is_exact(
+                            edge,
+                            &metadata.replay_authority,
+                            metadata.payload,
+                            &child_metadata.replay_authority,
+                            child_metadata.payload,
+                        )
+                        .or_else(|| {
+                            signed_broadcast_continuation_is_exact(
+                                edge,
+                                &metadata.replay_authority,
+                                metadata.payload,
+                                &child_metadata.replay_authority,
+                                child_metadata.payload,
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            durable_continuation_payload_is_exact(
+                                edge,
+                                metadata.payload,
+                                child_metadata.payload,
+                            )
+                        });
+                    child.owner != record.owner
+                        || child_metadata.reconstruction_source != metadata.reconstruction_source
+                        || !payload_and_replay_are_exact
+                        || !durable_continuation_successor_is_exact(
+                            edge,
+                            record.work_class,
+                            record.key,
+                            record.stage,
+                            child.work_class,
+                            child.key,
+                            child.stage,
+                        )
+                })
+        });
+        rejected |= rebuilt.owner_index.values().any(|owner| {
+            rebuilt
+                .records
+                .get(&owner.first_admission_ordinal)
+                .is_none_or(|record| record.owner != *owner)
+        });
+        let unique_producers: BTreeSet<_> = rebuilt.producer_debts.values().copied().collect();
+        rejected |= unique_producers.len() != rebuilt.producer_debts.len();
+        rejected |= rebuilt.producer_debts.iter().any(|(serve, producer)| {
+            let (Some(serve_record), Some(producer_record)) =
+                (rebuilt.records.get(serve), rebuilt.records.get(producer))
+            else {
+                return true;
+            };
+            serve.checked_add(1) != Some(*producer)
+                || serve_record.work_class != LifecycleWorkClass::CertifiedServe
+                || serve_record.stage.kind != LifecycleStageKind::CertifiedServe
+                || producer_record.work_class != LifecycleWorkClass::ProducerTurn
+                || producer_record.stage.kind != LifecycleStageKind::ProducerTurn
+                || !serve_and_producer_keys_match(serve_record.key, producer_record.key)
+                || serve_record.owner != producer_record.owner
+                || rebuilt
+                    .durable_records
+                    .get(serve)
+                    .is_none_or(|serve_metadata| {
+                        rebuilt
+                            .durable_records
+                            .get(producer)
+                            .is_none_or(|producer_metadata| {
+                                producer_metadata.reconstruction_source
+                                    != serve_metadata.reconstruction_source
+                                    || !producer_metadata
+                                        .replay_authority
+                                        .same_persisted_family(&serve_metadata.replay_authority)
+                            })
+                    })
+                || matches!(producer_record.state, LifecycleState::Terminal(_))
+        });
+        rejected |= rebuilt
+            .records
+            .values()
+            .any(|record| match record.work_class {
+                LifecycleWorkClass::CertifiedServe => record
+                    .ordinal
+                    .checked_add(1)
+                    .and_then(|producer| rebuilt.records.get(&producer))
+                    .is_none_or(|producer| {
+                        producer.work_class != LifecycleWorkClass::ProducerTurn
+                            || producer.stage.kind != LifecycleStageKind::ProducerTurn
+                            || !serve_and_producer_keys_match(record.key, producer.key)
+                            || producer.owner != record.owner
+                            || rebuilt.durable_records[&producer.ordinal].reconstruction_source
+                                != rebuilt.durable_records[&record.ordinal].reconstruction_source
+                            || !rebuilt.durable_records[&producer.ordinal]
+                                .replay_authority
+                                .same_persisted_family(
+                                    &rebuilt.durable_records[&record.ordinal].replay_authority,
+                                )
+                            || (record.state
+                                == LifecycleState::Terminal(TerminalOutcome::Cancelled)
+                                && producer.state
+                                    != LifecycleState::Terminal(TerminalOutcome::Cancelled))
+                    }),
+                LifecycleWorkClass::ProducerTurn => record
+                    .ordinal
+                    .checked_sub(1)
+                    .and_then(|serve| rebuilt.records.get(&serve))
+                    .is_none_or(|serve| {
+                        serve.work_class != LifecycleWorkClass::CertifiedServe
+                            || serve.stage.kind != LifecycleStageKind::CertifiedServe
+                            || !serve_and_producer_keys_match(serve.key, record.key)
+                            || serve.owner != record.owner
+                            || rebuilt.durable_records[&serve.ordinal].reconstruction_source
+                                != rebuilt.durable_records[&record.ordinal].reconstruction_source
+                            || !rebuilt.durable_records[&serve.ordinal]
+                                .replay_authority
+                                .same_persisted_family(
+                                    &rebuilt.durable_records[&record.ordinal].replay_authority,
+                                )
+                    }),
+                _ => false,
+            });
+        rejected |= rebuilt.records.values().any(|record| {
+            let live = !matches!(record.state, LifecycleState::Terminal(_));
+            match record.work_class {
+                LifecycleWorkClass::CertifiedServe => {
+                    live && !rebuilt.producer_debts.contains_key(&record.ordinal)
+                }
+                LifecycleWorkClass::ProducerTurn => {
+                    let has_debt = rebuilt
+                        .producer_debts
+                        .values()
+                        .any(|producer| *producer == record.ordinal);
+                    has_debt != live
+                }
+                _ => false,
+            }
+        });
+        let debts: Vec<_> = rebuilt
+            .producer_debts
+            .iter()
+            .map(|(serve, producer)| (*serve, *producer))
+            .collect();
+        for (serve, producer) in debts {
+            if rejected
+                || rebuilt
+                    .records
+                    .get(&producer)
+                    .is_some_and(|record| matches!(record.state, LifecycleState::Terminal(_)))
+            {
+                rejected = true;
+                break;
+            }
+            match rebuilt.records[&serve].state {
+                LifecycleState::Terminal(TerminalOutcome::Cancelled) => {
+                    // Ledger snapshots persist Serve cancellation and producer
+                    // cancellation atomically, without an outstanding debt.
+                    rejected = true;
+                    break;
+                }
+                LifecycleState::Terminal(_) => rebuilt.make_ready(producer),
+                LifecycleState::Waiting(_) | LifecycleState::Ready | LifecycleState::Claimed(_) => {
+                }
+            }
+        }
+        if rejected {
+            rebuilt.records.clear();
+            rebuilt.key_index.clear();
+            rebuilt.owner_index.clear();
+            rebuilt.ready_index.clear();
+            rebuilt.durable_records.clear();
+            rebuilt.producer_debts.clear();
+            rebuilt
+                .capacity_used
+                .values_mut()
+                .for_each(|used| *used = 0);
+            rebuilt.fault = Some(CoordinatorFault::RecoveryRejected);
+        }
+        *self = rebuilt;
+    }
+
     fn reconcile_store_ahead_terminal_serve(
         &mut self,
         serve_ordinal: u128,
@@ -1421,6 +1772,7 @@ impl LifecycleCoordinator {
         let records_by_key = decoded_records_by_key(&ledger)?;
         let (serve_candidates, terminal_updates, retained_serve_payloads, serve_replay_pairs) =
             resolve_serve_payloads(context, &ledger, &records_by_key, &recovery.serve_payloads)?;
+        let has_store_ahead_terminal_updates = !terminal_updates.is_empty();
         let mut recovered_candidates = recovery.candidates.clone();
         for candidate in serve_candidates {
             if recovered_candidates
@@ -1656,7 +2008,7 @@ impl LifecycleCoordinator {
             )
         })?;
         let authenticated_successor = LifecycleLedgerV1::from_coordinator(&coordinator)?;
-        if authenticated_successor != ledger {
+        if !has_store_ahead_terminal_updates && authenticated_successor != ledger {
             return Err(LifecycleOpenErrorKind::InvalidRecovery(
                 "recovered coordinator does not reproduce its authenticated LedgerV1 frame",
             )

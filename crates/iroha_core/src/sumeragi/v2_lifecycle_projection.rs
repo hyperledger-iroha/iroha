@@ -3026,9 +3026,14 @@ mod wait_source_tests {
     #[test]
     fn terminal_validate_recovery_binds_exact_body_outcome_and_parent_identity() {
         let (context, candidate, durable) = validate_recovery_fixture();
+        let execution_commitment =
+            super::super::replay_authority::exact_body_execution_commitment_fixture(context, 3);
         let validated =
             crate::sumeragi::v2_body_store::DurableBodyValidationOutcome::validated_for_test(
-                crate::sumeragi::v2_body_store::ValidatedBodyReceipt::for_test(durable.clone()),
+                crate::sumeragi::v2_body_store::ValidatedBodyReceipt::for_test_with_commitment(
+                    durable.clone(),
+                    execution_commitment,
+                ),
             );
         assert!(recovered_validate_no_successor_is_authenticated(
             context, &candidate, &validated,

@@ -840,6 +840,25 @@ fn certified_pipeline_replay_evidence_for_test(
     CertifiedValidateReplayEvidenceV1,
 )> {
     let certificate = certified_pipeline_prepare_certificate_for_test(manifest, receipt);
+    certified_pipeline_replay_evidence_with_certificate_for_test(
+        tag,
+        manifest,
+        receipt,
+        validate_pending,
+        certificate,
+    )
+}
+#[cfg(test)]
+fn certified_pipeline_replay_evidence_with_certificate_for_test(
+    tag: EventTag,
+    manifest: &wire::PayloadManifest,
+    receipt: &DurableBodyReceipt,
+    validate_pending: &PendingRuntimeEffectBinding,
+    certificate: wire::QuorumCertificate,
+) -> Option<(
+    CertifiedStoreReplayEvidenceV1,
+    CertifiedValidateReplayEvidenceV1,
+)> {
     let fetch_effect = AdapterEffect::FetchBody {
         tag,
         round: manifest.round,

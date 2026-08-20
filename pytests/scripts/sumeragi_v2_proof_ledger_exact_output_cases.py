@@ -930,6 +930,13 @@
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
+            "pub(super) fn preflight_finalized_lane_rollover(",
+            "let _ = lane_work.service_next_historical_recovery()?;",
+            "let _ = &lane_work;",
+            "finalized-lane preflight must keep the active predecessor alive",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
             "fn rollover_finalized_height_outputs(",
             "let _ = retry_exact_output_and_apply_sidecar_admissions(\n"
             "        &mut lane_work,\n"
@@ -937,7 +944,7 @@
             "        control_queue_capacity,\n"
             "    )?;",
             "let _ = services.retry_pending_exact_output();",
-            "durable finalization must retry and apply sidecar receipts before reconstructing rollover authority",
+            "durable finalization must retry exact output and reject rollover until every predecessor-height recovery",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -1001,21 +1008,21 @@
             "fn rollover_finalized_height_outputs(",
             "lane_work.persist_anchored_sessions()?;",
             "let _ = &lane_work;",
-            "finalized output rollover must durably reconstruct every predecessor owner",
+            "finalized output rollover must durably settle every predecessor owner",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
             "fn rollover_finalized_height_outputs(",
             ".durable_lane_rollover_authority(artifact)?",
             "None",
-            "finalized output rollover must durably reconstruct every predecessor owner",
+            "finalized output rollover must durably settle every predecessor owner",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
             "fn rollover_finalized_height_outputs(",
             "lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;",
             "lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority.clone())?;",
-            "finalized output rollover must durably reconstruct every predecessor owner",
+            "finalized output rollover must durably settle every predecessor owner",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -1931,7 +1938,7 @@
             "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;",
             "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;",
             "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 2;",
-            "exact-output defaults must retain the reviewed completion divisor, reducer batch, and three-class geometry",
+            "exact-output defaults must retain the reviewed completion divisor, two Serve phase families, bounded lifecycle records, reducer batch, and three-class geometry",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
@@ -1966,7 +1973,7 @@
             "pub fn parse(self) -> Result<actual::Root, ParseError> {",
             ".max_total_connections\n",
             ".max_connections_per_peer\n",
-            "root configuration must derive the authenticated-source bound from network geometry and fail parsing",
+            "root configuration must derive the authenticated-source bound from network geometry and reject invalid lifecycle or exact-output capacity",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -2389,16 +2396,16 @@ def _apply_exact_output_non_runtime_extended_mutations(
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "pub(crate) fn durable_lane_rollover_authority(",
-            "if retained_proposal == proposal",
-            "if true",
-            "must require either an exact durable certificate or the bounded retained successor owner",
+            "let Some(durable) = durable else {\n                return Ok(None);\n            };",
+            "let Some(durable) = durable else {\n                continue;\n            };",
+            "must keep the predecessor active until each winning lane has an exact durable certificate",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "pub(crate) fn durable_lane_rollover_authority(",
             "durable_sessions.insert(proposal.proposal_hash, source);",
             "let _ = source;",
-            "must preserve one exact retained or persistent witness per winner",
+            "must preserve one exact ordinary or autonomous durable witness per winner",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",

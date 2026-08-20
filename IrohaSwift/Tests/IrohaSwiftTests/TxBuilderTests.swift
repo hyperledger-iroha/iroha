@@ -510,6 +510,25 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(second.remaining(), 0)
         XCTAssertEqual(third.remaining(), 0)
         XCTAssertEqual(sequenceReader.remaining(), 0)
+
+        _ = try payloadReader.readCompactField()
+        _ = try payloadReader.readCompactField()
+        _ = try payloadReader.readCompactField()
+        var admissionIntentReader = CanonicalNoritoReader(
+            data: try payloadReader.readCompactField()
+        )
+        XCTAssertEqual(
+            try admissionIntentReader.readUInt32LE(),
+            TransactionAdmissionIntentV1.queuePlanSynced.rawValue
+        )
+        XCTAssertEqual(admissionIntentReader.remaining(), 0)
+        var metadataReader = CanonicalNoritoReader(
+            data: try payloadReader.readCompactField()
+        )
+        XCTAssertEqual(try metadataReader.readUInt64LE(), 0)
+        XCTAssertEqual(metadataReader.remaining(), 0)
+        XCTAssertEqual(try payloadReader.readCompactField(), Data([0]))
+        XCTAssertEqual(payloadReader.remaining(), 0)
     }
 
     func testExecutableBatchRejectsEmptyAndMissingContractGasLimit() throws {

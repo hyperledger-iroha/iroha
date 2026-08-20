@@ -38,7 +38,8 @@
         generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
             .expect("generate localnet with relative path");
 
-        let out_dir = base.path().join("localnet");
+        let out_dir = fs::canonicalize(base.path().join("localnet"))
+            .expect("canonical generated localnet output directory");
         let peer_cfg = fs::read_to_string(out_dir.join("peer0.toml")).expect("read peer config");
         let parsed: toml::Value = toml::from_str(&peer_cfg).expect("parse peer config");
         let genesis_path = parsed
@@ -129,6 +130,109 @@
                 && !Path::new(da_root).starts_with(Path::new(kura_path)),
             "auxiliary state roots must remain outside the pristine Kura root"
         );
+        for peer_index in 0..opts.peers.get() {
+            let peer_config: toml::Value = toml::from_str(
+                &fs::read_to_string(out_dir.join(format!("peer{peer_index}.toml")))
+                    .expect("read generated peer config"),
+            )
+            .expect("parse generated peer config");
+            let expected_state = out_dir.join("state").join(format!("peer{peer_index}"));
+            let streaming = peer_config
+                .get("streaming")
+                .and_then(toml::Value::as_table)
+                .expect("streaming table");
+            let session_store = streaming
+                .get("session_store_dir")
+                .and_then(toml::Value::as_str)
+                .expect("streaming session store");
+            let soranet_spool = streaming
+                .get("soranet")
+                .and_then(toml::Value::as_table)
+                .and_then(|soranet| soranet.get("provision_spool_dir"))
+                .and_then(toml::Value::as_str)
+                .expect("SoraNet provision spool");
+            let soravpn_spool = streaming
+                .get("soravpn")
+                .and_then(toml::Value::as_table)
+                .and_then(|soravpn| soravpn.get("provision_spool_dir"))
+                .and_then(toml::Value::as_str)
+                .expect("SoraVPN provision spool");
+            let torii_data = peer_config
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|torii| torii.get("data_dir"))
+                .and_then(toml::Value::as_str)
+                .expect("Torii data directory");
+            let torii_da = peer_config
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|torii| torii.get("da_ingest"))
+                .and_then(toml::Value::as_table)
+                .expect("Torii DA ingest table");
+            let torii_da_replay = torii_da
+                .get("replay_cache_store_dir")
+                .and_then(toml::Value::as_str)
+                .expect("Torii DA replay-cache directory");
+            let torii_da_manifests = torii_da
+                .get("manifest_store_dir")
+                .and_then(toml::Value::as_str)
+                .expect("Torii DA manifest directory");
+            let sorafs_data = peer_config
+                .get("sorafs")
+                .and_then(toml::Value::as_table)
+                .and_then(|sorafs| sorafs.get("storage"))
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("data_dir"))
+                .and_then(toml::Value::as_str)
+                .expect("SoraFS data directory");
+            let sorafs_por_state = peer_config
+                .get("sorafs")
+                .and_then(toml::Value::as_table)
+                .and_then(|sorafs| sorafs.get("por"))
+                .and_then(toml::Value::as_table)
+                .and_then(|por| por.get("state_dir"))
+                .and_then(toml::Value::as_str)
+                .expect("SoraFS PoR state directory");
+            let soranet_ticket_revocations = peer_config
+                .get("network")
+                .and_then(toml::Value::as_table)
+                .and_then(|network| network.get("soranet_handshake"))
+                .and_then(toml::Value::as_table)
+                .and_then(|handshake| handshake.get("pow"))
+                .and_then(toml::Value::as_table)
+                .and_then(|pow| pow.get("revocation_store_path"))
+                .and_then(toml::Value::as_str)
+                .expect("SoraNet ticket revocation store");
+            assert_eq!(Path::new(session_store), expected_state.join("streaming"));
+            assert_eq!(
+                Path::new(soranet_spool),
+                expected_state.join("streaming").join("soranet_routes")
+            );
+            assert_eq!(
+                Path::new(soravpn_spool),
+                expected_state.join("streaming").join("soravpn_routes")
+            );
+            assert_eq!(Path::new(torii_data), expected_state.join("torii"));
+            assert_eq!(
+                Path::new(torii_da_replay),
+                expected_state.join("torii").join("da_replay")
+            );
+            assert_eq!(
+                Path::new(torii_da_manifests),
+                expected_state.join("torii").join("da_manifests")
+            );
+            assert_eq!(Path::new(sorafs_data), expected_state.join("sorafs"));
+            assert_eq!(
+                Path::new(sorafs_por_state),
+                expected_state.join("sorafs").join("por")
+            );
+            assert_eq!(
+                Path::new(soranet_ticket_revocations),
+                expected_state
+                    .join("soranet")
+                    .join("ticket_revocations.norito")
+            );
+        }
         assert!(
             fs::read_dir(kura_path)
                 .expect("read pristine Kura root")

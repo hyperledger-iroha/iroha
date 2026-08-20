@@ -43,7 +43,7 @@ address = "addr:0.0.0.0:1342#762A"
 public_address = "addr:172.28.0.15:1342#8717"
 max_frame_bytes = 23068700
 max_frame_bytes_block_sync = 23068672
-max_frame_bytes_tx_gossip = 11534336
+max_frame_bytes_tx_gossip = 13631488
 
 [torii]
 address = "addr:0.0.0.0:8085#E987"
@@ -305,4 +305,8 @@ submitters = []
 [genesis]
 public_key = "ed012077D8B70FE83D6E0A0FF1C100FDCD01C6A937DA0B7B1004E7C9545BB64D6639A8"
 file = "genesis.signed.nrt"
+<<<<<<< HEAD
 expected_hash = "hash:662CDEA6518677830868F1852CB94C5E1812D4D455FB6D628D77977DF6002ABD#956B"
+=======
+expected_hash = "hash:9B5BAC7E92DA4740F3132DBB8528ECB3BC1CE40ED2D7BAD50182A834EA3D7EAB#5F2F"
+>>>>>>> origin/optimizations

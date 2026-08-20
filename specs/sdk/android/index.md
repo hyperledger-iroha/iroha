@@ -46,9 +46,13 @@ layered on top via the keystore abstraction when running on devices.
 ```java
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.util.Collections;
 import org.hyperledger.iroha.android.IrohaKeyManager;
-import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
+import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
@@ -61,10 +65,12 @@ IrohaKeyManager keyManager = IrohaKeyManager.withDefaultProviders();
 TransactionBuilder builder = new TransactionBuilder(codec, keyManager);
 
 TransactionPayload payload = TransactionPayload.builder()
-    .setChainId("00000000")
+    .setNetworkId(NetworkId.parse("<canonical-network-id>"))
     .setAuthority("<i105-account-id>")
     .setCreationTimeMs(System.currentTimeMillis())
     .setExecutable(Executable.ivm(new byte[] { /* Kotodama bytecode */ }))
+    .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
+    .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
     .build();
 
 SignedTransaction tx = builder.encodeAndSign(
@@ -84,6 +90,10 @@ transport.submitTransaction(tx).join();
 
 - `IrohaKeyManager.withDefaultProviders()` prefers hardware-backed providers
   when present and falls back to the software signer on emulators/desktop JVMs.
+- `TransactionBuilder.encodeAndSign` always signs the public-submission copy
+  with `QUEUE_PLAN_SYNCED`; setting it explicitly above makes the required
+  signature-bound V1 intent visible. Direct codec users must select their
+  intended mode themselves.
 - For instruction lists, populate `TransactionPayload.setInstructions(...)`
   with `InstructionBox.fromWirePayload(...)` entries. Each payload must already
   include the Norito header/checksum; legacy argument-map instruction payloads

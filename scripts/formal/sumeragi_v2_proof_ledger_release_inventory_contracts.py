@@ -862,8 +862,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 441:
-        errors.append("internal release-regression seal must contain exactly 441 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 446:
+        errors.append("internal release-regression seal must contain exactly 446 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1205,139 +1205,166 @@ def _production_liveness_release_inventory_errors(
             late_lane_recovery_path,
             late_lane_recovery_test,
             """
-            let retained_prepare_qc =
-                lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare);
+            assert!(adapter.proposal_anchor_is_committed_in_state(&proposal));
+            assert!(
+                adapter
+                    .kura
+                    .read_certified_lane_block_artifact(
+                        proposal.descriptor.lane_id,
+                        proposal.descriptor.lane_block_height,
+                    )
+                    .is_none(),
+                "the globally applied body must begin without lane certificate durability"
+            );
+            assert!(
+                !adapter
+                    .state
+                    .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&recovered),
+                "global application alone must not impersonate lane certificate application"
+            );
+            assert!(
+                adapter.proposal_body_available(&proposal),
+                "the missing certificate must remain reconstructable from the canonical body"
+            );
+            """,
+            "late canonical lane recovery must distinguish global body application "
+            "from lane-certificate durability while preserving reconstruction",
+            errors,
+        )
+        _require_rust_token_sequence(
+            late_lane_recovery_path,
+            late_lane_recovery_test,
+            """
+            assert_eq!(
+                adapter
+                    .persist_anchored_sessions()
+                    .expect("rehydrate the late-applied canonical ownership"),
+                0,
+                "no certificate exists yet to persist"
+            );
+            assert!(
+                adapter
+                    .lane_sessions
+                    .proposals_without_commit_qc()
+                    .iter()
+                    .any(|pending| pending == &proposal),
+                "rollover must rehydrate ownership which arrived after adapter construction"
+            );
+            let retained_prepare_qc = lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare);
             let retained_prepare_pops = adapter.pops_for_lane_qc(&retained_prepare_qc);
             assert_eq!(
-                adapter.lane_sessions.insert_qc_with_pops(
-                    retained_prepare_qc.clone(),
-                    &retained_prepare_pops
-                ),
+                adapter
+                    .lane_sessions
+                    .insert_qc_with_pops(retained_prepare_qc.clone(), &retained_prepare_pops),
                 Ok(LaneBlockSessionInsertOutcome::Inserted),
-                "retain one valid PrepareQC as the successor-owned decision"
-            );
-            adapter
-                .prepare_canonical_lane_rollover(&finality_artifact)
-                .expect("canonicalize the late-applied lane owner");
-            let authority = adapter
-                .durable_lane_rollover_authority(&finality_artifact)
-                .expect("inspect incomplete decided-lane rollover")
-                .expect("the incomplete lane owner must move into the successor");
-            """,
-            "late canonical lane recovery must transfer an exact retained "
-            "PrepareQC owner into successor rollover authority",
-            errors,
-        )
-        _require_rust_token_sequence(
-            late_lane_recovery_path,
-            late_lane_recovery_test,
-            """
-            let subsumed_prepare_vote =
-                signed_lane_vote(&proposal, CertPhase::Prepare, &keys[3]);
-            assert!(
-                authority
-                    .covered_source_hash(
-                        &finality_artifact,
-                        &BlockMessage::LaneBlockVote(subsumed_prepare_vote.clone()),
-                    )
-                    .expect("authenticate a still-backpressured vote subsumed by retained PrepareQC")
-                    .is_some(),
-                "a retained same-phase QC must release a redundant vote still owned by network fanout"
+                "retain one valid PrepareQC under the active height"
             );
             assert!(
-                !authority.uses_retained_source(&BlockMessage::LaneBlockVote(
-                    subsumed_prepare_vote.clone()
-                )),
-                "a QC-subsumed vote must retire instead of crossing into the successor"
-            );
-            """,
-            "late canonical lane recovery must retire only an authenticated "
-            "same-phase vote subsumed by retained quorum evidence",
-            errors,
-        )
-        _require_rust_token_sequence(
-            late_lane_recovery_path,
-            late_lane_recovery_test,
-            """
-            let mut forged_subsumed_vote = subsumed_prepare_vote;
-            forged_subsumed_vote.bls_signature[0] ^= 0x80;
-            assert!(
-                authority
-                    .covered_source_hash(
-                        &finality_artifact,
-                        &BlockMessage::LaneBlockVote(forged_subsumed_vote),
-                    )
-                    .is_err(),
-                "rollover must never retire a forged vote under a retained QC"
-            );
-            let unique_commit_vote = signed_lane_vote(&proposal, CertPhase::Commit, &keys[3]);
-            assert!(
-                authority
-                    .covered_source_hash(
-                        &finality_artifact,
-                        &BlockMessage::LaneBlockVote(unique_commit_vote),
-                    )
-                    .is_err(),
-                "a PrepareQC cannot retire a Commit vote which still carries unique phase progress"
-            );
-            """,
-            "late canonical lane recovery must reject forged and phase-distinct "
-            "vote retirement",
-            errors,
-        )
-        _require_rust_token_sequence(
-            late_lane_recovery_path,
-            late_lane_recovery_test,
-            """
-            assert!(
-                authority
-                    .covered_source_hash(
-                        &finality_artifact,
-                        &BlockMessage::LaneBlockQc(recovered.prepare_qc.clone()),
-                    )
-                    .expect("authenticate an uncached same-proposal quorum variant")
-                    .is_some(),
-                "a valid QC learned from another 3-of-4 subset must cross the retained rollover boundary"
+                !adapter
+                    .durable_completion_matches_finality(&finality_artifact)
+                    .expect("inspect late-applied lane durability"),
+                "the recovered proposal and PrepareQC are not a durable completion"
             );
             assert!(
-                authority
-                    .covered_source_hash(
-                        &finality_artifact,
-                        &BlockMessage::LaneBlockQc(recovered.commit_qc.clone()),
-                    )
-                    .is_err(),
-                "rollover must not discard a new CommitQC when the successor owns only Prepare progress"
+                adapter
+                    .durable_lane_rollover_authority(&finality_artifact)
+                    .expect("inspect incomplete decided-lane authority")
+                    .is_none(),
+                "the active height must retain ownership until the CommitQC and receipt are durable"
             );
-            """,
-            "late canonical lane recovery must carry an alternate valid "
-            "PrepareQC while retaining phase-distinct Commit progress",
-            errors,
-        )
-        _require_rust_token_sequence(
-            late_lane_recovery_path,
-            late_lane_recovery_test,
-            """
             assert!(
                 adapter
                     .lane_sessions
                     .qcs_for_incomplete_sessions()
                     .contains(&retained_prepare_qc),
-                "the semantically equivalent retained QC must remain successor-owned"
-            );
-            let mut forged_rollover_qc = recovered.prepare_qc.clone();
-            forged_rollover_qc.bls_aggregate_signature[0] ^= 0x80;
-            assert!(
-                authority
-                    .covered_source_hash(
-                        &finality_artifact,
-                        &BlockMessage::LaneBlockQc(forged_rollover_qc),
-                    )
-                    .is_err(),
-                "semantic proof-variant recovery must still reject a forged aggregate"
+                "the semantically equivalent retained QC must remain active-height-owned"
             );
             """,
-            "late canonical lane recovery must retain the exact successor-owned "
-            "QC and reject forged aggregate variants",
+            "late canonical lane recovery must retain incomplete certificate "
+            "progress in the active predecessor and block successor authority",
+            errors,
+        )
+        _require_rust_token_sequence(
+            late_lane_recovery_path,
+            late_lane_recovery_test,
+            """
+            let _ = adapter.drain_effects(usize::MAX);
+            adapter
+                .schedule_retransmission()
+                .expect("schedule exact missing-certificate discovery");
+            assert!(
+                adapter.drain_effects(usize::MAX).iter().any(|effect| {
+                    matches!(
+                        effect,
+                        V2LaneWorkEffect::PostLaneBlock {
+                            message: BlockMessage::LaneBlockProposal(pending),
+                            ..
+                        } if pending == &proposal
+                    )
+                }),
+                "the rehydrated proposal must become a bounded certificate request source"
+            );
+            """,
+            "late canonical lane recovery must expose one bounded exact "
+            "certificate-discovery source while the predecessor stays active",
+            errors,
+        )
+        _require_rust_token_sequence(
+            late_lane_recovery_path,
+            late_lane_recovery_test,
+            """
+            let certificate = LaneBlockCertificateV1 {
+                proposal: recovered.proposal.clone(),
+                prepare_qc: recovered.prepare_qc.clone(),
+                commit_qc: recovered.commit_qc.clone(),
+            };
+            assert_eq!(
+                accept_lane_message_from(
+                    &mut adapter,
+                    BlockMessage::LaneBlockCertificate(Box::new(certificate)),
+                    PeerId::new(keys[1].public_key().clone()),
+                    0,
+                ),
+                V2LaneIngressOutcome::Inserted
+            );
+            assert_eq!(
+                adapter
+                    .persist_anchored_sessions()
+                    .expect("persist recovered certificate and application receipt"),
+                1
+            );
+            let durable = adapter
+                .kura
+                .read_certified_lane_block_artifact(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .expect("recovered durable certificate");
+            assert_eq!(durable.proposal, recovered.proposal);
+            assert_eq!(durable.prepare_qc, retained_prepare_qc);
+            assert_eq!(durable.commit_qc, recovered.commit_qc);
+            assert!(
+                adapter
+                    .kura
+                    .lane_block_application_receipt_available(&proposal),
+                "certificate recovery must finish the lane application boundary"
+            );
+            assert!(
+                adapter
+                    .durable_completion_matches_finality(&finality_artifact)
+                    .expect("validate recovered decided-lane durability"),
+                "the recovered certificate and application receipt must release the preflight"
+            );
+            assert!(
+                adapter
+                    .durable_lane_rollover_authority(&finality_artifact)
+                    .expect("build recovered decided-lane rollover authority")
+                    .is_some(),
+                "the exact recovered certificate and receipt must release successor activation"
+            );
+            """,
+            "late canonical lane recovery must release successor activation only "
+            "after the exact certificate and application receipt are durable",
             errors,
         )
         if late_lane_recovery_test is not None:
@@ -1402,7 +1429,11 @@ def _production_liveness_release_inventory_errors(
     if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
         errors.append(
             f"{release_path}: production liveness modules must equal the reviewed "
+<<<<<<< HEAD
             f"ordered forty-three-module inventory; found {modules}"
+=======
+            f"ordered 43-module inventory; found {modules}"
+>>>>>>> origin/optimizations
         )
     inventory_rows = ["module\ttest"]
     inventory_has_exact_modules = True
@@ -1434,7 +1465,11 @@ def _production_liveness_release_inventory_errors(
     if leg_ids != expected_leg_ids or len(set(leg_ids)) != len(leg_ids):
         errors.append(
             f"{release_path}: production module leg IDs must equal the reviewed "
+<<<<<<< HEAD
             f"forty-three-entry inventory; found {leg_ids}"
+=======
+            f"43-entry inventory; found {leg_ids}"
+>>>>>>> origin/optimizations
         )
     for _, module, expected_count in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS:
         observed_count = sum(
@@ -2145,21 +2180,33 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
+<<<<<<< HEAD
             "current\ninventory to 860 tests across 43 modules.\n"
+=======
+            "current\ninventory to 865 tests across 43 modules.\n"
+>>>>>>> origin/optimizations
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
+<<<<<<< HEAD
             "current 860-test, 43-module inventory. The complete source-sealed\n"
+=======
+            "current 865-test, 43-module inventory. The complete source-sealed\n"
+>>>>>>> origin/optimizations
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
+<<<<<<< HEAD
             "current\nsource-bound inventory to 860 exact tests across 43 modules and "
+=======
+            "current\nsource-bound inventory to 865 exact tests across 43 modules and "
+>>>>>>> origin/optimizations
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
@@ -2174,7 +2221,7 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
             "contain exactly "
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} unique required\n"
-            "tests: 321 core, 143 queue-journal, 13 configuration, eight data-model,\n"
+            "tests: 324 core, 143 queue-journal, 13 configuration, eight data-model,\n"
             "39 Torii, one Torii-shared, and two integration.",
             "both require that exact\n"
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row shape",

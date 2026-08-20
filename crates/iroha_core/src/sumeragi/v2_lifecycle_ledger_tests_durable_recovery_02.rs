@@ -11,12 +11,19 @@ fn complete_tip_terminal_apply_store_join_rejects_store_drift() {
     store
         .persist(&ledger)
         .expect("persist terminal CompleteTip predecessor");
+    let apply_ordinal = ledger
+        .authenticate_complete_tip_terminal_apply(&complete_tip)
+        .expect("authenticate terminal Apply before store drift");
     store
         .persist(&empty)
         .expect("replace predecessor before cut authentication");
     assert!(
         ledger
-            .into_complete_tip_terminal_apply_store_join(store, complete_tip)
+            .into_complete_tip_terminal_apply_store_join(
+                store,
+                complete_tip,
+                CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(apply_ordinal),
+            )
             .is_err(),
         "a changed attached frame cannot mint predecessor authority"
     );
@@ -40,9 +47,16 @@ fn complete_tip_terminal_apply_store_join_rejects_an_identical_foreign_target() 
     foreign_store
         .persist(&ledger)
         .expect("copy exact terminal predecessor frame to foreign root");
+    let apply_ordinal = ledger
+        .authenticate_complete_tip_terminal_apply(&complete_tip)
+        .expect("authenticate terminal Apply for canonical CompleteTip");
     assert!(
         ledger
-            .into_complete_tip_terminal_apply_store_join(foreign_store, complete_tip)
+            .into_complete_tip_terminal_apply_store_join(
+                foreign_store,
+                complete_tip,
+                CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(apply_ordinal),
+            )
             .is_err(),
         "byte-identical ledger data cannot substitute for the Kura-bound target"
     );

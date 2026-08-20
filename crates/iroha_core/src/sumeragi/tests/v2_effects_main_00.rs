@@ -139,6 +139,8 @@ struct BodyOwnershipProjection {
     durable_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     validated_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
     rejected_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
+    retired_rejected_bodies:
+        BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     runtime_completions: Vec<RuntimeCompletion>,
     runtime_bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
     runtime_body_reservation: Option<BodyAvailableReservation>,
@@ -163,6 +165,7 @@ impl V2EffectExecutor<FakeRuntime> {
             durable_bodies: self.durable_bodies.clone(),
             validated_bodies: self.validated_bodies.clone(),
             rejected_bodies: self.rejected_bodies.clone(),
+            retired_rejected_bodies: self.retired_rejected_bodies.clone(),
             runtime_completions: self.runtime.completions.clone(),
             runtime_bound_validations: self.runtime.bound_validations.clone(),
             runtime_body_reservation: self.runtime.reserved_body_available.clone(),
@@ -937,9 +940,6 @@ impl EffectRuntime for FakeRuntime {
         let Some(incumbent) = self.terminal_body_candidate_owners.get(&identity) else {
             return Ok(None);
         };
-        if incumbent.owner() != ownership.owner() {
-            return Err("fake runtime terminal query rejected exact owner replacement".to_owned());
-        }
         incumbent
             .adopt_incumbent_body_stage_for_retry_or_authority(ownership, effect)
             .map(Some)
@@ -1468,6 +1468,10 @@ struct ProductionTransportFixture {
     manifest: wire::PayloadManifest,
     canonical_commitment: wire::ExecutionCommitment,
     conflicting_commitment: wire::ExecutionCommitment,
+<<<<<<< HEAD
+=======
+    _lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+>>>>>>> origin/optimizations
     executor: V2EffectExecutor,
 }
 impl ProductionTransportFixture {
@@ -1615,6 +1619,10 @@ impl ProductionTransportFixture {
             manifest,
             canonical_commitment,
             conflicting_commitment,
+<<<<<<< HEAD
+=======
+            _lifecycle_ordinals: lifecycle_ordinals,
+>>>>>>> origin/optimizations
             executor,
         }
     }

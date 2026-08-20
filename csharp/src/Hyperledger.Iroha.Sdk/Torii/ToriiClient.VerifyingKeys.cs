@@ -421,6 +421,7 @@ public sealed partial class ToriiClient
             var timeToLive = cursor.TakeField("time_to_live_ms");
             var nonce = cursor.TakeField("nonce");
             var feePayment = cursor.TakeField("fee_payment");
+            var admissionIntent = cursor.TakeField("admission_intent");
             var metadata = cursor.TakeField("metadata");
             var attachments = cursor.TakeField("attachments");
             if (!cursor.IsFinished
@@ -429,7 +430,7 @@ public sealed partial class ToriiClient
                 || metadata.IsEmpty)
             {
                 throw new JsonException(
-                    $"{context} must contain exactly one canonical nine-field Norito TransactionPayload.");
+                    $"{context} must contain exactly one canonical ten-field Norito TransactionPayload.");
             }
 
             var (authorityAccountId, backend, name, expectedRecord) =
@@ -459,6 +460,7 @@ public sealed partial class ToriiClient
                 required: false,
                 context: $"{context}.nonce");
             SccpSubmitValidation.RequireCanonicalTransactionFeePayment(feePayment);
+            SccpSubmitValidation.RequireQueuePlanSyncedAdmissionIntent(admissionIntent);
             SccpSubmitValidation.RequireEmptyTransactionMetadata(metadata);
             RequireAbsentVerifyingKeyDraftOption(attachments, $"{context}.attachments");
             RequireRequestedVerifyingKeyInstruction(
@@ -476,7 +478,7 @@ public sealed partial class ToriiClient
         catch (Exception error) when (error is ArgumentException or OverflowException)
         {
             throw new JsonException(
-                $"{context} must contain exactly one canonical nine-field Norito TransactionPayload.",
+                $"{context} must contain exactly one canonical ten-field Norito TransactionPayload.",
                 error);
         }
     }

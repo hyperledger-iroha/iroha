@@ -79,6 +79,8 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+#[path = "actual_soranet_handshake_debug.rs"]
+mod actual_soranet_handshake_debug;
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
 use crate::{
@@ -1260,6 +1262,13 @@ pub struct SoranetPow {
     pub min_ticket_ttl: Duration,
     /// Target lifetime used when minting tickets locally.
     pub ticket_ttl: Duration,
+    /// Maximum concurrent local Argon2 ticket mints.
+    pub outbound_mint_capacity: NonZeroUsize,
+    /// Maximum concurrent remote Argon2 ticket verifications.
+    ///
+    /// At most `(outbound_mint_capacity + inbound_verify_capacity) * memory_kib`
+    /// KiB is owned by active puzzle jobs in a production process.
+    pub inbound_verify_capacity: NonZeroUsize,
     /// Maximum revoked ticket entries to retain on disk.
     pub revocation_store_capacity: usize,
     /// Maximum TTL enforced for revoked entries.
@@ -1305,6 +1314,14 @@ impl Default for SoranetPuzzle {
     }
 }
 impl SoranetPow {
+    /// Hard ceiling for either direction's puzzle-work capacity.
+    pub const MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION: usize = 8;
+    /// Default capacity in each direction.
+    ///
+    /// Three concurrent jobs let every peer in the canonical four-validator
+    /// committee authenticate directly without serializing topology formation.
+    pub const DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION: NonZeroUsize =
+        NonZeroUsize::new(3).unwrap();
     /// Construct a PoW policy with explicit parameters.
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
@@ -1324,6 +1341,8 @@ impl SoranetPow {
             max_future_skew,
             min_ticket_ttl,
             ticket_ttl,
+            outbound_mint_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
+            inbound_verify_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
             revocation_store_capacity,
             revocation_max_ttl,
             revocation_store_path,
@@ -1338,7 +1357,9 @@ impl SoranetPow {
             difficulty: iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY,
             max_future_skew: Duration::from_secs(300),
             min_ticket_ttl: Duration::from_secs(30),
-            ticket_ttl: Duration::from_secs(60),
+            ticket_ttl: Duration::from_secs(300),
+            outbound_mint_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
+            inbound_verify_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
             revocation_store_capacity: 8_192,
             revocation_max_ttl: Duration::from_secs(900),
             revocation_store_path: Cow::Borrowed("./storage/soranet/ticket_revocations.norito"),
@@ -1356,65 +1377,6 @@ impl SoranetPow {
 impl Default for SoranetPow {
     fn default() -> Self {
         Self::default_const()
-    }
-}
-struct HexWithOrigin<'a>(&'a WithOrigin<Vec<u8>>);
-impl fmt::Debug for HexWithOrigin<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WithOrigin")
-            .field("value_hex", &hex::encode(self.0.value()))
-            .field("origin", self.0.origin())
-            .finish()
-    }
-}
-impl fmt::Debug for SoranetHandshake {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let signed_ticket_key = self.pow.signed_ticket_public_key.as_ref().map_or_else(
-            || "None".to_string(),
-            |key| format!("Some(len={})", key.len()),
-        );
-        f.debug_struct("SoranetHandshake")
-            .field("descriptor_commit", &HexWithOrigin(&self.descriptor_commit))
-            .field(
-                "client_capabilities",
-                &HexWithOrigin(&self.client_capabilities),
-            )
-            .field(
-                "relay_capabilities",
-                &HexWithOrigin(&self.relay_capabilities),
-            )
-            .field("trust_gossip", &self.trust_gossip)
-            .field("kem_id", &self.kem_id)
-            .field("sig_id", &self.sig_id)
-            .field("resume_hash", &self.resume_hash.as_ref().map(HexWithOrigin))
-            .field(
-                "pow",
-                &format_args!(
-                "SoranetPow {{ required: {}, difficulty: {}, max_future_skew_secs: {}, min_ticket_ttl_secs: {}, ticket_ttl_secs: {}, revocation_store_capacity: {}, revocation_max_ttl_secs: {}, revocation_store_path: {}, puzzle: {}, signed_ticket_public_key: {} }}",
-                self.pow.required,
-                self.pow.difficulty,
-                self.pow.max_future_skew.as_secs(),
-                    self.pow.min_ticket_ttl.as_secs(),
-                    self.pow.ticket_ttl.as_secs(),
-                    self.pow.revocation_store_capacity,
-                    self.pow.revocation_max_ttl.as_secs(),
-                    self.pow.revocation_store_path,
-                    self.pow
-                        .puzzle
-                        .as_ref()
-                        .map_or_else(
-                            || "None".to_string(),
-                            |puzzle| format!(
-                            "Some {{ memory_kib: {}, time_cost: {}, lanes: {} }}",
-                            puzzle.memory_kib.get(),
-                            puzzle.time_cost.get(),
-                            puzzle.lanes.get()
-                        ),
-                        ),
-                    signed_ticket_key,
-                ),
-            )
-            .finish()
     }
 }
 impl Default for SoranetHandshake {
@@ -6359,12 +6321,23 @@ impl Sumeragi {
             "sumeragi.queues.authenticated_non_validator_sources",
             self.queues.authenticated_non_validator_sources.get(),
         )?;
+<<<<<<< HEAD
         let minimum_body_queue_capacity = authenticated_non_validator_source_capacity
             .checked_mul(3)
             .and_then(|sources| sources.checked_add(5))
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
             ))?;
+=======
+        let minimum_body_queue_capacity = sumeragi_v2_body_ingress_required_message_capacity(
+            1,
+            self.queues.authenticated_non_validator_sources.get(),
+        )
+        .and_then(|minimum| u64::try_from(minimum).ok())
+        .ok_or(SumeragiV2ConfigError::LimitOverflow(
+            "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
+        ))?;
+>>>>>>> origin/optimizations
         if body_queue_capacity < minimum_body_queue_capacity {
             return Err(SumeragiV2ConfigError::BodyQueueTooSmall {
                 actual: body_queue_capacity,
@@ -7031,6 +7004,163 @@ pub fn validate_sumeragi_v2_exact_output_geometry(
     }
     Ok(())
 }
+/// Complete production lifecycle capacity geometry for one height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SumeragiV2LifecycleCapacityGeometry {
+    /// Consensus lifecycle records.
+    pub consensus: usize,
+    /// Reducer-effect lifecycle records.
+    pub effect: usize,
+    /// Certified Serve lifecycle records.
+    pub serve: usize,
+    /// Certified Producer lifecycle records.
+    pub producer: usize,
+    /// Sum of every lifecycle capacity class.
+    pub total: usize,
+}
+/// Invalid production lifecycle capacity geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum SumeragiV2LifecycleCapacityGeometryError {
+    /// One capacity derivation overflowed the platform size representation.
+    #[error("Sumeragi v2 production lifecycle capacity geometry overflowed")]
+    Overflow,
+    /// One physical-slot class exceeded the canonical slot-index space.
+    #[error(
+        "Sumeragi v2 production lifecycle {class} capacity {actual} exceeds the canonical per-class maximum {maximum}"
+    )]
+    ClassTooLarge {
+        /// Capacity-class label.
+        class: &'static str,
+        /// Derived class capacity.
+        actual: usize,
+        /// Canonical per-class maximum.
+        maximum: usize,
+    },
+    /// The complete height-local ledger exceeded its canonical record bound.
+    #[error(
+        "Sumeragi v2 production lifecycle capacity geometry requires {total} records (consensus {consensus}, effect {effect}, serve {serve}, producer {producer}), above the canonical height-local maximum {maximum}"
+    )]
+    TotalTooLarge {
+        /// Consensus lifecycle records.
+        consensus: usize,
+        /// Reducer-effect lifecycle records.
+        effect: usize,
+        /// Certified Serve lifecycle records.
+        serve: usize,
+        /// Certified Producer lifecycle records.
+        producer: usize,
+        /// Sum of every capacity class.
+        total: usize,
+        /// Canonical height-local maximum.
+        maximum: usize,
+    },
+}
+/// Derive and admit the exact production lifecycle capacity geometry.
+///
+/// Certified Serve and Producer each reserve two phase families containing
+/// every validator plus one body-queue bound for every authenticated
+/// non-validator ingress source. Every class and their sum must fit the
+/// canonical `u16` physical-slot space.
+///
+/// # Errors
+///
+/// Returns an exact geometry error on arithmetic overflow or when a class or
+/// the complete height-local ledger exceeds its canonical bound.
+pub fn sumeragi_v2_lifecycle_capacity_geometry(
+    validator_roster_len: usize,
+    effect_work_capacity: usize,
+    certified_request_capacity: usize,
+    authenticated_non_validator_source_capacity: usize,
+) -> core::result::Result<
+    SumeragiV2LifecycleCapacityGeometry,
+    SumeragiV2LifecycleCapacityGeometryError,
+> {
+    let consensus = defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP
+        .checked_mul(2)
+        .ok_or(SumeragiV2LifecycleCapacityGeometryError::Overflow)?;
+    let serve = authenticated_non_validator_source_capacity
+        .max(1)
+        .checked_mul(certified_request_capacity)
+        .and_then(|observer| validator_roster_len.checked_add(observer))
+        .and_then(|owners| {
+            owners.checked_mul(defaults::sumeragi::V2_CERTIFIED_SERVE_PHASE_FAMILIES)
+        })
+        .ok_or(SumeragiV2LifecycleCapacityGeometryError::Overflow)?;
+    let producer = serve;
+    let total = consensus
+        .checked_add(effect_work_capacity)
+        .and_then(|sum| sum.checked_add(serve))
+        .and_then(|sum| sum.checked_add(producer))
+        .ok_or(SumeragiV2LifecycleCapacityGeometryError::Overflow)?;
+    let maximum = defaults::sumeragi::V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
+    for (class, actual) in [
+        ("consensus", consensus),
+        ("effect", effect_work_capacity),
+        ("serve", serve),
+        ("producer", producer),
+    ] {
+        if actual > maximum {
+            return Err(SumeragiV2LifecycleCapacityGeometryError::ClassTooLarge {
+                class,
+                actual,
+                maximum,
+            });
+        }
+    }
+    if total > maximum {
+        return Err(SumeragiV2LifecycleCapacityGeometryError::TotalTooLarge {
+            consensus,
+            effect: effect_work_capacity,
+            serve,
+            producer,
+            total,
+            maximum,
+        });
+    }
+    Ok(SumeragiV2LifecycleCapacityGeometry {
+        consensus,
+        effect: effect_work_capacity,
+        serve,
+        producer,
+        total,
+    })
+}
+/// Derive the outer-ingress message capacity required for a validator roster.
+///
+/// Every validator owns five protected positions, every configured
+/// authenticated non-validator source owns three, and anonymous traffic owns
+/// one position without a validator roster or two positions once validators
+/// are configured.
+#[must_use]
+pub fn sumeragi_v2_body_ingress_required_message_capacity(
+    validator_roster_len: usize,
+    authenticated_non_validator_source_capacity: usize,
+) -> Option<usize> {
+    let anonymous_slots = if validator_roster_len == 0 { 1 } else { 2 };
+    validator_roster_len
+        .checked_mul(5)
+        .and_then(|required| {
+            authenticated_non_validator_source_capacity
+                .checked_mul(3)
+                .and_then(|authenticated_sources| required.checked_add(authenticated_sources))
+        })
+        .and_then(|required| required.checked_add(anonymous_slots))
+}
+/// Derive the aggregate outer-ingress byte capacity for a validator roster.
+///
+/// Every validator, configured authenticated non-validator source, and the
+/// anonymous source owns one isolated `body_source_bytes` partition.
+#[must_use]
+pub fn sumeragi_v2_body_ingress_required_byte_capacity(
+    validator_roster_len: usize,
+    authenticated_non_validator_source_capacity: usize,
+    body_source_bytes: usize,
+) -> Option<usize> {
+    validator_roster_len
+        .checked_add(authenticated_non_validator_source_capacity)
+        .and_then(|source_count| source_count.checked_add(1))
+        .and_then(|source_count| source_count.checked_mul(body_source_bytes))
+}
 /// Invalid or non-canonical Sumeragi v2 runtime configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SumeragiV2ConfigError {
@@ -7249,6 +7379,15 @@ impl TrustedPeers {
     /// Tells whether a trusted peers list has some other peers except for the peer itself
     pub fn contains_other_trusted_peers(&self) -> bool {
         !self.others.is_empty()
+    }
+    /// Return the validator roster size resolved by the bootstrap PoP policy.
+    #[must_use]
+    pub fn validator_roster_len(&self) -> usize {
+        if self.pops.is_empty() {
+            self.others.len().saturating_add(1)
+        } else {
+            self.pops.len()
+        }
     }
 }
 /// Live query store configuration.

@@ -9,6 +9,7 @@ import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -74,6 +75,10 @@ final class VerifyingKeyDraftBinding {
     if (!expectedNetworkId.equals(payload.networkId()) || !authority.equals(payload.authority())) {
       throw new IllegalArgumentException(
           "verifying-key draft transaction payload changed the requested network or authority");
+    }
+    if (payload.admissionIntent() != TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
+      throw new IllegalArgumentException(
+          "verifying-key draft transaction payload admission intent must be QueuePlanSynced");
     }
     final Executable executable = payload.executable();
     if (!executable.isInstructions()) {

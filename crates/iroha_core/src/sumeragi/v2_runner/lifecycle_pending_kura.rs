@@ -440,6 +440,7 @@ fn run_pending_active_height(
     retransmit_interval: Duration,
 ) -> Result<Option<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError> {
     let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);
+    let mut canonical_lane_body_recovered = false;
     loop {
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {
@@ -547,6 +548,24 @@ fn run_pending_active_height(
             continue;
         }
 
+        let rollover_ready = activated.with_runner_runtime(
+            &mut active_runner,
+            |executor, _services, lane_work| {
+                super::preflight_finalized_lane_rollover(
+                    executor,
+                    lane_work,
+                    &mut canonical_lane_body_recovered,
+                )
+            },
+        )?;
+        if !rollover_ready {
+            activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
+                committed_lane_status_publisher.publish_if_changed(lane_work)
+            });
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
+        }
+
         let (finalized, lane_work) = activated.into_finalized_rollover(&mut active_runner)?;
         let prepared_successor = {
             let (receipt, artifact) = finalized.finality();
@@ -618,6 +637,24 @@ fn run_pending_active_height(
         )?;
         let cleanup_ready = post_output.retire_lifecycle_stores()?;
         let cleanup = cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor);
+        let PreparedPendingKuraSuccessorV1 {
+            verified_context,
+            lifecycle_storage_authority,
+            pending_activation,
+            receipt_height,
+            receipt_context_id,
+            receipt_block_hash,
+        } = prepared_successor;
+        let (cleanup, lifecycle_storage_authority) =
+            cleanup.bind_successor_storage(lifecycle_storage_authority)?;
+        let prepared_successor = PreparedPendingKuraSuccessorV1 {
+            verified_context,
+            lifecycle_storage_authority,
+            pending_activation,
+            receipt_height,
+            receipt_context_id,
+            receipt_block_hash,
+        };
         if let Some(warning) = cleanup.wal_retirement_warning() {
             iroha_logger::warn!(
                 height = prepared_successor.receipt_height,

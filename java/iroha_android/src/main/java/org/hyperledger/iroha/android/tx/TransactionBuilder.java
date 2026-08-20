@@ -5,6 +5,7 @@ import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.crypto.Signer;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoException;
@@ -24,8 +25,11 @@ public final class TransactionBuilder {
   }
 
   /**
-   * Encodes the payload with the Norito codec and signs it using the given alias. Keys are created on
-   * demand by the {@link IrohaKeyManager}.
+   * Encodes the payload for public Torii submission and signs it using the given alias. Keys are
+   * created on demand by the {@link IrohaKeyManager}.
+   *
+   * <p>Public submission requires the signature-bound QueuePlan admission intent. The caller's
+   * payload remains unchanged so direct codec users continue to produce ordinary transactions.
    */
   public SignedTransaction encodeAndSign(
       final TransactionPayload payload,
@@ -33,13 +37,22 @@ public final class TransactionBuilder {
       final IrohaKeyManager.KeySecurityPreference preference)
       throws NoritoException, KeyManagementException, SigningException {
     final Signer signer = keyManager.signerForAlias(alias, preference);
-    return encodeAndSignInternal(payload, signer, alias);
+    return encodeAndSignInternal(withQueuePlanSyncedAdmission(payload), signer, alias);
   }
 
-  /** Encodes the payload and signs it using the provided signer. */
+  /** Encodes a public-submission payload and signs it using the provided signer. */
   public SignedTransaction encodeAndSign(final TransactionPayload payload, final Signer signer)
       throws NoritoException, SigningException {
-    return encodeAndSignInternal(payload, signer, null);
+    return encodeAndSignInternal(withQueuePlanSyncedAdmission(payload), signer, null);
+  }
+
+  private static TransactionPayload withQueuePlanSyncedAdmission(
+      final TransactionPayload payload) {
+    Objects.requireNonNull(payload, "payload");
+    return payload
+        .toBuilder()
+        .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
+        .build();
   }
 
   private SignedTransaction encodeAndSignInternal(

@@ -88,7 +88,7 @@ public final class TransactionIdentityTests {
     final SignedTransaction transaction =
         signed(CODEC.encodeTransaction(samplePayload(Collections.emptyMap(), null)), (byte) 0x44);
 
-    assertEquals(9, countSizedFields(transaction.encodedPayload()));
+    assertEquals(10, countSizedFields(transaction.encodedPayload()));
     assertEquals(3, countSizedFields(SignedTransactionEncoder.encode(transaction)));
   }
 

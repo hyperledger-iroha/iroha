@@ -1291,6 +1291,14 @@ impl Root {
                     lane_profile.defaults().max_total_connections,
                     NonZeroUsize::get,
                 );
+            let remote_trusted_peer_count = trusted_peers.value().others.len();
+            if remote_trusted_peer_count > reply_source_capacity {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "trusted-peer full fanout requires {remote_trusted_peer_count} remote connections, above the effective network connection capacity {reply_source_capacity}"
+                    )),
+                );
+            }
             if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
@@ -1302,6 +1310,69 @@ impl Root {
             let effect_work_capacity = (sumeragi.queues.commands.get()
                 / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
                 .max(1);
+            let validator_roster_len = trusted_peers.value().validator_roster_len();
+            let authenticated_non_validator_source_capacity =
+                sumeragi.queues.authenticated_non_validator_sources.get();
+            match actual::sumeragi_v2_body_ingress_required_message_capacity(
+                validator_roster_len,
+                authenticated_non_validator_source_capacity,
+            ) {
+                Some(required_bodies) if sumeragi.queues.bodies.get() < required_bodies => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "Sumeragi v2 canonical outer-ingress message capacity {} is below the roster-aware minimum {required_bodies}; configured validator roster is {validator_roster_len}, and authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}",
+                            sumeragi.queues.bodies,
+                        )),
+                    );
+                }
+                None => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "Sumeragi v2 roster-aware canonical outer-ingress message minimum overflowed; configured validator roster is {validator_roster_len}, and authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}",
+                        )),
+                    );
+                }
+                Some(_) => {}
+            }
+            let body_source_bytes = sumeragi.queues.body_source_bytes.get();
+            match actual::sumeragi_v2_body_ingress_required_byte_capacity(
+                validator_roster_len,
+                authenticated_non_validator_source_capacity,
+                body_source_bytes,
+            ) {
+                Some(required_body_bytes)
+                    if sumeragi.queues.body_bytes.get() < required_body_bytes =>
+                {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "Sumeragi v2 aggregate canonical outer-ingress wire-byte capacity {} is below the roster-aware minimum {required_body_bytes}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}, and each source requires {body_source_bytes} bytes",
+                            sumeragi.queues.body_bytes,
+                        )),
+                    );
+                }
+                None => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "Sumeragi v2 roster-aware aggregate canonical outer-ingress wire-byte minimum overflowed; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}, and each source requires {body_source_bytes} bytes",
+                        )),
+                    );
+                }
+                Some(_) => {}
+            }
+            if let Err(error) = actual::sumeragi_v2_lifecycle_capacity_geometry(
+                validator_roster_len,
+                effect_work_capacity,
+                sumeragi.queues.bodies.get(),
+                sumeragi.queues.authenticated_non_validator_sources.get(),
+            ) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "{error}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {}, and certified-request capacity is {}",
+                        sumeragi.queues.authenticated_non_validator_sources,
+                        sumeragi.queues.bodies,
+                    )),
+                );
+            }
             let geometry = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
                 effect_work_capacity,
                 sumeragi.queues.bodies.get(),
@@ -5700,7 +5771,10 @@ pub struct SumeragiQueues {
     #[config(default = "defaults::sumeragi::QUEUE_BODY_CAPACITY")]
     pub bodies: NonZeroUsize,
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
-    #[config(default = "defaults::sumeragi::QUEUE_BODY_BYTES")]
+    #[config(
+        env = "SUMERAGI_QUEUES_BODY_BYTES",
+        default = "defaults::sumeragi::QUEUE_BODY_BYTES"
+    )]
     pub body_bytes: NonZeroUsize,
     /// Per-ingress-source canonical outer-ingress wire-byte partition.
     /// Validator partitions isolate ordinary traffic, payload completions, and
@@ -5999,12 +6073,20 @@ impl Sumeragi {
         let minimum_body_sources = queues
             .authenticated_non_validator_sources
             .get()
+<<<<<<< HEAD
             .checked_add(1);
         let minimum_body_messages = queues
             .authenticated_non_validator_sources
             .get()
             .checked_mul(3)
             .and_then(|sources| sources.checked_add(5));
+=======
+            .checked_add(2);
+        let minimum_body_messages = actual::sumeragi_v2_body_ingress_required_message_capacity(
+            1,
+            queues.authenticated_non_validator_sources.get(),
+        );
+>>>>>>> origin/optimizations
         match minimum_body_messages {
             Some(minimum) if queues.bodies.get() < minimum => {
                 emitter.emit(
@@ -6250,6 +6332,10 @@ pub struct SoranetHandshakePow {
     min_ticket_ttl_secs: u64,
     #[config(default = "Self::default_ticket_ttl()")]
     ticket_ttl_secs: u64,
+    #[config(default = "Self::default_puzzle_work_capacity()")]
+    outbound_mint_capacity: NonZeroUsize,
+    #[config(default = "Self::default_puzzle_work_capacity()")]
+    inbound_verify_capacity: NonZeroUsize,
     #[config(default = "Self::default_revocation_store_capacity()")]
     revocation_store_capacity: u64,
     #[config(default = "Self::default_revocation_store_ttl()")]
@@ -6273,7 +6359,18 @@ impl SoranetHandshakePow {
         30
     }
     const fn default_ticket_ttl() -> u64 {
-        60
+        Self::default_max_future_skew()
+    }
+    const fn default_puzzle_work_capacity() -> NonZeroUsize {
+        actual::SoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+    }
+    fn bound_puzzle_work_capacity(capacity: NonZeroUsize) -> NonZeroUsize {
+        NonZeroUsize::new(
+            capacity
+                .get()
+                .min(actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION),
+        )
+        .expect("bounded SoraNet puzzle-work capacity is non-zero")
     }
     const fn default_revocation_store_capacity() -> u64 {
         8_192
@@ -6290,6 +6387,8 @@ impl SoranetHandshakePow {
             max_future_skew_secs,
             min_ticket_ttl_secs,
             ticket_ttl_secs,
+            outbound_mint_capacity,
+            inbound_verify_capacity,
             revocation_store_capacity,
             revocation_store_ttl_secs,
             revocation_store_path,
@@ -6318,6 +6417,8 @@ impl SoranetHandshakePow {
             max_future_skew,
             min_ticket_ttl,
             ticket_ttl,
+            outbound_mint_capacity: Self::bound_puzzle_work_capacity(outbound_mint_capacity),
+            inbound_verify_capacity: Self::bound_puzzle_work_capacity(inbound_verify_capacity),
             revocation_store_capacity,
             revocation_max_ttl,
             revocation_store_path: revocation_store_path.to_string_lossy().into_owned().into(),
@@ -6372,37 +6473,7 @@ impl SoranetHandshakePuzzle {
 }
 #[cfg(test)]
 mod soranet_handshake_puzzle_tests {
-    use super::*;
-    #[test]
-    fn parse_bounds_argon2_resource_costs() {
-        let upper = SoranetHandshakePuzzle {
-            memory_kib: u32::MAX,
-            time_cost: u32::MAX,
-            lanes: u32::MAX,
-        }
-        .parse();
-        assert_eq!(
-            upper.memory_kib.get(),
-            iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB
-        );
-        assert_eq!(
-            upper.time_cost.get(),
-            iroha_crypto::soranet::puzzle::MAX_TIME_COST
-        );
-        assert_eq!(upper.lanes.get(), iroha_crypto::soranet::puzzle::MAX_LANES);
-        let lower = SoranetHandshakePuzzle {
-            memory_kib: 0,
-            time_cost: 0,
-            lanes: 0,
-        }
-        .parse();
-        assert_eq!(
-            lower.memory_kib.get(),
-            iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
-        );
-        assert_eq!(lower.time_cost.get(), 1);
-        assert_eq!(lower.lanes.get(), 1);
-    }
+    include!("user_soranet_handshake_tests.rs");
 }
 /// User-level configuration container for SoraNet privacy telemetry.
 #[derive(Debug, Clone, Copy, ReadConfig)]
@@ -31210,7 +31281,7 @@ mod duration_clamp_tests {
         actual, defaults,
         user::{LaneValidatorModeConfig, SoracloudRuntime, SoracloudRuntimeHuggingFace},
     };
-    use iroha_config_base::{read::ConfigReader, toml::TomlSource, util::Bytes};
+    use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource, util::Bytes};
     use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -31284,6 +31355,36 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 "#;
     fn base_table() -> Table {
         toml::from_str(MINIMAL_CONFIG).expect("parse minimal config")
+    }
+    fn four_validator_roster_table() -> Table {
+        let mut table = base_table();
+        let base_public_key = table
+            .get("public_key")
+            .and_then(Value::as_str)
+            .expect("minimal config public key")
+            .to_owned();
+        let mut trusted_peers = vec![Value::String(format!("{base_public_key}@127.0.0.1:1337"))];
+        let trusted_peers_pop = table
+            .get_mut("trusted_peers_pop")
+            .and_then(Value::as_array_mut)
+            .expect("minimal config trusted peer PoP array");
+        for (index, seed) in [0x91, 0x92, 0x93].into_iter().enumerate() {
+            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic BLS validator fixture");
+            let public_key = key_pair.public_key().to_string();
+            let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                .expect("derive BLS validator PoP");
+            trusted_peers.push(Value::String(format!(
+                "{public_key}@127.0.0.1:{}",
+                1338 + index
+            )));
+            let mut pop_entry = Table::new();
+            pop_entry.insert("public_key".into(), Value::String(public_key));
+            pop_entry.insert("pop_hex".into(), Value::String(hex::encode(pop)));
+            trusted_peers_pop.push(Value::Table(pop_entry));
+        }
+        table.insert("trusted_peers".into(), Value::Array(trusted_peers));
+        table
     }
     fn load_root(table: Table) -> actual::Root {
         actual::Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
@@ -33857,6 +33958,175 @@ publish_delay_seconds = 17
         );
     }
     #[test]
+    fn trusted_peer_full_fanout_must_fit_the_effective_network_capacity() {
+        let set_connection_capacity = |table: &mut Table, capacity: usize| {
+            table
+                .get_mut("network")
+                .and_then(Value::as_table_mut)
+                .expect("network table")
+                .insert(
+                    "max_total_connections".into(),
+                    Value::Integer(i64::try_from(capacity).expect("fixture capacity fits TOML")),
+                );
+        };
+
+        let mut exact = four_validator_roster_table();
+        set_connection_capacity(&mut exact, 3);
+        let admitted = load_root(exact);
+        assert_eq!(admitted.common.trusted_peers.value().others.len(), 3);
+        assert_eq!(
+            admitted
+                .network
+                .max_total_connections
+                .map(std::num::NonZeroUsize::get),
+            Some(3),
+        );
+
+        let mut underbudget = four_validator_roster_table();
+        set_connection_capacity(&mut underbudget, 2);
+        let error = actual::Root::from_toml_source(TomlSource::inline(underbudget))
+            .expect_err("three remote trusted peers cannot fit two protected P2P sources");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "trusted-peer full fanout requires 3 remote connections, above the effective network connection capacity 2"
+            ),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_body_messages_must_cover_the_configured_validator_roster() {
+        let authenticated_non_validator_sources =
+            defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get();
+        let required = actual::sumeragi_v2_body_ingress_required_message_capacity(
+            4,
+            authenticated_non_validator_sources,
+        )
+        .expect("fixture message geometry is representable");
+        assert_eq!(required, 28, "fixture must pin the production geometry");
+
+        let set_bodies_with_exact_fanout = |table: &mut Table, bodies: usize| {
+            table
+                .entry("sumeragi")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("sumeragi table")
+                .entry("queues")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("sumeragi queue table")
+                .insert(
+                    "bodies".into(),
+                    Value::Integer(i64::try_from(bodies).expect("fixture capacity fits TOML")),
+                );
+            table
+                .get_mut("network")
+                .and_then(Value::as_table_mut)
+                .expect("network table")
+                .insert("max_total_connections".into(), Value::Integer(3));
+        };
+
+        let mut exact = four_validator_roster_table();
+        set_bodies_with_exact_fanout(&mut exact, required);
+        let admitted = load_root(exact);
+        assert_eq!(admitted.sumeragi.queues.bodies.get(), required);
+
+        let underbudget = required - 1;
+        let mut table = four_validator_roster_table();
+        set_bodies_with_exact_fanout(&mut table, underbudget);
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("one fewer protected message slot cannot serve the four-validator roster");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(&format!(
+                "canonical outer-ingress message capacity {underbudget} is below the roster-aware minimum {required}"
+            )),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_body_bytes_must_cover_the_configured_validator_roster() {
+        let table = four_validator_roster_table();
+        let actual = load_root(table.clone());
+        assert_eq!(
+            actual.common.trusted_peers.value().validator_roster_len(),
+            4,
+            "fixture must exercise the four-validator byte requirement"
+        );
+        let authenticated_non_validator_sources =
+            defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get();
+        let body_source_bytes = defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+        let required = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            4,
+            authenticated_non_validator_sources,
+            body_source_bytes,
+        )
+        .expect("fixture byte geometry is representable");
+        let underbudget = required - body_source_bytes;
+        let mut table = table;
+        table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table")
+            .entry("queues")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi queue table")
+            .insert(
+                "body_bytes".into(),
+                Value::Integer(i64::try_from(underbudget).expect("fixture budget fits TOML")),
+            );
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("six source partitions cannot serve a four-validator roster plus ingress");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(&format!(
+                "aggregate canonical outer-ingress wire-byte capacity {underbudget} is below the roster-aware minimum {required}"
+            )),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_body_bytes_env_override_is_consumed_and_roster_validated() {
+        let table = four_validator_roster_table();
+        let authenticated_non_validator_sources =
+            defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get();
+        let body_source_bytes = defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+        let required = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            4,
+            authenticated_non_validator_sources,
+            body_source_bytes,
+        )
+        .expect("fixture byte geometry is representable");
+        let load_with_env = |body_bytes: usize| {
+            let env = MockEnv::new().set("SUMERAGI_QUEUES_BODY_BYTES", body_bytes.to_string());
+            let env_probe = env.clone();
+            let result = ConfigReader::new()
+                .with_env(env)
+                .with_toml_source(TomlSource::inline(table.clone()))
+                .read_and_complete::<super::Root>()
+                .expect("read user config with Sumeragi body-byte env override")
+                .parse();
+            assert!(
+                env_probe.unvisited().is_empty(),
+                "the generated Compose environment key must be consumed"
+            );
+            result
+        };
+        let actual = load_with_env(required).expect("exact roster-aware env capacity is valid");
+        assert_eq!(actual.sumeragi.queues.body_bytes.get(), required);
+
+        let underbudget = required - body_source_bytes;
+        let error = load_with_env(underbudget)
+            .expect_err("under-budget environment capacity must fail roster-aware admission");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(&format!("roster-aware minimum {required}")),
+            "{report}"
+        );
+    }
+    #[test]
     fn sumeragi_v2_exact_output_geometry_accepts_equal_capacity_boundary() {
         let mut table = base_table();
         let network = table
@@ -33919,6 +34189,39 @@ publish_delay_seconds = 17
             report.contains(
                 "Sumeragi v2 outbound shared ownership capacity 394 is below one maximum fanout 396; configured network reply-source capacity is 132"
             ),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_v2_lifecycle_geometry_rejects_unreservable_authenticated_sources() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert("max_total_connections".into(), Value::Integer(120));
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let queues = sumeragi
+            .entry("queues")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.queues table");
+        queues.insert(
+            "authenticated_non_validator_sources".into(),
+            Value::Integer(101),
+        );
+        queues.insert("bodies".into(), Value::Integer(310));
+        queues.insert("body_bytes".into(), Value::Integer(103 * 33 * 1024 * 1024));
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("height-local lifecycle capacity must fit its physical-slot space");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("above the canonical height-local maximum 65536")
+                && report.contains("authenticated non-validator source capacity is 101"),
             "{report}",
         );
     }

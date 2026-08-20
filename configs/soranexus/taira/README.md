@@ -2642,7 +2642,11 @@ signer config as-is and fail if it is missing; neither script overwrites or
 bootstraps over an operator-supplied path. Omit `--write-config` only when the
 intended flow is to bootstrap the default runtime canary config automatically,
 and then pass the exact owner-private credential with
-`--onboarding-token-file /absolute/runtime/path/onboarding-token`.
+`--onboarding-token-file /absolute/runtime/path/onboarding-token`. The MCP
+rollout passes its exact operator-bound `--operator-network-id` through to the
+bootstrap helper and rejects any generated or supplied config whose top-level
+`network_id` differs; it never accepts the helper's repository default as a
+substitute for the deployment under test.
 
 Expected result:
 
@@ -3159,7 +3163,7 @@ From `../iroha2-block-explorer-web`:
      while retaining 6 MiB for canonical block framing and context attachments;
      smaller transactions can still share the block. The per-source queue
      rounds the exact ordinary/completion/timeout minimum up to 33 MiB. Keep
-     `[network] max_frame_bytes_tx_gossip = 11534336` (11 MiB plaintext),
+     `[network] max_frame_bytes_tx_gossip = 13631488` (13 MiB plaintext),
      `[network] max_frame_bytes_block_sync = 23068672` (22 MiB plaintext) and
      `max_frame_bytes = 23068700` (the same ceiling plus 28 AEAD bytes) with
      those values.

@@ -7,7 +7,7 @@
 //! publishes the final `RESTART_REQUIRED` state. Panic and incomplete-operation
 //! drops close admission before releasing their read permits without blocking
 //! on a writer.
-#[cfg(not(test))]
+use std::panic::Location;
 use std::sync::OnceLock;
 use std::sync::{
     Arc, RwLock, RwLockReadGuard, TryLockError,
@@ -23,6 +23,14 @@ pub(crate) struct ConsensusOutputGuard {
     state: AtomicU8,
     authoritative_worker_launch_claimed: AtomicBool,
     output: RwLock<()>,
+    restart_origin: OnceLock<ConsensusRestartOrigin>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ConsensusRestartOrigin {
+    trigger: &'static str,
+    source_file: &'static str,
+    source_line: u32,
+    source_column: u32,
 }
 impl Default for ConsensusOutputGuard {
     fn default() -> Self {
@@ -30,6 +38,7 @@ impl Default for ConsensusOutputGuard {
             state: AtomicU8::new(OPEN),
             authoritative_worker_launch_claimed: AtomicBool::new(false),
             output: RwLock::new(()),
+            restart_origin: OnceLock::new(),
         }
     }
 }
@@ -38,6 +47,7 @@ pub(crate) struct ConsensusOutputPermit<'a> {
     output_guard: &'a ConsensusOutputGuard,
     read_guard: Option<RwLockReadGuard<'a, ()>>,
     armed: bool,
+    origin: &'static Location<'static>,
 }
 /// One fail-stop consensus operation admitted while output remains open.
 ///
@@ -48,6 +58,7 @@ pub(crate) struct ConsensusOutputPermit<'a> {
 pub(crate) struct ConsensusFailStopOperation<'a> {
     output_guard: &'a ConsensusOutputGuard,
     permit: Option<ConsensusOutputPermit<'a>>,
+    origin: &'static Location<'static>,
 }
 impl ConsensusOutputGuard {
     /// Construct an isolated open guard for tests or an explicitly scoped runner.
@@ -55,6 +66,7 @@ impl ConsensusOutputGuard {
         Arc::new(Self::default())
     }
     /// Admit one output only while no restart-required transition has begun.
+    #[track_caller]
     pub(crate) fn acquire(&self) -> Option<ConsensusOutputPermit<'_>> {
         if self.state.load(Ordering::Acquire) != OPEN {
             self.try_finalize_activation();
@@ -71,7 +83,9 @@ impl ConsensusOutputGuard {
                 // This path may be reached by code that already owns another
                 // permit from the same guard.  Close admission synchronously,
                 // but never wait for a write lock here.
-                self.begin_activation();
+                if self.begin_activation() {
+                    self.record_restart_origin(Location::caller(), "poisoned output lock");
+                }
                 self.try_finalize_activation();
                 return None;
             }
@@ -85,14 +99,17 @@ impl ConsensusOutputGuard {
             output_guard: self,
             read_guard: Some(guard),
             armed: true,
+            origin: Location::caller(),
         })
     }
     /// Begin an operation whose abnormal exit permanently requires restart.
+    #[track_caller]
     pub(crate) fn begin_fail_stop_operation(&self) -> Option<ConsensusFailStopOperation<'_>> {
         let permit = self.acquire()?;
         Some(ConsensusFailStopOperation {
             output_guard: self,
             permit: Some(permit),
+            origin: Location::caller(),
         })
     }
     /// Permanently claim the one authoritative worker launch allowed in this process.
@@ -109,16 +126,23 @@ impl ConsensusOutputGuard {
     ///
     /// During unwinding this only closes admission; taking a writer there
     /// could deadlock on nested permits and poison the lock.
+    #[track_caller]
     pub(crate) fn activate_restart_required(&self) {
         if thread::panicking() {
-            self.begin_activation();
+            if self.begin_activation() {
+                self.record_restart_origin(Location::caller(), "panicking explicit activation");
+            }
             return;
         }
         match self
             .state
             .compare_exchange(OPEN, ACTIVATING, Ordering::AcqRel, Ordering::Acquire)
         {
-            Ok(_) | Err(ACTIVATING) => self.drain_and_publish_restart_required(),
+            Ok(_) => {
+                self.record_restart_origin(Location::caller(), "explicit activation");
+                self.drain_and_publish_restart_required();
+            }
+            Err(ACTIVATING) => self.drain_and_publish_restart_required(),
             Err(RESTART_REQUIRED) => {}
             Err(_) => unreachable!("consensus output guard has a valid state"),
         }
@@ -127,8 +151,11 @@ impl ConsensusOutputGuard {
     ///
     /// Panic guards use this before their stack can release nested permits.
     /// A later non-panicking permit/acquire path finalizes the internal state.
+    #[track_caller]
     pub(crate) fn close_admission_for_restart(&self) {
-        self.begin_activation();
+        if self.begin_activation() {
+            self.record_restart_origin(Location::caller(), "direct admission closure");
+        }
     }
     /// Activate restart recovery from an already-admitted fatal effect.
     ///
@@ -138,22 +165,52 @@ impl ConsensusOutputGuard {
     /// attempts a nonblocking write so a nested operation cannot wait on an outer permit held by
     /// the same thread; explicit [`Self::activate_restart_required`] still performs a blocking
     /// drain when the caller knows no nested permit remains.
-    pub(crate) fn activate_restart_required_from_permit(
+    #[track_caller]
+    pub(crate) fn activate_restart_required_from_permit(&self, permit: ConsensusOutputPermit<'_>) {
+        self.activate_restart_required_from_permit_at(
+            permit,
+            Location::caller(),
+            "fatal admitted effect",
+        );
+    }
+    fn activate_restart_required_from_permit_at(
         &self,
         mut permit: ConsensusOutputPermit<'_>,
+        origin: &'static Location<'static>,
+        trigger: &'static str,
     ) {
         let read_guard = permit.take_for_explicit_activation();
-        self.begin_activation();
+        if self.begin_activation() {
+            self.record_restart_origin(origin, trigger);
+        }
         drop(read_guard);
         self.try_finalize_activation();
     }
-    fn begin_activation(&self) {
+    fn begin_activation(&self) -> bool {
         match self
             .state
             .compare_exchange(OPEN, ACTIVATING, Ordering::AcqRel, Ordering::Acquire)
         {
-            Ok(_) | Err(ACTIVATING | RESTART_REQUIRED) => {}
+            Ok(_) => true,
+            Err(ACTIVATING | RESTART_REQUIRED) => false,
             Err(_) => unreachable!("consensus output guard has a valid state"),
+        }
+    }
+    fn record_restart_origin(&self, origin: &'static Location<'static>, trigger: &'static str) {
+        let restart_origin = ConsensusRestartOrigin {
+            trigger,
+            source_file: origin.file(),
+            source_line: origin.line(),
+            source_column: origin.column(),
+        };
+        if self.restart_origin.set(restart_origin).is_ok() {
+            iroha_logger::error!(
+                trigger = restart_origin.trigger,
+                source_file = restart_origin.source_file,
+                source_line = restart_origin.source_line,
+                source_column = restart_origin.source_column,
+                "Sumeragi consensus output first entered restart-required"
+            );
         }
     }
     fn try_finalize_activation(&self) {
@@ -210,7 +267,10 @@ impl Drop for ConsensusOutputPermit<'_> {
         if panicking {
             // Close admission before releasing the permit, but never wait for
             // nested permits or acquire a writer while unwinding.
-            self.output_guard.begin_activation();
+            if self.output_guard.begin_activation() {
+                self.output_guard
+                    .record_restart_origin(self.origin, "panicking output permit");
+            }
         }
         drop(self.read_guard.take());
         if !panicking {
@@ -233,8 +293,11 @@ impl ConsensusFailStopOperation<'_> {
 impl Drop for ConsensusFailStopOperation<'_> {
     fn drop(&mut self) {
         if let Some(permit) = self.permit.take() {
-            self.output_guard
-                .activate_restart_required_from_permit(permit);
+            self.output_guard.activate_restart_required_from_permit_at(
+                permit,
+                self.origin,
+                "incomplete fail-stop operation",
+            );
         }
     }
 }
@@ -357,6 +420,14 @@ mod tests {
             super::ACTIVATING,
             "panic drop must close admission before the surviving read permit drains"
         );
+        let origin = guard
+            .restart_origin
+            .get()
+            .expect("the first panic-closing permit records its origin");
+        assert_eq!(origin.trigger, "panicking output permit");
+        assert!(origin.source_file.ends_with("sumeragi/output_guard.rs"));
+        assert_ne!(origin.source_line, 0);
+        assert_ne!(origin.source_column, 0);
         assert!(
             guard.acquire().is_none(),
             "no later output may cross a panic-closed gate"
@@ -408,6 +479,13 @@ mod tests {
             .begin_fail_stop_operation()
             .expect("admit inner fail-stop operation");
         drop(inner);
+        let first_origin = *guard
+            .restart_origin
+            .get()
+            .expect("the incomplete operation records its begin site");
+        assert_eq!(first_origin.trigger, "incomplete fail-stop operation");
+        guard.close_admission_for_restart();
+        assert_eq!(guard.restart_origin.get(), Some(&first_origin));
         assert_eq!(guard.state.load(Ordering::Acquire), super::ACTIVATING);
         assert!(guard.acquire().is_none());
         outer.complete();

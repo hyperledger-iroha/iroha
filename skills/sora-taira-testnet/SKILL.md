@@ -205,13 +205,17 @@ script over hand-editing TOML:
 ```bash
 python3 scripts/taira_bootstrap_canary.py \
   --torii-root https://taira.sora.org \
+  --onboarding-token-file /absolute/runtime/path/onboarding-token \
+  --network-id "${OPERATOR_NETWORK_ID}" \
   --output-config /run/secrets/taira-canary-client.toml
 ```
 
 That flow generates a new local Ed25519 keypair, onboards it on Taira, attempts
 the public faucet claim, and writes a runtime-only client config with rollout-
-specific TTL and status timeout. Keep the generated config out of tracked repo
-state unless the user explicitly asks to persist it.
+specific TTL and status timeout. `OPERATOR_NETWORK_ID` must be the exact
+genesis-derived NetworkId for the deployment under test; do not rely on the
+helper's repository default during a live rollout. Keep the generated config
+out of tracked repo state unless the user explicitly asks to persist it.
 
 ### Verify the bootstrapped signer before writes
 

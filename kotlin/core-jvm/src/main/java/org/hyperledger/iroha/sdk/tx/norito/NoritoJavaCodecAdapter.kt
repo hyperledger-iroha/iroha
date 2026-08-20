@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.tx.norito
 
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -54,6 +55,23 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
         fun validateCanonicalTransactionPayload(encoded: ByteArray) {
             try {
                 TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded)
+            } catch (ex: Exception) {
+                throw NoritoException("Invalid canonical Norito transaction payload", ex)
+            }
+        }
+
+        /** Reject non-canonical payloads and payloads with a different admission intent. */
+        @JvmStatic
+        @Throws(NoritoException::class)
+        fun validateCanonicalTransactionPayload(
+            encoded: ByteArray,
+            expectedAdmissionIntent: TransactionAdmissionIntent,
+        ) {
+            try {
+                val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded)
+                require(payload.admissionIntent == expectedAdmissionIntent) {
+                    "transaction payload admission intent must be $expectedAdmissionIntent"
+                }
             } catch (ex: Exception) {
                 throw NoritoException("Invalid canonical Norito transaction payload", ex)
             }

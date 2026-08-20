@@ -83,7 +83,7 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
         )
         .expect("install Native AMX queue-plan journal");
     let (authority, authority_keypair) = gen_account_in("wonderland");
-    let transaction = accepted_tx_with(
+    let transaction = accepted_queue_plan_tx_with(
         authority.clone(),
         &authority_keypair,
         &time_source,

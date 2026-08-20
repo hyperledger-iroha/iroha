@@ -264,7 +264,10 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
             "LifecycleCertifiedServeTaskV1::from_terminal_replay",
             "settle_certified_serve_negative",
             "CertifiedServeTerminal",
-            "CapacityPending",
+            "CertifiedServeCapacityPending",
+            "CertifiedServeCompetingReady",
+            "CertifiedServeReplayQueued",
+            "CertifiedServeRetry",
             "RestartRequired",
         ):
             if not _token_sequence_positions(turn_tokens, rust_code_tokens(marker)):
@@ -276,17 +279,54 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
     sequence(
         "turn",
         "LaunchedProductionLifecycleV1",
-        "drive_completion_turn",
+        "drive_completion_pre_gate",
         "Certified-Serve completion transport and fail-stop publication",
         (
             "take_next_recovered_lifecycle_completion()",
             "RecoveredLifecycleCompletionTakeV1::CertifiedServe(completion)",
             "settle_deliver_and_acknowledge(&mut self.owner, &self.services)",
-            "Ok(()) => ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted",
+            "LifecycleCertifiedServeCompletionSettlementV1::Claimed",
+            "ProductionLifecycleCompletionSelectionV1::CertifiedServeClaimedCompleted",
+            "LifecycleCertifiedServeCompletionSettlementV1::TerminalReplay",
+            "ProductionLifecycleCompletionSelectionV1::CertifiedServeReplayCompleted",
             "Err(reason)",
             "iroha_logger::error!(%reason, \"lifecycle Certified-Serve completion failed closed\")",
             "self.close_output_for_restart()",
             "ProductionLifecycleCompletionSelectionV1::RestartRequired",
+        ),
+        expected_attributes=("#[cfg_attr(not(test), allow(dead_code))]",),
+    )
+    sequence(
+        "turn",
+        "LaunchedProductionLifecycleV1",
+        "drive_ready_completion_turn",
+        "fresh Ready completion dispatch after the Producer eligibility gate",
+        (
+            "self.owner.classify_completion_ready_work()",
+            "ProductionCompletionReadyWorkV1::None",
+            "ProductionLifecycleCompletionTurnV1::PassThrough(runner)",
+            "ProductionCompletionReadyWorkV1::Invalid",
+            "self.close_output_for_restart()",
+            "ProductionCompletionReadyWorkV1::RecoveredIo",
+            "dispatch_recovered_completion_with_runner_debt",
+            "ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast",
+            "refanout_recovered_lifecycle_signed_broadcast_with_runner_debt",
+            "ProductionLifecycleCompletionTurnV1::Selected(selected)",
+        ),
+    )
+    sequence(
+        "turn",
+        "LaunchedProductionLifecycleV1",
+        "drive_completion_turn",
+        "compatibility-free full Completion turn composition",
+        (
+            "self.drive_completion_pre_gate(runner, lane_work)",
+            "ProductionLifecycleCompletionPreGateV1::Selected(selected)",
+            "ProductionLifecycleCompletionTurnV1::Selected(selected)",
+            "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+            "ProductionLifecycleCompletionTurnV1::PassThrough(runner)",
+            "ProductionLifecycleCompletionPreGateV1::Ready(ready)",
+            "self.drive_ready_completion_turn(ready)",
         ),
         expected_attributes=("#[cfg_attr(not(test), allow(dead_code))]",),
     )
@@ -445,9 +485,12 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         "drain_lifecycle_v2_ingress",
         "height-runner Serve completion yield",
         (
-            "drive_completion_turn(current_turn, lane_work)",
+            "drive_completion_pre_gate(current_turn, lane_work)",
+            "PreGate::Ready(ready)",
+            "producer_claim == LifecycleProducerClaimDispositionV1::Eligible",
+            "drive_ready_completion_turn(ready)",
             "completion_selection_stops_batch(&selected)",
-            "return Ok(())",
+            "return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim))",
             "ingress_restart_error(&output_guard)",
         ),
     )
@@ -468,9 +511,9 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         "retire",
         "leader-wire-only lifecycle ingress retirement",
         (
-            "self.gate.take()",
-            "self.ingress.close()",
-            "self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
+            "self.gate.as_ref().cloned()",
+            "self.ingress.retire_leader_wire_lifecycle_gate(&gate)",
+            "self.gate = None",
         ),
     )
     sequence(
@@ -497,6 +540,8 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         ("scheduler", "CertifiedServeSchedulerObservationV1", "from_live_cuts"),
         ("scheduler", None, "claim_certified_serve_turn_v1"),
         ("turn", None, "prepare_and_dispatch_current_certified_serve"),
+        ("turn", "LaunchedProductionLifecycleV1", "drive_completion_pre_gate"),
+        ("turn", "LaunchedProductionLifecycleV1", "drive_ready_completion_turn"),
         ("turn", "LaunchedProductionLifecycleV1", "drive_completion_turn"),
         ("worker", "LifecycleCertifiedServeTaskV1", "from_dequeued_parts"),
         ("worker", "LifecycleIoCapacityReservation<'_>", "preflight_lifecycle_certified_serve"),
@@ -533,6 +578,9 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
                 "#[cfg(any(not(test), feature = \"bls\"))]",
             ),
             "turn:LaunchedProductionLifecycleV1::drive_completion_turn": (
+                "#[cfg_attr(not(test), allow(dead_code))]",
+            ),
+            "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate": (
                 "#[cfg_attr(not(test), allow(dead_code))]",
             ),
             "launch:ProductionLifecycleOwnerV1::launch": (
