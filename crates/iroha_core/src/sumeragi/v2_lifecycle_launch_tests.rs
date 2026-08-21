@@ -487,6 +487,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let runner_source = include_str!("v2_runner.rs");
     let lifecycle_run_inner_source = include_str!("v2_runner/lifecycle_run_inner.rs");
+    let lifecycle_scheduler_source = include_str!("v2_lifecycle_scheduler_inputs.rs");
     let pending_kura_lifecycle_source = include_str!("v2_runner/lifecycle_pending_kura.rs");
     let runner_authority_source = concat!(
         include_str!("v2_runner/lifecycle_runner_authority.rs"),
@@ -797,7 +798,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             ".body_store\n            .take()",
             "V2EffectExecutor::open_with_body_store(",
             "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
-            "executor\n                .install_authenticated_genesis_body(authenticated_genesis.signed_block())",
+            "executor\n                .install_authenticated_genesis_body(authenticated_genesis)",
             "ProductionV2Services::start_with_apply_service(",
         ],
     );
@@ -1310,14 +1311,28 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         "fn into_finalized_rollover(",
         "/// Exercise the exact empty-output post-handoff retirement transaction",
     );
+    let finalization_readiness = source_region(
+        &source,
+        "fn ready_for_finalized_rollover(&mut self) -> bool {",
+        "impl ActivatedProductionLifecycleV1",
+    );
     let owner_token = "let Self {\n            mut launched,\n            local_proposal,\n            runner_activation,";
-    assert_source_tokens_in_order(
-        activated_finalization,
-        &["executor.ready_to_finish()", owner_token],
+    assert_required_source_tokens(
+        finalization_readiness,
+        &[
+            "self.executor.ready_to_finish()",
+            "!self.owner.has_recovered_lifecycle_outputs()",
+            "self.pending_kura_apply_replay.is_none()",
+            "self.recovered_local_proposal_attempt.is_none()",
+            "self.pending_lifecycle_completion.is_none()",
+            "self.pending_ingress_capacity.is_none()",
+            "self.completion_observer_activation.is_none()",
+            "exactly_covers_finalization_work(&self.owner.coordinator)",
+        ],
     );
     assert_source_tokens_in_order(
         activated_finalization,
-        &["exactly_covers_finalization_work", owner_token],
+        &["!self.launched.ready_for_finalized_rollover()", owner_token],
     );
     assert_source_tokens_in_order(
         activated_finalization,
@@ -1329,6 +1344,19 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "begin_fail_stop_operation()",
             ".finish_height(&receipt, &artifact)",
             "operation.complete()",
+        ],
+    );
+    assert_source_tokens_in_order(
+        lifecycle_run_inner_source,
+        &[
+            "executor.ready_to_finish()",
+            "if !ready_to_finish || producer_turn.is_some()",
+            "schedule_local_proposal(",
+            "let finalization_ready = ready_to_finish",
+            "activated.ready_for_finalized_rollover(&mut active_runner)",
+            "let rollover_ready = if finalization_ready",
+            "preflight_finalized_lane_rollover(",
+            "if ready_to_finish && !rollover_ready",
         ],
     );
 
@@ -1559,11 +1587,42 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_required_source_tokens(
         finalization_registry,
         &[
+            "DurableRecoveredLifecycleSignedBroadcast(_)",
+            ".collect::<std::collections::BTreeSet<_>>()",
+            "RecoveredWalRegistrySlotV1::None",
             "exactly_covers_ready_work_with_extra(",
             "&std::collections::BTreeSet::new()",
+            "&refanned_broadcasts",
         ],
     );
-    assert!(registry_validate_source.contains("broadcast.matches_current_finalization_record("));
+    assert_required_source_tokens(
+        registry_validate_source,
+        &[
+            "refanned_broadcasts.iter().all(|ordinal|",
+            "LifecycleLedgerV1::from_coordinator(coordinator)",
+            "!matches!(record.state, super::LifecycleState::Waiting(_))",
+            "broadcast.validates_in_ledger(exact_ledger)",
+            "broadcast.paired_next_sign_matches_terminal_record(",
+            "broadcast.matches_current_finalization_record(",
+            "!refanned_broadcasts.contains(&record.ordinal)",
+        ],
+    );
+    assert!(lifecycle_run_inner_source.contains(
+        "let finalization_ready =\n            ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);"
+    ));
+    assert!(lifecycle_scheduler_source.contains(
+        "finalization accepts the exact volatile refanout wait after its next Sign retires"
+    ));
+    assert!(
+        lifecycle_scheduler_source.contains(
+            "finalization rejects a corrupted retained digest after paired Sign retirement"
+        )
+    );
+    assert!(
+        lifecycle_scheduler_source.contains(
+            "fn finalization_waits_for_every_authenticated_recovered_broadcast_refanout()"
+        )
+    );
 
     let runner_dependency_permit = source_region(
         runner_authority_source,

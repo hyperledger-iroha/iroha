@@ -2030,6 +2030,69 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
         self.paired_next_sign.is_none()
     }
 
+    /// Rejoin a retained next-Sign link after its executable carrier retires.
+    ///
+    /// Finalization may retain the refanned Broadcast while the adjacent Sign
+    /// has already reached a durable terminal row. The pair still has to name
+    /// that exact installed Sign digest and its validated LedgerV1
+    /// continuation; a live next-Sign registry carrier is neither expected nor
+    /// accepted here.
+    fn paired_next_sign_matches_terminal_record(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> bool {
+        let Some((next_address, next_digest)) = self.paired_next_sign else {
+            return true;
+        };
+        let Some(next_record) = coordinator.records.get(&next_address.ordinal) else {
+            return false;
+        };
+        let super::LifecycleState::Terminal(outcome) = next_record.state else {
+            return false;
+        };
+        let Some((next_slot, installed_digest)) =
+            exact_single_record_slot(next_record, LifecycleWorkClass::SignVote.capacity_class())
+        else {
+            return false;
+        };
+        let Some(durable_next) = ledger
+            .records()
+            .iter()
+            .find(|record| record.ordinal() == next_address.ordinal)
+        else {
+            return false;
+        };
+        self.address.ordinal.checked_add(1) == Some(next_address.ordinal)
+            && self.address.owner != next_address.owner
+            && ConcreteWorkAddress::new(next_record.owner, next_record.ordinal, next_slot)
+                == Some(next_address)
+            && next_record.work_class == LifecycleWorkClass::SignVote
+            && installed_digest == next_digest
+            && coordinator.high_water >= next_address.ordinal
+            && coordinator.key_index.get(&next_record.key) == Some(&next_address.ordinal)
+            && coordinator
+                .owner_index
+                .get(&next_record.owner.causal_root())
+                == Some(&next_record.owner)
+            && !coordinator.ready_index.contains(&next_address.ordinal)
+            && ledger.context() == coordinator.active_context
+            && ledger.high_water() == coordinator.high_water
+            && durable_next.key() == Some(next_record.key)
+            && durable_next.owner() == next_record.owner
+            && durable_next.work_class() == Some(LifecycleWorkClass::SignVote)
+            && durable_next.stage() == Some(next_record.stage)
+            && durable_next.terminal() == Some(Some(outcome))
+            && durable_next.continuation().is_some_and(|continuation| {
+                continuation.matches_record(
+                    LifecycleWorkClass::SignVote,
+                    Some(outcome),
+                    next_address.ordinal,
+                    ledger.high_water(),
+                )
+            })
+    }
+
     fn validates_at(
         &self,
         address: ConcreteWorkAddress,

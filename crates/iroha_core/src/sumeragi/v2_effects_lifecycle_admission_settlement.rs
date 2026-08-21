@@ -47,6 +47,52 @@ impl RemoteProposalReplayStageV1 {
     }
 }
 
+/// Exact authenticated-genesis replay owner retained beside the certified body pipeline.
+///
+/// Unlike an ordinary certified response, this source is already local and
+/// launch-authenticated. The stage still advances through the same Store and
+/// Validate ownership cuts, and no variant exposes its replay evidence or a
+/// caller-selected lifecycle address.
+#[allow(variant_size_differences)]
+enum AuthenticatedGenesisReplayStageV1 {
+    BodyAvailable(PreparedAuthenticatedGenesisFetchReplayPreAdmission),
+    StoreAdmission(PreparedAuthenticatedGenesisStoreReplayPreAdmission),
+    Store {
+        work_id: EffectWorkId,
+        replay: PreparedAuthenticatedGenesisStoreReplayPreAdmission,
+    },
+    Stored {
+        replay: PreparedAuthenticatedGenesisStoredReplayPreAdmission,
+        ownership: RuntimeEffectOwnership,
+    },
+}
+
+impl AuthenticatedGenesisReplayStageV1 {
+    fn store_work_id(&self) -> Option<EffectWorkId> {
+        match self {
+            Self::Store { work_id, .. } => Some(*work_id),
+            Self::BodyAvailable(_) | Self::StoreAdmission(_) | Self::Stored { .. } => None,
+        }
+    }
+
+    fn exactly_authenticates_fetch_rediscovery(&self, effect: &AdapterEffect) -> bool {
+        match self {
+            Self::BodyAvailable(replay) => replay.exactly_authenticates_fetch_rediscovery(effect),
+            Self::StoreAdmission(replay) | Self::Store { replay, .. } => {
+                replay.exactly_authenticates_fetch_rediscovery(effect)
+            }
+            Self::Stored { replay, .. } => replay.exactly_authenticates_fetch_rediscovery(effect),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthenticatedGenesisStoreReplayDispositionV1 {
+    None,
+    Advance,
+    Retry,
+}
+
 /// Inert runtime fingerprint for one replay-authorized Validate after its
 /// move-only admission owner transfers into the lifecycle registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -567,6 +613,456 @@ impl V2EffectExecutor<SerializedV2Runtime> {
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Retain the exact resultless wire of the already-authenticated staged
+    /// genesis as a process-local acquisition source.
+    ///
+    /// Genesis is signed once with a fixed view-zero header, while its
+    /// consensus Proposal may be reissued in later views with a new manifest.
+    /// The opaque installed authority, canonical bytes, and subject remain one
+    /// value until the certified Fetch projects its Store replay lineage.
+    pub(in crate::sumeragi) fn install_authenticated_genesis_body(
+        &mut self,
+        authenticated_genesis: &super::v2_context::AuthenticatedGenesisBodyV1,
+    ) -> Result<(), EffectExecutorError> {
+        self.ensure_open()?;
+        let installed = InstalledAuthenticatedGenesisReplayAuthorityV1::install(
+            authenticated_genesis,
+            &self.context,
+        )
+        .map_err(|reason| EffectExecutorError::Contract(reason.to_owned()))?;
+        let subject = installed.subject();
+        let canonical_wire = Arc::clone(installed.canonical_wire());
+        let genesis_round = wire::ConsensusRound {
+            context_id: self.context.id(),
+            height: self.context.height,
+            view: 0,
+        };
+        ReadyBody::derive(
+            &self.context,
+            genesis_round,
+            subject,
+            Arc::clone(&canonical_wire),
+        )
+        .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
+        if let Some(retained) = self.authenticated_genesis_body.as_ref() {
+            if retained.subject() == subject
+                && retained.canonical_wire().as_ref() == canonical_wire.as_ref()
+            {
+                return Ok(());
+            }
+            return Err(EffectExecutorError::Contract(
+                "authenticated staged genesis changed after executor construction".to_owned(),
+            ));
+        }
+        self.authenticated_genesis_body = Some(installed);
+        Ok(())
+    }
+
+    /// Install synthetic authenticated-genesis authority for executor fixtures.
+    #[cfg(test)]
+    fn install_authenticated_genesis_body_for_test(
+        &mut self,
+        authenticated_genesis: &iroha_data_model::block::SignedBlock,
+    ) -> Result<(), EffectExecutorError> {
+        self.ensure_open()?;
+        let installed = InstalledAuthenticatedGenesisReplayAuthorityV1::for_test(
+            authenticated_genesis,
+            &self.context,
+        )
+        .ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "synthetic authenticated staged genesis is not canonical".to_owned(),
+            )
+        })?;
+        if let Some(retained) = self.authenticated_genesis_body.as_ref() {
+            return (retained.subject() == installed.subject()
+                && retained.canonical_wire().as_ref() == installed.canonical_wire().as_ref())
+            .then_some(())
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "authenticated staged genesis changed after executor construction".to_owned(),
+                )
+            });
+        }
+        self.authenticated_genesis_body = Some(installed);
+        Ok(())
+    }
+
+    fn stored_replay_incumbent_validate_ownership(
+        &self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        effect: &AdapterEffect,
+    ) -> Result<Option<RuntimeEffectOwnership>, EffectExecutorError> {
+        if self.authenticated_genesis_replay.contains_key(&key)
+            && self.remote_proposal_replay.contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "one stored body retained two replay lineages".to_owned(),
+            ));
+        }
+        let Some(receipt) = self.durable_bodies.get(&key) else {
+            if self.authenticated_genesis_replay.contains_key(&key)
+                || self.remote_proposal_replay.contains_key(&key)
+            {
+                return Err(EffectExecutorError::Contract(
+                    "stored body replay lost its durable receipt during retention".to_owned(),
+                ));
+            }
+            return Ok(None);
+        };
+        let incumbent = match (
+            self.remote_proposal_replay.get(&key),
+            self.authenticated_genesis_replay.get(&key),
+        ) {
+            (Some(RemoteProposalReplayStageV1::Stored { replay, ownership }), None) => {
+                replay.project_incumbent_validate_ownership(receipt, ownership, effect)
+            }
+            (None, Some(AuthenticatedGenesisReplayStageV1::Stored { replay, ownership })) => {
+                replay.project_incumbent_validate_ownership(receipt, ownership, effect)
+            }
+            _ => return Ok(None),
+        };
+        incumbent.map(Some).ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "stored body replay could not project its incumbent Validate owner".to_owned(),
+            )
+        })
+    }
+
+    fn preflight_authenticated_genesis_store_completion(
+        &self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        pending: &PendingStore,
+        work_id: EffectWorkId,
+    ) -> Result<bool, EffectExecutorError> {
+        match self.authenticated_genesis_replay.get(&key) {
+            Some(AuthenticatedGenesisReplayStageV1::Store {
+                work_id: retained,
+                replay,
+            }) => {
+                let effect = AdapterEffect::StoreBody {
+                    tag: pending.task.tag(),
+                    round: key.0,
+                    subject: key.1,
+                };
+                if *retained != work_id
+                    || !replay.exactly_matches_retry(&effect, pending.task.ownership())
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "authenticated-genesis Store completion changed its replay owner"
+                            .to_owned(),
+                    ));
+                }
+                Ok(true)
+            }
+            Some(AuthenticatedGenesisReplayStageV1::BodyAvailable(_))
+            | Some(AuthenticatedGenesisReplayStageV1::StoreAdmission(_)) => {
+                Err(EffectExecutorError::Contract(
+                    "authenticated-genesis Store completion preceded its retained stage".to_owned(),
+                ))
+            }
+            Some(AuthenticatedGenesisReplayStageV1::Stored { .. }) | None => Ok(false),
+        }
+    }
+
+    fn commit_authenticated_genesis_store_completion(
+        &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        work_id: EffectWorkId,
+        receipt: DurableBodyReceipt,
+        ownership: RuntimeEffectOwnership,
+    ) -> Result<(), EffectExecutorError> {
+        let Some(AuthenticatedGenesisReplayStageV1::Store {
+            work_id: retained,
+            replay,
+        }) = self.authenticated_genesis_replay.remove(&key)
+        else {
+            return Err(EffectExecutorError::Contract(
+                "preflighted authenticated-genesis Store replay disappeared".to_owned(),
+            ));
+        };
+        if retained != work_id {
+            let previous = self.authenticated_genesis_replay.insert(
+                key,
+                AuthenticatedGenesisReplayStageV1::Store {
+                    work_id: retained,
+                    replay,
+                },
+            );
+            debug_assert!(previous.is_none());
+            return Err(EffectExecutorError::Contract(
+                "authenticated-genesis Store work ID changed before commit".to_owned(),
+            ));
+        }
+        let stored = match replay.bind_durable_body(receipt.clone()) {
+            Ok(stored) => stored,
+            Err(error) => {
+                let previous = self.authenticated_genesis_replay.insert(
+                    key,
+                    AuthenticatedGenesisReplayStageV1::Store {
+                        work_id,
+                        replay: error.into_store(),
+                    },
+                );
+                debug_assert!(previous.is_none());
+                return Err(EffectExecutorError::Contract(
+                    "authenticated-genesis Store completion changed its durable body".to_owned(),
+                ));
+            }
+        };
+        if !stored.exactly_retains_owned_store(&receipt, &ownership) {
+            return Err(EffectExecutorError::Contract(
+                "authenticated-genesis Store completion changed its runtime owner".to_owned(),
+            ));
+        }
+        let previous = self.authenticated_genesis_replay.insert(
+            key,
+            AuthenticatedGenesisReplayStageV1::Stored {
+                replay: stored,
+                ownership,
+            },
+        );
+        debug_assert!(previous.is_none());
+        Ok(())
+    }
+
+    fn prepare_authenticated_genesis_store_replay(
+        &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<AuthenticatedGenesisStoreReplayDispositionV1, EffectExecutorError> {
+        if self.authenticated_genesis_replay.contains_key(&key)
+            && self.remote_proposal_replay.contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "one body stage retained both Proposal and authenticated-genesis replay".to_owned(),
+            ));
+        }
+        match self.authenticated_genesis_replay.get(&key) {
+            Some(AuthenticatedGenesisReplayStageV1::StoreAdmission(replay)) => {
+                if !replay.exactly_matches_retry(effect, ownership) {
+                    return Err(EffectExecutorError::Contract(
+                        "authenticated-genesis Store retry changed its projected replay owner"
+                            .to_owned(),
+                    ));
+                }
+                return Ok(AuthenticatedGenesisStoreReplayDispositionV1::Advance);
+            }
+            Some(AuthenticatedGenesisReplayStageV1::Store { replay, .. }) => {
+                if !replay.exactly_matches_retry(effect, ownership) {
+                    return Err(EffectExecutorError::Contract(
+                        "authenticated-genesis Store retry changed its exact replay owner"
+                            .to_owned(),
+                    ));
+                }
+                return Ok(AuthenticatedGenesisStoreReplayDispositionV1::Retry);
+            }
+            Some(AuthenticatedGenesisReplayStageV1::Stored {
+                replay,
+                ownership: stored_ownership,
+            }) => {
+                let receipt = self.durable_bodies.get(&key).ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "durable authenticated-genesis replay lost its body receipt".to_owned(),
+                    )
+                })?;
+                if ownership != stored_ownership
+                    || !replay.exactly_retains_owned_store(receipt, stored_ownership)
+                    || !replay.exactly_matches_retry(effect, receipt)
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "durable authenticated-genesis Store retry changed its replay owner"
+                            .to_owned(),
+                    ));
+                }
+                return Ok(AuthenticatedGenesisStoreReplayDispositionV1::Retry);
+            }
+            Some(AuthenticatedGenesisReplayStageV1::BodyAvailable(_)) | None => {}
+        }
+        let Some(AuthenticatedGenesisReplayStageV1::BodyAvailable(fetch)) =
+            self.authenticated_genesis_replay.remove(&key)
+        else {
+            return Ok(AuthenticatedGenesisStoreReplayDispositionV1::None);
+        };
+        let store = match fetch.project_store(effect.clone(), ownership.clone()) {
+            Ok(store) => store,
+            Err(error) => {
+                let previous = self.authenticated_genesis_replay.insert(
+                    key,
+                    AuthenticatedGenesisReplayStageV1::BodyAvailable(error.into_fetch()),
+                );
+                debug_assert!(previous.is_none());
+                return Err(EffectExecutorError::Contract(
+                    "authenticated-genesis Fetch could not project its exact Store successor"
+                        .to_owned(),
+                ));
+            }
+        };
+        let previous = self.authenticated_genesis_replay.insert(
+            key,
+            AuthenticatedGenesisReplayStageV1::StoreAdmission(store),
+        );
+        debug_assert!(previous.is_none());
+        Ok(AuthenticatedGenesisStoreReplayDispositionV1::Advance)
+    }
+
+    fn commit_authenticated_genesis_store_replay(
+        &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        ownership: RuntimeEffectOwnership,
+    ) -> Result<(), EffectExecutorError> {
+        let Some(AuthenticatedGenesisReplayStageV1::StoreAdmission(store)) =
+            self.authenticated_genesis_replay.remove(&key)
+        else {
+            return Err(EffectExecutorError::Contract(
+                "serialized Store lost its authenticated-genesis replay stage".to_owned(),
+            ));
+        };
+        let stage = if let Some(receipt) = self.durable_bodies.get(&key).cloned() {
+            let stored = match store.bind_durable_body(receipt.clone()) {
+                Ok(stored) => stored,
+                Err(error) => {
+                    let previous = self.authenticated_genesis_replay.insert(
+                        key,
+                        AuthenticatedGenesisReplayStageV1::StoreAdmission(error.into_store()),
+                    );
+                    debug_assert!(previous.is_none());
+                    return Err(EffectExecutorError::Contract(
+                        "authenticated-genesis Store could not bind its durable body".to_owned(),
+                    ));
+                }
+            };
+            if !stored.exactly_retains_owned_store(&receipt, &ownership) {
+                return Err(EffectExecutorError::Contract(
+                    "authenticated-genesis Store changed its retained runtime owner".to_owned(),
+                ));
+            }
+            AuthenticatedGenesisReplayStageV1::Stored {
+                replay: stored,
+                ownership,
+            }
+        } else {
+            let Some(work_id) = self.pending_stores.iter().find_map(|(work_id, pending)| {
+                (pending.task.manifest.round == key.0 && pending.task.manifest.subject == key.1)
+                    .then_some(*work_id)
+            }) else {
+                let previous = self.authenticated_genesis_replay.insert(
+                    key,
+                    AuthenticatedGenesisReplayStageV1::StoreAdmission(store),
+                );
+                debug_assert!(previous.is_none());
+                return Err(EffectExecutorError::Contract(
+                    "authenticated-genesis Store installed neither durable nor pending work"
+                        .to_owned(),
+                ));
+            };
+            AuthenticatedGenesisReplayStageV1::Store {
+                work_id,
+                replay: store,
+            }
+        };
+        let previous = self.authenticated_genesis_replay.insert(key, stage);
+        debug_assert!(previous.is_none());
+        Ok(())
+    }
+
+    fn commit_remote_proposal_body_available_replay(
+        &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        replay: Option<PreparedRemoteProposalFetchReplayPreAdmission>,
+    ) {
+        if let Some(replay) = replay {
+            let previous = self
+                .remote_proposal_replay
+                .insert(key, RemoteProposalReplayStageV1::BodyAvailable(replay));
+            assert!(
+                previous.is_none(),
+                "remote Proposal replay preflight keeps its body key vacant"
+            );
+        }
+    }
+
+    /// Prove every signed-Proposal replay token is attached to its exact
+    /// executor-owned physical stage before a view or Decision retires it.
+    fn preflight_remote_proposal_replay_indexes(&self) -> Result<(), EffectExecutorError> {
+        if self
+            .authenticated_genesis_replay
+            .keys()
+            .any(|key| self.remote_proposal_replay.contains_key(key))
+        {
+            return Err(EffectExecutorError::Contract(
+                "one physical body stage retained two replay lineages".to_owned(),
+            ));
+        }
+        for (key, stage) in &self.remote_proposal_replay {
+            let exact = match stage {
+                RemoteProposalReplayStageV1::Fetch { work_id, .. } => self
+                    .pending_fetches
+                    .get(work_id)
+                    .is_some_and(|pending| (pending.task.round, pending.task.subject) == *key),
+                RemoteProposalReplayStageV1::BodyAvailable(_) => {
+                    self.body_pipeline_owners.contains_key(key)
+                        && self.retained_body_manifest_hash(*key)?.is_some()
+                }
+                // StoreAdmission exists only inside one serialized StoreBody
+                // call. Observing it at a later control boundary would mean
+                // the move-only projection escaped that transaction.
+                RemoteProposalReplayStageV1::StoreAdmission(_) => false,
+                RemoteProposalReplayStageV1::Store { work_id, .. } => {
+                    self.pending_stores.get(work_id).is_some_and(|pending| {
+                        (pending.task.manifest.round, pending.task.manifest.subject) == *key
+                    })
+                }
+                RemoteProposalReplayStageV1::Stored { replay, ownership } => {
+                    self.durable_bodies.get(key).is_some_and(|receipt| {
+                        (receipt.round(), receipt.subject()) == *key
+                            && replay.exactly_retains_owned_store(receipt, ownership)
+                    })
+                }
+            };
+            if !exact {
+                return Err(EffectExecutorError::Contract(
+                    "remote Proposal replay is detached from its exact physical body stage"
+                        .to_owned(),
+                ));
+            }
+        }
+        for (key, stage) in &self.authenticated_genesis_replay {
+            let exact = match stage {
+                AuthenticatedGenesisReplayStageV1::BodyAvailable(_) => {
+                    self.body_pipeline_owners.contains_key(key)
+                        && self.retained_body_manifest_hash(*key)?.is_some()
+                }
+                AuthenticatedGenesisReplayStageV1::StoreAdmission(_) => false,
+                AuthenticatedGenesisReplayStageV1::Store { work_id, replay } => {
+                    self.pending_stores.get(work_id).is_some_and(|pending| {
+                        let effect = AdapterEffect::StoreBody {
+                            tag: pending.task.tag(),
+                            round: key.0,
+                            subject: key.1,
+                        };
+                        (pending.task.manifest.round, pending.task.manifest.subject) == *key
+                            && replay.exactly_matches_retry(&effect, pending.task.ownership())
+                    })
+                }
+                AuthenticatedGenesisReplayStageV1::Stored { replay, ownership } => {
+                    self.durable_bodies.get(key).is_some_and(|receipt| {
+                        (receipt.round(), receipt.subject()) == *key
+                            && replay.exactly_retains_owned_store(receipt, ownership)
+                    })
+                }
+            };
+            if !exact {
+                return Err(EffectExecutorError::Contract(
+                    "authenticated-genesis replay is detached from its physical body stage"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_body<S: V2EffectServices>(
         &mut self,
         tag: EventTag,
@@ -618,6 +1114,85 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             // transition advances to Apply after this exact catalog stutter;
             // it must not mint ordinary Proposal/local-body admission work.
             return Ok(());
+        }
+        if self.authenticated_genesis_replay.contains_key(&key)
+            && self.remote_proposal_replay.contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "ValidateBody retained two incompatible replay authorities".to_owned(),
+            ));
+        }
+        match self.authenticated_genesis_replay.get(&key) {
+            Some(AuthenticatedGenesisReplayStageV1::BodyAvailable(_))
+            | Some(AuthenticatedGenesisReplayStageV1::StoreAdmission(_))
+            | Some(AuthenticatedGenesisReplayStageV1::Store { .. }) => {
+                return Err(EffectExecutorError::Contract(
+                    "authenticated-genesis ValidateBody preceded its durable Store replay"
+                        .to_owned(),
+                ));
+            }
+            Some(AuthenticatedGenesisReplayStageV1::Stored {
+                replay,
+                ownership: store_ownership,
+            }) => {
+                if !replay.exactly_retains_owned_store(&receipt, store_ownership) {
+                    return Err(EffectExecutorError::Contract(
+                        "authenticated-genesis ValidateBody changed its Store lineage".to_owned(),
+                    ));
+                }
+            }
+            None => {}
+        }
+        if self.authenticated_genesis_replay.contains_key(&key) {
+            let Some(AuthenticatedGenesisReplayStageV1::Stored {
+                replay: stored,
+                ownership: store_ownership,
+            }) = self.authenticated_genesis_replay.remove(&key)
+            else {
+                unreachable!("preflighted authenticated-genesis Store replay remains installed")
+            };
+            let validate_ownership = ownership;
+            let validate = match self.protected_decision {
+                Some((decision_round, proposal_round, decision_subject, execution_commitment))
+                    if proposal_round == round && decision_subject == subject =>
+                {
+                    stored.project_validate_after_durable_decision(
+                        effect.clone(),
+                        validate_ownership.clone(),
+                        decision_round,
+                        proposal_round,
+                        decision_subject,
+                        execution_commitment,
+                    )
+                }
+                Some(_) => {
+                    unreachable!("a retained Decision Validate has the protected genesis body key")
+                }
+                None => stored.project_validate(effect.clone(), validate_ownership.clone()),
+            };
+            let validate = match validate {
+                Ok(validate) => validate,
+                Err(error) => {
+                    let previous = self.authenticated_genesis_replay.insert(
+                        key,
+                        AuthenticatedGenesisReplayStageV1::Stored {
+                            replay: error.into_stored(),
+                            ownership: store_ownership,
+                        },
+                    );
+                    debug_assert!(previous.is_none());
+                    return Err(EffectExecutorError::Contract(
+                        "authenticated-genesis Store could not project its Validate successor"
+                            .to_owned(),
+                    ));
+                }
+            };
+            return self.install_pending_durable_validate_admission(
+                key,
+                &effect,
+                &validate_ownership,
+                validate.into_pending_durable_validate_admission(),
+            );
         }
         match self.remote_proposal_replay.get(&key) {
             Some(RemoteProposalReplayStageV1::Fetch { .. })

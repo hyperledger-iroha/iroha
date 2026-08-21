@@ -335,16 +335,37 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         "fn recovered_broadcast_refanout_ranks_exact_pair_before_unrelated_ready_sign()",
-        "finalization accepts the exact volatile refanout wait beside its Ready next Sign",
-        "finalization accepts an inexact volatile refanout wait beside its Ready next Sign",
+        "finalization accepts the exact volatile refanout wait after its next Sign retires",
+        "finalization accepts an inexact volatile refanout wait after its next Sign retires",
         "volatile refanned Broadcast finalization behavior must retain each executable literal exactly once",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "fn exact_optional_recovered_wal_authority(",
+        "!matches!(record.state, super::LifecycleState::Waiting(_))",
+        "matches!(record.state, super::LifecycleState::Waiting(_))",
+        "finalization recovered Broadcast pair link omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "fn paired_next_sign_matches_terminal_record(",
+        "installed_digest == next_digest",
+        "installed_digest != next_digest",
+        "retained recovered Broadcast terminal next-Sign link omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn run_lifecycle_active_height(",
+        "let finalization_ready =\n            ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);",
+        "let finalization_ready = ready_to_finish;",
+        "runner lifecycle finalization preflight must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
         "fn exact_optional_recovered_wal_authority(",
         "carrier.pairs_exact_next_sign(next_sign, next_sign_digest)",
         "true",
-        "finalization-only recovered registry census omits production refinement tokens",
+        "finalization recovered Broadcast pair link omits production refinement tokens",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
@@ -2532,7 +2553,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 333
+) == 336
 
 
 @pytest.mark.parametrize(

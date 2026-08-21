@@ -1192,13 +1192,19 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         )
         .expect("exact local durability joins Validate replay evidence");
     assert!(validate.exactly_matches_validate(&validate_effect, &receipt));
-    validate.family.body_frame.frame[0] ^= 1;
+    validate
+        .family
+        .assembled_body_frame_mut_for_test()
+        .frame[0] ^= 1;
     assert!(!validate.exactly_matches_validate(&validate_effect, &receipt));
-    validate.family.body_frame.frame = [0; 32];
+    validate
+        .family
+        .assembled_body_frame_mut_for_test()
+        .frame = [0; 32];
     assert!(
         validate
             .family
-            .is_exact_for_stage(LifecycleStageKind::ValidateBody),
+            .is_exact_for_stage_for_test(LifecycleStageKind::ValidateBody),
         "zero-valued digest bytes remain structurally valid rather than sentinel values"
     );
     assert!(!validate.exactly_matches_validate(&store_effect, &receipt));

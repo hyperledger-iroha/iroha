@@ -924,7 +924,9 @@ fn run_lifecycle_active_height(
             }
         }
 
-        let rollover_ready = if ready_to_finish {
+        let finalization_ready =
+            ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);
+        let rollover_ready = if finalization_ready {
             activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, executor, services, _local_proposal| {

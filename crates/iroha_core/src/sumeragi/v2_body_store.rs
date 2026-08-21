@@ -97,6 +97,19 @@ pub(crate) struct DurableBodyReceipt {
     manifest_hash: HashOf<wire::PayloadManifest>,
     frame_hash: Hash,
 }
+/// Opaque proof that one exact recovered frame was reopened under the
+/// genesis-authority signature policy for a parentless height-one context.
+#[derive(Debug)]
+#[must_use = "genesis-authority frame proof must remain with cold replay"]
+pub(in crate::sumeragi) struct AuthenticatedGenesisBodyStoreFrameV1 {
+    receipt: DurableBodyReceipt,
+}
+impl AuthenticatedGenesisBodyStoreFrameV1 {
+    /// Compare this policy proof with the exact recovered durable receipt.
+    pub(in crate::sumeragi) fn exactly_matches(&self, receipt: &DurableBodyReceipt) -> bool {
+        &self.receipt == receipt
+    }
+}
 /// Durable proof that one fully authenticated certified-Fetch response's exact
 /// canonical body has crossed the local file-and-directory sync boundary.
 ///
@@ -1523,6 +1536,24 @@ impl V2BodyStore {
     /// inspected before the serialized runtime is constructed.
     pub(crate) fn matches_context(&self, context: &wire::HeightContext) -> bool {
         &self.context == context
+    }
+    /// Authenticate one exact recovered frame under the private genesis policy.
+    pub(in crate::sumeragi) fn authenticate_genesis_authority_frame(
+        &self,
+        receipt: &DurableBodyReceipt,
+    ) -> Option<AuthenticatedGenesisBodyStoreFrameV1> {
+        (self.context.height == 1
+            && self.context.parent_commit_qc.is_none()
+            && self.context.snapshot_bootstrap.is_none()
+            && matches!(
+                &self.signature_policy,
+                BlockSignaturePolicy::GenesisAuthority(_)
+            )
+            && self.owns_receipt(receipt)
+            && self.load_envelope(receipt).is_ok())
+        .then(|| AuthenticatedGenesisBodyStoreFrameV1 {
+            receipt: receipt.clone(),
+        })
     }
     /// Compare this exact opened store with one sealed lifecycle storage root.
     ///

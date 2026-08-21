@@ -16,6 +16,9 @@ def _successor_production_recovery_source_fidelity_errors(
     sumeragi_path: Path,
     sumeragi_source: str,
 ) -> None:
+    lifecycle_run_inner_path, lifecycle_run_inner_source = load(
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
+    )
     recovery_path, recovery_source = load(
         "crates/iroha_core/src/sumeragi/v2_recovery.rs"
     )
@@ -4586,6 +4589,28 @@ self.io.is_some()
                     ".retire_lifecycle_stores()",
                 ),
             )
+            finalization_readiness = region(
+                launch_path,
+                launch_source,
+                "shared lifecycle finalization readiness",
+                "fn ready_for_finalized_rollover(&mut self) -> bool {",
+                "impl ActivatedProductionLifecycleV1",
+            )
+            require_order(
+                launch_path,
+                "shared lifecycle finalization readiness",
+                finalization_readiness,
+                (
+                    "self.executor.ready_to_finish()",
+                    "!self.owner.has_recovered_lifecycle_outputs()",
+                    "self.pending_kura_apply_replay.is_none()",
+                    "self.recovered_local_proposal_attempt.is_none()",
+                    "self.pending_lifecycle_completion.is_none()",
+                    "self.pending_ingress_capacity.is_none()",
+                    "self.completion_observer_activation.is_none()",
+                    "exactly_covers_finalization_work(&self.owner.coordinator)",
+                ),
+            )
             activated_finalization = region(
                 launch_path,
                 launch_source,
@@ -4598,8 +4623,7 @@ self.io.is_some()
                 "activated lifecycle finalization",
                 activated_finalization,
                 (
-                    "executor.ready_to_finish()",
-                    "exactly_covers_finalization_work",
+                    "self.launched.ready_for_finalized_rollover()",
                     "let Self { mut launched, local_proposal, runner_activation, } = self",
                     "runner_activation.retire(&launched.leader_wire_ingress_binding.ingress)",
                     "drop(local_proposal)",
@@ -4616,11 +4640,22 @@ self.io.is_some()
                 "activated lifecycle finalization quiescence",
                 activated_finalization,
                 (
-                    "pending_lifecycle_completion.is_some()",
-                    "pending_ingress_capacity.is_some()",
-                    "completion_observer_activation.is_some()",
                     "ProductionLifecycleFinalizationErrorV1::NotReady",
                     "finalized_adapter: finalized",
+                ),
+            )
+            require_order(
+                lifecycle_run_inner_path,
+                "runner lifecycle finalization preflight",
+                lifecycle_run_inner_source,
+                (
+                    "if !ready_to_finish || producer_turn.is_some()",
+                    "schedule_local_proposal(",
+                    "let finalization_ready = ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner)",
+                    "let rollover_ready = if finalization_ready",
+                    "preflight_finalized_lane_rollover(",
+                    "if ready_to_finish && !rollover_ready",
+                    "finalize_lifecycle_height(",
                 ),
             )
             output_rollover = region(
@@ -4774,8 +4809,11 @@ self.io.is_some()
                 finalization_registry,
                 (
                     "coordinator.fault.is_some() || coordinator.active_lease.is_some()",
+                    "DurableRecoveredLifecycleSignedBroadcast(_)",
+                    ".collect::<std::collections::BTreeSet<_>>()",
                     "self.exact_recovered_wal_registry_slot()",
-                    "self.exactly_covers_ready_work_with_extra( coordinator, extra, &std::collections::BTreeSet::new(), None, true, )",
+                    "RecoveredWalRegistrySlotV1::None",
+                    "self.exactly_covers_ready_work_with_extra( coordinator, extra, &std::collections::BTreeSet::new(), None, &refanned_broadcasts, )",
                 ),
             )
             finalization_pair_link = region(
@@ -4792,6 +4830,36 @@ self.io.is_some()
                 (
                     "broadcast.is_unpaired()",
                     "carrier.pairs_exact_next_sign(next_sign, next_sign_digest)",
+                    "refanned_broadcasts.iter().all(|ordinal|",
+                    "LifecycleLedgerV1::from_coordinator(coordinator)",
+                    "!matches!(record.state, super::LifecycleState::Waiting(_))",
+                    "broadcast.validates_in_ledger(exact_ledger)",
+                    "broadcast.paired_next_sign_matches_terminal_record( coordinator, exact_ledger, )",
+                    "broadcast.matches_current_finalization_record(",
+                    "!refanned_broadcasts.contains(&record.ordinal)",
+                ),
+            )
+            terminal_pair_link = region(
+                registry_path,
+                registry_source,
+                "retained recovered Broadcast terminal next-Sign link",
+                "fn paired_next_sign_matches_terminal_record(",
+                "fn validates_at(",
+            )
+            require_tokens(
+                registry_path,
+                "retained recovered Broadcast terminal next-Sign link",
+                terminal_pair_link,
+                (
+                    "LifecycleState::Terminal(outcome)",
+                    "exact_single_record_slot( next_record, LifecycleWorkClass::SignVote.capacity_class(), )",
+                    "ConcreteWorkAddress::new(next_record.owner, next_record.ordinal, next_slot) == Some(next_address)",
+                    "installed_digest == next_digest",
+                    "coordinator.key_index.get(&next_record.key) == Some(&next_address.ordinal)",
+                    "coordinator.owner_index.get(&next_record.owner.causal_root()) == Some(&next_record.owner)",
+                    "!coordinator.ready_index.contains(&next_address.ordinal)",
+                    "durable_next.terminal() == Some(Some(outcome))",
+                    "continuation.matches_record( LifecycleWorkClass::SignVote, Some(outcome), next_address.ordinal, ledger.high_water(), )",
                 ),
             )
             require_tokens(
@@ -4810,7 +4878,9 @@ self.io.is_some()
                 "volatile refanned Broadcast finalization behavior",
                 scheduler_source,
                 (
-                    '"finalization accepts the exact volatile refanout wait beside its Ready next Sign"',
+                    '"finalization accepts the exact volatile refanout wait after its next Sign retires"',
+                    '"all exact post-output waits form one bounded finalization census"',
+                    '"finalization rejects a corrupted retained digest after paired Sign retirement"',
                     '"finalization must reject the corrupted exact next-Sign link"',
                 ),
             )
@@ -4820,6 +4890,7 @@ self.io.is_some()
                 scheduler_source,
                 (
                     "fn recovered_broadcast_refanout_ranks_exact_pair_before_unrelated_ready_sign()",
+                    "fn finalization_waits_for_every_authenticated_recovered_broadcast_refanout()",
                     "finalization_registry_census_is_exact_for_test()",
                 ),
             )

@@ -74,6 +74,7 @@ const MAX_REPLAY_AUTHORITY_BYTES: usize = 4 * 1024 * 1024;
 const EQUIVOCATION_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:equivocation-subject:v1";
 const PRODUCER_TURN_PHYSICAL_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:lifecycle:producer-turn-physical:v1";
+
 /// Version-one replay envelope retained beside one lifecycle ledger row.
 ///
 /// The fields are private so neither decoded wire values nor an arbitrary
@@ -198,7 +199,7 @@ impl LifecycleReplayAuthorityV1 {
                 })
         .then_some(CertifiedFetchReplayEvidenceV1 { family })
     }
-    /// Recover only a standalone local-body or signed-Proposal Validate source.
+    /// Recover only a closed standalone Validate source.
     fn recover_durable_standalone_validate(
         &self,
         active_context: LifecycleContext,
@@ -233,7 +234,9 @@ impl LifecycleReplayAuthorityV1 {
         };
         if !matches!(
             &source.origin,
-            BodyPipelineOriginV1::LocalBody(_) | BodyPipelineOriginV1::Proposal(_)
+            BodyPipelineOriginV1::LocalBody(_)
+                | BodyPipelineOriginV1::Proposal(_)
+                | BodyPipelineOriginV1::Certified { .. }
         ) || body_frame.durable_reference()
             != match payload {
                 DurablePayloadReference::BodyFrame(reference) => reference,
@@ -3459,7 +3462,7 @@ pub(in crate::sumeragi) struct LocalBodyPreIntentReplaySealV1 {
 #[derive(Clone, Debug)]
 #[must_use = "local Validate replay evidence must remain attached through completion"]
 pub(in crate::sumeragi) struct LocalValidateReplayEvidenceV1 {
-    family: LocalBodyPipelineReplayFamilyV1,
+    family: LocalValidateReplayFamilyV1,
     validate_pending: Arc<PendingRuntimeEffectBinding>,
 }
 /// Closed local-proposal command handoff projected from one Ready lifecycle Validate.
@@ -3842,7 +3845,7 @@ impl LocalBodyPreIntentReplaySealV1 {
             .expect("an exact local Store owner has one Validate successor");
         debug_assert_eq!(&projected, validate_pending);
         Ok(LocalValidateReplayEvidenceV1 {
-            family,
+            family: LocalValidateReplayFamilyV1::Assembled(family),
             validate_pending: Arc::new(projected),
         })
     }
@@ -3855,12 +3858,7 @@ impl LocalValidateReplayEvidenceV1 {
         receipt: &DurableBodyReceipt,
     ) -> bool {
         self.validate_pending.exactly_binds_adapter_effect(effect)
-            && local_body_stage_matches(
-                &self.family,
-                effect,
-                receipt,
-                LifecycleStageKind::ValidateBody,
-            )
+            && self.family.exactly_matches_validate(effect, receipt)
     }
     /// Compare this canonical family with the exact pending owner retained by
     /// a durable lifecycle Validate carrier.
@@ -3874,11 +3872,7 @@ impl LocalValidateReplayEvidenceV1 {
     }
     /// Revalidate the closed local family against its retained durable frame.
     pub(super) fn exactly_matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
-        exact_local_body_pipeline_family(&self.family.source, receipt)
-            .is_some_and(|expected| expected == self.family)
-            && self
-                .family
-                .is_exact_for_stage(LifecycleStageKind::ValidateBody)
+        self.family.exactly_matches_durable_body(receipt)
     }
     /// Consume successful validation into an exact local-proposal handoff.
     #[allow(clippy::result_large_err)]
@@ -3894,7 +3888,7 @@ impl LocalValidateReplayEvidenceV1 {
         };
         if validated_receipt.durable().manifest_hash() != HashOf::new(manifest)
             || !self.exactly_matches_validate(effect, validated_receipt.durable())
-            || !local_body_family_manifest_matches(&self.family, manifest)
+            || self.family.assembled_manifest() != Some(manifest)
             || !command_identity.exactly_matches_handoff(
                 *tag,
                 manifest,
@@ -3905,8 +3899,14 @@ impl LocalValidateReplayEvidenceV1 {
         {
             return Err(self);
         }
+        let family = match self.family {
+            LocalValidateReplayFamilyV1::Assembled(family) => family,
+            LocalValidateReplayFamilyV1::AuthenticatedGenesis(_) => {
+                unreachable!("authenticated genesis cannot project LocalProposalReady")
+            }
+        };
         Ok(LocalProposalReadyReplayEvidenceV1 {
-            family: self.family,
+            family,
             validate_pending: self.validate_pending,
             validated_receipt,
             command_identity,

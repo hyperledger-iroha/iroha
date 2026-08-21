@@ -192,7 +192,9 @@ impl V2EffectExecutor<FakeRuntime> {
             certified_work: self.certified_work.clone(),
             outstanding_request_hashes: self.outstanding_requests.hashes(),
             ready_bodies: self.ready_bodies.clone(),
-            authenticated_genesis_body: self.authenticated_genesis_body.clone(),
+            authenticated_genesis_body: self.authenticated_genesis_body.as_ref().map(|retained| {
+                (retained.subject(), Arc::clone(retained.canonical_wire()))
+            }),
             retained_locked_body: self.retained_locked_body.clone(),
             ready_body_bytes: self.ready_body_bytes,
             pending_store_bytes: self.pending_store_bytes,

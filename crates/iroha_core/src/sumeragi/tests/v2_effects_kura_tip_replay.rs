@@ -1185,7 +1185,7 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     executor
-        .install_authenticated_genesis_body(&fixture.block)
+        .install_authenticated_genesis_body_for_test(&fixture.block)
         .expect("retain authenticated staged genesis");
     let manifest = manifest_at_view(&fixture, 5);
     let round = manifest.round;
@@ -1263,7 +1263,7 @@ fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     executor
-        .install_authenticated_genesis_body(&fixture.block)
+        .install_authenticated_genesis_body_for_test(&fixture.block)
         .expect("retain authenticated staged genesis");
     let certificate = fixture.qc(wire::GlobalPhase::Commit);
     let sources = certified_sources(&fixture, &certificate);
@@ -1295,6 +1295,45 @@ fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
             fixture.manifest.clone()
         )]
     );
+    executor
+        .consume_effects(
+            vec![AdapterEffect::StoreBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            }],
+            &mut services,
+        )
+        .expect("advance authenticated genesis through Store");
+    let store_id = services.store_tasks[0].id();
+    let completion = services.execute_store(store_id);
+    executor
+        .complete_body_store(completion, &mut services)
+        .expect("fsync authenticated genesis body");
+    executor
+        .consume_effects(
+            vec![AdapterEffect::ValidateBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            }],
+            &mut services,
+        )
+        .expect("admit authenticated genesis Validate through the closed LocalBody cut");
+    assert_eq!(executor.pending_durable_validate_admissions.len(), 1);
+    assert!(
+        executor
+            .pending_durable_validate_admissions
+            .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
+    );
+    assert!(
+        !executor
+            .pending_durable_validate_admissions
+            [&(fixture.manifest.round, fixture.manifest.subject)]
+            .projects_local_proposal_handoff_for_test(),
+        "certified genesis enters the closed LocalBody admission surface without becoming a local proposal"
+    );
+    assert!(executor.authenticated_genesis_replay.is_empty());
 }
 #[test]
 fn authenticated_genesis_cache_does_not_satisfy_a_different_subject() {
@@ -1302,7 +1341,7 @@ fn authenticated_genesis_cache_does_not_satisfy_a_different_subject() {
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     executor
-        .install_authenticated_genesis_body(&fixture.block)
+        .install_authenticated_genesis_body_for_test(&fixture.block)
         .expect("retain authenticated staged genesis");
     let proposal_round = round(&fixture.context, 4);
     let (subject, body) = distinct_body(&fixture);

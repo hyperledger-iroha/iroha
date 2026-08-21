@@ -2027,9 +2027,37 @@ impl LaunchedProductionLifecycleV1 {
             launched: self,
         })
     }
+
+    fn ready_for_finalized_rollover(&mut self) -> bool {
+        self.executor.ready_to_finish()
+            && !self.owner.has_recovered_lifecycle_outputs()
+            && self.pending_kura_apply_replay.is_none()
+            && self.recovered_local_proposal_attempt.is_none()
+            && self.pending_lifecycle_completion.is_none()
+            && self.pending_ingress_capacity.is_none()
+            && self.completion_observer_activation.is_none()
+            && self
+                .owner
+                .registry
+                .registry_mut()
+                .exactly_covers_finalization_work(&self.owner.coordinator)
+    }
 }
 
 impl ActivatedProductionLifecycleV1 {
+    /// Return whether every executor and lifecycle owner can cross final rollover now.
+    ///
+    /// Keeping this predicate shared with the consuming transition lets the
+    /// active runner stutter through another Completion turn while authenticated
+    /// lifecycle work remains schedulable, without weakening the finalizer's
+    /// fail-closed check.
+    pub(in crate::sumeragi) fn ready_for_finalized_rollover(
+        &mut self,
+        _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> bool {
+        self.launched.ready_for_finalized_rollover()
+    }
+
     /// Consume an active, possibly non-final height for orderly operator exit.
     ///
     /// Durable WAL, body, and lifecycle rows remain untouched for cold replay.
@@ -2067,20 +2095,7 @@ impl ActivatedProductionLifecycleV1 {
         _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
     ) -> Result<FinalizedProductionLifecycleRolloverV1, ProductionLifecycleFinalizationErrorV1>
     {
-        if !self.launched.executor.ready_to_finish()
-            || self.launched.owner.has_recovered_lifecycle_outputs()
-            || self.launched.pending_kura_apply_replay.is_some()
-            || self.launched.recovered_local_proposal_attempt.is_some()
-            || self.launched.pending_lifecycle_completion.is_some()
-            || self.launched.pending_ingress_capacity.is_some()
-            || self.launched.completion_observer_activation.is_some()
-            || !self
-                .launched
-                .owner
-                .registry
-                .registry_mut()
-                .exactly_covers_finalization_work(&self.launched.owner.coordinator)
-        {
+        if !self.launched.ready_for_finalized_rollover() {
             return Err(ProductionLifecycleFinalizationErrorV1::NotReady);
         }
 
@@ -2575,7 +2590,7 @@ impl ProductionLifecycleOwnerV1 {
         .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
         if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref() {
             executor
-                .install_authenticated_genesis_body(authenticated_genesis.signed_block())
+                .install_authenticated_genesis_body(authenticated_genesis)
                 .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
         }
         if !body_store

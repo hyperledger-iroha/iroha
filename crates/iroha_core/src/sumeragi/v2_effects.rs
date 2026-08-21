@@ -107,10 +107,13 @@ use super::{
         LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
     },
     v2_lifecycle_coordinator::{
-        AdmissionDecision, LifecycleOutputAdmissionKeyV1, LifecycleOutputServiceDispositionV1,
+        AdmissionDecision, InstalledAuthenticatedGenesisReplayAuthorityV1,
+        LifecycleOutputAdmissionKeyV1, LifecycleOutputServiceDispositionV1,
         PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
-        PendingLiveWalSignAdmissionV1, PreparedLocalBodyValidateReplayPreAdmission,
-        PreparedRemoteProposalFetchReplayPreAdmission,
+        PendingLiveWalSignAdmissionV1, PreparedAuthenticatedGenesisFetchReplayPreAdmission,
+        PreparedAuthenticatedGenesisStoreReplayPreAdmission,
+        PreparedAuthenticatedGenesisStoredReplayPreAdmission,
+        PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,
         PreparedRemoteProposalStoreReplayPreAdmission,
         PreparedRemoteProposalStoredReplayPreAdmission,
         ProductionDurableValidateAdmissionSettlementV1,
@@ -144,7 +147,7 @@ use super::{
 use crate::kura::KuraV2CommitReceipt;
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
-    block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
+    block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2 as wire},
     merge::MergeLedgerEntry,
     peer::PeerId,
 };
@@ -3192,6 +3195,9 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// Signed-Proposal authority advancing with the exact ordinary body stage.
     remote_proposal_replay:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), RemoteProposalReplayStageV1>,
+    /// Authenticated height-one genesis authority advancing with its certified body stage.
+    authenticated_genesis_replay:
+        BTreeMap<(wire::ConsensusRound, wire::BlockSubject), AuthenticatedGenesisReplayStageV1>,
     /// Durable local/remote Validate owners awaiting the sole lifecycle cut.
     pending_durable_validate_admissions:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), PendingDurableValidateAdmissionV1>,
@@ -3234,7 +3240,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     pending_tip_recovery_attempts: u64,
     pending_tip_recovery_last_result: Option<PendingTipRecoveryAttemptResult>,
     decision_body_drained: bool,
-    authenticated_genesis_body: Option<(wire::BlockSubject, Arc<[u8]>)>,
+    authenticated_genesis_body: Option<InstalledAuthenticatedGenesisReplayAuthorityV1>,
     retained_locked_body: Option<(wire::BlockSubject, Arc<[u8]>)>,
     ready_body_bytes: u64,
     pending_store_bytes: u64,
@@ -4124,6 +4130,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             && self.parked_effect_batch.is_none()
             && !self.runtime.has_dormant_remote_proposal_replay()
             && self.remote_proposal_replay.is_empty()
+            && self.authenticated_genesis_replay.is_empty()
             && self.pending_durable_validate_admissions.is_empty()
             && self.durable_validate_retry_seals_are_finalization_inert()
             && self.pending_live_wal_sign_admission.is_none()
@@ -4428,75 +4435,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Option<&PendingKuraApplyRecoveryEvidence> {
         self.pending_tip_recovery.as_ref()
     }
-    /// Retain the exact resultless wire of the already-authenticated staged
-    /// genesis as a process-local acquisition source.
-    ///
-    /// Genesis is signed once with a fixed view-zero header, while its
-    /// consensus Proposal may be reissued in later views with a new manifest.
-    /// Keeping only the authenticated bytes and subject here lets
-    /// [`Self::begin_fetch`] derive that exact current-round manifest and then
-    /// re-enter the ordinary durable-store and deterministic-validation
-    /// pipeline. This cache never creates or reuses a durable receipt or
-    /// validation marker across proposal rounds.
-    pub(crate) fn install_authenticated_genesis_body(
-        &mut self,
-        authenticated_genesis: &SignedBlock,
-    ) -> Result<(), EffectExecutorError> {
-        self.ensure_open()?;
-        if self.context.height != 1
-            || self.context.parent_commit_qc.is_some()
-            || self.context.snapshot_bootstrap.is_some()
-        {
-            return Err(EffectExecutorError::Contract(
-                "authenticated staged genesis is only valid in a fresh height-one context"
-                    .to_owned(),
-            ));
-        }
-        let proposal = authenticated_genesis.canonical_resultless_proposal();
-        if proposal.header().height().get() != 1
-            || proposal.header().view_change_index() != 0
-            || proposal.header().prev_block_hash().is_some()
-            || proposal.header().execution_context_hash().is_some()
-            || proposal.execution_context().is_some()
-            || !proposal.is_resultless_proposal()
-        {
-            return Err(EffectExecutorError::Contract(
-                "authenticated staged genesis is not a canonical parentless view-zero proposal"
-                    .to_owned(),
-            ));
-        }
-        let canonical_wire: Arc<[u8]> = proposal
-            .encode_wire()
-            .map_err(|error| EffectExecutorError::Contract(error.to_string()))?
-            .into();
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: proposal.hash(),
-            payload_hash: Hash::new(canonical_wire.as_ref()),
-        };
-        let genesis_round = wire::ConsensusRound {
-            context_id: self.context.id(),
-            height: self.context.height,
-            view: 0,
-        };
-        ReadyBody::derive(
-            &self.context,
-            genesis_round,
-            subject,
-            Arc::clone(&canonical_wire),
-        )
-        .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
-        if let Some((retained_subject, retained_wire)) = self.authenticated_genesis_body.as_ref() {
-            if *retained_subject == subject && retained_wire.as_ref() == canonical_wire.as_ref() {
-                return Ok(());
-            }
-            return Err(EffectExecutorError::Contract(
-                "authenticated staged genesis changed after executor construction".to_owned(),
-            ));
-        }
-        self.authenticated_genesis_body = Some((subject, canonical_wire));
-        Ok(())
-    }
     /// Return whether retained reducer dispatch debt permits this outer
     /// ingress envelope to reach its handler.
     fn retained_dispatch_allows_network_ingress(
@@ -4598,6 +4536,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             pending_stores: BTreeMap::new(),
             local_store_replay: BTreeMap::new(),
             remote_proposal_replay: BTreeMap::new(),
+            authenticated_genesis_replay: BTreeMap::new(),
             pending_durable_validate_admissions: BTreeMap::new(),
             durable_validate_retry_seals: BTreeMap::new(),
             pending_live_wal_sign_admission: None,
@@ -4877,6 +4816,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         for key in self
             .remote_proposal_replay
             .keys()
+            .chain(self.authenticated_genesis_replay.keys())
             .chain(self.pending_durable_validate_admissions.keys())
             .chain(self.durable_validate_retry_seals.keys())
             .copied()
@@ -5111,6 +5051,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.body_pipeline_owners
             .retain(|key, _| !superseded_keys.contains(key));
         self.remote_proposal_replay
+            .retain(|key, _| !superseded_keys.contains(key));
+        self.authenticated_genesis_replay
             .retain(|key, _| !superseded_keys.contains(key));
         self.durable_validate_retry_seals
             .retain(|key, _| !superseded_keys.contains(key));
@@ -5954,27 +5896,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 continue;
             };
             let key = (*round, *subject);
-            let Some(RemoteProposalReplayStageV1::Stored {
-                replay,
-                ownership: store_ownership,
-            }) = self.remote_proposal_replay.get(&key)
+            let Some(incumbent) = self.stored_replay_incumbent_validate_ownership(key, effect)?
             else {
                 continue;
             };
-            let receipt = self.durable_bodies.get(&key).ok_or_else(|| {
-                EffectExecutorError::Contract(
-                    "stored Proposal replay lost its exact durable body during retention"
-                        .to_owned(),
-                )
-            })?;
-            let incumbent = replay
-                .project_incumbent_validate_ownership(receipt, store_ownership, effect)
-                .ok_or_else(|| {
-                    EffectExecutorError::Contract(
-                        "stored Proposal replay could not project its incumbent Validate owner"
-                            .to_owned(),
-                    )
-                })?;
             if let Some(existing) = retained_validation_lineages.insert(key, incumbent.clone())
                 && existing != incumbent
             {
@@ -7450,10 +7375,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 self.remote_proposal_replay.get(&key),
                 Some(RemoteProposalReplayStageV1::Store { work_id, .. })
                     if *work_id == completion.work_id()
-            ) {
+            ) || self
+                .authenticated_genesis_replay
+                .get(&key)
+                .and_then(AuthenticatedGenesisReplayStageV1::store_work_id)
+                == Some(completion.work_id())
+            {
                 return Err(self.close(
                     EffectExecutorError::Contract(
-                        "orphaned Proposal Store replay authority outlived its exact task"
+                        "orphaned replay-authorized Store authority outlived its exact task"
                             .to_owned(),
                     ),
                     services,
@@ -7525,6 +7455,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
             Some(RemoteProposalReplayStageV1::Stored { .. }) | None => false,
         };
+        let completes_authenticated_genesis_store = self
+            .preflight_authenticated_genesis_store_completion(key, &pending, completion.work_id())
+            .map_err(|error| self.close(error, services))?;
+        if completes_remote_proposal_store && completes_authenticated_genesis_store {
+            return Err(self.close(
+                EffectExecutorError::Contract(
+                    "one Store completion retained two replay authorities".to_owned(),
+                ),
+                services,
+            ));
+        }
         if completion.tag() != pending.task.tag()
             || pending.task.manifest() != &manifest
             || pending.task.id() != completion.work_id()
@@ -7693,6 +7634,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 },
             );
             debug_assert!(previous.is_none());
+        }
+        if completes_authenticated_genesis_store {
+            self.commit_authenticated_genesis_store_completion(
+                key,
+                completion.work_id(),
+                receipt.clone(),
+                pending.task.ownership().clone(),
+            )
+            .map_err(|error| self.close(error, services))?;
         }
         match &pending.consumer {
             Some(StoreConsumer::Reducer { tag, ownership }) => self
@@ -9573,21 +9523,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.ready_bodies.insert(plan.key, plan.body);
         self.ready_body_bytes = plan.ready_body_bytes;
     }
-    fn commit_remote_proposal_body_available_replay(
-        &mut self,
-        key: (wire::ConsensusRound, wire::BlockSubject),
-        replay: Option<PreparedRemoteProposalFetchReplayPreAdmission>,
-    ) {
-        if let Some(replay) = replay {
-            let previous = self
-                .remote_proposal_replay
-                .insert(key, RemoteProposalReplayStageV1::BodyAvailable(replay));
-            assert!(
-                previous.is_none(),
-                "remote Proposal replay preflight keeps its body key vacant"
-            );
-        }
-    }
     #[allow(clippy::too_many_arguments)]
     fn begin_fetch<S: V2EffectServices>(
         &mut self,
@@ -9647,6 +9582,23 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         let key = (round, subject);
+        if let Some(stage) = self.authenticated_genesis_replay.get(&key) {
+            if proposal_replay.is_some()
+                || !stage.exactly_authenticates_fetch_rediscovery(&incoming_effect)
+            {
+                return Err(EffectExecutorError::Contract(
+                    "certified genesis Fetch rediscovery changed its authenticated origin"
+                        .to_owned(),
+                ));
+            }
+            if matches!(stage, AuthenticatedGenesisReplayStageV1::StoreAdmission(_)) {
+                return Err(EffectExecutorError::Contract(
+                    "certified genesis Fetch rediscovery observed transient Store admission"
+                        .to_owned(),
+                ));
+            }
+            return Ok(());
+        }
         let existing_id = self.pending_fetches.iter().find_map(|(id, pending)| {
             (pending.task.round == round && pending.task.subject == subject).then_some(*id)
         });
@@ -9888,11 +9840,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             && self.context.snapshot_bootstrap.is_none()
             && self.pending_tip_recovery.is_none()
             && !self.recovered_bodies.contains_key(&key)
-            && let Some((genesis_subject, genesis_bytes)) = self.authenticated_genesis_body.as_ref()
-            && *genesis_subject == subject
+            && let Some(authenticated_genesis) = self.authenticated_genesis_body.as_ref()
+            && authenticated_genesis.subject() == subject
         {
-            let genesis = ReadyBody::derive(&self.context, round, subject, genesis_bytes.clone())
-                .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
+            let genesis = ReadyBody::derive(
+                &self.context,
+                round,
+                subject,
+                Arc::clone(authenticated_genesis.canonical_wire()),
+            )
+            .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
             // The staged genesis bytes were authenticated before consensus
             // started, and `ReadyBody::derive` above binds them to the exact
             // certified subject and proposal round. A lagging validator may
@@ -9906,6 +9863,23 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .is_none_or(|manifest| manifest == &genesis.manifest)
             {
                 let genesis_manifest = genesis.manifest.clone();
+                let genesis_replay = certificate
+                    .is_some()
+                    .then(|| {
+                        PreparedAuthenticatedGenesisFetchReplayPreAdmission::seal_exact_fetch(
+                            authenticated_genesis,
+                            incoming_effect.clone(),
+                            ownership.clone(),
+                            genesis_manifest.clone(),
+                        )
+                    })
+                    .transpose()
+                    .map_err(|_| {
+                        EffectExecutorError::Contract(
+                            "certified local genesis Fetch omitted its authenticated replay owner"
+                                .to_owned(),
+                        )
+                    })?;
                 let ready_plan =
                     self.plan_ready_body_install(key, genesis, staged_release.clone())?;
                 let owner_plan = self.plan_body_pipeline_owner(tag, &genesis_manifest)?;
@@ -9919,6 +9893,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 self.commit_body_pipeline_owner(owner_plan);
                 self.commit_ready_body_install(ready_plan);
                 self.commit_remote_proposal_body_available_replay(key, proposal_replay);
+                if let Some(replay) = genesis_replay {
+                    let previous = self.authenticated_genesis_replay.insert(
+                        key,
+                        AuthenticatedGenesisReplayStageV1::BodyAvailable(replay),
+                    );
+                    debug_assert!(previous.is_none());
+                }
                 return Ok(());
             }
         }
@@ -10368,44 +10349,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
 
-    /// Prove every signed-Proposal replay token is attached to its exact
-    /// executor-owned physical stage before a view or Decision retires it.
-    fn preflight_remote_proposal_replay_indexes(&self) -> Result<(), EffectExecutorError> {
-        for (key, stage) in &self.remote_proposal_replay {
-            let exact = match stage {
-                RemoteProposalReplayStageV1::Fetch { work_id, .. } => self
-                    .pending_fetches
-                    .get(work_id)
-                    .is_some_and(|pending| (pending.task.round, pending.task.subject) == *key),
-                RemoteProposalReplayStageV1::BodyAvailable(_) => {
-                    self.body_pipeline_owners.contains_key(key)
-                        && self.retained_body_manifest_hash(*key)?.is_some()
-                }
-                // StoreAdmission exists only inside one serialized StoreBody
-                // call. Observing it at a later control boundary would mean
-                // the move-only projection escaped that transaction.
-                RemoteProposalReplayStageV1::StoreAdmission(_) => false,
-                RemoteProposalReplayStageV1::Store { work_id, .. } => {
-                    self.pending_stores.get(work_id).is_some_and(|pending| {
-                        (pending.task.manifest.round, pending.task.manifest.subject) == *key
-                    })
-                }
-                RemoteProposalReplayStageV1::Stored { replay, ownership } => {
-                    self.durable_bodies.get(key).is_some_and(|receipt| {
-                        (receipt.round(), receipt.subject()) == *key
-                            && replay.exactly_retains_owned_store(receipt, ownership)
-                    })
-                }
-            };
-            if !exact {
-                return Err(EffectExecutorError::Contract(
-                    "remote Proposal replay is detached from its exact physical body stage"
-                        .to_owned(),
-                ));
-            }
-        }
-        Ok(())
-    }
     /// Prove the byte counters equal the complete serialized owner sets.
     ///
     /// EnterView may retire one subset during lock reconciliation and a
@@ -10633,6 +10576,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             round,
             subject,
         };
+        let genesis_disposition =
+            self.prepare_authenticated_genesis_store_replay(key, &effect, &ownership)?;
+        if genesis_disposition == AuthenticatedGenesisStoreReplayDispositionV1::Retry {
+            return self.store_body_inner(tag, round, subject, ownership, services);
+        }
         match self.remote_proposal_replay.get(&key) {
             Some(RemoteProposalReplayStageV1::Fetch { .. }) => {
                 return Err(EffectExecutorError::Contract(
@@ -10709,60 +10657,69 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.remote_proposal_replay.get(&key),
             Some(RemoteProposalReplayStageV1::StoreAdmission(_))
         );
+        let advances_genesis_replay =
+            genesis_disposition == AuthenticatedGenesisStoreReplayDispositionV1::Advance;
         self.store_body_inner(tag, round, subject, ownership.clone(), services)?;
-        if !advances_proposal_replay {
+        if !advances_proposal_replay && !advances_genesis_replay {
             return Ok(());
         }
-        let Some(RemoteProposalReplayStageV1::StoreAdmission(store_replay)) =
-            self.remote_proposal_replay.remove(&key)
-        else {
-            unreachable!("serialized Store keeps the preflighted Proposal replay stage")
-        };
-        let stage = if let Some(receipt) = self.durable_bodies.get(&key).cloned() {
-            let stored = match store_replay.bind_durable_body(receipt.clone()) {
-                Ok(stored) => stored,
-                Err(error) => {
+        if advances_proposal_replay {
+            let Some(RemoteProposalReplayStageV1::StoreAdmission(store_replay)) =
+                self.remote_proposal_replay.remove(&key)
+            else {
+                unreachable!("serialized Store keeps the preflighted Proposal replay stage")
+            };
+            let stage = if let Some(receipt) = self.durable_bodies.get(&key).cloned() {
+                let stored = match store_replay.bind_durable_body(receipt.clone()) {
+                    Ok(stored) => stored,
+                    Err(error) => {
+                        let previous = self.remote_proposal_replay.insert(
+                            key,
+                            RemoteProposalReplayStageV1::StoreAdmission(error.into_store()),
+                        );
+                        debug_assert!(previous.is_none());
+                        return Err(EffectExecutorError::Contract(
+                            "Proposal Store replay could not bind its exact durable body"
+                                .to_owned(),
+                        ));
+                    }
+                };
+                if !stored.exactly_retains_owned_store(&receipt, &ownership) {
+                    return Err(EffectExecutorError::Contract(
+                        "Proposal Store replay changed its exact retained runtime owner".to_owned(),
+                    ));
+                }
+                RemoteProposalReplayStageV1::Stored {
+                    replay: stored,
+                    ownership: ownership.clone(),
+                }
+            } else {
+                let Some(work_id) = self.pending_stores.iter().find_map(|(work_id, pending)| {
+                    (pending.task.manifest.round == round
+                        && pending.task.manifest.subject == subject)
+                        .then_some(*work_id)
+                }) else {
                     let previous = self.remote_proposal_replay.insert(
                         key,
-                        RemoteProposalReplayStageV1::StoreAdmission(error.into_store()),
+                        RemoteProposalReplayStageV1::StoreAdmission(store_replay),
                     );
                     debug_assert!(previous.is_none());
                     return Err(EffectExecutorError::Contract(
-                        "Proposal Store replay could not bind its exact durable body".to_owned(),
+                        "Proposal Store admission installed neither durable nor pending work"
+                            .to_owned(),
                     ));
+                };
+                RemoteProposalReplayStageV1::Store {
+                    work_id,
+                    replay: store_replay,
                 }
             };
-            if !stored.exactly_retains_owned_store(&receipt, &ownership) {
-                return Err(EffectExecutorError::Contract(
-                    "Proposal Store replay changed its exact retained runtime owner".to_owned(),
-                ));
-            }
-            RemoteProposalReplayStageV1::Stored {
-                replay: stored,
-                ownership,
-            }
-        } else {
-            let Some(work_id) = self.pending_stores.iter().find_map(|(work_id, pending)| {
-                (pending.task.manifest.round == round && pending.task.manifest.subject == subject)
-                    .then_some(*work_id)
-            }) else {
-                let previous = self.remote_proposal_replay.insert(
-                    key,
-                    RemoteProposalReplayStageV1::StoreAdmission(store_replay),
-                );
-                debug_assert!(previous.is_none());
-                return Err(EffectExecutorError::Contract(
-                    "Proposal Store admission installed neither durable nor pending work"
-                        .to_owned(),
-                ));
-            };
-            RemoteProposalReplayStageV1::Store {
-                work_id,
-                replay: store_replay,
-            }
-        };
-        let previous = self.remote_proposal_replay.insert(key, stage);
-        debug_assert!(previous.is_none());
+            let previous = self.remote_proposal_replay.insert(key, stage);
+            debug_assert!(previous.is_none());
+        }
+        if advances_genesis_replay {
+            self.commit_authenticated_genesis_store_replay(key, ownership)?;
+        }
         Ok(())
     }
     fn store_body_inner<S: V2EffectServices>(
@@ -11642,6 +11599,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 && *key == decision_body
                 && matches!(stage, RemoteProposalReplayStageV1::Stored { .. })
         });
+        self.authenticated_genesis_replay.retain(|key, stage| {
+            !drain_decision_body
+                && *key == decision_body
+                && matches!(stage, AuthenticatedGenesisReplayStageV1::Stored { .. })
+        });
         // A consumed Validate owner leaves an inert idempotence tombstone, not
         // live work. Decision makes every competing body permanently stale;
         // keep only the selected body's tombstone until rollover, and none
@@ -12248,6 +12210,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.remote_proposal_replay.retain(|key, stage| {
             Some(*key) == protected_body
                 && matches!(stage, RemoteProposalReplayStageV1::Stored { .. })
+        });
+        self.authenticated_genesis_replay.retain(|key, stage| {
+            Some(*key) == protected_body
+                && matches!(stage, AuthenticatedGenesisReplayStageV1::Stored { .. })
         });
         // Retry seals are post-admission tombstones, so they own neither
         // lifecycle capacity nor service work. Once the view advances, only

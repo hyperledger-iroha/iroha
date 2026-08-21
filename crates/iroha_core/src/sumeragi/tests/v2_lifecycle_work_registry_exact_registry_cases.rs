@@ -440,7 +440,7 @@ fn remote_proposal_replay_pre_admission_is_closed_exact_and_live() {
         "RemoteProposalReplayStageV1::Stored { .. }",
         ".project_store(effect.clone(), ownership.clone())",
         ".bind_durable_body(receipt.clone())",
-        ".project_validate(effect, ownership)",
+        ".project_validate(effect.clone(), validate_ownership.clone())",
         ".into_pending_durable_validate_admission()",
     ] {
         assert!(

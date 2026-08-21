@@ -3689,7 +3689,7 @@ mod recovered_sign_capacity_tests {
             _bounded_planner_io,
             _bounded_directory,
             bounded_broadcast,
-            _bounded_pair,
+            bounded_pair,
             bounded_unrelated,
         ) = recovered_broadcast_scheduler_fixture();
         assert!(bounded_owner.retire_unrelated_sign_for_finalization_test(bounded_unrelated));
@@ -3705,9 +3705,89 @@ mod recovered_sign_capacity_tests {
             }
         );
         assert!(
-            bounded_owner.finalization_registry_census_is_exact_for_test(),
-            "finalization accepts the exact volatile refanout wait beside its Ready next Sign"
+            !bounded_owner.finalization_registry_census_is_exact_for_test(),
+            "finalization cannot consume the still-schedulable paired next Sign"
         );
+        assert!(bounded_owner.retire_unrelated_sign_for_finalization_test(bounded_pair));
+        assert!(
+            bounded_owner.finalization_registry_census_is_exact_for_test(),
+            "finalization accepts the exact volatile refanout wait after its next Sign retires"
+        );
+        assert!(bounded_owner.corrupt_recovered_broadcast_pair_link_for_test(bounded_broadcast));
+        assert!(
+            !bounded_owner.finalization_registry_census_is_exact_for_test(),
+            "finalization rejects a corrupted retained digest after paired Sign retirement"
+        );
+    }
+
+    #[test]
+    fn finalization_waits_for_every_authenticated_recovered_broadcast_refanout() {
+        let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+        let context = worker_context(&keys);
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("multi-refanout fixture validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+            .expect("verified multi-refanout scheduler context");
+        let directory =
+            tempfile::TempDir::new().expect("temporary multi-refanout scheduler storage");
+        let (mut owner, first_broadcast, paired, unrelated) =
+            ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                verified,
+                &keys[0],
+                directory.path(),
+            );
+        let second_broadcast = owner
+            .add_recovered_broadcast_scheduler_fixture_for_test(&keys[0], 0x71)
+            .expect("add a second exact recovered signed-Broadcast carrier");
+        let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+        let planner_io = owner.bind_body_store_to_planner_io_for_test(
+            &mut services,
+            Arc::clone(&output_guard),
+            8,
+        );
+
+        assert!(
+            !owner.finalization_registry_census_is_exact_for_test(),
+            "Ready recovered Broadcasts remain schedulable before rollover"
+        );
+        assert_eq!(
+            owner
+                .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0)
+                .expect("refan the oldest exact recovered Broadcast"),
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                ordinal: first_broadcast,
+            }
+        );
+        assert!(owner.retire_unrelated_sign_for_finalization_test(paired));
+        assert!(owner.retire_unrelated_sign_for_finalization_test(unrelated));
+        assert!(
+            !owner.finalization_registry_census_is_exact_for_test(),
+            "the second Ready Broadcast must receive its own Completion turn"
+        );
+        assert_eq!(
+            owner
+                .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0)
+                .expect("refan the second exact recovered Broadcast"),
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                ordinal: second_broadcast,
+            }
+        );
+        assert!(
+            owner.finalization_registry_census_is_exact_for_test(),
+            "all exact post-output waits form one bounded finalization census"
+        );
+        assert!(owner.corrupt_recovered_broadcast_wait_for_finalization_test(first_broadcast));
+        assert!(
+            !owner.finalization_registry_census_is_exact_for_test(),
+            "a foreign Recovery wait cannot borrow another Broadcast's output handoff"
+        );
+        assert!(!output_guard.restart_required());
+        planner_io.detach(&mut services);
     }
 
     sumeragi_stack_test!(
@@ -4014,6 +4094,21 @@ impl ProductionLifecycleOwnerV1 {
         )
     }
 
+    /// Add one exact unpaired recovered signed-Broadcast to this closed owner.
+    fn add_recovered_broadcast_scheduler_fixture_for_test(
+        &mut self,
+        local_signer: &iroha_crypto::KeyPair,
+        marker: u8,
+    ) -> Option<u128> {
+        self.registry
+            .add_recovered_broadcast_scheduler_fixture_for_test(
+                &mut self.coordinator,
+                &self.verified,
+                local_signer,
+                marker,
+            )
+    }
+
     /// Clear the retained link without exposing either closed carrier.
     fn clear_recovered_broadcast_pair_link_for_test(&mut self, broadcast_ordinal: u128) -> bool {
         self.registry
@@ -4058,6 +4153,28 @@ impl ProductionLifecycleOwnerV1 {
                     broadcast_ordinal,
                 ),
         }
+    }
+
+    /// Corrupt only one refanned Broadcast's volatile wait source.
+    fn corrupt_recovered_broadcast_wait_for_finalization_test(
+        &mut self,
+        broadcast_ordinal: u128,
+    ) -> bool {
+        let Some(record) = self.coordinator.records.get_mut(&broadcast_ordinal) else {
+            return false;
+        };
+        let LifecycleState::Waiting(wait) = record.state else {
+            return false;
+        };
+        let mut foreign_digest = super::LifecycleDigest::new([0xE7; 32]);
+        if wait.source() == super::WaitSource::Recovery(foreign_digest) {
+            foreign_digest = super::LifecycleDigest::new([0xE8; 32]);
+        }
+        record.state = LifecycleState::Waiting(super::WaitToken::new(
+            super::WaitSource::Recovery(foreign_digest),
+            wait.observed_generation(),
+        ));
+        true
     }
 
     /// Seal a generic runtime retransmit without exposing the typed carrier.

@@ -45,6 +45,7 @@ pub(in crate::sumeragi) use projection::reducer_fence_wait_source;
 #[path = "v2_lifecycle_replay_authority.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod replay_authority;
+pub(in crate::sumeragi) use replay_authority::InstalledAuthenticatedGenesisReplayAuthorityV1;
 /// Sealed production planner-input authentication.
 #[path = "v2_lifecycle_scheduler_inputs.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -328,6 +329,9 @@ pub(in crate::sumeragi) use work_registry::{
 pub(in crate::sumeragi) use work_registry::{
     LifecycleOutputAdmissionKeyV1, PendingDurableValidateAdmissionV1,
     PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
+    PreparedAuthenticatedGenesisFetchReplayPreAdmission,
+    PreparedAuthenticatedGenesisStoreReplayPreAdmission,
+    PreparedAuthenticatedGenesisStoredReplayPreAdmission,
     PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,
     PreparedRemoteProposalStoreReplayPreAdmission, PreparedRemoteProposalStoredReplayPreAdmission,
 };
