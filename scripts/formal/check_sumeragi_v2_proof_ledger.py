@@ -851,7 +851,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
     "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "d2f24737c0a9ed5fddc579101ab48ea8a1820ef83508319b9942f6381a65109b",
-    "effect_candidate_retain": "2ddf84d44bb686dab2766b7367b9731318e01ddbdf0aa693de069c7238661920",
+    "effect_candidate_retain": "56512d3347fa9d328c342e3982e6b03f3a9699fcc4ed7daeac854277838d59f4",
     "relay_retry": "052e90cc19d9416a0546c0938c57592da456a5bf98d9c9d64939dc4469d258ac",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
@@ -22348,18 +22348,10 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         )
     else:
         integration_source = integration_path.read_text(encoding="utf-8")
-    integration_context = (
-        (
-            "#",
-            "[",
-            "cfg",
-            "(",
-            "test",
-            ")",
-            "]",
-            "mod",
-            "prepare_qc_split_tests",
-        ),
+    integration_test_path, integration_test_source = (
+        _read_locked_commit_progress_witness_test_provider(
+            repo_root, integration_path, integration_source, errors
+        )
     )
     for helper_name, expected_sha256 in (
         _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256.items()
@@ -22388,12 +22380,12 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         _LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256.items()
     ):
         item = _require_rust_item(
-            integration_path, integration_source, test_name, errors
+            integration_test_path, integration_test_source, test_name, errors
         )
         _require_rust_item_context(
-            integration_path,
+            integration_test_path,
             item,
-            integration_context,
+            (),
             f"locked-Commit progress-witness regression {test_name}",
             errors,
             expected_attributes=("#[test]",),
@@ -22403,7 +22395,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         observed_sha256 = _rust_item_token_sha256(item)
         if observed_sha256 != expected_sha256:
             errors.append(
-                f"{integration_path}:{item.line}: locked-Commit "
+                f"{integration_test_path}:{item.line}: locked-Commit "
                 f"progress-witness regression {test_name} must match exact "
                 f"reviewed token digest {expected_sha256}; found "
                 f"{observed_sha256}"
@@ -57788,9 +57780,12 @@ Some(retained)
     _require_rust_token_sequence(
         ingress_path,
         ingress_seam_items["ingress::matches_semantic_origin"][1],
-        "self.validate_exact() && self.first.semantic_origin.as_ref() == origin",
+        "self.validate_exact() && &self.first.semantic_origin == origin",
         "semantic-origin validation must compare the independently retained canonical request origin",
         errors,
+    )
+    _require_exact_output_mandatory_identity_markers(
+        ingress_path, ingress_seam_items, effects_path, worker_path, errors
     )
     _require_rust_token_sequence(
         ingress_path,
@@ -57823,7 +57818,7 @@ self.first.lifecycle_ordinal == self.latest.lifecycle_ordinal
     && self.first.encoded_bytes.as_ref() == self.latest.encoded_bytes.as_ref()
     && self.first.encoded_len == self.latest.encoded_len
     && self.leader_wire_token.as_ref().is_none_or(|token| {
-        self.first.semantic_origin.as_ref().is_some_and(|origin| &token.identity.semantic_origin == origin)
+        token.identity.semantic_origin == self.first.semantic_origin
             && token.identity.canonical_wire_hash == self.first.wire_key.hash && token.slot.semantic_origin == token.identity.semantic_origin
             && token.slot.phase == token.identity.phase && token.source_class == token.identity.phase.source_class()
             && (token.source_class == FairV2IngressLeaderWireSourceClass::Chunk) == token.slot.chunk_index.is_some()
@@ -57857,7 +57852,7 @@ let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
 ));
 if !ingress_ownership.validate_exact()
     || !ingress_ownership.matches_message(&message)
-    || !ingress_ownership.matches_semantic_origin(Some(authenticated_sender))
+    || !ingress_ownership.matches_semantic_origin(authenticated_sender)
 {
 """,
         "payload chunk effect consumption must reject a changed envelope or semantic origin before mutation",
@@ -57888,7 +57883,7 @@ if let Some(ownership) = ingress_ownership {
         """
 if !ingress_ownership.validate_exact()
     || !ingress_ownership.matches_message(&chunk_message)
-    || !ingress_ownership.matches_semantic_origin(Some(&sender))
+    || !ingress_ownership.matches_semantic_origin(&sender)
 {
 """,
         "payload chunk routing must bind canonical bytes and semantic sender before buffering or effect mutation",
@@ -57953,13 +57948,13 @@ match result {
 if ingress_ownership.as_ref().is_some_and(|ownership| {
     !ownership.validate_exact()
         || !ownership.matches_message(&message)
-        || !ownership.matches_semantic_origin(sender.as_ref())
+        || !ownership.matches_semantic_origin(&sender)
         || !ownership.matches_reply_routes(reply_routes.as_ref())
 }) {
     return V2LaneIngressOutcome::Rejected;
 }
 """,
-        "lane ingress must bind semantic origin, canonical message, and the complete source route set before service",
+        "lane ingress must bind its mandatory semantic origin, canonical message, and the complete source route set before service",
         errors,
     )
     _require_rust_token_sequence(
@@ -58942,7 +58937,9 @@ if self.pending_server_closures.is_empty() {
         lifecycle_runner_path,
         lifecycle_runner_items.get("ordinary_active"),
         """
-let rollover_ready = if ready_to_finish {
+let finalization_ready =
+    ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);
+let rollover_ready = if finalization_ready {
     activated.with_runner_runtime(
         &mut active_runner,
         |_owner, executor, services, _local_proposal| {
@@ -58962,7 +58959,6 @@ let rollover_ready = if ready_to_finish {
     false
 };
 if ready_to_finish && !rollover_ready {
-    committed_lane_status_publisher.publish_if_changed(&lane_work);
     let _ = wake_rx.recv_timeout(IDLE_POLL);
     continue;
 }
@@ -67527,7 +67523,7 @@ let cleanup = cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor);
 if reply_routes.semantic_target() != sender
     || !ownership.validate_exact()
     || !ownership.matches_message(inbound.message())
-    || !ownership.matches_semantic_origin(Some(sender))
+    || !ownership.matches_semantic_origin(sender)
     || !ownership.matches_reply_routes(Some(reply_routes))
 {
     return CurrentCertifiedServePreAdmissionV1::Service(

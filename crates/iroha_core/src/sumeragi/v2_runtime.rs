@@ -78,7 +78,8 @@ use super::{
         PreparedReadyDurableValidateAdapterPreview, PreparedReadyDurableValidateExecution,
         ReadyDurableValidateAdapterPreviewError,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
-        RecoveredWalVoteReplayEvidenceV1,
+        RecoveredWalVoteReplayEvidenceV1, RuntimeLifecycleOrdinalAuthority,
+        runtime_lifecycle_ordinal_authority_after_high_watermark,
     },
 };
 use iroha_data_model::block::consensus_v2 as wire;
@@ -86,10 +87,7 @@ use norito::codec::{Decode as _, Encode as _};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
     time::{Duration, Instant},
 };
 const RETRANSMIT_DIVISOR: u32 = 5;
@@ -105,45 +103,26 @@ const NANOS_PER_SECOND: u128 = 1_000_000_000;
 /// any reconstructed runtime owner is minted.
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeLifecycleOrdinalSource {
-    next: Arc<Mutex<Option<u128>>>,
+    authority: RuntimeLifecycleOrdinalAuthority,
 }
 impl RuntimeLifecycleOrdinalSource {
     /// Construct a source strictly after a durable high-watermark.
     pub(crate) fn after_high_watermark(high_watermark: u128) -> Self {
         Self {
-            next: Arc::new(Mutex::new(high_watermark.checked_add(1))),
+            authority: runtime_lifecycle_ordinal_authority_after_high_watermark(high_watermark),
         }
     }
-    fn lock_next(&self) -> Result<std::sync::MutexGuard<'_, Option<u128>>, String> {
-        self.next
-            .lock()
-            .map_err(|_| "Sumeragi v2 lifecycle ordinal source was poisoned".to_owned())
+    /// Wrap the runtime-restricted view of a shared launch authority.
+    pub(in crate::sumeragi) const fn from_authority(
+        authority: RuntimeLifecycleOrdinalAuthority,
+    ) -> Self {
+        Self { authority }
     }
     /// Reserve one globally unique ordinal.
     pub(crate) fn reserve_one(&self) -> Result<u128, String> {
         self.reserve_range(1)?
             .0
             .ok_or_else(|| "Sumeragi v2 lifecycle ordinal source returned no owner".to_owned())
-    }
-    fn prospective_range(
-        next: Option<u128>,
-        count: usize,
-    ) -> Result<(Option<u128>, Option<u128>), String> {
-        if count == 0 {
-            return Ok((None, next));
-        }
-        let first = next.ok_or_else(|| {
-            "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
-        })?;
-        let offset = u128::try_from(count - 1)
-            .map_err(|_| "Sumeragi v2 lifecycle admission range is not representable".to_owned())?;
-        let last = first.checked_add(offset).ok_or_else(|| {
-            "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
-        })?;
-        let successor = last.checked_add(1).ok_or_else(|| {
-            "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
-        })?;
-        Ok((Some(first), Some(successor)))
     }
     /// Hold the actor-global source while a prospective FIFO owner is fully
     /// checked and committed to its local ingress.
@@ -159,14 +138,9 @@ impl RuntimeLifecycleOrdinalSource {
         if count == 0 {
             return Err(EnqueueError::FailClosed);
         }
-        let mut next = self.lock_next().map_err(|_| EnqueueError::FailClosed)?;
-        let (first, successor) =
-            Self::prospective_range(*next, count).map_err(|_| EnqueueError::FailClosed)?;
-        let first = first.ok_or(EnqueueError::FailClosed)?;
-        let successor = successor.ok_or(EnqueueError::FailClosed)?;
-        let committed = commit(first, successor)?;
-        *next = Some(successor);
-        Ok(committed)
+        self.authority
+            .with_checked_reservation(count, commit)
+            .map_err(|_| EnqueueError::FailClosed)?
     }
     /// Hold the source at one already-minted successor while a reservation is
     /// materialized without allocating another ordinal.
@@ -174,42 +148,23 @@ impl RuntimeLifecycleOrdinalSource {
         &self,
         commit: impl FnOnce(u128) -> Result<T, EnqueueError>,
     ) -> Result<T, EnqueueError> {
-        let next = self.lock_next().map_err(|_| EnqueueError::FailClosed)?;
-        let current = (*next).ok_or(EnqueueError::FailClosed)?;
-        commit(current)
+        self.authority
+            .with_checked_current(commit)
+            .map_err(|_| EnqueueError::FailClosed)?
     }
     fn reserve_range(&self, count: usize) -> Result<(Option<u128>, Option<u128>), String> {
-        let mut next = self.lock_next()?;
-        let reserved = Self::prospective_range(*next, count)?;
-        if count != 0 {
-            *next = reserved.1;
-        }
-        Ok(reserved)
+        self.authority.reserve_range(count)
     }
     /// Advance a live source past a high-watermark restored by another owner.
     pub(crate) fn advance_past(&self, high_watermark: u128) -> Result<(), String> {
-        let mut next = self.lock_next()?;
-        match *next {
-            None => {
-                return Err(
-                    "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned(),
-                );
-            }
-            Some(candidate) if candidate <= high_watermark => {
-                *next = Some(high_watermark.checked_add(1).ok_or_else(|| {
-                    "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
-                })?);
-            }
-            Some(_) => {}
-        }
-        Ok(())
+        self.authority.advance_past(high_watermark)
     }
     /// Read the next unused ordinal without reserving it.
     ///
     /// Runtime ingress uses this to initialize its diagnostic mirror from the
     /// same actor-global source that owns all lifecycle reservations.
     pub(super) fn next_ordinal(&self) -> Result<Option<u128>, String> {
-        self.lock_next().map(|next| *next)
+        self.authority.next_ordinal()
     }
     /// Inspect the next actor-global lifecycle ordinal in tests.
     #[cfg(test)]
@@ -217,11 +172,7 @@ impl RuntimeLifecycleOrdinalSource {
         self.next_ordinal()
     }
     fn recognizes_minted(&self, ordinal: u128) -> Result<bool, String> {
-        if ordinal == 0 {
-            return Ok(false);
-        }
-        self.lock_next()
-            .map(|next| (*next).is_some_and(|next| ordinal < next))
+        self.authority.recognizes_minted(ordinal)
     }
 }
 /// Derive the deadline for one certified view from the immutable base timeout.
@@ -6294,6 +6245,20 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .map_err(|_| EnqueueError::FailClosed)?;
         self.next_admission_ordinal = reserved.1;
         Ok(reserved)
+    }
+    /// Adopt an ordinal already minted and durably published by the coordinator.
+    fn advance_past_coordinator_ordinal(
+        &mut self,
+        lifecycle_ordinal: u128,
+    ) -> Result<(), EnqueueError> {
+        self.lifecycle_ordinals
+            .advance_past(lifecycle_ordinal)
+            .map_err(|_| EnqueueError::FailClosed)?;
+        self.next_admission_ordinal = self
+            .lifecycle_ordinals
+            .next_ordinal()
+            .map_err(|_| EnqueueError::FailClosed)?;
+        Ok(())
     }
     /// Atomically validate and publish one or more physical FIFO owners.
     ///
@@ -16581,116 +16546,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .take_ingress_ownership()
             .expect("real test fair ingress produces exact ownership");
         self.can_admit_network_message_with_ingress_ownership(message, &ownership)
-    }
-    /// Enqueue a local proposal successor under the immutable lifecycle Validate owner.
-    ///
-    /// The coordinator ordinal is already minted by the actor-global source;
-    /// this boundary validates and reuses it rather than allocating a second
-    /// logical lifecycle position.
-    pub(in crate::sumeragi) fn enqueue_local_proposal_with_lifecycle_pending(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-        durable_receipt: DurableBodyReceipt,
-        validated_receipt: ValidatedBodyReceipt,
-        pending: &PendingRuntimeEffectBinding,
-        lifecycle_ordinal: u128,
-    ) -> Result<LocalProposalReadyCommandIdentity, EnqueueError> {
-        if self.fail_closed || lifecycle_ordinal == 0 {
-            return Err(EnqueueError::FailClosed);
-        }
-        let identity = LocalProposalReadyCommandIdentity::from_exact_pending_handoff(
-            tag,
-            &manifest,
-            &durable_receipt,
-            &validated_receipt,
-            pending,
-        )
-        .ok_or(EnqueueError::FailClosed)?;
-        let command = AdapterCommand::LocalProposalReady {
-            manifest,
-            durable_receipt,
-            validated_receipt,
-        };
-        let preflight =
-            self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
-        let mut tagged = match preflight {
-            RuntimeCommandAdmissionPreflight::CoalesceOwned {
-                causal_lifecycle_key,
-                admission_ordinal,
-            } if causal_lifecycle_key == *pending.causal_lifecycle_key()
-                && admission_ordinal == lifecycle_ordinal =>
-            {
-                return Ok(identity);
-            }
-            RuntimeCommandAdmissionPreflight::Coalesce if tag != self.driver.current_tag() => {
-                return Ok(identity);
-            }
-            RuntimeCommandAdmissionPreflight::Coalesce
-            | RuntimeCommandAdmissionPreflight::CoalesceOwned { .. } => {
-                self.latch_fail_closed(
-                    "lifecycle local-proposal completion changed its immutable owner",
-                );
-                return Err(EnqueueError::FailClosed);
-            }
-            RuntimeCommandAdmissionPreflight::Admit => {
-                let owner = self.restored_command_owner(
-                    tag,
-                    CommandClass::Completion,
-                    &command,
-                    None,
-                    *pending.causal_lifecycle_key(),
-                    lifecycle_ordinal,
-                )?;
-                TaggedCommand::with_causal_origin(
-                    tag,
-                    CommandClass::Completion,
-                    command,
-                    Instant::now(),
-                    owner.causal_origin().clone(),
-                    owner.lifecycle_ordinal(),
-                )?
-            }
-            RuntimeCommandAdmissionPreflight::ReuseDormant {
-                causal_lifecycle_key,
-                admission_ordinal,
-                producer_stage,
-            } => {
-                if causal_lifecycle_key != *pending.causal_lifecycle_key()
-                    || admission_ordinal != lifecycle_ordinal
-                    || producer_stage != 0
-                {
-                    self.latch_fail_closed(
-                        "lifecycle local-proposal completion changed its dormant owner",
-                    );
-                    return Err(EnqueueError::FailClosed);
-                }
-                self.restored_tagged_command(
-                    tag,
-                    CommandClass::Completion,
-                    command,
-                    Instant::now(),
-                    causal_lifecycle_key,
-                    admission_ordinal,
-                    producer_stage,
-                )?
-            }
-            RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
-        };
-        tagged.candidate_semantic_statement = pending.candidate_statement();
-        if !tagged.validate_admission_identity() {
-            self.latch_fail_closed(
-                "lifecycle local-proposal completion carried an invalid candidate statement",
-            );
-            return Err(EnqueueError::FailClosed);
-        }
-        let result = self.enqueue_after_clock_reservation(tagged);
-        if result == Err(EnqueueError::FailClosed) {
-            self.latch_fail_closed(
-                "lifecycle local-proposal completion failed exact queue ownership",
-            );
-        }
-        result.map(|()| identity)
     }
     /// Enqueue successful canonical reconstruction with the exact fetch tag.
     ///

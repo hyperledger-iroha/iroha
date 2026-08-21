@@ -771,7 +771,8 @@ impl LifecycleCoordinator {
                     })
                 });
         let mut next = self.stage_durable_transaction();
-        let decision = next.reduce_admit(AdmissionRequest::Candidate(candidate.clone()));
+        let (decision, ordinal_reservation) =
+            next.reduce_admit_with_durable_ordinals(AdmissionRequest::Candidate(candidate.clone()));
         let first_admission = matches!(decision, AdmissionDecision::Admitted { .. });
         let recovery_rebind = matches!(
             decision,
@@ -799,7 +800,11 @@ impl LifecycleCoordinator {
                         location.address,
                         location.digest,
                         live,
-                        || next.persist_durable_projection(),
+                        || {
+                            next.persist_durable_projection_with_ordinal_reservation(
+                                ordinal_reservation.as_ref(),
+                            )
+                        },
                     ) {
                         Ok(()) => {
                             *self = next;
@@ -846,7 +851,11 @@ impl LifecycleCoordinator {
                         location.address,
                         location.digest,
                         bound,
-                        || next.persist_durable_projection(),
+                        || {
+                            next.persist_durable_projection_with_ordinal_reservation(
+                                ordinal_reservation.as_ref(),
+                            )
+                        },
                     ) {
                         Ok(()) => {
                             *self = next;
@@ -910,7 +919,11 @@ impl LifecycleCoordinator {
                             location.address,
                             location.digest,
                             validate,
-                            || next.persist_durable_projection(),
+                            || {
+                                next.persist_durable_projection_with_ordinal_reservation(
+                                    ordinal_reservation.as_ref(),
+                                )
+                            },
                         ) {
                         Ok(()) => {
                             *self = next;

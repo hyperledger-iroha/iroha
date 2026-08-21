@@ -745,6 +745,7 @@ region|derive_remote_proposal_store_evidence|replay_authority|last|#[derive(|bef
 region|derive_remote_proposal_stored_evidence|replay_authority|last|#[derive(|before|pub(in crate::sumeragi) struct RemoteProposalStoredReplayEvidenceV1 {
 region|derive_remote_proposal_validate_evidence|replay_authority|last|#[derive(|before|pub(in crate::sumeragi) struct RemoteProposalValidateReplayEvidenceV1 {
 region|remote|replay_authority|after|pub(in crate::sumeragi) struct RemoteProposalFetchReplayEvidenceV1|before|/// Move-only pre-intent replay seal for one exact local
+region|authenticated_genesis|replay_authority|at|pub(in crate::sumeragi) struct InstalledAuthenticatedGenesisReplayAuthorityV1|before|fn remote_proposal_origin_matches_fetch(
 region|remote_certified_body|replay_authority|at|fn remote_proposal_origin_matches_fetch(|before|impl CertifiedFetchReplayEvidenceV1 {
 region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|adapter|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -774,6 +775,16 @@ required|remote|LifecycleStageKind::ValidateBody|remote Proposal replay wrapper 
 required|remote|canonical_replay_authority(|remote Proposal replay wrapper omitted canonical_replay_authority(
 required|remote_certified_body|fn remote_proposal_origin_matches_fetch(|remote Proposal projected stages lost their exact signed Fetch-origin matcher
 count|remote_certified_body|fn exactly_matches_origin_fetch(|3|the certified family plus Store and Stored Proposal stages must retain exactly three origin-Fetch matchers
+required|authenticated_genesis|pub(in crate::sumeragi) struct InstalledAuthenticatedGenesisReplayAuthorityV1|authenticated genesis replay lost its opaque installed authority
+required|authenticated_genesis|authenticated.signed_block()|authenticated genesis replay authority is no longer minted from the opaque launch-authenticated body
+required|authenticated_genesis|context.height != 1|authenticated genesis replay stopped requiring height one
+required|authenticated_genesis|context.parent_commit_qc.is_some()|authenticated genesis replay stopped rejecting a parented context
+required|authenticated_genesis|context.snapshot_bootstrap.is_some()|authenticated genesis replay stopped rejecting a snapshot bootstrap context
+required|authenticated_genesis|crate::sumeragi::v2_chunks::encode_payload(|authenticated genesis replay stopped validating the frozen DA layout
+required|authenticated_genesis|AuthenticatedGenesisFetchReplayEvidenceV1|authenticated genesis replay lost its closed Fetch evidence
+required|authenticated_genesis|AuthenticatedGenesisStoreReplayEvidenceV1|authenticated genesis replay lost its closed Store evidence
+required|authenticated_genesis|AuthenticatedGenesisStoredReplayEvidenceV1|authenticated genesis replay lost its closed durable Store evidence
+count|authenticated_genesis|fn exactly_matches_origin_fetch(|2|authenticated genesis Store and Stored evidence must retain exactly two origin-Fetch matchers
 forbidden|remote|pub(crate) struct RemoteProposal|remote Proposal replay wrapper exposed or reserved pub(crate) struct RemoteProposal
 forbidden|remote|pub(in crate::sumeragi) fn authenticated(|remote Proposal replay wrapper exposed or reserved pub(in crate::sumeragi) fn authenticated(
 forbidden|remote|pub(in crate::sumeragi) fn ingress(|remote Proposal replay wrapper exposed or reserved pub(in crate::sumeragi) fn ingress(
@@ -1021,6 +1032,7 @@ end
 case|remote_proposal_replay_pre_admission_is_closed_exact_and_live
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|token|registry|after|pub(in crate::sumeragi) struct PreparedRemoteProposalFetchReplayPreAdmission {|before|/// Closed concrete form of one fsynced recovered WAL `Sign` successor.
+region|authenticated_genesis_token|registry|at|impl PreparedAuthenticatedGenesisFetchReplayPreAdmission {|before|impl PreparedRemoteProposalFetchReplayPreAdmission {
 region|callers|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|selector|begin|-|end|-
 region|callers|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1030,6 +1042,9 @@ region|callers|runner|begin|-|end|-
 required|token|PreparedRemoteProposalStoreReplayPreAdmission|remote Proposal replay token omitted {required}
 required|token|PreparedRemoteProposalStoredReplayPreAdmission|remote Proposal replay token omitted {required}
 required|token|PreparedRemoteProposalValidateReplayPreAdmission|remote Proposal replay token omitted {required}
+required|token|PreparedAuthenticatedGenesisFetchReplayPreAdmission|authenticated genesis replay token omitted {required}
+required|token|PreparedAuthenticatedGenesisStoreReplayPreAdmission|authenticated genesis replay token omitted {required}
+required|token|PreparedAuthenticatedGenesisStoredReplayPreAdmission|authenticated genesis replay token omitted {required}
 required|token|replay_evidence: RemoteProposalFetchReplayEvidenceV1|remote Proposal replay token omitted {required}
 required|token|replay_evidence: RemoteProposalStoreReplayEvidenceV1|remote Proposal replay token omitted {required}
 required|token|replay_evidence: RemoteProposalStoredReplayEvidenceV1|remote Proposal replay token omitted {required}
@@ -1046,6 +1061,7 @@ required|token|fn exactly_retains_owned_store(|Stored Proposal replay token lost
 required|token|fn project_incumbent_validate_ownership(|Stored Proposal replay token lost its exact same-body Validate incumbent
 required|token|fn project_validate_after_durable_decision(|Stored Proposal replay token lost its exact Decision Validate refinement
 count|token|fn exactly_authenticates_fetch_rediscovery(|6|the remote-Proposal and launch-authenticated-genesis Fetch, Store, and Stored pre-admissions must all authenticate their original Fetch
+count|authenticated_genesis_token|fn exactly_authenticates_fetch_rediscovery(|3|authenticated-genesis Fetch, Store, and Stored pre-admissions must all authenticate the sealed Fetch
 required|token|fn into_durable_validate_carrier(|remote Proposal replay token omitted {required}
 required|token|replay_evidence: DurableValidateReplayEvidenceV1::remote_proposal(|remote Proposal replay token omitted {required}
 required|token|_fetch: PreparedRemoteProposalFetchReplayPreAdmission|remote Proposal replay token omitted {required}

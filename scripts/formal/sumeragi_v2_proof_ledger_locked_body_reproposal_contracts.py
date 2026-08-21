@@ -1427,8 +1427,8 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "initialize_recovered_local_proposal": "8295ba9249430d0f8f6c3ecc65b11b48873adc3b9f3408c313f1425f2a68ff01",
     "prepared_local_proposal_exactly_matches": "666d62c1d4104e6f0e07548434bd2d789514d23531e598032b743ed66e2afc5a",
     "activate_with_prepared_local_proposal": "dbfce16c82f866d3f833f0d04c490851d72ce48fad28e178e16ef059355ddadc",
-    "run_non_pending_lifecycle_loop": "cf1175fb9703fb722dea4460957dd63847e4a6ec98b5394c66823f8aed0576cf",
-    "run_lifecycle_active_height": "6e6e6ebbdfb4677790d7802cf3d377e2ec2fc4b487a975114cd65b3db3176064",
+    "run_non_pending_lifecycle_loop": "fe38b2b2ab597569383e9b693deabb75346eee956713ec26e3c5174eca38f767",
+    "run_lifecycle_active_height": "8a93a2ae69c84618d44942bcbf9013c47d219630e56d8e5288af9336354d29b2",
     "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade": "e82974c532219438b4b7af86dbd17c2c3ffeea7631b591b28708c5c3c66da452",
     "prepared_local_proposal_state_is_affine_and_context_directive_bound": "e2e8af92151f3b187cdb8eca6f40bb67a5472060ed6fdc79b5fea0127d02c3b3",
     "schedule_local_proposal": "f83b871c9f775d84674d6b536f7ff41396a563583bbd1906bcb33b8446c21c43",
@@ -1440,5 +1440,5 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "submit_exact_body": "bd38de84a86fd4769bf7784324b1ff94c875072d2cab99325897d1390962128e",
     "encode_exact_local_body": "34de57c479e25668c7e77efa06fe00df53d3602157a32fd188984565d6091a22",
     "submit_encoded_body": "78a7d2e2d5cb1e67cfa502ee54e6d5051b1ed0e7b21b24a451742a88e820a39b",
-    "validate_request": "b341fab7be9687fd5db733999adab1a4c78cb7cdddda66e9b6bf9ca6424e6ce3",
+    "validate_request": "72ec6272aa860e4f83012d98cb3d4a5fde13b610e3ce9efbecf7d2a8310bd329",
 }

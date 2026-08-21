@@ -962,13 +962,13 @@ where
                 return Ok(None);
             }
         }
-        BodyPipelineOriginV1::Certified { .. }
-            if !authenticated_genesis_standalone_source(verified, &source.source) =>
-        {
-            return Ok(None);
+        BodyPipelineOriginV1::Certified { .. } => {
+            if !authenticated_genesis_standalone_source(verified, &source.source) {
+                return Ok(None);
+            }
         }
         BodyPipelineOriginV1::LocalBody(_) => {}
-        BodyPipelineOriginV1::Certified { .. } | BodyPipelineOriginV1::RecoveredDecision { .. } => {
+        BodyPipelineOriginV1::RecoveredDecision { .. } => {
             return Ok(None);
         }
     }
@@ -979,10 +979,17 @@ where
     let Some(effect) = standalone_validate_effect(&source.source) else {
         return Ok(None);
     };
+    let certified_predecessor = match &source.source.origin {
+        BodyPipelineOriginV1::Certified { certificate, .. } => Some(certificate),
+        BodyPipelineOriginV1::Proposal(_)
+        | BodyPipelineOriginV1::LocalBody(_)
+        | BodyPipelineOriginV1::RecoveredDecision { .. } => None,
+    };
     let Some(pending) = PendingRuntimeEffectBinding::from_durable_standalone_validate(
         DurableStandaloneValidatePendingMintPermit::new(),
         Hash::prehashed(*owner.causal_root().digest().as_bytes()),
         &effect,
+        certified_predecessor,
     ) else {
         return Ok(None);
     };
@@ -1443,6 +1450,7 @@ impl DurableValidateReplayEvidenceV1 {
                     DurableStandaloneValidatePendingMintPermit::new(),
                     *pending.causal_lifecycle_key(),
                     effect,
+                    None,
                 )?;
                 if &reconstructed != pending {
                     return None;

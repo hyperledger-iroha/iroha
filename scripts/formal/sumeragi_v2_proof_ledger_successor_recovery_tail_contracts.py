@@ -3049,13 +3049,12 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
             "request.round.height != active_height",
             "inbound.sender()",
-            "inbound.via()",
             "inbound.reply_routes()",
             "inbound.ingress_ownership()",
             "reply_routes.semantic_target() != sender",
             "!ownership.validate_exact()",
             "!ownership.matches_message(inbound.message())",
-            "!ownership.matches_semantic_origin(Some(sender))",
+            "!ownership.matches_semantic_origin(sender)",
             "!ownership.matches_reply_routes(Some(reply_routes))",
             "authenticate(request.clone(), sender)",
             "CurrentCertifiedServePreAdmissionV1::Negative",
@@ -3075,7 +3074,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     if serve_pre_admission is not None:
         pre_admission_tokens = rust_code_tokens(serve_pre_admission.source)
         for token, count in (
-            ("CurrentCertifiedServePreAdmissionV1::Service(", 9),
+            ("CurrentCertifiedServePreAdmissionV1::Service(", 7),
             ("CurrentCertifiedServePreAdmissionV1::Negative", 1),
         ):
             observed = _token_sequence_count(
@@ -3629,7 +3628,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         (
             "outer_ingress_turns(limit, context_id, height)",
             "settle_one_recovered_lifecycle_output(",
-            "if recovered_output_settled",
+            "recovered_output_drain_disposition(recovered_output_settlement, producer_claim)",
             "LifecycleRunnerRankTarget::Completion",
             "activated.drive_completion_pre_gate(current_turn, lane_work)",
             "PreGate::Ordinary(ordinary_turn)",

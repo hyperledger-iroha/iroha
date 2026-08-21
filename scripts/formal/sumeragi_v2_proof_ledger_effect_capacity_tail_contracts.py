@@ -121,6 +121,18 @@ if let Err(error) = services.enqueue_body_fetch(pending.task) {
         "certified-view protected Fetch transfer",
         errors,
     )
+    _require_rust_token_sequence(
+        effects_path,
+        install_view,
+        """
+self.authenticated_genesis_replay.retain(|key, stage| {
+    Some(*key) == protected_body
+        && matches!(stage, AuthenticatedGenesisReplayStageV1::Stored { .. })
+});
+""",
+        "certified-view installation must retain only the protected stored authenticated-genesis replay owner",
+        errors,
+    )
     _require_rust_item_token_sha256(
         effects_path,
         install_view,
@@ -350,7 +362,7 @@ assert_eq!(
         .executor
         .consume_effects(fetch_b_effects, &mut services)
         .expect("defer Fetch B at production certified-request capacity"),
-    0
+    0,
 );
 """,
             "the deferred saturated Fetch must carry the same production ownership",
@@ -363,6 +375,22 @@ assert_eq!(
             description,
             errors,
         )
+    _require_rust_token_sequence(
+        effects_path,
+        saturation_regression,
+        """
+owner
+    .complete_certified_fetch_for_test(
+        &mut fixture.executor,
+        &mut production_services,
+        &ingress,
+        completion,
+    )
+    .unwrap_or_else(|_| panic!("A must publish Ready and retire its physical response"));
+""",
+        "the saturated response must complete through the current lifecycle Phase-B persistence adapter",
+        errors,
+    )
 
     tc_token_regression = _require_rust_item(
         effects_path,
@@ -402,11 +430,19 @@ executor
         ),
         (
             """
-Err(EffectTransportError::Authentication(
-    V2TransportError::UnsolicitedResponse(_)
-))
+executor.probe_certified_response_priority(&response_a, &responder),
+Ok(CertifiedResponsePriorityProbe::PreflightRequired(_))
 """,
-            "unprotected TC regression must reject the retired response carrier instead of resurrecting its token",
+            "unprotected TC regression must first authenticate the exact live response through the read-only priority probe",
+        ),
+        (
+            """
+executor.probe_certified_response_priority(&response_a, &responder),
+Ok(CertifiedResponsePriorityProbe::DefinitelyNonPriority(
+    CertifiedResponsePriorityNonPriority::Unsolicited { request_hash }
+)) if request_hash == request_hash_a
+""",
+            "unprotected TC regression must classify the retired response carrier as unsolicited instead of resurrecting its token",
         ),
         (
             "assert!(!executor.status().fail_closed);",
@@ -457,6 +493,7 @@ assert!(executor.outstanding_requests.is_empty());
 assert!(executor.runtime.reserved_body_available.is_none());
 assert!(executor.runtime.completions.is_empty());
 assert_eq!(executor.pending_signatures.len(), 1);
+assert!(!executor.output_guard.restart_required());
 assert!(!executor.status().fail_closed);
 """,
         "durable-Sign regression must release the complete stale Fetch/token/request owner set and admit one signature without fail-close",

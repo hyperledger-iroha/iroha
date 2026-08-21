@@ -720,6 +720,7 @@ impl LifecycleCoordinator {
             admission_waits: self.admission_waits.clone(),
             active_lease: self.active_lease.clone(),
             high_water: self.high_water,
+            lifecycle_ordinal_authority: self.lifecycle_ordinal_authority.clone(),
             next_lease: self.next_lease,
             durable_records: self.durable_records.clone(),
             capacity_geometry: self.capacity_geometry.clone(),
@@ -736,6 +737,19 @@ impl LifecycleCoordinator {
             return Ok(());
         };
         store.persist(&LifecycleLedgerV1::from_coordinator(self)?)
+    }
+    /// Fsync this staged projection, then release its shared ordinal range.
+    pub(super) fn persist_durable_projection_with_ordinal_reservation(
+        &self,
+        reservation: Option<&DurableLifecycleOrdinalReservation>,
+    ) -> Result<(), LifecycleLedgerError> {
+        self.persist_durable_projection()?;
+        if let Some(reservation) = reservation {
+            reservation
+                .commit_after_durable_publication()
+                .map_err(LifecycleLedgerError::InvalidLedger)?;
+        }
+        Ok(())
     }
     /// Fsync one staged successor against this coordinator's exact attached
     /// LedgerV1 frame.

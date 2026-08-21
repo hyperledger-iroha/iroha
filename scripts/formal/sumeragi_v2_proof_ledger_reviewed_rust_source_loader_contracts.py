@@ -31,3 +31,33 @@ def _load_recursive_reviewed_rust_source_module() -> Any:
 
 
 _RECURSIVE_REVIEWED_RUST_SOURCE = _load_recursive_reviewed_rust_source_module()
+
+
+def _read_locked_commit_progress_witness_test_provider(
+    repo_root: Path,
+    integration_path: Path,
+    integration_source: str,
+    errors: list[str],
+) -> tuple[Path, str]:
+    """Read the one reviewed split-file provider for locked-Commit regressions."""
+
+    provider = integration_path.parent / "sumeragi_v2_runner" / "prepare_qc_split_tests.rs"
+    include_source = 'include!("sumeragi_v2_runner/prepare_qc_split_tests.rs");'
+    if integration_source.count(include_source) != 1:
+        errors.append(
+            f"{integration_path}: locked-Commit progress-witness regressions "
+            "must have exactly one prepare_qc_split_tests include provider"
+        )
+    if not provider.is_file() or provider.is_symlink():
+        errors.append(
+            f"{provider}: locked-Commit progress-witness regression provider "
+            "must be a regular file"
+        )
+        return provider, ""
+    _loaded, source = _read_reviewed_rust_source(
+        repo_root,
+        provider.relative_to(repo_root).as_posix(),
+        errors,
+        "locked-Commit progress-witness regression provider",
+    )
+    return provider, source

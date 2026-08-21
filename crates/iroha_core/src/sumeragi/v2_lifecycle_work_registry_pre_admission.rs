@@ -1226,18 +1226,6 @@ impl PreparedAuthenticatedGenesisFetchReplayPreAdmission {
     ) -> bool {
         self.validates() && self.replay_evidence.exactly_matches_fetch(effect)
     }
-    /// Recheck an exact certified Fetch retry without replacing the local genesis origin.
-    pub(in crate::sumeragi) fn exactly_matches_retry(
-        &self,
-        effect: &AdapterEffect,
-        ownership: &RuntimeEffectOwnership,
-    ) -> bool {
-        ownership
-            .exact_pending_adapter_effect_binding(effect)
-            .is_ok_and(|pending| {
-                self.validates() && self.effect == *effect && self.pending == pending
-            })
-    }
     /// Consume the Fetch origin only through its exact inherited Store successor.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn project_store(

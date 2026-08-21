@@ -279,8 +279,8 @@ _REMOTE_PROPOSAL_REPLAY_ITEM_SHA256 = {
     "fetch_consumer_rebind": "fae6445791cb8e360adab46ae142cc4d3e291ddd40ed55393eeb67d369e61b18",
     "fetch_authority_adopt": "e846fda5841a09586c8baded336d1723f2cc2d625a1078ff21e8185913cb38b1",
     "body_fetch_rebind": "eba1c4dbbc4292774bfb50861995e9fb212643576d8522e318a91efa7cec6399",
-    "executor_retain": "2ddf84d44bb686dab2766b7367b9731318e01ddbdf0aa693de069c7238661920",
-    "executor_ready": "59e180ef368a513541a4f8d12a8a0f60a3a08e3f718580e42ad658b5145a7683",
+    "executor_retain": "56512d3347fa9d328c342e3982e6b03f3a9699fcc4ed7daeac854277838d59f4",
+    "executor_ready": "3cd8a67af6c3deb4ff38ddb24af3932df4df70ba799de15b3b644f82dd626139",
     "ownership_fetch_replay": "1ac9ff4ff448a03d9348faab7796bc1c986cd0600f64d3feb27b4f0abee657c1",
     "authority_mint": "ea8680ad00ae88245688355cc371724b4a133b112be43c3d46fe50f9cc4785e3",
     "authority_match": "fffb59ff81f0cdf5b0f8c1c222693c0fb586af021b2c68746ca5e846bf0ba8e5",
@@ -938,8 +938,12 @@ replay.exactly_matches_fetch_pending(effect, &pending).then(|| replay.clone())
     _require_rust_token_sequence(
         effects_path,
         executor_ready,
-        "&& !self.runtime.has_dormant_remote_proposal_replay()",
-        "height finalization must not discard one live dormant Proposal replay origin",
+        """
+&& !self.runtime.has_dormant_remote_proposal_replay()
+&& self.remote_proposal_replay.is_empty()
+&& self.authenticated_genesis_replay.is_empty()
+""",
+        "height finalization must not discard one live dormant Proposal or authenticated-genesis replay origin",
         errors,
     )
     executor_retain = one_item(
@@ -965,6 +969,13 @@ replay.exactly_matches_fetch_pending(effect, &pending).then(|| replay.clone())
             "incumbent.adopt_incumbent_fetch_for_retry_or_authority(evidence, effect)",
         ),
         "post-EnterView lineage indexing must simulate the exact protected Fetch ownership rebind before Same/Upgrade adoption",
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        executor_retain,
+        "self.stored_replay_incumbent_validate_ownership(key, effect)?",
+        "retained Validate authority must project both ordinary Proposal and authenticated-genesis replay incumbents",
+        errors,
     )
 
     authority_context = (("impl", "RemoteProposalFetchReplayEvidenceV1"),)

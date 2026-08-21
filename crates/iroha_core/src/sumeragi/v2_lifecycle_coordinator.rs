@@ -73,7 +73,14 @@ mod wal_recovery;
 #[path = "v2_lifecycle_work_registry.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod work_registry;
-use authority::AuthenticatedEpisodeAuthority;
+use authority::{
+    AuthenticatedEpisodeAuthority, CoordinatorLifecycleOrdinalAuthority,
+    DurableLifecycleOrdinalReservation, DurableLifecycleOrdinalReservationError,
+};
+pub(in crate::sumeragi) use authority::{
+    RuntimeLifecycleOrdinalAuthority,
+    runtime_lifecycle_ordinal_authority_after_high_watermark,
+};
 #[cfg(test)]
 pub(crate) use authority::RolloverSnapshot;
 use body_pipeline_transition::durable_validate_payload_is_exact;
@@ -349,6 +356,7 @@ pub(crate) struct LifecycleCoordinator {
     admission_waits: BTreeMap<LifecycleKey, CapacityAdmissionWait>,
     active_lease: Option<TurnLease>,
     high_water: u128,
+    lifecycle_ordinal_authority: Option<CoordinatorLifecycleOrdinalAuthority>,
     next_lease: Option<u128>,
     durable_records: BTreeMap<u128, DurableRecordMetadata>,
     capacity_geometry: CapacityGeometry,
@@ -450,6 +458,7 @@ impl LifecycleCoordinator {
             admission_waits: BTreeMap::new(),
             active_lease: None,
             high_water,
+            lifecycle_ordinal_authority: None,
             next_lease: Some(1),
             durable_records: BTreeMap::new(),
             capacity_used: CapacityClass::ALL
@@ -479,6 +488,23 @@ impl LifecycleCoordinator {
     /// Return the latched fail-closed condition, when present.
     pub(crate) const fn fault(&self) -> Option<CoordinatorFault> {
         self.fault
+    }
+    /// Bind the launch-restored scheduler ordinal authority before live admission opens.
+    fn bind_live_lifecycle_ordinal_authority(
+        &mut self,
+        authority: CoordinatorLifecycleOrdinalAuthority,
+    ) -> Result<(), String> {
+        if self.lifecycle_ordinal_authority.is_some()
+            || self.fault.is_some()
+            || self.ledger_store.is_none()
+            || !authority.recognizes_high_water(self.high_water)?
+        {
+            return Err(
+                "lifecycle coordinator rejected its launch-restored ordinal authority".to_owned(),
+            );
+        }
+        self.lifecycle_ordinal_authority = Some(authority);
+        Ok(())
     }
     /// Project and atomically admit one post-fsync authenticated Certified-Serve request.
     ///
@@ -517,6 +543,64 @@ impl LifecycleCoordinator {
         decision
     }
     fn reduce_admit(&mut self, request: AdmissionRequest) -> AdmissionDecision {
+        self.reduce_admit_with_ordinal_allocator(request, |high_water, count| {
+            let Some(first) = high_water.checked_add(1) else {
+                return Err(AdmissionDecision::Rejected(
+                    AdmissionRejection::OrdinalExhausted,
+                ));
+            };
+            let Ok(offset) = u128::try_from(count - 1) else {
+                return Err(AdmissionDecision::Rejected(
+                    AdmissionRejection::OrdinalExhausted,
+                ));
+            };
+            let Some(last) = first.checked_add(offset) else {
+                return Err(AdmissionDecision::Rejected(
+                    AdmissionRejection::OrdinalExhausted,
+                ));
+            };
+            Ok((first, last))
+        })
+    }
+    /// Reduce a live durable admission against the shared actor-global ordinal authority.
+    fn reduce_admit_with_durable_ordinals(
+        &mut self,
+        request: AdmissionRequest,
+    ) -> (AdmissionDecision, Option<DurableLifecycleOrdinalReservation>) {
+        let Some(authority) = self.lifecycle_ordinal_authority.clone() else {
+            self.fault = Some(CoordinatorFault::DurabilityFailure);
+            return (
+                AdmissionDecision::FailClosed(CoordinatorFault::DurabilityFailure),
+                None,
+            );
+        };
+        let mut reservation = None;
+        let decision = self.reduce_admit_with_ordinal_allocator(
+            request,
+            |high_water, count| match authority.begin_durable_range(high_water, count) {
+                Ok(pending) => {
+                    let range = (pending.first(), pending.last());
+                    reservation = Some(pending);
+                    Ok(range)
+                }
+                Err(DurableLifecycleOrdinalReservationError::Exhausted) => Err(
+                    AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted),
+                ),
+                Err(DurableLifecycleOrdinalReservationError::Invariant) => Err(
+                    AdmissionDecision::FailClosed(CoordinatorFault::DurabilityFailure),
+                ),
+            },
+        );
+        if let AdmissionDecision::FailClosed(fault) = decision {
+            self.fault = Some(fault);
+        }
+        (decision, reservation)
+    }
+    fn reduce_admit_with_ordinal_allocator(
+        &mut self,
+        request: AdmissionRequest,
+        allocate: impl FnOnce(u128, usize) -> Result<(u128, u128), AdmissionDecision>,
+    ) -> AdmissionDecision {
         if let Some(fault) = self.fault {
             return AdmissionDecision::FailClosed(fault);
         }
@@ -679,10 +763,10 @@ impl LifecycleCoordinator {
         }) {
             return AdmissionDecision::Rejected(AdmissionRejection::InvalidProducerTurn);
         }
-        let (ordinal_count, ordinal_span) = if producer.is_some() {
-            (2_usize, 1_u128)
+        let ordinal_count = if producer.is_some() {
+            2_usize
         } else {
-            (1_usize, 0_u128)
+            1_usize
         };
         if !has_lifecycle_record_capacity(self.records.len(), ordinal_count) {
             self.admission_waits.remove(&candidate.key);
@@ -804,12 +888,14 @@ impl LifecycleCoordinator {
             return AdmissionDecision::WaitForCapacity(wait);
         }
         self.admission_waits.remove(&candidate.key);
-        let Some(first_ordinal) = self.high_water.checked_add(1) else {
-            return AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted);
+        let (first_ordinal, last_ordinal) = match allocate(self.high_water, ordinal_count) {
+            Ok(range) => range,
+            Err(decision) => return decision,
         };
-        let Some(last_ordinal) = first_ordinal.checked_add(ordinal_span) else {
-            return AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted);
-        };
+        debug_assert_eq!(
+            last_ordinal.checked_sub(first_ordinal),
+            u128::try_from(ordinal_count - 1).ok()
+        );
         let owner = self
             .owner_index
             .get(&candidate.causal_root)

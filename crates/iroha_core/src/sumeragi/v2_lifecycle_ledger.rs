@@ -26,12 +26,12 @@ use super::wal_recovery::{
     RecoveredLifecycleSignedBroadcastProjectionV1,
 };
 use super::{
-    CandidateAdmission, CausalRoot, DurablePayloadReference, DurableServeNegativeOutcome,
-    InitialLifecycleState, LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey,
-    LifecyclePhase, LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleState,
-    LifecycleWorkClass, LifecycleWorkRegistryHolder, OwnerId, PhysicalSlotId, PredecessorScope,
-    ProductionLifecycleOwnerV1, RecoveredLifecycleRecord, RecoveredWalProductionOwnerOpenV1,
-    RecoverySnapshot, TerminalOutcome,
+    CandidateAdmission, CausalRoot, DurableLifecycleOrdinalReservation, DurablePayloadReference,
+    DurableServeNegativeOutcome, InitialLifecycleState, LifecycleContext, LifecycleCoordinator,
+    LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRound, LifecycleStage,
+    LifecycleStageKind, LifecycleState, LifecycleWorkClass, LifecycleWorkRegistryHolder, OwnerId,
+    PhysicalSlotId, PredecessorScope, ProductionLifecycleOwnerV1, RecoveredLifecycleRecord,
+    RecoveredWalProductionOwnerOpenV1, RecoverySnapshot, TerminalOutcome,
 };
 #[cfg(test)]
 use super::{TurnOutcome, TurnPlan};

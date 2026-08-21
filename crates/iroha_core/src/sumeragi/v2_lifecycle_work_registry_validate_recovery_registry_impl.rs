@@ -3055,62 +3055,6 @@ impl ConcreteLifecycleWorkRegistry {
         )
     }
 
-    fn exactly_covers_recovered_ready_work_with_extra_and_outputs(
-        &self,
-        coordinator: &LifecycleCoordinator,
-        extra: RecoveredWalRegistrySlotV1,
-        owner_held_outputs: &std::collections::BTreeSet<u128>,
-    ) -> bool {
-        self.exactly_covers_ready_work_with_extra(
-            coordinator,
-            extra,
-            owner_held_outputs,
-            None,
-            &std::collections::BTreeSet::new(),
-        )
-    }
-
-    /// Verify the complete live registry immediately before final retirement.
-    ///
-    /// This preserves every startup rule except for the bounded set of volatile
-    /// states created by durable signed-Broadcast refanout. Every such
-    /// Broadcast must already be parked on its exact `Recovery(digest)`
-    /// generation after output handoff; Ready Broadcast and live next-Sign
-    /// carriers remain schedulable and cannot cross this boundary.
-    pub(super) fn exactly_covers_finalization_work(
-        &self,
-        coordinator: &LifecycleCoordinator,
-    ) -> bool {
-        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
-            return false;
-        }
-        let refanned_broadcasts = self
-            .entries
-            .iter()
-            .filter_map(|(address, work)| {
-                matches!(
-                    &work.kind,
-                    ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_)
-                )
-                .then_some(address.ordinal)
-            })
-            .collect::<std::collections::BTreeSet<_>>();
-        let extra = if refanned_broadcasts.is_empty() {
-            let Some(extra) = self.exact_recovered_wal_registry_slot() else {
-                return false;
-            };
-            extra
-        } else {
-            RecoveredWalRegistrySlotV1::None
-        };
-        self.exactly_covers_ready_work_with_extra(
-            coordinator,
-            extra,
-            &std::collections::BTreeSet::new(),
-            None,
-            &refanned_broadcasts,
-        )
-    }
     fn exactly_covers_ready_work_with_extra(
         &self,
         coordinator: &LifecycleCoordinator,

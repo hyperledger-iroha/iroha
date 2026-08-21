@@ -663,10 +663,12 @@ fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
     );
     assert!(retained.runtime.active_view_producer_retained);
     assert!(retained.runtime.completed_proposal_fanouts.is_empty());
-    assert!(retained
-        .pending_lifecycle_output_admissions
-        .insert(key, pending)
-        .is_none());
+    assert!(
+        retained
+            .pending_lifecycle_output_admissions
+            .insert(key, pending)
+            .is_none()
+    );
     let _accepted_pending = retained
         .pending_lifecycle_output_admissions
         .remove(&key)
@@ -1261,6 +1263,7 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
 fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
+    executor.runtime.retain_body_available_effect_ownership = true;
     let mut services = fixture.services();
     executor
         .install_authenticated_genesis_body_for_test(&fixture.block)
@@ -1327,8 +1330,7 @@ fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
             .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
     );
     assert!(
-        !executor
-            .pending_durable_validate_admissions
+        !executor.pending_durable_validate_admissions
             [&(fixture.manifest.round, fixture.manifest.subject)]
             .projects_local_proposal_handoff_for_test(),
         "certified genesis enters the closed LocalBody admission surface without becoming a local proposal"
@@ -2142,6 +2144,18 @@ fn tc_retires_unprotected_retryable_body_token_before_the_next_fetch() {
             .certified_request()
             .expect("the first Fetch owns its signed certified request"),
     );
+    let response_a = signed_certified_response(
+        &fixture,
+        &task_a,
+        fixture.manifest.clone(),
+        fixture.body.clone(),
+        0,
+    );
+    let responder = fixture.context.roster[0].validator.clone();
+    assert!(matches!(
+        executor.probe_certified_response_priority(&response_a, &responder),
+        Ok(CertifiedResponsePriorityProbe::PreflightRequired(_))
+    ));
     let retryable = executor
         .runtime
         .reserve_body_available_with_owner(task_a.tag, fixture.manifest.clone(), task_a.ownership())
@@ -2171,8 +2185,20 @@ fn tc_retires_unprotected_retryable_body_token_before_the_next_fetch() {
     assert!(executor.certified_work.is_empty());
     assert!(executor.outstanding_requests.is_empty());
     assert_eq!(services.cancelled_fetches, vec![task_a.id()]);
-    assert!(executor.runtime.reserved_body_available.is_none());
+    assert!(
+        executor
+            .body_ownership_projection()
+            .runtime_body_reservation
+            .is_none(),
+        "retiring the fetch must release its unpublished Completion owner",
+    );
     assert!(executor.runtime.completions.is_empty());
+    assert!(matches!(
+        executor.probe_certified_response_priority(&response_a, &responder),
+        Ok(CertifiedResponsePriorityProbe::DefinitelyNonPriority(
+            CertifiedResponsePriorityNonPriority::Unsolicited { request_hash }
+        )) if request_hash == request_hash_a
+    ));
 
     let (subject_b, body_b) = distinct_body(&fixture);
     let manifest_b = canonical_payload_manifest(

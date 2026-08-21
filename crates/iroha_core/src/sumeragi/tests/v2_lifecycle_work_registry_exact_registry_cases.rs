@@ -385,8 +385,22 @@ fn remote_proposal_replay_pre_admission_is_closed_exact_and_live() {
         token
             .matches("pub(in crate::sumeragi) fn exactly_authenticates_fetch_rediscovery(")
             .count(),
+        6,
+        "Remote Proposal and authenticated-genesis Fetch, Store, and Stored wrappers must each retain their exact origin"
+    );
+    let authenticated_genesis = token
+        .split("impl PreparedAuthenticatedGenesisFetchReplayPreAdmission {")
+        .nth(1)
+        .expect("authenticated-genesis Fetch replay has one implementation")
+        .split("impl PreparedRemoteProposalFetchReplayPreAdmission {")
+        .next()
+        .expect("remote Proposal Fetch implementation follows authenticated genesis");
+    assert_eq!(
+        authenticated_genesis
+            .matches("pub(in crate::sumeragi) fn exactly_authenticates_fetch_rediscovery(")
+            .count(),
         3,
-        "Fetch, Store, and Stored wrappers must each retain the exact Proposal origin"
+        "authenticated-genesis Fetch, Store, and Stored wrappers must each retain the sealed Fetch origin"
     );
     for declaration in [
         "PreparedRemoteProposalFetchReplayPreAdmission {",

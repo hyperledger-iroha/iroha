@@ -1211,6 +1211,9 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     .expect("open local ProposalIntent adapter");
     assert!(startup.is_empty());
     let now = std::time::Instant::now();
+    let lifecycle_ordinals =
+        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+    let lifecycle_ordinal_observer = lifecycle_ordinals.clone();
     let (mut runtime, startup) =
         crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
             adapter,
@@ -1218,9 +1221,7 @@ fn local_proposal_intent_live_wal_sign_fixture() {
             now,
             std::time::Duration::from_secs(10),
             crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
-            crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(
-                lease.ordinal(),
-            ),
+            lifecycle_ordinals,
         )
         .expect("wrap local ProposalIntent adapter");
     assert!(startup.is_empty());
@@ -1246,6 +1247,20 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     let published = local
         .publish_into_runtime(&mut runtime)
         .unwrap_or_else(|_| panic!("publish exact local-proposal runtime handoff"));
+    let physical_admission_ordinal = lease
+        .ordinal()
+        .checked_add(1)
+        .expect("local Proposal lifecycle successor remains representable");
+    assert_eq!(
+        lifecycle_ordinal_observer
+            .next_ordinal_for_test()
+            .expect("inspect adopted local Proposal lifecycle ordinal"),
+        Some(
+            physical_admission_ordinal
+                .checked_add(1)
+                .expect("local Proposal physical successor remains representable")
+        )
+    );
     let (command_identity, ready_replay) = published.into_entry();
     let crate::sumeragi::v2_runtime::RuntimeStep::Advanced(effects) = runtime
         .step(now)
@@ -1253,9 +1268,20 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     else {
         panic!("local ProposalReady command unexpectedly idled")
     };
-    runtime
+    let scheduler = runtime
         .take_last_scheduler_ownership()
         .expect("local ProposalReady publishes scheduler ownership");
+    let crate::sumeragi::v2_runtime::RuntimeSelectedCandidateOwnership::Exact(candidate) =
+        scheduler.candidate
+    else {
+        panic!("local ProposalReady scheduler retains one exact FIFO candidate")
+    };
+    assert_eq!(
+        candidate.kind,
+        crate::sumeragi::v2_runtime::RuntimeCommandKind::LocalProposalReady
+    );
+    assert_eq!(candidate.lifecycle_ordinal, lease.ordinal());
+    assert_eq!(candidate.admission_ordinal, physical_admission_ordinal);
     let ownership = runtime
         .take_effect_ownership(effects.len())
         .expect("local ProposalIntent retains positional effect ownership");

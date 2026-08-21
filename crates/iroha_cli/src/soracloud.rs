@@ -128,6 +128,28 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tiny_keccak::{Hasher as _, Sha3};
+macro_rules! define_torii_args {
+    (
+        $url_doc:literal, $token_doc:literal, $timeout_doc:literal;
+        $(#[$meta:meta])*
+        pub struct $name:ident { $($fields:tt)* }
+    ) => {
+        $(#[$meta])*
+        #[derive(clap::Args, Debug)]
+        pub struct $name {
+            $($fields)*
+            #[doc = $url_doc]
+            #[arg(long, value_name = "URL")]
+            torii_url: Option<String>,
+            #[doc = $token_doc]
+            #[arg(long, value_name = "TOKEN")]
+            api_token: Option<String>,
+            #[doc = $timeout_doc]
+            #[arg(long, value_name = "SECS", default_value_t = 10)]
+            timeout_secs: u64,
+        }
+    };
+}
 const DEFAULT_CONTAINER_MANIFEST: &str = "fixtures/soracloud/sora_container_manifest_v1.json";
 const DEFAULT_SERVICE_MANIFEST: &str = "fixtures/soracloud/sora_service_manifest_v1.json";
 const DEFAULT_AGENT_APARTMENT_MANIFEST: &str =
@@ -4159,28 +4181,6 @@ macro_rules! define_live_mutation_args {
             #[arg(long, value_name = "TOKEN")]
             api_token: Option<String>,
             /// HTTP timeout for live control-plane mutations.
-            #[arg(long, value_name = "SECS", default_value_t = 10)]
-            timeout_secs: u64,
-        }
-    };
-}
-macro_rules! define_torii_args {
-    (
-        $url_doc:literal, $token_doc:literal, $timeout_doc:literal;
-        $(#[$meta:meta])*
-        pub struct $name:ident { $($fields:tt)* }
-    ) => {
-        $(#[$meta])*
-        #[derive(clap::Args, Debug)]
-        pub struct $name {
-            $($fields)*
-            #[doc = $url_doc]
-            #[arg(long, value_name = "URL")]
-            torii_url: Option<String>,
-            #[doc = $token_doc]
-            #[arg(long, value_name = "TOKEN")]
-            api_token: Option<String>,
-            #[doc = $timeout_doc]
             #[arg(long, value_name = "SECS", default_value_t = 10)]
             timeout_secs: u64,
         }

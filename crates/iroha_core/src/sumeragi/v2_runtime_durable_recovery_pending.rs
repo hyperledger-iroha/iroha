@@ -1,12 +1,15 @@
 impl PendingRuntimeEffectBinding {
     /// Reconstruct the unique ordinal-free owner of a standalone durable Validate.
     ///
-    /// The replay module mints the permit only after the canonical LocalBody or
-    /// signed-Proposal authority has joined the exact authenticated BodyFrame.
+    /// The replay module mints the permit only after the canonical LocalBody,
+    /// signed-Proposal, or authenticated-genesis authority has joined the exact
+    /// BodyFrame. Certified genesis retains its exact QC statement so the
+    /// reconstructed Validate key matches the live body-pipeline lineage.
     pub(in crate::sumeragi) fn from_durable_standalone_validate(
         _permit: DurableStandaloneValidatePendingMintPermit,
         causal_lifecycle_key: iroha_crypto::Hash,
         effect: &AdapterEffect,
+        certified_predecessor: Option<&wire::QuorumCertificate>,
     ) -> Option<Self> {
         if !matches!(effect, AdapterEffect::ValidateBody { .. }) {
             return None;
@@ -16,7 +19,17 @@ impl PendingRuntimeEffectBinding {
             effect_kind,
             &production_adapter_effect_semantic_identity(effect),
         );
-        let candidate = production_adapter_effect_candidate_binding(effect, None).ok()??;
+        let inherited = certified_predecessor.map(|certificate| {
+            RuntimeCandidateSemanticStatement::new(
+                certificate.round,
+                certificate.proposal_round,
+                Some(certificate.subject),
+                Some(certificate.phase),
+                Some(certificate.execution_commitment),
+            )
+        });
+        let candidate =
+            production_adapter_effect_candidate_binding(effect, inherited.as_ref()).ok()??;
         let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
             candidate.kind,
             &candidate.semantic_identity,

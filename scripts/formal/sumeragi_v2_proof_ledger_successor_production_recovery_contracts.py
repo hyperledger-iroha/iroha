@@ -1,24 +1,20 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
 def _successor_production_recovery_source_fidelity_errors(
-    repo_root: Path,
-    errors: list[str],
-    load,
-    region,
+    repo_root: Path, errors: list[str],
+    load, region,
     require_tokens,
     require_literals,
     require_token_count,
     require_literal_count,
     require_order,
     reject_tokens,
-    runner_path: Path,
-    runner_source: str,
+    runner_path: Path, runner_source: str,
     sumeragi_path: Path,
     sumeragi_source: str,
 ) -> None:
     lifecycle_run_inner_path, lifecycle_run_inner_source = load(
-        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
-    )
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs")
     recovery_path, recovery_source = load(
         "crates/iroha_core/src/sumeragi/v2_recovery.rs"
     )
@@ -1239,7 +1235,7 @@ self.io.is_some()
                     "self.apply_service.take()",
                     "V2EffectExecutor::open_with_body_store(",
                     "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
-                    "executor.install_authenticated_genesis_body(authenticated_genesis.signed_block())",
+                    "executor.install_authenticated_genesis_body(authenticated_genesis)",
                     "ProductionV2Services::start_with_apply_service(",
                     "ProductionLifecycleApplyServiceLaunchPermitV1",
                     "body_store,",
@@ -1651,7 +1647,7 @@ self.io.is_some()
                 (
                     "authenticated_genesis: Option<AuthenticatedGenesisBodyV1>",
                     "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
-                    "authenticated_genesis.signed_block()",
+                    "executor.install_authenticated_genesis_body(authenticated_genesis)",
                 ),
             )
             reject_tokens(
@@ -4601,8 +4597,7 @@ self.io.is_some()
                 "shared lifecycle finalization readiness",
                 finalization_readiness,
                 (
-                    "self.executor.ready_to_finish()",
-                    "!self.owner.has_recovered_lifecycle_outputs()",
+                    "self.executor.ready_to_finish()", "!self.owner.has_recovered_lifecycle_outputs()",
                     "self.pending_kura_apply_replay.is_none()",
                     "self.recovered_local_proposal_attempt.is_none()",
                     "self.pending_lifecycle_completion.is_none()",
@@ -4852,7 +4847,8 @@ self.io.is_some()
                 terminal_pair_link,
                 (
                     "LifecycleState::Terminal(outcome)",
-                    "exact_single_record_slot( next_record, LifecycleWorkClass::SignVote.capacity_class(), )",
+                    "exact_single_record_slot(",
+                    "LifecycleWorkClass::SignVote.capacity_class()",
                     "ConcreteWorkAddress::new(next_record.owner, next_record.ordinal, next_slot) == Some(next_address)",
                     "installed_digest == next_digest",
                     "coordinator.key_index.get(&next_record.key) == Some(&next_address.ordinal)",

@@ -134,6 +134,7 @@ struct FakeRuntime {
         crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment,
     >,
     exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
+    retain_body_available_effect_ownership: bool,
     live_proposal_intent_wal_sign: Option<(AdapterEffect, LiveProposalIntentWalSignHandoffV1)>,
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
     terminal_body_candidate_commits: usize,
@@ -192,9 +193,10 @@ impl V2EffectExecutor<FakeRuntime> {
             certified_work: self.certified_work.clone(),
             outstanding_request_hashes: self.outstanding_requests.hashes(),
             ready_bodies: self.ready_bodies.clone(),
-            authenticated_genesis_body: self.authenticated_genesis_body.as_ref().map(|retained| {
-                (retained.subject(), Arc::clone(retained.canonical_wire()))
-            }),
+            authenticated_genesis_body: self
+                .authenticated_genesis_body
+                .as_ref()
+                .map(|retained| (retained.subject(), Arc::clone(retained.canonical_wire()))),
             retained_locked_body: self.retained_locked_body.clone(),
             ready_body_bytes: self.ready_body_bytes,
             pending_store_bytes: self.pending_store_bytes,
@@ -508,6 +510,31 @@ impl EffectRuntime for FakeRuntime {
         }
         let reservation = BodyAvailableReservation::reserved(tag, manifest);
         self.reserved_body_available = Some(reservation.clone());
+        Ok(reservation)
+    }
+    fn reserve_body_available_with_owner(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<BodyAvailableReservation, EnqueueError> {
+        let store_effect = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        if self.retain_body_available_effect_ownership && self.exact_effect_ownership.is_some() {
+            return Err(EnqueueError::FailClosed);
+        }
+        let store_ownership = self
+            .retain_body_available_effect_ownership
+            .then(|| ownership.rebind_as_inherited_adapter_effect(&store_effect))
+            .transpose()
+            .map_err(|_| EnqueueError::FailClosed)?;
+        let reservation = self.reserve_body_available(tag, manifest)?;
+        if let Some(store_ownership) = store_ownership {
+            self.exact_effect_ownership = Some((store_effect, store_ownership));
+        }
         Ok(reservation)
     }
     fn commit_body_available(
@@ -1400,9 +1427,16 @@ impl ProductionTransportFixture {
             3_000,
             0,
         );
-        let signature = SignatureOf::try_from_hash(validator_keys[0].private_key(), header.hash())
-            .expect("production transport block signature");
-        let block = SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
+        let leader = context.leader(round.view);
+        let leader_index = usize::try_from(leader).expect("production leader fits usize");
+        let signature =
+            SignatureOf::try_from_hash(validator_keys[leader_index].private_key(), header.hash())
+                .expect("production transport block signature");
+        let block = SignedBlock::presigned(
+            BlockSignature::new(u64::from(leader), signature),
+            header,
+            Vec::new(),
+        );
         let body = block
             .encode_wire()
             .expect("production transport canonical block wire");

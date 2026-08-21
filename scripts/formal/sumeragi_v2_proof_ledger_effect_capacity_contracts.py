@@ -238,6 +238,18 @@ if let Some(finality) = &self.finality_completion {
         effects_path,
         retain,
         """
+let Some(incumbent) = self.stored_replay_incumbent_validate_ownership(key, effect)?
+else {
+    continue;
+};
+""",
+        "stored Proposal or authenticated-genesis replay must project one exact incumbent Validate owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        retain,
+        """
 let mut candidate_semantic_identity = evidence.candidate_semantic_identity();
 let mut exact_incumbent = candidate_semantic_identity
     .as_ref()
@@ -518,6 +530,12 @@ if !runtime_terminal_commits.is_empty() {
                 "retained_candidate_owners.insert(identity, evidence.clone())"
             ),
         )
+        validate_retry_publication_positions = _token_sequence_positions(
+            retain_tokens,
+            rust_code_tokens(
+                "retained_candidate_owners.insert(identity, projected.ownership.clone())"
+            ),
+        )
         ordered = (
             len(exact_incumbent_positions) == 1
             and len(owner_replacement_positions) == 1
@@ -526,29 +544,35 @@ if !runtime_terminal_commits.is_empty() {
             and len(terminal_schedule_positions) == 1
             and len(terminal_commit_positions) == 1
             and len(count_positions) == 1
-            and len(admission_positions) == 3
-            and len(projection_positions) == 3
-            and len(checked_positions) == 3
+            and len(admission_positions) == 4
+            and len(projection_positions) == 4
+            and len(checked_positions) == 4
             and len(fetch_adoption_positions) == 1
             and len(body_stage_adoption_positions) == 1
             and len(match_positions) == 1
             and len(publication_positions) == 2
+            and len(validate_retry_publication_positions) == 1
+            and admission_positions[0]
+            < projection_positions[0]
+            < checked_positions[0]
+            < validate_retry_publication_positions[0]
+            < exact_incumbent_positions[0]
             and exact_incumbent_positions[0]
             < owner_replacement_positions[0]
             < terminal_plan_positions[0]
             < terminal_adoption_positions[0]
             < count_positions[0]
-            < admission_positions[0]
-            < projection_positions[0]
-            < checked_positions[0]
-            < fetch_adoption_positions[0]
             < admission_positions[1]
             < projection_positions[1]
             < checked_positions[1]
-            < body_stage_adoption_positions[0]
+            < fetch_adoption_positions[0]
             < admission_positions[2]
             < projection_positions[2]
             < checked_positions[2]
+            < body_stage_adoption_positions[0]
+            < admission_positions[3]
+            < projection_positions[3]
+            < checked_positions[3]
             < match_positions[0]
             < publication_positions[-1]
             < terminal_schedule_positions[0]

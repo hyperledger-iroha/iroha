@@ -71,4 +71,125 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         execution.preflight_adapter_publication_kind(&mut self.driver)
     }
+
+    /// Enqueue a local proposal successor under the immutable lifecycle Validate owner.
+    ///
+    /// The coordinator ordinal is already minted by the actor-global source;
+    /// this boundary validates and reuses it rather than allocating a second
+    /// logical lifecycle position.
+    pub(in crate::sumeragi) fn enqueue_local_proposal_with_lifecycle_pending(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+        durable_receipt: DurableBodyReceipt,
+        validated_receipt: ValidatedBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+        lifecycle_ordinal: u128,
+    ) -> Result<LocalProposalReadyCommandIdentity, EnqueueError> {
+        if self.fail_closed || lifecycle_ordinal == 0 {
+            return Err(EnqueueError::FailClosed);
+        }
+        let identity = LocalProposalReadyCommandIdentity::from_exact_pending_handoff(
+            tag,
+            &manifest,
+            &durable_receipt,
+            &validated_receipt,
+            pending,
+        )
+        .ok_or(EnqueueError::FailClosed)?;
+        let command = AdapterCommand::LocalProposalReady {
+            manifest,
+            durable_receipt,
+            validated_receipt,
+        };
+        if self
+            .ingress
+            .advance_past_coordinator_ordinal(lifecycle_ordinal)
+            .is_err()
+        {
+            self.latch_fail_closed(
+                "lifecycle local-proposal completion could not adopt its durable coordinator ordinal",
+            );
+            return Err(EnqueueError::FailClosed);
+        }
+        let preflight =
+            self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
+        let mut tagged = match preflight {
+            RuntimeCommandAdmissionPreflight::CoalesceOwned {
+                causal_lifecycle_key,
+                admission_ordinal,
+            } if causal_lifecycle_key == *pending.causal_lifecycle_key()
+                && admission_ordinal == lifecycle_ordinal =>
+            {
+                return Ok(identity);
+            }
+            RuntimeCommandAdmissionPreflight::Coalesce if tag != self.driver.current_tag() => {
+                return Ok(identity);
+            }
+            RuntimeCommandAdmissionPreflight::Coalesce
+            | RuntimeCommandAdmissionPreflight::CoalesceOwned { .. } => {
+                self.latch_fail_closed(
+                    "lifecycle local-proposal completion changed its immutable owner",
+                );
+                return Err(EnqueueError::FailClosed);
+            }
+            RuntimeCommandAdmissionPreflight::Admit => {
+                let owner = self.restored_command_owner(
+                    tag,
+                    CommandClass::Completion,
+                    &command,
+                    None,
+                    *pending.causal_lifecycle_key(),
+                    lifecycle_ordinal,
+                )?;
+                TaggedCommand::with_causal_origin(
+                    tag,
+                    CommandClass::Completion,
+                    command,
+                    Instant::now(),
+                    owner.causal_origin().clone(),
+                    owner.lifecycle_ordinal(),
+                )?
+            }
+            RuntimeCommandAdmissionPreflight::ReuseDormant {
+                causal_lifecycle_key,
+                admission_ordinal,
+                producer_stage,
+            } => {
+                if causal_lifecycle_key != *pending.causal_lifecycle_key()
+                    || admission_ordinal != lifecycle_ordinal
+                    || producer_stage != 0
+                {
+                    self.latch_fail_closed(
+                        "lifecycle local-proposal completion changed its dormant owner",
+                    );
+                    return Err(EnqueueError::FailClosed);
+                }
+                self.restored_tagged_command(
+                    tag,
+                    CommandClass::Completion,
+                    command,
+                    Instant::now(),
+                    causal_lifecycle_key,
+                    admission_ordinal,
+                    producer_stage,
+                )?
+            }
+            RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
+        };
+        tagged.candidate_semantic_statement = pending.candidate_statement();
+        if !tagged.validate_admission_identity() {
+            self.latch_fail_closed(
+                "lifecycle local-proposal completion carried an invalid candidate statement",
+            );
+            return Err(EnqueueError::FailClosed);
+        }
+        let result = self.enqueue_after_clock_reservation(tagged);
+        if result == Err(EnqueueError::FailClosed) {
+            self.latch_fail_closed(
+                "lifecycle local-proposal completion failed exact queue ownership",
+            );
+        }
+        result.map(|()| identity)
+    }
 }
