@@ -235,6 +235,7 @@ pub async fn handler_post_da_ingest(
     validate_request_shape(&request).map_err(|(status, message)| {
         ResponseError::from(build_error_response(status, message, format))
     })?;
+    let nexus = app.state.nexus_snapshot();
     let committed_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let compute_request = request;
     let governance_metadata_key = app.da_ingest.governance_metadata_key;

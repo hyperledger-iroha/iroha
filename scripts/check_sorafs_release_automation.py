@@ -404,10 +404,10 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "OPERATION_POP_RUNTIME_OPEN_V1: u16 = 118",
         "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1: u16 = 119",
         "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1: u16 = 120",
-        "struct PopRuntimeOpenResultWireV1",
-        "struct PopRecipientOpenRequestWireV1",
-        "struct PopRecipientOpenResultWireV1",
-        "struct PopCredentialRuntimeBindingWireV1",
+        "PopRuntimeOpenResultWireV1 {",
+        "PopRecipientOpenRequestWireV1 {",
+        "PopRecipientOpenResultWireV1 {",
+        "PopCredentialRuntimeBindingWireV1 {",
     ),
     "crates/irohad/src/runtime_provider_broker/validate_operation_payload.rs": (
         "OPERATION_POP_RUNTIME_OPEN_V1",
@@ -1406,7 +1406,7 @@ def _validate_native_governance_sdk_contract(root: Path) -> list[str]:
 def _rust_struct_field_inventory(
     source: str, struct_name: str
 ) -> tuple[tuple[str, str], ...] | None:
-    """Return the ordered fields from one simple Rust wire struct."""
+    """Return ordered fields from one direct or macro-emitted wire struct."""
 
     declaration = re.search(
         rf"(?ms)^\s*(?:pub\(super\)\s+)?struct\s+{re.escape(struct_name)}\s*"
@@ -1414,17 +1414,48 @@ def _rust_struct_field_inventory(
         source,
     )
     if declaration is None:
-        return None
-    return tuple(
-        (field, re.sub(r"\s+", "", field_type))
-        for field, field_type in re.findall(
+        declaration = re.search(
             (
-                r"(?m)^\s*(?:pub(?:\(super\))?\s+)?"
-                r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^,\n]+),"
+                rf"(?ms)^\s*define_broker_wire_struct!\(\s*[A-Za-z_][A-Za-z0-9_]*\s+"
+                rf"(?:pub\(super\)\s+)?{re.escape(struct_name)}\s*"
+                r"\{(?P<body>.*?)\}\s*\);\s*$"
             ),
-            declaration.group("body"),
+            source,
         )
-    )
+    if declaration is None:
+        return None
+
+    fields: list[tuple[str, str]] = []
+    body = declaration.group("body")
+    start = 0
+    depth = 0
+    for index, character in enumerate(body):
+        if character in "<([{":
+            depth += 1
+        elif character in ">)]}":
+            depth -= 1
+        elif character == "," and depth == 0:
+            field_source = body[start:index].strip()
+            start = index + 1
+            if not field_source:
+                continue
+            field = re.fullmatch(
+                r"(?:pub(?:\([^)]*\))?\s+)?"
+                r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?P<type>.+)",
+                field_source,
+                re.DOTALL,
+            )
+            if field is None:
+                return None
+            fields.append(
+                (
+                    field.group("name"),
+                    re.sub(r"\s+", "", field.group("type")),
+                )
+            )
+    if body[start:].strip():
+        return None
+    return tuple(fields)
 
 
 def _validate_pop_broker_hard_cut_contract(root: Path) -> list[str]:

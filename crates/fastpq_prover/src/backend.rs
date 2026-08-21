@@ -1995,15 +1995,22 @@ struct PreparedBatch {
 
 /// Batch-derived commitments which a proof is required to advertise exactly.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BatchDerivedCommitments {
-    pub(crate) trace_root: u64,
-    pub(crate) air_trace_root: u64,
-    pub(crate) air_composition_root: u64,
-    pub(crate) lookup_root: u64,
-    pub(crate) lde_domain_size: u32,
-    pub(crate) lookup_grand_product: u64,
+pub struct BatchDerivedCommitments {
+    /// Canonical base-trace commitment.
+    pub trace_root: u64,
+    /// Canonical commitment to the LDE trace rows used by AIR openings.
+    pub air_trace_root: u64,
+    /// Canonical commitment to the AIR composition evaluations.
+    pub air_composition_root: u64,
+    /// Canonical LDE/lookup commitment.
+    pub lookup_root: u64,
+    /// Canonical LDE evaluation-domain size.
+    pub lde_domain_size: u32,
+    /// Canonical lookup grand-product accumulator.
+    pub lookup_grand_product: u64,
 }
 
+#[allow(clippy::too_many_lines)]
 fn prepare_batch(
     params: &StarkParameterSet,
     batch: &TransitionBatch,
@@ -2126,7 +2133,7 @@ fn prepare_batch(
 }
 
 /// Recompute every proof-carried root and accumulator that is deterministic from the batch.
-pub(crate) fn derive_batch_commitments(
+pub fn derive_batch_commitments(
     params: &StarkParameterSet,
     batch: &TransitionBatch,
     public_io: &PublicIO,

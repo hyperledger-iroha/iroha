@@ -6090,7 +6090,6 @@ public final class HttpClientTransportTests {
 
   private static final class CapturingExecutor implements HttpTransportExecutor {
     private TransportRequest lastRequest;
-
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       this.lastRequest = Objects.requireNonNull(request, "request");
@@ -6104,11 +6103,9 @@ public final class HttpClientTransportTests {
 
   private static final class FailingExecutor implements HttpTransportExecutor {
     private final RuntimeException error;
-
     private FailingExecutor(final RuntimeException error) {
       this.error = error;
     }
-
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       final CompletableFuture<TransportResponse> future = new CompletableFuture<>();
@@ -6120,11 +6117,9 @@ public final class HttpClientTransportTests {
   private static final class CountingFailingExecutor implements HttpTransportExecutor {
     private final RuntimeException error;
     private int callCount = 0;
-
     private CountingFailingExecutor(final RuntimeException error) {
       this.error = error;
     }
-
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       callCount++;
@@ -6137,11 +6132,9 @@ public final class HttpClientTransportTests {
   private static final class ScriptedExecutor implements HttpTransportExecutor {
     private final TransportResponse[] responses;
     private int index = 0;
-
     private ScriptedExecutor(final TransportResponse... responses) {
       this.responses = Objects.requireNonNull(responses, "responses");
     }
-
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       if (isCapabilitiesRequest(request)) {
@@ -6155,21 +6148,16 @@ public final class HttpClientTransportTests {
 
   private static final class RecordingTelemetrySink implements TelemetrySink {
     private final List<GaugeEvent> events = new ArrayList<>();
-
     @Override
     public void onRequest(final TelemetryRecord record) {}
-
     @Override
     public void onResponse(final TelemetryRecord record, final ClientResponse response) {}
-
     @Override
     public void onFailure(final TelemetryRecord record, final Throwable error) {}
-
     @Override
     public void emitSignal(final String signalId, final Map<String, Object> fields) {
       events.add(new GaugeEvent(signalId, fields));
     }
-
     GaugeEvent lastEvent(final String signalId) {
       for (int i = events.size() - 1; i >= 0; --i) {
         final GaugeEvent event = events.get(i);
@@ -6179,7 +6167,6 @@ public final class HttpClientTransportTests {
       }
       return null;
     }
-
     List<Map<String, Object>> eventsBySignal(final String signalId) {
       final List<Map<String, Object>> matches = new ArrayList<>();
       for (final GaugeEvent event : events) {
@@ -6189,20 +6176,16 @@ public final class HttpClientTransportTests {
       }
       return matches;
     }
-
     private static final class GaugeEvent {
       private final String signalId;
       private final Map<String, Object> fields;
-
       private GaugeEvent(final String signalId, final Map<String, Object> fields) {
         this.signalId = signalId;
         this.fields = fields;
       }
-
       String signalId() {
         return signalId;
       }
-
       Map<String, Object> fields() {
         return fields;
       }
@@ -6212,16 +6195,13 @@ public final class HttpClientTransportTests {
   private static final class StubResponseExecutor implements HttpTransportExecutor {
     private final TransportResponse response;
     private TransportRequest lastRequest;
-
     private StubResponseExecutor(final int statusCode, final byte[] body) {
       this(statusCode, body, "accepted");
     }
-
     private StubResponseExecutor(
         final int statusCode, final byte[] body, final String message) {
       this.response = new TransportResponse(statusCode, body, message, Map.of());
     }
-
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       lastRequest = request;
@@ -6230,7 +6210,6 @@ public final class HttpClientTransportTests {
       }
       return CompletableFuture.completedFuture(response);
     }
-
     TransportRequest lastRequest() {
       return lastRequest;
     }
@@ -6242,11 +6221,9 @@ public final class HttpClientTransportTests {
   private static final class QueueResponseExecutor implements HttpTransportExecutor {
     private final java.util.ArrayDeque<QueuedResponse> responses;
     private final List<TransportRequest> requests = new ArrayList<>();
-
     private QueueResponseExecutor(final List<QueuedResponse> responses) {
       this.responses = new java.util.ArrayDeque<>(responses);
     }
-
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       requests.add(request);
@@ -6261,7 +6238,6 @@ public final class HttpClientTransportTests {
               "ok",
               Map.of()));
     }
-
     List<TransportRequest> requests() {
       return requests;
     }
@@ -6269,13 +6245,11 @@ public final class HttpClientTransportTests {
 
   private static final class InvalidationTrackingExecutor implements HttpTransportExecutor {
     private boolean invalidated = false;
-
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       return CompletableFuture.completedFuture(
           new TransportResponse(200, new byte[0], "ok", Map.of()));
     }
-
     @Override
     public void invalidateAndCancel() {
       invalidated = true;
@@ -6286,17 +6260,14 @@ public final class HttpClientTransportTests {
     private final AtomicInteger requestCount = new AtomicInteger();
     private final AtomicInteger responseCount = new AtomicInteger();
     private final AtomicInteger failureCount = new AtomicInteger();
-
     @Override
     public void onRequest(final TransportRequest request) {
       requestCount.incrementAndGet();
     }
-
     @Override
     public void onResponse(final TransportRequest request, final ClientResponse response) {
       responseCount.incrementAndGet();
     }
-
     @Override
     public void onFailure(final TransportRequest request, final Throwable error) {
       failureCount.incrementAndGet();

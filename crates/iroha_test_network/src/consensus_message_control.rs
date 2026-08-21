@@ -70,6 +70,10 @@ pub enum ConsensusMessageControlKind {
     CommitCertificateRequest,
     /// Commit-certificate response.
     CommitCertificateResponse,
+    /// Verifiable-random-function commitment.
+    VrfCommit,
+    /// Verifiable-random-function reveal.
+    VrfReveal,
 }
 impl ConsensusMessageControlKind {
     const fn as_str(self) -> &'static str {
@@ -87,6 +91,8 @@ impl ConsensusMessageControlKind {
             Self::CertifiedBodyResponse => "certified_body_response",
             Self::CommitCertificateRequest => "commit_certificate_request",
             Self::CommitCertificateResponse => "commit_certificate_response",
+            Self::VrfCommit => "vrf_commit",
+            Self::VrfReveal => "vrf_reveal",
         }
     }
     fn parse(value: &str) -> Result<Self> {
@@ -104,11 +110,16 @@ impl ConsensusMessageControlKind {
             "certified_body_response" => Ok(Self::CertifiedBodyResponse),
             "commit_certificate_request" => Ok(Self::CommitCertificateRequest),
             "commit_certificate_response" => Ok(Self::CommitCertificateResponse),
+            "vrf_commit" => Ok(Self::VrfCommit),
+            "vrf_reveal" => Ok(Self::VrfReveal),
             _ => Err(eyre!("unknown consensus message-control kind `{value}`")),
         }
     }
     const fn has_exact_round(self) -> bool {
-        !matches!(self, Self::PayloadChunk | Self::CommitCertificateRequest)
+        !matches!(
+            self,
+            Self::PayloadChunk | Self::CommitCertificateRequest | Self::VrfCommit | Self::VrfReveal
+        )
     }
 }
 /// Action taken when a rule matches.
@@ -392,6 +403,10 @@ pub struct ConsensusMessageControlHeld {
     pub view: Option<u64>,
     /// Proposal block hash, when carried by the message.
     pub block_hash: Option<HashOf<BlockHeader>>,
+    /// Exact payload manifest hash carried by the message, when present.
+    pub manifest_hash: Option<HashOf<PayloadManifest>>,
+    /// Exact zero-based payload chunk index, when present.
+    pub chunk_index: Option<u32>,
     /// Complete block-and-payload subject, when carried by the message.
     pub subject: Option<BlockSubject>,
     /// Complete deterministic execution result, when carried by the message.
@@ -406,33 +421,6 @@ pub struct ConsensusMessageControlHeld {
     pub envelope_digest: CryptoHash,
     /// Original encoded P2P payload size.
     pub size_bytes: u64,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PayloadCoordinates {
-    sequence: u64,
-    manifest_hash: HashOf<PayloadManifest>,
-    chunk_index: Option<u32>,
-}
-/// One stable acknowledgement together with payload coordinates kept outside
-/// the legacy held-message record shape.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConsensusMessageControlObservation {
-    /// Canonical controller acknowledgement.
-    pub ack: ConsensusMessageControlAck,
-    payload_coordinates: Vec<PayloadCoordinates>,
-}
-impl ConsensusMessageControlObservation {
-    /// Return the exact manifest hash and optional chunk index carried by the
-    /// retained occurrence at `sequence`.
-    pub fn payload_coordinates(
-        &self,
-        sequence: u64,
-    ) -> Option<(HashOf<PayloadManifest>, Option<u32>)> {
-        self.payload_coordinates
-            .iter()
-            .find(|coordinates| coordinates.sequence == sequence)
-            .map(|coordinates| (coordinates.manifest_hash, coordinates.chunk_index))
-    }
 }
 /// Canonical acknowledgement published by one controlled peer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -681,18 +669,6 @@ impl ConsensusMessageControl {
         validate_root_identity(&self.root, self.root_identity)?;
         parse_ack(&bytes)
     }
-    /// Read the latest stable acknowledgement plus exact manifest coordinates
-    /// for every retained proposal/body carrier or payload chunk.
-    pub fn read_observation(&self) -> Result<ConsensusMessageControlObservation> {
-        validate_root_identity(&self.root, self.root_identity)?;
-        let bytes = read_bounded_private_file(
-            &self.root.join(ACK_FILE),
-            MAX_ACK_BYTES,
-            self.root_identity.owner,
-        )?;
-        validate_root_identity(&self.root, self.root_identity)?;
-        parse_ack_observation(&bytes)
-    }
     /// Arm one exact, one-shot Native AMX process cut for this peer.
     ///
     /// `source_id` is the 32-byte digest of the exact signed source transaction,
@@ -918,10 +894,36 @@ impl ConsensusMessageControl {
 fn ack_matches_expected(ack: &ConsensusMessageControlAck, expected: &ExpectedAck<'_>) -> bool {
     ack.revision == expected.revision
         && ack.command_digest == expected.command_digest
-        && ack.rules == expected.rules
+        && acknowledged_rules_match_command(&ack.rules, expected.rules)
         && ack.queue_capacity == expected.queue_capacity
         && !ack.draining
         && (!expected.drain || ack.drain_fence == Some(expected.revision))
+}
+fn acknowledged_rules_match_command(
+    acknowledged: &[ConsensusMessageControlRule],
+    commanded: &[ConsensusMessageControlRule],
+) -> bool {
+    acknowledged.len() == commanded.len()
+        && acknowledged
+            .iter()
+            .zip(commanded)
+            .all(|(acknowledged, commanded)| {
+                if acknowledged == commanded {
+                    return true;
+                }
+                if commanded.kind != ConsensusMessageControlKind::PayloadChunk
+                    || commanded.action != ConsensusMessageControlAction::Hold
+                    || commanded.manifest_hash.is_some()
+                    || commanded.proposal_height.is_none()
+                    || commanded.proposal_view.is_none()
+                    || acknowledged.manifest_hash.is_none()
+                {
+                    return false;
+                }
+                let mut resolved = commanded.clone();
+                resolved.manifest_hash = acknowledged.manifest_hash;
+                &resolved == acknowledged
+            })
 }
 fn ack_matches_expected_release_in_progress(
     ack: &ConsensusMessageControlAck,
@@ -1053,9 +1055,6 @@ fn parse_native_amx_fault(bytes: &[u8]) -> Result<NativeAmxFaultAck> {
     })
 }
 fn parse_ack(bytes: &[u8]) -> Result<ConsensusMessageControlAck> {
-    parse_ack_observation(bytes).map(|observation| observation.ack)
-}
-fn parse_ack_observation(bytes: &[u8]) -> Result<ConsensusMessageControlObservation> {
     if bytes.len() > MAX_ACK_BYTES {
         return Err(eyre!("message-control acknowledgement is too large"));
     }
@@ -1100,18 +1099,10 @@ fn parse_ack_observation(bytes: &[u8]) -> Result<ConsensusMessageControlObservat
             "message-control acknowledgement has too many held entries"
         ));
     }
-    let held_with_coordinates = held_values
+    let held = held_values
         .iter()
-        .map(parse_held_with_coordinates)
+        .map(parse_held)
         .collect::<Result<Vec<_>>>()?;
-    let payload_coordinates = held_with_coordinates
-        .iter()
-        .filter_map(|(_, coordinates)| *coordinates)
-        .collect::<Vec<_>>();
-    let held = held_with_coordinates
-        .into_iter()
-        .map(|(held, _)| held)
-        .collect::<Vec<_>>();
     if held
         .windows(2)
         .any(|pair| pair[0].sequence >= pair[1].sequence)
@@ -1269,18 +1260,9 @@ fn parse_ack_observation(bytes: &[u8]) -> Result<ConsensusMessageControlObservat
             "fatal controller acknowledgement needs an error code"
         ));
     }
-    Ok(ConsensusMessageControlObservation {
-        ack,
-        payload_coordinates,
-    })
+    Ok(ack)
 }
-#[cfg(test)]
 fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
-    parse_held_with_coordinates(value).map(|(held, _)| held)
-}
-fn parse_held_with_coordinates(
-    value: &Value,
-) -> Result<(ConsensusMessageControlHeld, Option<PayloadCoordinates>)> {
     let object = exact_object(
         value,
         &[
@@ -1320,18 +1302,25 @@ fn parse_held_with_coordinates(
         .map(u32::try_from)
         .transpose()
         .map_err(|_| eyre!("held descriptor chunk index exceeds u32"))?;
-    if kind == ConsensusMessageControlKind::PayloadChunk {
-        if height.is_some() || view.is_some() {
-            return Err(eyre!("payload chunk descriptor cannot invent a round"));
+    match kind {
+        ConsensusMessageControlKind::PayloadChunk
+        | ConsensusMessageControlKind::VrfCommit
+        | ConsensusMessageControlKind::VrfReveal => {
+            if height.is_some() || view.is_some() {
+                return Err(eyre!("roundless held descriptor invented a round"));
+            }
         }
-    } else if kind == ConsensusMessageControlKind::CommitCertificateRequest {
-        if height.is_none() || view.is_some() {
-            return Err(eyre!(
-                "commit-certificate request descriptor has an invalid round"
-            ));
+        ConsensusMessageControlKind::CommitCertificateRequest => {
+            if height.is_none() || view.is_some() {
+                return Err(eyre!(
+                    "commit-certificate request descriptor has an invalid round"
+                ));
+            }
         }
-    } else if height.is_none() || view.is_none() {
-        return Err(eyre!("round-carrying held descriptor lacks its round"));
+        _ if height.is_none() || view.is_none() => {
+            return Err(eyre!("round-carrying held descriptor lacks its round"));
+        }
+        _ => {}
     }
     let sender = parse_canonical_peer(object, "sender")?;
     let authenticated_via = parse_canonical_peer(object, "authenticated_via")?;
@@ -1379,6 +1368,8 @@ fn parse_held_with_coordinates(
             | ConsensusMessageControlKind::CommitVote
             | ConsensusMessageControlKind::TimeoutVote
             | ConsensusMessageControlKind::PayloadChunk
+            | ConsensusMessageControlKind::VrfCommit
+            | ConsensusMessageControlKind::VrfReveal
     );
     if requires_single_signer != signer.is_some() {
         return Err(eyre!(
@@ -1466,6 +1457,13 @@ fn parse_held_with_coordinates(
         ConsensusMessageControlKind::CommitCertificateRequest => {
             has_no_subject_or_execution && !has_single_signer && !has_certificate_signers
         }
+        ConsensusMessageControlKind::VrfCommit | ConsensusMessageControlKind::VrfReveal => {
+            has_no_subject_or_execution
+                && has_single_signer
+                && !has_certificate_signers
+                && !has_manifest_hash
+                && !has_chunk_index
+        }
     };
     if !matches!(
         kind,
@@ -1484,30 +1482,24 @@ fn parse_held_with_coordinates(
             "held descriptor fields disagree with the exact payload-kind shape"
         ));
     }
-    let payload_coordinates = manifest_hash.map(|manifest_hash| PayloadCoordinates {
+    Ok(ConsensusMessageControlHeld {
         sequence,
+        sender,
+        authenticated_via,
+        kind,
+        height,
+        view,
+        block_hash,
         manifest_hash,
         chunk_index,
-    });
-    Ok((
-        ConsensusMessageControlHeld {
-            sequence,
-            sender,
-            authenticated_via,
-            kind,
-            height,
-            view,
-            block_hash,
-            subject,
-            execution_commitment,
-            signer,
-            cited_responder,
-            certificate_signers,
-            envelope_digest: parse_canonical_crypto_hash(object, "envelope_digest")?,
-            size_bytes,
-        },
-        payload_coordinates,
-    ))
+        subject,
+        execution_commitment,
+        signer,
+        cited_responder,
+        certificate_signers,
+        envelope_digest: parse_canonical_crypto_hash(object, "envelope_digest")?,
+        size_bytes,
+    })
 }
 fn parse_ack_rules(object: &Map) -> Result<Vec<ConsensusMessageControlRule>> {
     let values = object
@@ -2022,6 +2014,14 @@ mod tests {
                 Value::Null,
                 Vec::new(),
             ),
+            ConsensusMessageControlKind::VrfCommit | ConsensusMessageControlKind::VrfReveal => (
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::from(0_u64),
+                Vec::new(),
+            ),
         };
         object_value([
             ("authenticated_via", Value::from(peer.clone())),
@@ -2162,8 +2162,26 @@ mod tests {
                 .is_err(),
             "a chunk selector cannot invent height/view coordinates"
         );
+        for (revision, kind) in [
+            (6, ConsensusMessageControlKind::VrfCommit),
+            (7, ConsensusMessageControlKind::VrfReveal),
+        ] {
+            let vrf_rule = ConsensusMessageControlRule::exact(
+                chunk.sender.clone(),
+                kind,
+                9,
+                2,
+                ConsensusMessageControlAction::Hold,
+            );
+            assert!(
+                control
+                    .write_command(revision, &[vrf_rule], &[], 2, false)
+                    .is_err(),
+                "roundless {kind:?} traffic cannot be selected by an exact-round rule"
+            );
+        }
         assert!(
-            control.write_command(6, &[deferred], &[], 2, false).is_ok(),
+            control.write_command(8, &[deferred], &[], 2, false).is_ok(),
             "a Proposal-bound Hold selector is admissible before its exact hash resolves"
         );
     }
@@ -2481,6 +2499,80 @@ mod tests {
             &expected
         ));
     }
+    #[test]
+    fn ack_binding_accepts_only_exact_deferred_manifest_resolution() {
+        let digest = CryptoHash::new(b"deferred-command");
+        let deferred = ConsensusMessageControlRule::payload_chunk_from_proposal(
+            descriptor_peer(),
+            9,
+            2,
+            7,
+            ConsensusMessageControlAction::Hold,
+        );
+        let commanded = vec![deferred.clone()];
+        let expected = ExpectedAck {
+            revision: 2,
+            command_digest: digest,
+            rules: &commanded,
+            queue_capacity: DEFAULT_QUEUE_CAPACITY,
+            drain: false,
+        };
+        let resolved = ConsensusMessageControlRule {
+            manifest_hash: Some(descriptor_manifest_hash()),
+            ..deferred.clone()
+        };
+        let ack = ConsensusMessageControlAck {
+            rules: vec![resolved.clone()],
+            ..empty_ack(digest)
+        };
+        assert!(ack_matches_expected(&ack, &expected));
+
+        for changed in [
+            ConsensusMessageControlRule {
+                chunk_index: Some(8),
+                ..resolved.clone()
+            },
+            ConsensusMessageControlRule {
+                proposal_view: Some(3),
+                ..resolved.clone()
+            },
+            ConsensusMessageControlRule {
+                action: ConsensusMessageControlAction::Drop,
+                ..resolved.clone()
+            },
+        ] {
+            assert!(!ack_matches_expected(
+                &ConsensusMessageControlAck {
+                    rules: vec![changed],
+                    ..ack.clone()
+                },
+                &expected
+            ));
+        }
+
+        let exact_command = vec![ConsensusMessageControlRule::payload_chunk(
+            deferred.sender,
+            descriptor_manifest_hash(),
+            7,
+            ConsensusMessageControlAction::Hold,
+        )];
+        let exact_expected = ExpectedAck {
+            rules: &exact_command,
+            ..expected
+        };
+        assert!(!ack_matches_expected(
+            &ConsensusMessageControlAck {
+                rules: vec![ConsensusMessageControlRule {
+                    manifest_hash: Some(HashOf::from_untyped_unchecked(CryptoHash::new(
+                        b"different-manifest",
+                    ))),
+                    ..exact_command[0].clone()
+                }],
+                ..ack
+            },
+            &exact_expected
+        ));
+    }
     #[tokio::test]
     async fn controller_operations_are_serialized() {
         let parent = tempdir().expect("temporary parent");
@@ -2687,21 +2779,15 @@ mod tests {
                 ("version", Value::from(FORMAT_VERSION)),
             ])
         };
-        let ConsensusMessageControlObservation {
-            ack: parsed,
-            payload_coordinates,
-        } = parse_ack_observation(&canonical_json(&ack(chunk.clone())).expect("canonical ack"))
-            .expect("ack");
+        let parsed =
+            parse_ack(&canonical_json(&ack(chunk.clone())).expect("canonical ack")).expect("ack");
         assert_eq!(parsed.held[0].sender, parsed.held[0].authenticated_via);
         assert_eq!(parsed.held[0].signer, Some(0));
         assert_eq!(
-            payload_coordinates,
-            vec![PayloadCoordinates {
-                sequence: 1,
-                manifest_hash: descriptor_manifest_hash(),
-                chunk_index: Some(7),
-            }]
+            parsed.held[0].manifest_hash,
+            Some(descriptor_manifest_hash())
         );
+        assert_eq!(parsed.held[0].chunk_index, Some(7));
         assert!(parsed.held[0].subject.is_none());
         assert!(parsed.held[0].execution_commitment.is_none());
         let mut relayed = chunk.clone();
@@ -2852,6 +2938,8 @@ mod tests {
             ConsensusMessageControlKind::CertifiedBodyResponse,
             ConsensusMessageControlKind::CommitCertificateRequest,
             ConsensusMessageControlKind::CommitCertificateResponse,
+            ConsensusMessageControlKind::VrfCommit,
+            ConsensusMessageControlKind::VrfReveal,
         ] {
             let parsed = parse_held(&held_descriptor(kind))
                 .unwrap_or_else(|error| panic!("daemon {kind:?} descriptor failed: {error:#}"));

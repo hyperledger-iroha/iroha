@@ -1588,11 +1588,8 @@ mod tests {
         );
         let mut final_config = public_config_v1();
         final_config.network_id = network_id_v1(b"final-signed-genesis-header");
-        let final_network = backend_with_config_and_seed_v1(
-            final_config,
-            issuer_seed_v1(),
-            bearer_token_v1(),
-        );
+        let final_network =
+            backend_with_config_and_seed_v1(final_config, issuer_seed_v1(), bearer_token_v1());
 
         assert_eq!(
             staging.policy(),

@@ -38,8 +38,37 @@ EXPECTED_SOURCES = (
     "crates/kotodama_lang/src/semantic.rs",
     "crates/kotodama_lang/src/ir.rs",
 )
+EXPECTED_TEST_INCLUDES = {
+    "crates/kotodama_lang/src/compiler.rs": (
+        "compiler/tests/axt_remote_spend_access_tests.rs",
+        "compiler/tests/staged_mint_access_hints.rs",
+    ),
+    "crates/kotodama_lang/src/semantic.rs": (
+        "semantic/tests/numeric_rounding_modes.rs",
+        "semantic_sum_tests.rs",
+    ),
+    "crates/kotodama_lang/src/ir.rs": (
+        "ir/tests/public_argument_record_abi.rs",
+        "ir_tail_tests.rs",
+    ),
+}
+TEST_BATCH_MACROS = {
+    "crates/kotodama_lang/src/semantic.rs": (
+        "analyze_ok_tests",
+        "analyze_test_ok_tests",
+        "analyze_reject_code_tests",
+        "analyze_reject_contains_tests",
+        "analyze_test_reject_contains_tests",
+        "analyze_reject_contains_diagnostic_tests",
+        "analyze_error_code_message_tests",
+        "analyze_error_code_cases",
+    ),
+}
+TEST_SINGLE_CASE_MACROS = {
+    "crates/kotodama_lang/src/ir.rs": ("alias_lowering_case",),
+}
 EXPECTED_FIXTURE_COUNT = 248
-EXPECTED_TEMPLATE_COUNT = 60
+EXPECTED_TEMPLATE_COUNT = 53
 ROOT_KEYS = frozenset(
     {
         "format",
@@ -96,6 +125,9 @@ TEST_FUNCTION_RE = re.compile(
     r"(?:[ \t]*#\[[^\n]+\][ \t]*\n)*"
     r"[ \t]*(?:pub(?:\([^\n)]*\))?[ \t]+)?fn[ \t]+"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+)
+TEST_INCLUDE_RE = re.compile(
+    r'(?m)^[ \t]*include!\(\s*"(?P<path>[^"\n]+)"\s*\);'
 )
 
 
@@ -350,6 +382,108 @@ def _regular_bytes(path: Path, label: str) -> bytes:
     return path.read_bytes()
 
 
+def _closing_brace(masked: str, opening: int, label: str) -> int:
+    depth = 0
+    for cursor in range(opening, len(masked)):
+        if masked[cursor] == "{":
+            depth += 1
+        elif masked[cursor] == "}":
+            depth -= 1
+            if depth == 0:
+                return cursor
+    _fail(f"unterminated Rust macro invocation: {label}")
+
+
+def _macro_test_events(
+    source_path: str, masked: str
+) -> list[tuple[int, list[str]]]:
+    events: list[tuple[int, list[str]]] = []
+    for macro_name in TEST_BATCH_MACROS.get(source_path, ()):
+        pattern = re.compile(rf"\b{re.escape(macro_name)}!\s*\{{")
+        for invocation in pattern.finditer(masked):
+            opening = masked.find("{", invocation.start(), invocation.end())
+            closing = _closing_brace(masked, opening, macro_name)
+            body = masked[opening + 1 : closing]
+            names = [
+                match.group(1)
+                for match in re.finditer(
+                    r"(?:\A|;)\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", body
+                )
+            ]
+            if not names:
+                _fail(f"Rust test macro invocation has no cases: {macro_name}")
+            events.append((invocation.start(), names))
+    for macro_name in TEST_SINGLE_CASE_MACROS.get(source_path, ()):
+        pattern = re.compile(
+            rf"\b{re.escape(macro_name)}!\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,"
+        )
+        events.extend(
+            (invocation.start(), [invocation.group(1)])
+            for invocation in pattern.finditer(masked)
+        )
+    return events
+
+
+def _expanded_test_names(root: Path, source_path: str, source: str) -> list[str]:
+    """Return tests in Rust lexical order, expanding the sealed child modules."""
+
+    masked = _mask_rust(source)
+    events: list[tuple[int, list[str]]] = [
+        (match.start(), [match.group("name")])
+        for match in TEST_FUNCTION_RE.finditer(masked)
+    ]
+    events.extend(_macro_test_events(source_path, masked))
+    includes: list[tuple[re.Match[str], str]] = []
+    for match in TEST_INCLUDE_RE.finditer(source):
+        include_start = source.find("include!", match.start(), match.end())
+        if masked[include_start : include_start + len("include!")] == "include!":
+            includes.append((match, match.group("path")))
+    observed_includes = tuple(path for _, path in includes)
+    expected_includes = EXPECTED_TEST_INCLUDES.get(source_path, ())
+    if observed_includes != expected_includes:
+        _fail(
+            f"Rust test include inventory changed in {source_path}: "
+            f"expected={list(expected_includes)}, observed={list(observed_includes)}"
+        )
+
+    source_parent = PurePosixPath(source_path).parent
+    for match, include_path in includes:
+        relative = _relative_path(include_path, f"{source_path} test include")
+        child_source_path = (source_parent / PurePosixPath(relative)).as_posix()
+        child_path = root / child_source_path
+        try:
+            child_source = _regular_bytes(child_path, child_source_path).decode("utf-8")
+        except (OSError, UnicodeError) as error:
+            raise ValidationError(
+                f"failed to read Rust test include {child_source_path}: {error}"
+            ) from error
+        child_masked = _mask_rust(child_source)
+        child_names = [
+            child_match.group("name")
+            for child_match in TEST_FUNCTION_RE.finditer(child_masked)
+        ]
+        if not child_names:
+            _fail(f"Rust test include has no tests: {child_source_path}")
+        nested_includes = [
+            child_match.group("path")
+            for child_match in TEST_INCLUDE_RE.finditer(child_source)
+            if child_masked[
+                child_source.find("include!", child_match.start(), child_match.end()) :
+            ].startswith("include!")
+        ]
+        if nested_includes:
+            _fail(
+                f"Rust test include nesting is not sealed in {child_source_path}: "
+                f"{nested_includes}"
+            )
+        events.append((match.start(), child_names))
+
+    names = [name for _, event_names in sorted(events) for name in event_names]
+    if len(names) != len(set(names)):
+        _fail(f"Rust test name inventory contains duplicates in {source_path}")
+    return names
+
+
 def _validate_legacy_manifest(root: Path, manifest_path: Path) -> int:
     """Validate the recovered legacy test-source assets and their Rust includes."""
 
@@ -529,10 +663,7 @@ def validate_manifest(
         source_text[source_path] = text
         spans = _function_spans(text)
         source_spans[source_path] = spans
-        masked = _mask_rust(text)
-        observed_names = [
-            match.group("name") for match in TEST_FUNCTION_RE.finditer(masked)
-        ]
+        observed_names = _expanded_test_names(root, source_path, text)
         if observed_names != expected_names:
             _fail(f"Rust test name/order inventory changed in {source_path}")
         expected_include_prefix = PurePosixPath(directory).relative_to(

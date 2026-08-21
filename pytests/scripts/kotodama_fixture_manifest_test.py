@@ -48,6 +48,13 @@ def _copy_fixture_tree(destination: Path) -> Path:
         copied_source = destination / source["path"]
         copied_source.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, copied_source)
+    for source_path, includes in checker.EXPECTED_TEST_INCLUDES.items():
+        source_parent = Path(source_path).parent
+        for include in includes:
+            included_source = source_parent / include
+            copied_source = destination / included_source
+            copied_source.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / included_source, copied_source)
     for fixture in payload["fixtures"]:
         asset = ROOT / fixture["asset"]
         copied_asset = destination / fixture["asset"]
@@ -70,8 +77,8 @@ def test_checked_in_inventory_is_complete_and_reconstructable() -> None:
     stats = checker.validate_manifest(ROOT, MANIFEST)
     assert stats.fixtures == 248
     assert stats.legacy_fixtures == 52
-    assert stats.retained_templates == 60
-    assert stats.tests > 500
+    assert stats.retained_templates == 53
+    assert stats.tests == 563
 
 
 def test_payload_corruption_fails_closed(tmp_path: Path) -> None:
@@ -91,6 +98,26 @@ def test_unknown_manifest_key_fails_closed(tmp_path: Path) -> None:
     copied_manifest.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(checker.ValidationError, match="unknown=.*unexpected"):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
+def test_included_test_inventory_drift_fails_closed(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    included_source = (
+        tmp_path
+        / "crates/kotodama_lang/src/compiler/tests/axt_remote_spend_access_tests.rs"
+    )
+    source = included_source.read_text(encoding="utf-8")
+    included_source.write_text(
+        source.replace(
+            "fn codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents()",
+            "fn changed_remote_spend_test_name()",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(checker.ValidationError, match="test name/order inventory changed"):
         checker.validate_manifest(tmp_path, copied_manifest)
 
 

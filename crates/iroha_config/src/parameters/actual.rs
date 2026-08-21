@@ -100,6 +100,14 @@ use thiserror::Error;
 use url::Url;
 pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
 type Result<T, E> = core::result::Result<T, Report<E>>;
+macro_rules! impl_default {
+    ($(#[$attr:meta])* $type:ty => $body:block) => {
+        $(#[$attr])*
+        impl Default for $type {
+            fn default() -> Self $body
+        }
+    };
+}
 /// Parsed configuration root used internally by Iroha services.
 #[derive(Debug, Clone)]
 pub struct Root {
@@ -202,8 +210,7 @@ pub struct SoracloudRuntime {
     /// Hugging Face importer and inference bridge settings.
     pub hf: SoracloudRuntimeHuggingFace,
 }
-impl Default for SoracloudRuntime {
-    fn default() -> Self {
+impl_default!(SoracloudRuntime => {
         Self {
             production_mode: defaults::soracloud_runtime::PRODUCTION_MODE,
             state_dir: defaults::soracloud_runtime::state_dir(),
@@ -217,8 +224,7 @@ impl Default for SoracloudRuntime {
             egress: SoracloudRuntimeEgress::default(),
             hf: SoracloudRuntimeHuggingFace::default(),
         }
-    }
-}
+});
 impl SoracloudRuntime {
     /// Assert that production mode is paired with fail-closed runtime settings.
     ///
@@ -277,8 +283,7 @@ pub struct SoracloudRuntimeCacheBudgets {
     /// Cache budget for model weights.
     pub model_weight_bytes: NonZeroU64,
 }
-impl Default for SoracloudRuntimeCacheBudgets {
-    fn default() -> Self {
+impl_default!(SoracloudRuntimeCacheBudgets => {
         Self {
             bundle_bytes: defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
             static_asset_bytes: defaults::soracloud_runtime::STATIC_ASSET_CACHE_BUDGET_BYTES,
@@ -287,8 +292,7 @@ impl Default for SoracloudRuntimeCacheBudgets {
             model_artifact_bytes: defaults::soracloud_runtime::MODEL_ARTIFACT_CACHE_BUDGET_BYTES,
             model_weight_bytes: defaults::soracloud_runtime::MODEL_WEIGHT_CACHE_BUDGET_BYTES,
         }
-    }
-}
+});
 /// Resource ceilings for mutable Inrou microVM workloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SoracloudRuntimeInrou {
@@ -313,8 +317,7 @@ pub struct SoracloudRuntimeInrou {
     /// Shutdown grace window before the manager force-stops the VMM process.
     pub stop_grace: Duration,
 }
-impl Default for SoracloudRuntimeInrou {
-    fn default() -> Self {
+impl_default!(SoracloudRuntimeInrou => {
         Self {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
             enabled: defaults::soracloud_runtime::INROU_ENABLED,
@@ -332,8 +335,7 @@ impl Default for SoracloudRuntimeInrou {
             start_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS),
             stop_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_STOP_GRACE_MS),
         }
-    }
-}
+});
 impl SoracloudRuntimeInrou {
     fn assert_archive_resource_bounds(&self) {
         assert!(
@@ -438,8 +440,7 @@ pub struct SoracloudRuntimeEgress {
     /// Optional outbound byte budget per service/minute.
     pub max_bytes_per_minute: Option<NonZeroU64>,
 }
-impl Default for SoracloudRuntimeEgress {
-    fn default() -> Self {
+impl_default!(SoracloudRuntimeEgress => {
         Self {
             default_allow: defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW,
             allowed_hosts: defaults::soracloud_runtime::egress_allowed_hosts(),
@@ -448,8 +449,7 @@ impl Default for SoracloudRuntimeEgress {
             max_bytes_per_minute: defaults::soracloud_runtime::EGRESS_MAX_BYTES_PER_MINUTE
                 .and_then(NonZeroU64::new),
         }
-    }
-}
+});
 /// Hugging Face importer/inference settings for the embedded Soracloud runtime manager.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoracloudRuntimeHuggingFace {
@@ -500,8 +500,7 @@ pub struct SoracloudRuntimeHfCredentialProviderBinding {
     /// Exact non-zero digest of the provider's public policy.
     pub policy_digest: [u8; 32],
 }
-impl Default for SoracloudRuntimeHuggingFace {
-    fn default() -> Self {
+impl_default!(SoracloudRuntimeHuggingFace => {
         Self {
             hub_base_url: defaults::soracloud_runtime::hf::HUB_BASE_URL.to_owned(),
             api_base_url: defaults::soracloud_runtime::hf::API_BASE_URL.to_owned(),
@@ -529,8 +528,7 @@ impl Default for SoracloudRuntimeHuggingFace {
             import_file_allowlist: defaults::soracloud_runtime::hf::import_file_allowlist(),
             inference_credential_provider: None,
         }
-    }
-}
+});
 /// See [`Root::from_toml_source`]
 #[derive(thiserror::Error, Debug, Copy, Clone)]
 #[error("Failed to read configuration from a given TOML source")]
@@ -1062,8 +1060,7 @@ pub struct Crypto {
     /// Curve identifiers (per the account curve registry) allowed for controllers.
     pub allowed_curve_ids: Vec<u8>,
 }
-impl Default for Crypto {
-    fn default() -> Self {
+impl_default!(Crypto => {
         Self {
             enable_sm_openssl_preview: defaults::crypto::enable_sm_openssl_preview(),
             sm_intrinsics: SmIntrinsicsPolicy::Auto,
@@ -1072,8 +1069,7 @@ impl Default for Crypto {
             sm2_distid_default: defaults::crypto::sm2_distid_default(),
             allowed_curve_ids: defaults::crypto::allowed_curve_ids(),
         }
-    }
-}
+});
 impl Crypto {
     /// Determine whether SM helper syscalls should be enabled for this configuration.
     #[must_use]
@@ -1152,8 +1148,7 @@ impl SoranetPrivacy {
     pub const DEFAULT_EVENT_BUFFER_CAPACITY: usize =
         defaults::soranet::privacy::EVENT_BUFFER_CAPACITY;
 }
-impl Default for SoranetPrivacy {
-    fn default() -> Self {
+impl_default!(SoranetPrivacy => {
         Self {
             bucket_secs: defaults::soranet::privacy::BUCKET_SECS,
             min_handshakes: defaults::soranet::privacy::MIN_HANDSHAKES,
@@ -1164,8 +1159,7 @@ impl Default for SoranetPrivacy {
             expected_shares: defaults::soranet::privacy::EXPECTED_SHARES,
             event_buffer_capacity: defaults::soranet::privacy::EVENT_BUFFER_CAPACITY,
         }
-    }
-}
+});
 /// Derived VPN configuration for the native SoraNet tunnel.
 #[derive(Debug, Clone)]
 pub struct SoranetVpn {
@@ -1216,8 +1210,7 @@ pub struct SoranetVpn {
     /// Externally provisioned digest authenticating the exact snapshot bytes.
     pub guard_directory_digest: Option<[u8; 32]>,
 }
-impl Default for SoranetVpn {
-    fn default() -> Self {
+impl_default!(SoranetVpn => {
         Self {
             enabled: defaults::soranet::vpn::ENABLED,
             cell_size_bytes: defaults::soranet::vpn::CELL_SIZE_BYTES,
@@ -1247,8 +1240,7 @@ impl Default for SoranetVpn {
             guard_directory_path: None,
             guard_directory_digest: None,
         }
-    }
-}
+});
 /// PoW admission parameters shared with peers.
 #[derive(Debug, Clone)]
 pub struct SoranetPow {
@@ -1308,11 +1300,9 @@ impl SoranetPuzzle {
         }
     }
 }
-impl Default for SoranetPuzzle {
-    fn default() -> Self {
+impl_default!(SoranetPuzzle => {
         Self::default_const()
-    }
-}
+});
 impl SoranetPow {
     /// Hard ceiling for either direction's puzzle-work capacity.
     pub const MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION: usize = 8;
@@ -1374,13 +1364,10 @@ impl SoranetPow {
         self
     }
 }
-impl Default for SoranetPow {
-    fn default() -> Self {
+impl_default!(SoranetPow => {
         Self::default_const()
-    }
-}
-impl Default for SoranetHandshake {
-    fn default() -> Self {
+});
+impl_default!(SoranetHandshake => {
         Self {
             descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
             client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
@@ -1391,8 +1378,7 @@ impl Default for SoranetHandshake {
             resume_hash: None,
             pow: SoranetPow::default(),
         }
-    }
-}
+});
 /// Lane profile presets for shaping p2p behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaneProfile {
@@ -1524,16 +1510,14 @@ pub struct ScionConfig {
     /// Per-peer SCION routes keyed by peer id.
     pub routes: BTreeMap<PeerId, SocketAddr>,
 }
-impl Default for ScionConfig {
-    fn default() -> Self {
+impl_default!(ScionConfig => {
         Self {
             enabled: defaults::network::SCION_ENABLED,
             fallback_to_legacy: defaults::network::SCION_FALLBACK_TO_LEGACY,
             listen_endpoint: None,
             routes: BTreeMap::new(),
         }
-    }
-}
+});
 /// Network options.
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
@@ -1927,8 +1911,7 @@ impl CitizenServiceDiscipline {
         }
     }
 }
-impl Default for CitizenServiceDiscipline {
-    fn default() -> Self {
+impl_default!(CitizenServiceDiscipline => {
         Self {
             seat_cooldown_blocks: defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS,
             max_seats_per_epoch: defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH,
@@ -1938,8 +1921,7 @@ impl Default for CitizenServiceDiscipline {
             misconduct_slash_bps: defaults::governance::citizen_service::MISCONDUCT_SLASH_BPS,
             role_bond_multipliers: defaults::governance::citizen_service::role_bond_multipliers(),
         }
-    }
-}
+});
 /// Viral incentive policy governing social reward flows.
 #[derive(Debug, Clone)]
 pub struct ViralIncentives {
@@ -1972,8 +1954,7 @@ pub struct ViralIncentives {
     /// Aggregate campaign budget cap across the promo window (0 = unlimited).
     pub campaign_cap: Quantity,
 }
-impl Default for ViralIncentives {
-    fn default() -> Self {
+impl_default!(ViralIncentives => {
         let default_pool_account = defaults::governance::slash_receiver_account_id();
         Self {
             incentive_pool_account: default_pool_account.clone(),
@@ -1993,8 +1974,7 @@ impl Default for ViralIncentives {
             promo_ends_at_ms: defaults::governance::viral_promo_end_ms(),
             campaign_cap: defaults::governance::viral_campaign_cap(),
         }
-    }
-}
+});
 /// Runtime-upgrade provenance enforcement modes (actual layer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeUpgradeProvenanceMode {
@@ -2033,8 +2013,7 @@ pub struct RuntimeUpgradeProvenancePolicy {
     /// Minimum number of trusted signatures required.
     pub signature_threshold: usize,
 }
-impl Default for RuntimeUpgradeProvenancePolicy {
-    fn default() -> Self {
+impl_default!(RuntimeUpgradeProvenancePolicy => {
         Self {
             mode: RuntimeUpgradeProvenanceMode::Optional,
             require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
@@ -2043,8 +2022,7 @@ impl Default for RuntimeUpgradeProvenancePolicy {
             signature_threshold:
                 defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
         }
-    }
-}
+});
 /// Governance configuration (actual layer).
 #[derive(Debug, Clone)]
 pub struct Governance {
@@ -2155,8 +2133,7 @@ pub struct Governance {
     /// Maximum blocks allocated to agenda council scheduling.
     pub pipeline_agenda_sla_blocks: u64,
 }
-impl Default for Governance {
-    fn default() -> Self {
+impl_default!(Governance => {
         Self {
             vk_ballot: None,
             vk_tally: None,
@@ -2239,8 +2216,7 @@ impl Default for Governance {
             pipeline_rules_sla_blocks: defaults::governance::PIPELINE_RULES_SLA_BLOCKS,
             pipeline_agenda_sla_blocks: defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS,
         }
-    }
-}
+});
 /// Concurrency controls for internal thread pools.
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::struct_field_names)]
@@ -2366,8 +2342,7 @@ pub struct NexusStaking {
     /// Account that receives slashed stake (string form).
     pub slash_sink_account_id: String,
 }
-impl Default for NexusStaking {
-    fn default() -> Self {
+impl_default!(NexusStaking => {
         Self {
             public_validator_mode: LaneValidatorMode::StakeElected,
             restricted_validator_mode: LaneValidatorMode::AdminManaged,
@@ -2381,8 +2356,7 @@ impl Default for NexusStaking {
             stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
             slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
         }
-    }
-}
+});
 impl NexusStaking {
     /// Resolve the validator activation policy for a lane using its configured visibility.
     #[must_use]
@@ -2430,8 +2404,7 @@ pub enum NexusFeeSettlementMode {
     /// Fees are committed into lane receipts and burned during Nexus merge settlement.
     LaneRelayBurn,
 }
-impl Default for NexusFees {
-    fn default() -> Self {
+impl_default!(NexusFees => {
         Self {
             fee_asset_id: defaults::nexus::fees::fee_asset_id(),
             fee_sink_account_id: defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string(),
@@ -2444,8 +2417,7 @@ impl Default for NexusFees {
             settlement_mode: NexusFeeSettlementMode::Direct,
             successful_claim_fee_exempt_authorities: BTreeSet::new(),
         }
-    }
-}
+});
 /// Asynchronous worker that proves DPN lane relays and sponsor fee budgets.
 #[derive(Debug, Clone)]
 pub struct NexusRelayWorker {
@@ -2460,8 +2432,7 @@ pub struct NexusRelayWorker {
     /// Maximum proof/submission attempts before local worker retry stops.
     pub max_retry_attempts: NonZeroU32,
 }
-impl Default for NexusRelayWorker {
-    fn default() -> Self {
+impl_default!(NexusRelayWorker => {
         Self {
             enabled: defaults::nexus::relay_worker::ENABLED,
             authority_account_id: defaults::nexus::relay_worker::AUTHORITY_ACCOUNT_ID
@@ -2474,8 +2445,7 @@ impl Default for NexusRelayWorker {
             max_retry_attempts: NonZeroU32::new(defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS)
                 .expect("default Nexus relay worker max_retry_attempts is non-zero"),
         }
-    }
-}
+});
 /// Shared Hugging Face lease policy for Soracloud pool draining.
 #[derive(Debug, Clone, Copy)]
 pub struct NexusHfSharedLeases {
@@ -2490,8 +2460,7 @@ pub struct NexusHfSharedLeases {
     /// Slash ratio applied when a host advert is provably self-contradictory.
     pub advert_contradiction_slash_bps: u16,
 }
-impl Default for NexusHfSharedLeases {
-    fn default() -> Self {
+impl_default!(NexusHfSharedLeases => {
         Self {
             drain_grace: Duration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS),
             warmup_no_show_slash_bps: defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS,
@@ -2502,8 +2471,7 @@ impl Default for NexusHfSharedLeases {
             advert_contradiction_slash_bps:
                 defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS,
         }
-    }
-}
+});
 /// Uploaded private-model quota policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NexusUploadedModels {
@@ -2520,8 +2488,7 @@ pub struct NexusUploadedModels {
     /// Maximum image budget admitted for one private session.
     pub max_session_image_budget: u16,
 }
-impl Default for NexusUploadedModels {
-    fn default() -> Self {
+impl_default!(NexusUploadedModels => {
         Self {
             chunk_plaintext_bytes: defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES,
             max_plaintext_bytes_per_model:
@@ -2532,8 +2499,7 @@ impl Default for NexusUploadedModels {
             max_session_token_budget: defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET,
             max_session_image_budget: defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET,
         }
-    }
-}
+});
 /// Committee and quorum settings for protected-domain endorsements.
 #[derive(Debug, Clone)]
 pub struct NexusEndorsement {
@@ -2542,8 +2508,7 @@ pub struct NexusEndorsement {
     /// Quorum required to accept an endorsement (0 disables enforcement).
     pub quorum: u16,
 }
-impl Default for NexusEndorsement {
-    fn default() -> Self {
+impl_default!(NexusEndorsement => {
         let committee_keys: BTreeSet<PublicKey> = defaults::nexus::endorsement::committee_keys()
             .into_iter()
             .enumerate()
@@ -2562,8 +2527,7 @@ impl Default for NexusEndorsement {
             committee_keys,
             quorum,
         }
-    }
-}
+});
 /// Nexus configuration for AXT execution and expiry policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NexusAxt {
@@ -2576,8 +2540,7 @@ pub struct NexusAxt {
     /// Number of slots to retain handle usage for replay protection across restarts/peers.
     pub replay_retention_slots: NonZeroU64,
 }
-impl Default for NexusAxt {
-    fn default() -> Self {
+impl_default!(NexusAxt => {
         Self {
             slot_length_ms: NonZeroU64::new(defaults::nexus::axt::SLOT_LENGTH_MS)
                 .expect("default AXT slot length must be non-zero"),
@@ -2587,8 +2550,7 @@ impl Default for NexusAxt {
             replay_retention_slots: NonZeroU64::new(defaults::nexus::axt::REPLAY_RETENTION_SLOTS)
                 .expect("replay retention window must be non-zero"),
         }
-    }
-}
+});
 /// Lane-relay emergency override configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct LaneRelayEmergency {
@@ -2601,8 +2563,7 @@ pub struct LaneRelayEmergency {
     /// Maximum number of blocks an emergency override may remain active.
     pub max_ttl_blocks: NonZeroU32,
 }
-impl Default for LaneRelayEmergency {
-    fn default() -> Self {
+impl_default!(LaneRelayEmergency => {
         Self {
             enabled: defaults::nexus::lane_relay_emergency::ENABLED,
             multisig_threshold: NonZeroU16::new(
@@ -2616,8 +2577,7 @@ impl Default for LaneRelayEmergency {
             max_ttl_blocks: NonZeroU32::new(defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS)
                 .expect("default emergency TTL must be non-zero"),
         }
-    }
-}
+});
 /// Storage component participating in Nexus disk budgeting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NexusStorageBudgetComponent {
@@ -2756,8 +2716,7 @@ impl fmt::Debug for NexusStorage {
             .finish()
     }
 }
-impl Default for NexusStorage {
-    fn default() -> Self {
+impl_default!(NexusStorage => {
         Self {
             local_budget_bytes: None,
             effective_local_budget_bytes: None,
@@ -2767,8 +2726,7 @@ impl Default for NexusStorage {
             disk_budget_weights: NexusStorageWeights::default(),
             configured_component_caps: None,
         }
-    }
-}
+});
 /// Basis-point budget weights for Nexus storage subsystems.
 #[derive(Debug, Clone, Copy)]
 pub struct NexusStorageWeights {
@@ -2794,8 +2752,7 @@ impl NexusStorageWeights {
             + self.soravpn_spool_bps as u32
     }
 }
-impl Default for NexusStorageWeights {
-    fn default() -> Self {
+impl_default!(NexusStorageWeights => {
         Self {
             kura_blocks_bps: defaults::nexus::storage::KURA_BLOCKS_BPS,
             wsv_snapshots_bps: defaults::nexus::storage::WSV_SNAPSHOTS_BPS,
@@ -2803,8 +2760,7 @@ impl Default for NexusStorageWeights {
             soranet_spool_bps: defaults::nexus::storage::SORANET_SPOOL_BPS,
             soravpn_spool_bps: defaults::nexus::storage::SORAVPN_SPOOL_BPS,
         }
-    }
-}
+});
 /// Nexus configuration describing lanes, data spaces, and routing policy.
 #[derive(Debug, Clone)]
 pub struct Nexus {
@@ -2856,9 +2812,7 @@ pub struct Nexus {
     /// Data-availability sampling configuration.
     pub da: Da,
 }
-#[allow(clippy::derivable_impls)]
-impl Default for Nexus {
-    fn default() -> Self {
+impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
         Self {
             storage: NexusStorage::default(),
             staking: NexusStaking::default(),
@@ -2883,8 +2837,7 @@ impl Default for Nexus {
             commit: Commit::default(),
             da: Da::default(),
         }
-    }
-}
+});
 impl Nexus {
     /// Returns true when the catalog or routing policy deviates from the single-lane defaults.
     #[must_use]
@@ -4162,15 +4115,13 @@ pub struct LaneRegistry {
     /// Poll interval for refreshing manifests and governance data.
     pub poll_interval: Duration,
 }
-impl Default for LaneRegistry {
-    fn default() -> Self {
+impl_default!(LaneRegistry => {
         Self {
             manifest_directory: None,
             cache_directory: None,
             poll_interval: defaults::nexus::registry::POLL_INTERVAL,
         }
-    }
-}
+});
 /// Lane compliance policy configuration.
 #[derive(Debug, Clone)]
 pub struct LaneCompliance {
@@ -4181,15 +4132,13 @@ pub struct LaneCompliance {
     /// Optional directory containing Norito-encoded policy bundles.
     pub policy_dir: Option<PathBuf>,
 }
-impl Default for LaneCompliance {
-    fn default() -> Self {
+impl_default!(LaneCompliance => {
         Self {
             enabled: defaults::nexus::compliance::ENABLED,
             audit_only: defaults::nexus::compliance::AUDIT_ONLY,
             policy_dir: None,
         }
-    }
-}
+});
 /// Governance module catalog for lanes.
 #[derive(Debug, Clone, Default)]
 pub struct GovernanceCatalog {
@@ -4306,11 +4255,9 @@ pub struct LaneConfig {
     entries: Vec<LaneConfigEntry>,
     by_id: BTreeMap<LaneId, usize>,
 }
-impl Default for LaneConfig {
-    fn default() -> Self {
+impl_default!(LaneConfig => {
         Self::from_catalog(&LaneCatalog::default())
-    }
-}
+});
 impl LaneConfig {
     /// Derive lane configuration metadata from the validated catalog.
     #[must_use]
@@ -4511,8 +4458,7 @@ pub struct Fusion {
     /// Maximum number of slots a fused window can persist without re-evaluating load.
     pub max_window_slots: NonZeroU16,
 }
-impl Default for Fusion {
-    fn default() -> Self {
+impl_default!(Fusion => {
         Self {
             floor_teu: defaults::nexus::fusion::FLOOR_TEU,
             exit_teu: defaults::nexus::fusion::EXIT_TEU,
@@ -4521,8 +4467,7 @@ impl Default for Fusion {
             max_window_slots: NonZeroU16::new(defaults::nexus::fusion::MAX_WINDOW_SLOTS)
                 .expect("default max window slots > 0"),
         }
-    }
-}
+});
 /// Deterministic lane autoscaling parameters.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Autoscale {
@@ -4569,8 +4514,7 @@ impl Autoscale {
         lane >= self.min_lanes.get() && lane < self.max_lanes.get()
     }
 }
-impl Default for Autoscale {
-    fn default() -> Self {
+impl_default!(Autoscale => {
         Self {
             enabled: defaults::nexus::autoscale::ENABLED,
             min_lanes: NonZeroU32::new(defaults::nexus::autoscale::MIN_LANES)
@@ -4597,22 +4541,19 @@ impl Default for Autoscale {
                 .expect("default autoscale per_lane_target_tps > 0"),
             last_transition_height: 0,
         }
-    }
-}
+});
 /// Proof/commit deadline configuration (Δ window).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Commit {
     /// Number of slots available for proofs/DA bundles to arrive before a transaction aborts.
     pub window_slots: NonZeroU16,
 }
-impl Default for Commit {
-    fn default() -> Self {
+impl_default!(Commit => {
         Self {
             window_slots: NonZeroU16::new(defaults::nexus::commit::WINDOW_SLOTS)
                 .expect("default commit window > 0"),
         }
-    }
-}
+});
 /// Data-availability sampling configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Da {
@@ -4641,8 +4582,7 @@ pub struct Da {
     /// Temporal diversity / attester rotation configuration.
     pub rotation: DaRotation,
 }
-impl Default for Da {
-    fn default() -> Self {
+impl_default!(Da => {
         Self {
             q_in_slot_total: NonZeroU32::new(defaults::nexus::da::Q_IN_SLOT_TOTAL)
                 .expect("default q_in_slot_total > 0"),
@@ -4672,8 +4612,7 @@ impl Default for Da {
             recovery: DaRecovery::default(),
             rotation: DaRotation::default(),
         }
-    }
-}
+});
 /// Rolling audit configuration ensuring long-term DA coverage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DaAudit {
@@ -4684,8 +4623,7 @@ pub struct DaAudit {
     /// Duration of an audit window.
     pub interval: Duration,
 }
-impl Default for DaAudit {
-    fn default() -> Self {
+impl_default!(DaAudit => {
         Self {
             sample_size: NonZeroU16::new(defaults::nexus::da::audit::SAMPLE_SIZE)
                 .expect("default audit sample size > 0"),
@@ -4693,21 +4631,18 @@ impl Default for DaAudit {
                 .expect("default audit window count > 0"),
             interval: defaults::nexus::da::audit::INTERVAL,
         }
-    }
-}
+});
 /// Recovery deadline configuration for missing DA proofs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DaRecovery {
     /// Deadline for providing recovery proofs once requested.
     pub request_timeout: Duration,
 }
-impl Default for DaRecovery {
-    fn default() -> Self {
+impl_default!(DaRecovery => {
         Self {
             request_timeout: defaults::nexus::da::recovery::REQUEST_TIMEOUT,
         }
-    }
-}
+});
 /// Temporal diversity / attester rotation configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DaRotation {
@@ -4720,8 +4655,7 @@ pub struct DaRotation {
     /// Latency-bias decay factor applied to attester weights.
     pub latency_decay: f64,
 }
-impl Default for DaRotation {
-    fn default() -> Self {
+impl_default!(DaRotation => {
         Self {
             max_hits_per_window: NonZeroU16::new(
                 defaults::nexus::da::rotation::MAX_HITS_PER_WINDOW,
@@ -4732,8 +4666,7 @@ impl Default for DaRotation {
             seed_tag: defaults::nexus::da::rotation::SEED_TAG.to_string(),
             latency_decay: defaults::nexus::da::rotation::LATENCY_DECAY,
         }
-    }
-}
+});
 impl Fusion {
     /// Determine whether recent TEU demand satisfies the fusion criteria.
     #[must_use]
@@ -4869,8 +4802,7 @@ pub struct Pipeline {
     /// Estimated nanoseconds per syscall used for AMX budgeting.
     pub amx_per_syscall_ns: u64,
 }
-impl Default for Pipeline {
-    fn default() -> Self {
+impl_default!(Pipeline => {
         Self {
             dynamic_prepass: defaults::pipeline::DYNAMIC_PREPASS,
             access_set_cache_enabled: defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -4913,8 +4845,7 @@ impl Default for Pipeline {
             amx_per_memory_access_ns: defaults::pipeline::AMX_PER_MEMORY_ACCESS_NS,
             amx_per_syscall_ns: defaults::pipeline::AMX_PER_SYSCALL_NS,
         }
-    }
-}
+});
 /// One retained lane-incarnation lineage binding committed into a Sumeragi v2 height context.
 ///
 /// The complete projection contains every active or retired lane identifier ever
@@ -5993,8 +5924,7 @@ pub fn kura_replica_advert_registry_entry_capacity(
         .checked_mul(KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT)
         .and_then(NonZeroUsize::new)
 }
-impl Default for Queue {
-    fn default() -> Self {
+impl_default!(Queue => {
         Self {
             transaction_time_to_live: defaults::queue::TRANSACTION_TIME_TO_LIVE,
             capacity: defaults::queue::CAPACITY,
@@ -6004,8 +5934,7 @@ impl Default for Queue {
             expired_cull_batch: defaults::queue::EXPIRED_CULL_BATCH,
             plan_journal_max_bytes: defaults::queue::PLAN_JOURNAL_MAX_BYTES,
         }
-    }
-}
+});
 /// Node role in consensus participation.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum NodeRole {
@@ -6042,15 +5971,13 @@ pub struct SumeragiBlock {
     /// Proposal queue scan budget relative to `max_transactions`.
     pub proposal_queue_scan_multiplier: NonZeroUsize,
 }
-impl Default for SumeragiBlock {
-    fn default() -> Self {
+impl_default!(SumeragiBlock => {
         Self {
             max_transactions: defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
             max_payload_bytes: defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
             proposal_queue_scan_multiplier: defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
         }
-    }
-}
+});
 /// Bounded asynchronous adapter queues and outer-ingress byte budgets around
 /// the serialized reducer.
 #[derive(Debug, Clone, Copy)]
@@ -6074,8 +6001,7 @@ pub struct SumeragiQueues {
     /// Reconstructed bodies waiting for reducer delivery.
     pub ready_bodies: NonZeroUsize,
 }
-impl Default for SumeragiQueues {
-    fn default() -> Self {
+impl_default!(SumeragiQueues => {
         Self {
             commands: defaults::sumeragi::QUEUE_COMMAND_CAPACITY,
             authenticated_non_validator_sources:
@@ -6086,8 +6012,7 @@ impl Default for SumeragiQueues {
             chunks: defaults::sumeragi::QUEUE_CHUNK_CAPACITY,
             ready_bodies: defaults::sumeragi::QUEUE_READY_BODY_CAPACITY,
         }
-    }
-}
+});
 /// Shared finite runtime bounds for Sumeragi v2 lane, merge, and Native AMX services.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiV2RuntimeLimits {
@@ -6146,8 +6071,7 @@ pub struct SumeragiV2RuntimeLimits {
     /// Runtime byte ceiling for the Native AMX signing chain anchor.
     pub native_amx_signing_guard_anchor_bytes: NonZeroUsize,
 }
-impl Default for SumeragiV2RuntimeLimits {
-    fn default() -> Self {
+impl_default!(SumeragiV2RuntimeLimits => {
         Self {
             authenticated_merge_qc_capacity: defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY,
             merge_leader_body_frame_headroom_bytes:
@@ -6198,8 +6122,7 @@ impl Default for SumeragiV2RuntimeLimits {
             native_amx_signing_guard_anchor_bytes:
                 defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
         }
-    }
-}
+});
 /// Consensus key-rotation and HSM policy.
 #[derive(Debug, Clone)]
 pub struct SumeragiKeys {
@@ -6216,8 +6139,7 @@ pub struct SumeragiKeys {
     /// Admitted HSM provider identifiers.
     pub allowed_hsm_providers: BTreeSet<String>,
 }
-impl Default for SumeragiKeys {
-    fn default() -> Self {
+impl_default!(SumeragiKeys => {
         Self {
             activation_lead_blocks: defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
             overlap_grace_blocks: defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
@@ -6230,8 +6152,7 @@ impl Default for SumeragiKeys {
                 .into_iter()
                 .collect(),
         }
-    }
-}
+});
 /// First-release Sumeragi v2 node configuration.
 ///
 /// Consensus mode, block cadence, DA layout, leader seed, roster, and quorum
@@ -6250,8 +6171,7 @@ pub struct Sumeragi {
     /// Consensus key-rotation and HSM policy.
     pub keys: SumeragiKeys,
 }
-impl Default for Sumeragi {
-    fn default() -> Self {
+impl_default!(Sumeragi => {
         Self {
             role: NodeRole::Validator,
             block: SumeragiBlock::default(),
@@ -6259,8 +6179,7 @@ impl Default for Sumeragi {
             limits: SumeragiV2RuntimeLimits::default(),
             keys: SumeragiKeys::default(),
         }
-    }
-}
+});
 impl Sumeragi {
     /// Build the canonical shared Sumeragi v2 runtime configuration.
     ///
@@ -7385,15 +7304,13 @@ pub struct LiveQueryStore {
     /// Per-user live query limit.
     pub capacity_per_user: NonZeroUsize,
 }
-impl Default for LiveQueryStore {
-    fn default() -> Self {
+impl_default!(LiveQueryStore => {
         Self {
             idle_time: defaults::torii::QUERY_IDLE_TIME,
             capacity: defaults::torii::QUERY_STORE_CAPACITY,
             capacity_per_user: defaults::torii::QUERY_STORE_CAPACITY_PER_USER,
         }
-    }
-}
+});
 /// Block synchronization parameters.
 #[derive(Debug, Clone, Copy)]
 pub struct BlockSync {
@@ -7430,14 +7347,12 @@ pub enum DataspaceGossipFallback {
     /// Use the public overlay targets when commit topology is unavailable.
     UsePublicOverlay,
 }
-impl Default for DataspaceGossipFallback {
-    fn default() -> Self {
+impl_default!(DataspaceGossipFallback => {
         match defaults::network::TX_GOSSIP_RESTRICTED_FALLBACK {
             "public_overlay" => Self::UsePublicOverlay,
             _ => Self::Drop,
         }
-    }
-}
+});
 /// Action to take when restricted gossip can only target the public overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestrictedPublicPayload {
@@ -7446,16 +7361,13 @@ pub enum RestrictedPublicPayload {
     /// Forward to the public overlay (assumes operators provision their own payload protection).
     Forward,
 }
-impl Default for RestrictedPublicPayload {
-    fn default() -> Self {
+impl_default!(RestrictedPublicPayload => {
         match defaults::network::TX_GOSSIP_RESTRICTED_PUBLIC_PAYLOAD {
             "forward" => Self::Forward,
             _ => Self::Refuse,
         }
-    }
-}
-impl Default for DataspaceGossip {
-    fn default() -> Self {
+});
+impl_default!(DataspaceGossip => {
         Self {
             drop_unknown_dataspace: defaults::network::TX_GOSSIP_DROP_UNKNOWN_DATASPACE,
             restricted_target_cap: defaults::network::TX_GOSSIP_RESTRICTED_TARGET_CAP,
@@ -7465,8 +7377,7 @@ impl Default for DataspaceGossip {
             restricted_fallback: DataspaceGossipFallback::default(),
             restricted_public_payload: RestrictedPublicPayload::default(),
         }
-    }
-}
+});
 /// Transaction gossiping parameters.
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionGossiper {
@@ -7542,8 +7453,7 @@ pub struct Webhook {
     /// HTTP read timeout for webhook delivery.
     pub read_timeout: Duration,
 }
-impl Default for Webhook {
-    fn default() -> Self {
+impl_default!(Webhook => {
         Self {
             queue_capacity: NonZeroUsize::new(defaults::torii::WEBHOOK_QUEUE_CAPACITY)
                 .expect("default webhook queue capacity non-zero"),
@@ -7555,8 +7465,7 @@ impl Default for Webhook {
             write_timeout: Duration::from_millis(defaults::torii::WEBHOOK_WRITE_TIMEOUT_MS),
             read_timeout: Duration::from_millis(defaults::torii::WEBHOOK_READ_TIMEOUT_MS),
         }
-    }
-}
+});
 /// Webhook destination security configuration (SSRF guard rails).
 #[derive(Debug, Clone)]
 pub struct WebhookSecurity {
@@ -7565,14 +7474,12 @@ pub struct WebhookSecurity {
     /// CIDR allow-list for webhook destinations (empty => only public IPs are allowed).
     pub allow_cidrs: Vec<String>,
 }
-impl Default for WebhookSecurity {
-    fn default() -> Self {
+impl_default!(WebhookSecurity => {
         Self {
             enabled: defaults::torii::webhook_security::ENABLED,
             allow_cidrs: defaults::torii::webhook_security::allow_cidrs(),
         }
-    }
-}
+});
 /// Push notification delivery configuration (FCM/APNS).
 #[derive(Debug, Clone)]
 pub struct Push {
@@ -7609,8 +7516,7 @@ pub struct Push {
     /// Deprecated static APNs auth token. Kept for configuration compatibility only.
     pub apns_auth_token: Option<String>,
 }
-impl Default for Push {
-    fn default() -> Self {
+impl_default!(Push => {
         Self {
             enabled: defaults::torii::PUSH_ENABLED,
             rate_per_minute: defaults::torii::PUSH_RATE_PER_MINUTE
@@ -7633,8 +7539,7 @@ impl Default for Push {
             apns_endpoint: None,
             apns_auth_token: None,
         }
-    }
-}
+});
 /// Torii API configuration.
 #[derive(Debug, Clone)]
 pub struct Torii {
@@ -7912,8 +7817,7 @@ pub struct ToriiRecipientLookup {
     /// Configured bank Core API routes keyed by canonical FI id.
     pub routes: Vec<ToriiRecipientLookupRoute>,
 }
-impl Default for ToriiRecipientLookup {
-    fn default() -> Self {
+impl_default!(ToriiRecipientLookup => {
         Self {
             policy_id: defaults::torii::recipient_lookup::POLICY_ID
                 .parse()
@@ -7924,8 +7828,7 @@ impl Default for ToriiRecipientLookup {
             ),
             routes: Vec::new(),
         }
-    }
-}
+});
 /// Single bank Core API route used by the retail recipient lookup endpoint.
 #[derive(Debug, Clone)]
 pub struct ToriiRecipientLookupRoute {
@@ -7973,8 +7876,7 @@ pub struct ToriiOperatorSignatures {
     /// Maximum number of nonce entries held for replay detection.
     pub replay_cache_capacity: NonZeroUsize,
 }
-impl Default for ToriiOperatorSignatures {
-    fn default() -> Self {
+impl_default!(ToriiOperatorSignatures => {
         Self {
             enabled: defaults::torii::operator_signatures::ENABLED,
             allow_node_key: defaults::torii::operator_signatures::ALLOW_NODE_KEY,
@@ -7989,8 +7891,7 @@ impl Default for ToriiOperatorSignatures {
             )
             .expect("default operator signature replay cache capacity must be non-zero"),
         }
-    }
-}
+});
 /// Operator authentication configuration for Torii operator endpoints.
 #[derive(Debug, Clone)]
 pub struct ToriiOperatorAuth {
@@ -8015,8 +7916,7 @@ pub struct ToriiOperatorAuth {
     /// WebAuthn configuration (when enabled).
     pub webauthn: Option<OperatorWebAuthnConfig>,
 }
-impl Default for ToriiOperatorAuth {
-    fn default() -> Self {
+impl_default!(ToriiOperatorAuth => {
         let token_fallback = match defaults::torii::operator_auth::TOKEN_FALLBACK {
             "disabled" => OperatorTokenFallback::Disabled,
             "always" => OperatorTokenFallback::Always,
@@ -8039,8 +7939,7 @@ impl Default for ToriiOperatorAuth {
             lockout: OperatorAuthLockout::default(),
             webauthn: None,
         }
-    }
-}
+});
 /// Token fallback policy for operator auth.
 #[derive(Debug, Clone, Copy)]
 pub enum OperatorTokenFallback {
@@ -8093,15 +7992,13 @@ pub struct OperatorAuthLockout {
     /// Lockout duration once triggered.
     pub duration: Duration,
 }
-impl Default for OperatorAuthLockout {
-    fn default() -> Self {
+impl_default!(OperatorAuthLockout => {
         Self {
             failures: NonZeroU32::new(defaults::torii::operator_auth::LOCKOUT_FAILURES),
             window: Duration::from_secs(defaults::torii::operator_auth::LOCKOUT_WINDOW_SECS),
             duration: Duration::from_secs(defaults::torii::operator_auth::LOCKOUT_DURATION_SECS),
         }
-    }
-}
+});
 /// WebAuthn configuration required for operator auth.
 #[derive(Debug, Clone)]
 pub struct OperatorWebAuthnConfig {
@@ -8160,14 +8057,12 @@ pub struct ToriiPeerGeo {
     /// Optional geo endpoint; required and HTTPS-only when lookups are enabled.
     pub endpoint: Option<Url>,
 }
-impl Default for ToriiPeerGeo {
-    fn default() -> Self {
+impl_default!(ToriiPeerGeo => {
         Self {
             enabled: defaults::torii::peer_geo::ENABLED,
             endpoint: defaults::torii::peer_geo::endpoint(),
         }
-    }
-}
+});
 /// Ingress controls for SoraNet privacy telemetry endpoints.
 #[derive(Debug, Clone)]
 pub struct SoranetPrivacyIngest {
@@ -8180,8 +8075,7 @@ pub struct SoranetPrivacyIngest {
     /// CIDR allow-list for trusted submitters; empty -> deny.
     pub allow_cidrs: Vec<String>,
 }
-impl Default for SoranetPrivacyIngest {
-    fn default() -> Self {
+impl_default!(SoranetPrivacyIngest => {
         Self {
             enabled: defaults::torii::soranet_privacy_ingest::ENABLED,
             rate_per_sec: defaults::torii::soranet_privacy_ingest::RATE_PER_SEC
@@ -8190,8 +8084,7 @@ impl Default for SoranetPrivacyIngest {
                 .and_then(std::num::NonZeroU32::new),
             allow_cidrs: defaults::torii::soranet_privacy_ingest::allow_cidrs(),
         }
-    }
-}
+});
 /// Transport-specific configuration exposed by Torii.
 #[derive(Debug, Clone, Default)]
 pub struct ToriiTransport {
@@ -8243,8 +8136,7 @@ pub struct ToriiCors {
     /// Maximum preflight cache age in seconds.
     pub max_age_secs: u64,
 }
-impl Default for ToriiCors {
-    fn default() -> Self {
+impl_default!(ToriiCors => {
         Self {
             enabled: defaults::torii::cors::ENABLED,
             allowed_origins: defaults::torii::cors::allowed_origins(),
@@ -8253,8 +8145,7 @@ impl Default for ToriiCors {
             exposed_headers: defaults::torii::cors::exposed_headers(),
             max_age_secs: defaults::torii::cors::MAX_AGE_SECS,
         }
-    }
-}
+});
 impl From<user::ToriiCors> for ToriiCors {
     fn from(value: user::ToriiCors) -> Self {
         Self {
@@ -8312,8 +8203,7 @@ impl NoritoRpcStage {
         }
     }
 }
-impl Default for NoritoRpcTransport {
-    fn default() -> Self {
+impl_default!(NoritoRpcTransport => {
         Self {
             enabled: defaults::torii::transport::norito_rpc::ENABLED,
             require_mtls: defaults::torii::transport::norito_rpc::REQUIRE_MTLS,
@@ -8323,8 +8213,7 @@ impl Default for NoritoRpcTransport {
             stage: NoritoRpcStage::parse(defaults::torii::transport::norito_rpc::STAGE)
                 .expect("default Norito-RPC stage label is valid"),
         }
-    }
-}
+});
 impl From<user::ToriiTransport> for ToriiTransport {
     fn from(value: user::ToriiTransport) -> Self {
         Self {
@@ -8341,8 +8230,7 @@ impl From<user::ToriiTransport> for ToriiTransport {
         }
     }
 }
-impl Default for ToriiMcp {
-    fn default() -> Self {
+impl_default!(ToriiMcp => {
         Self {
             enabled: defaults::torii::mcp::ENABLED,
             max_request_bytes: defaults::torii::mcp::MAX_REQUEST_BYTES,
@@ -8355,8 +8243,7 @@ impl Default for ToriiMcp {
             rate_per_minute: defaults::torii::mcp::RATE_PER_MINUTE.and_then(NonZeroU32::new),
             burst: defaults::torii::mcp::BURST.and_then(NonZeroU32::new),
         }
-    }
-}
+});
 impl From<user::ToriiMcp> for ToriiMcp {
     fn from(value: user::ToriiMcp) -> Self {
         Self {
@@ -8599,8 +8486,7 @@ impl DaReplicationPolicy {
         (expected, *submitted != *expected)
     }
 }
-impl Default for DaReplicationPolicy {
-    fn default() -> Self {
+impl_default!(DaReplicationPolicy => {
         let default = super::defaults::torii::da_replication_default_policy();
         let overrides = super::defaults::torii::da_replication_overrides()
             .into_iter()
@@ -8613,8 +8499,7 @@ impl Default for DaReplicationPolicy {
             overrides,
             taikai_availability,
         }
-    }
-}
+});
 /// Torii transaction-ingress resource corridor.
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionIngress {
@@ -8627,8 +8512,7 @@ pub struct TransactionIngress {
     /// Absolute deadline for reading one admitted verified-source request body.
     pub verified_source_body_read_timeout: Duration,
 }
-impl Default for TransactionIngress {
-    fn default() -> Self {
+impl_default!(TransactionIngress => {
         Self {
             max_concurrent_compute_jobs:
                 super::defaults::torii::TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS,
@@ -8639,8 +8523,7 @@ impl Default for TransactionIngress {
             verified_source_body_read_timeout:
                 super::defaults::torii::VERIFIED_SOURCE_BODY_READ_TIMEOUT,
         }
-    }
-}
+});
 /// Data-availability ingest configuration.
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)]
@@ -8686,8 +8569,7 @@ pub struct DaTaikaiAnchor {
     /// Poll interval between spool scans.
     pub poll_interval: Duration,
 }
-impl Default for DaIngest {
-    fn default() -> Self {
+impl_default!(DaIngest => {
         Self {
             replay_cache_capacity: super::defaults::torii::DA_REPLAY_CACHE_CAPACITY,
             replay_cache_max_lane_epochs: super::defaults::torii::DA_REPLAY_CACHE_MAX_LANE_EPOCHS,
@@ -8705,8 +8587,7 @@ impl Default for DaIngest {
             rent_policy: DaRentPolicyV1::default(),
             telemetry_cluster_label: None,
         }
-    }
-}
+});
 /// Torii-side SoraFS discovery configuration.
 #[derive(Debug, Clone)]
 pub struct SorafsDiscovery {
@@ -8723,8 +8604,7 @@ pub struct SorafsDiscovery {
     /// Optional publish peer discovery hints served to SoraFS deploy clients.
     pub publish: SorafsPublishDiscovery,
 }
-impl Default for SorafsDiscovery {
-    fn default() -> Self {
+impl_default!(SorafsDiscovery => {
         Self {
             discovery_enabled: super::defaults::torii::SORAFS_DISCOVERY_ENABLED,
             known_capabilities: super::defaults::torii::sorafs_known_capabilities(),
@@ -8735,8 +8615,7 @@ impl Default for SorafsDiscovery {
             admission: None,
             publish: SorafsPublishDiscovery::default(),
         }
-    }
-}
+});
 /// Governance admission registry configuration for SoraFS providers.
 #[derive(Debug, Clone)]
 pub struct SorafsAdmission {
@@ -8769,8 +8648,7 @@ pub struct SorafsRepair {
     /// Concurrent native repair executions per node.
     pub worker_concurrency: usize,
 }
-impl Default for SorafsRepair {
-    fn default() -> Self {
+impl_default!(SorafsRepair => {
         Self {
             enabled: defaults::sorafs::repair::ENABLED,
             claim_ttl_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
@@ -8778,8 +8656,7 @@ impl Default for SorafsRepair {
             max_attempts: defaults::sorafs::repair::MAX_ATTEMPTS,
             worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
         }
-    }
-}
+});
 /// GC scheduler configuration.
 #[derive(Debug, Clone)]
 pub struct SorafsGc {
@@ -8794,8 +8671,7 @@ pub struct SorafsGc {
     /// Grace window for retention expiry (seconds).
     pub retention_grace_secs: u64,
 }
-impl Default for SorafsGc {
-    fn default() -> Self {
+impl_default!(SorafsGc => {
         Self {
             enabled: defaults::sorafs::gc::ENABLED,
             state_dir: defaults::sorafs::gc::state_dir(),
@@ -8803,8 +8679,7 @@ impl Default for SorafsGc {
             max_deletions_per_run: defaults::sorafs::gc::MAX_DELETIONS_PER_RUN,
             retention_grace_secs: defaults::sorafs::gc::RETENTION_GRACE_SECS,
         }
-    }
-}
+});
 /// Proof-of-Retrievability coordinator configuration.
 #[derive(Debug, Clone)]
 pub struct SorafsPor {
@@ -8833,8 +8708,7 @@ pub struct SorafsPor {
     /// Minimum trusted-auditor signature count required on verdicts.
     pub auditor_signature_threshold: NonZeroU16,
 }
-impl Default for SorafsPor {
-    fn default() -> Self {
+impl_default!(SorafsPor => {
         Self {
             enabled: super::defaults::sorafs::por::ENABLED,
             potr_runtime: None,
@@ -8853,8 +8727,7 @@ impl Default for SorafsPor {
             )
             .expect("default PoR auditor signature threshold must be non-zero"),
         }
-    }
-}
+});
 /// Exact non-secret production boundary for PoTR signing and finalized policy reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsPotrRuntimeBinding {
@@ -8935,8 +8808,7 @@ pub struct SorafsPorDrand {
     /// Durable verified high-water path.
     pub state_path: PathBuf,
 }
-impl Default for SorafsPorDrand {
-    fn default() -> Self {
+impl_default!(SorafsPorDrand => {
         Self {
             scheme: String::new(),
             chain_hash: [0; 32],
@@ -8957,8 +8829,7 @@ impl Default for SorafsPorDrand {
             max_future_skew_secs: super::defaults::sorafs::por::DRAND_MAX_FUTURE_SKEW_SECS,
             state_path: super::defaults::sorafs::por::drand_state_path(),
         }
-    }
-}
+});
 /// SoraFS appeal-finance settlement submitter configuration.
 #[derive(Debug, Clone)]
 pub struct SorafsAppealFinanceSettlement {
@@ -8987,8 +8858,7 @@ pub struct SorafsAppealFinanceSettlement {
     /// Maximum canonical checkpoint size.
     pub worker_checkpoint_max_bytes: u64,
 }
-impl Default for SorafsAppealFinanceSettlement {
-    fn default() -> Self {
+impl_default!(SorafsAppealFinanceSettlement => {
         Self {
             asset_definition_id: defaults::torii::sorafs_appeal_finance::asset_definition_id(),
             asset_scale: defaults::torii::sorafs_appeal_finance::ASSET_SCALE,
@@ -9010,8 +8880,7 @@ impl Default for SorafsAppealFinanceSettlement {
             worker_checkpoint_max_bytes:
                 defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES,
         }
-    }
-}
+});
 /// Canonical inline appeal pricing policy carried by the validated config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealPricingPolicy {
@@ -9026,8 +8895,7 @@ pub struct SorafsAppealPricingPolicy {
     /// Complete first-release appeal class inventory.
     pub classes: SorafsAppealPricingClasses,
 }
-impl Default for SorafsAppealPricingPolicy {
-    fn default() -> Self {
+impl_default!(SorafsAppealPricingPolicy => {
         Self {
             version: defaults::torii::sorafs_appeal_finance::BASELINE_POLICY_VERSION.to_owned(),
             quote_ttl_secs: defaults::torii::sorafs_appeal_finance::PRICING_QUOTE_TTL_SECS,
@@ -9035,8 +8903,7 @@ impl Default for SorafsAppealPricingPolicy {
             urgency_multipliers: SorafsAppealUrgencyMultipliers::default(),
             classes: SorafsAppealPricingClasses::default(),
         }
-    }
-}
+});
 /// Canonical urgency multipliers for appeal pricing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealUrgencyMultipliers {
@@ -9045,15 +8912,13 @@ pub struct SorafsAppealUrgencyMultipliers {
     /// Multiplier applied to high-urgency appeals.
     pub high: Numeric,
 }
-impl Default for SorafsAppealUrgencyMultipliers {
-    fn default() -> Self {
+impl_default!(SorafsAppealUrgencyMultipliers => {
         use defaults::torii::sorafs_appeal_finance as policy;
         Self {
             normal: policy::numeric(policy::PRICING_URGENCY_NORMAL_MULTIPLIER),
             high: policy::numeric(policy::PRICING_URGENCY_HIGH_MULTIPLIER),
         }
-    }
-}
+});
 /// Complete, closed first-release appeal pricing class inventory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealPricingClasses {
@@ -9066,8 +8931,7 @@ pub struct SorafsAppealPricingClasses {
     /// Other governed appeals.
     pub other: SorafsAppealPricingClassPolicy,
 }
-impl Default for SorafsAppealPricingClasses {
-    fn default() -> Self {
+impl_default!(SorafsAppealPricingClasses => {
         use defaults::torii::sorafs_appeal_finance as policy;
         Self {
             content: SorafsAppealPricingClassPolicy::baseline(
@@ -9107,8 +8971,7 @@ impl Default for SorafsAppealPricingClasses {
                 policy::PRICING_OTHER_MAX_DEPOSIT_XOR,
             ),
         }
-    }
-}
+});
 /// Canonical pricing parameters for one appeal class.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealPricingClassPolicy {
@@ -9164,16 +9027,14 @@ pub struct SorafsAppealSettlementPolicy {
     /// Complete first-release settlement rule inventory.
     pub rules: SorafsAppealSettlementRules,
 }
-impl Default for SorafsAppealSettlementPolicy {
-    fn default() -> Self {
+impl_default!(SorafsAppealSettlementPolicy => {
         Self {
             version: defaults::torii::sorafs_appeal_finance::BASELINE_POLICY_VERSION.to_owned(),
             default_panel_size: defaults::torii::sorafs_appeal_finance::DEFAULT_PANEL_SIZE,
             panel_rewards: SorafsAppealPanelRewards::default(),
             rules: SorafsAppealSettlementRules::default(),
         }
-    }
-}
+});
 /// Canonical appeal-panel reward schedule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealPanelRewards {
@@ -9182,15 +9043,13 @@ pub struct SorafsAppealPanelRewards {
     /// XOR bonus pool paid once per case.
     pub case_bonus_xor: XorQuantity,
 }
-impl Default for SorafsAppealPanelRewards {
-    fn default() -> Self {
+impl_default!(SorafsAppealPanelRewards => {
         use defaults::torii::sorafs_appeal_finance as policy;
         Self {
             stipend_per_juror_xor: policy::xor_quantity(policy::SETTLEMENT_STIPEND_PER_JUROR_XOR),
             case_bonus_xor: policy::xor_quantity(policy::SETTLEMENT_CASE_BONUS_XOR),
         }
-    }
-}
+});
 /// Complete first-release appeal settlement rule inventory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealSettlementRules {
@@ -9205,8 +9064,7 @@ pub struct SorafsAppealSettlementRules {
     /// Rule applied while an appeal remains escalated.
     pub escalated: SorafsAppealSettlementRule,
 }
-impl Default for SorafsAppealSettlementRules {
-    fn default() -> Self {
+impl_default!(SorafsAppealSettlementRules => {
         use defaults::torii::sorafs_appeal_finance as policy;
         Self {
             decisions: SorafsAppealDecisionRules::default(),
@@ -9227,8 +9085,7 @@ impl Default for SorafsAppealSettlementRules {
                 policy::SETTLEMENT_ESCALATED_TREASURY_RATE,
             ),
         }
-    }
-}
+});
 /// Complete first-release decision settlement rule inventory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealDecisionRules {
@@ -9239,8 +9096,7 @@ pub struct SorafsAppealDecisionRules {
     /// Rule applied when the original decision is modified.
     pub modify: SorafsAppealSettlementRule,
 }
-impl Default for SorafsAppealDecisionRules {
-    fn default() -> Self {
+impl_default!(SorafsAppealDecisionRules => {
         use defaults::torii::sorafs_appeal_finance as policy;
         Self {
             uphold: SorafsAppealSettlementRule::baseline(
@@ -9256,8 +9112,7 @@ impl Default for SorafsAppealDecisionRules {
                 policy::SETTLEMENT_MODIFY_TREASURY_RATE,
             ),
         }
-    }
-}
+});
 /// Canonical refund/treasury fractions for one appeal outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealSettlementRule {
@@ -10237,8 +10092,7 @@ pub struct SorafsEvidenceViewerAuditSchedule {
     /// Delay after a cycle closes before publication, in seconds.
     pub publish_delay_seconds: u64,
 }
-impl Default for SorafsStorage {
-    fn default() -> Self {
+impl_default!(SorafsStorage => {
         Self {
             enabled: defaults::sorafs::storage::ENABLED,
             provider_id: None,
@@ -10283,10 +10137,8 @@ impl Default for SorafsStorage {
             governance_dag_publisher_public_key_hex: None,
             governance_dag_service: SorafsGovernanceDagService::default(),
         }
-    }
-}
-impl Default for SorafsGovernanceDagService {
-    fn default() -> Self {
+});
+impl_default!(SorafsGovernanceDagService => {
         use defaults::sorafs::storage::governance_dag_service as service;
         Self {
             enabled: service::ENABLED,
@@ -10324,10 +10176,8 @@ impl Default for SorafsGovernanceDagService {
             allow_head_bootstrap: service::ALLOW_HEAD_BOOTSTRAP,
             listen_addr: service::LISTEN_ADDR.to_owned(),
         }
-    }
-}
-impl Default for SorafsRuntimeRetention {
-    fn default() -> Self {
+});
+impl_default!(SorafsRuntimeRetention => {
         Self {
             event_history_limit: defaults::sorafs::storage::RUNTIME_EVENT_HISTORY_LIMIT,
             state_entry_limit: defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT,
@@ -10338,10 +10188,8 @@ impl Default for SorafsRuntimeRetention {
             proof_outcome_max_attempts:
                 defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_MAX_ATTEMPTS.get(),
         }
-    }
-}
-impl Default for SorafsPdpProviderPolicy {
-    fn default() -> Self {
+});
+impl_default!(SorafsPdpProviderPolicy => {
         use defaults::sorafs::storage::pdp_provider as pdp;
         Self {
             max_pending_records: pdp::MAX_PENDING_RECORDS,
@@ -10354,10 +10202,8 @@ impl Default for SorafsPdpProviderPolicy {
             max_future_skew_secs: pdp::MAX_FUTURE_SKEW_SECS,
             terminal_retention_secs: pdp::TERMINAL_RETENTION_SECS,
         }
-    }
-}
-impl Default for SorafsOrderbookWorker {
-    fn default() -> Self {
+});
+impl_default!(SorafsOrderbookWorker => {
         use defaults::sorafs::storage::orderbook_worker as worker;
         Self {
             enabled: worker::ENABLED,
@@ -10370,10 +10216,8 @@ impl Default for SorafsOrderbookWorker {
             max_attempts: worker::MAX_ATTEMPTS.get(),
             checkpoint_max_bytes: worker::CHECKPOINT_MAX_BYTES,
         }
-    }
-}
-impl Default for SorafsReserveWorker {
-    fn default() -> Self {
+});
+impl_default!(SorafsReserveWorker => {
         use defaults::sorafs::storage::reserve_worker as worker;
         Self {
             enabled: worker::ENABLED,
@@ -10385,10 +10229,8 @@ impl Default for SorafsReserveWorker {
             max_attempts: worker::MAX_ATTEMPTS.get(),
             checkpoint_max_bytes: worker::CHECKPOINT_MAX_BYTES,
         }
-    }
-}
-impl Default for SorafsPrivacyAggregateSchedule {
-    fn default() -> Self {
+});
+impl_default!(SorafsPrivacyAggregateSchedule => {
         Self {
             enabled: defaults::sorafs::storage::privacy_aggregates::ENABLED,
             cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
@@ -10423,18 +10265,15 @@ impl Default for SorafsPrivacyAggregateSchedule {
             composition_budget_max_publications:
                 defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_MAX_PUBLICATIONS,
         }
-    }
-}
-impl Default for SorafsEvidenceViewerAuditSchedule {
-    fn default() -> Self {
+});
+impl_default!(SorafsEvidenceViewerAuditSchedule => {
         Self {
             enabled: defaults::sorafs::storage::evidence_viewer_audits::ENABLED,
             cycle_seconds: defaults::sorafs::storage::evidence_viewer_audits::CYCLE_SECONDS,
             publish_delay_seconds:
                 defaults::sorafs::storage::evidence_viewer_audits::PUBLISH_DELAY_SECONDS,
         }
-    }
-}
+});
 /// Under-delivery penalty policy enforced for SoraFS providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SorafsPenaltyPolicy {
@@ -10462,8 +10301,7 @@ impl SorafsPenaltyPolicy {
         settlement_window_secs.saturating_mul(u64::from(self.cooldown_windows))
     }
 }
-impl Default for SorafsPenaltyPolicy {
-    fn default() -> Self {
+impl_default!(SorafsPenaltyPolicy => {
         Self {
             utilisation_floor_bps: defaults::governance::sorafs_penalty::UTILISATION_FLOOR_BPS,
             uptime_floor_bps: defaults::governance::sorafs_penalty::UPTIME_FLOOR_BPS,
@@ -10474,8 +10312,7 @@ impl Default for SorafsPenaltyPolicy {
             max_pdp_failures: defaults::governance::sorafs_penalty::MAX_PDP_FAILURES,
             max_potr_breaches: defaults::governance::sorafs_penalty::MAX_POTR_BREACHES,
         }
-    }
-}
+});
 /// Telemetry authentication and replay policy for SoraFS capacity windows.
 #[derive(Debug, Clone)]
 pub struct SorafsTelemetryPolicy {
@@ -10493,8 +10330,7 @@ pub struct SorafsTelemetryPolicy {
     /// Per-provider submitter overrides; when present, this list is enforced instead of the global list.
     pub per_provider_submitters: BTreeMap<ProviderId, Vec<AccountId>>,
 }
-impl Default for SorafsTelemetryPolicy {
-    fn default() -> Self {
+impl_default!(SorafsTelemetryPolicy => {
         Self {
             require_submitter: defaults::governance::sorafs_telemetry::REQUIRE_SUBMITTER,
             require_nonce: defaults::governance::sorafs_telemetry::REQUIRE_NONCE,
@@ -10526,8 +10362,7 @@ impl Default for SorafsTelemetryPolicy {
                 .collect(),
             per_provider_submitters: BTreeMap::new(),
         }
-    }
-}
+});
 /// Optional smoothing parameters for metering outputs.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SorafsMeteringSmoothing {
@@ -10574,8 +10409,7 @@ pub struct SorafsTokenConfig {
     /// Default refresh budget (requests per minute).
     pub default_requests_per_minute: u32,
 }
-impl Default for SorafsTokenConfig {
-    fn default() -> Self {
+impl_default!(SorafsTokenConfig => {
         Self {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
             signer_handle: None,
@@ -10598,8 +10432,7 @@ impl Default for SorafsTokenConfig {
             default_requests_per_minute:
                 defaults::sorafs::storage::tokens::DEFAULT_REQUESTS_PER_MINUTE,
         }
-    }
-}
+});
 /// Per-action quota configuration for SoraFS control-plane endpoints.
 #[derive(Debug, Clone, Copy)]
 pub struct SorafsQuotaWindow {
@@ -10608,14 +10441,12 @@ pub struct SorafsQuotaWindow {
     /// Rolling window duration.
     pub window: Duration,
 }
-impl Default for SorafsQuotaWindow {
-    fn default() -> Self {
+impl_default!(SorafsQuotaWindow => {
         Self {
             max_events: None,
             window: Duration::from_secs(1),
         }
-    }
-}
+});
 /// Consolidated quota configuration for SoraFS control-plane endpoints.
 #[derive(Debug, Clone, Copy)]
 pub struct SorafsQuota {
@@ -10628,8 +10459,7 @@ pub struct SorafsQuota {
     /// Quota applied to proof-of-retrievability submissions.
     pub por_submission: SorafsQuotaWindow,
 }
-impl Default for SorafsQuota {
-    fn default() -> Self {
+impl_default!(SorafsQuota => {
         Self {
             capacity_declaration: SorafsQuotaWindow {
                 max_events: defaults::torii::SORAFS_QUOTA_DECLARATION_MAX_EVENTS
@@ -10651,8 +10481,7 @@ impl Default for SorafsQuota {
                 window: Duration::from_secs(defaults::torii::SORAFS_QUOTA_POR_WINDOW_SECS),
             },
         }
-    }
-}
+});
 /// Alias cache policy shared by Torii gateways and client helpers.
 #[derive(Debug, Clone, Copy)]
 pub struct SorafsAliasCachePolicy {
@@ -10673,8 +10502,7 @@ pub struct SorafsAliasCachePolicy {
     /// Grace period applied to governance rotation events.
     pub governance_grace: Duration,
 }
-impl Default for SorafsAliasCachePolicy {
-    fn default() -> Self {
+impl_default!(SorafsAliasCachePolicy => {
         Self {
             positive_ttl: Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
             refresh_window: Duration::from_secs(defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
@@ -10691,8 +10519,7 @@ impl Default for SorafsAliasCachePolicy {
                 defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS,
             ),
         }
-    }
-}
+});
 /// Staged anonymity rollout policy for SoraNet transports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
@@ -10794,8 +10621,7 @@ pub struct SorafsGateway {
     /// Optional direct-mode override configuration.
     pub direct_mode: Option<SorafsGatewayDirectMode>,
 }
-impl Default for SorafsGateway {
-    fn default() -> Self {
+impl_default!(SorafsGateway => {
         Self {
             require_manifest_envelope: defaults::sorafs::gateway::REQUIRE_MANIFEST_ENVELOPE,
             enforce_admission: defaults::sorafs::gateway::ENFORCE_ADMISSION,
@@ -10813,8 +10639,7 @@ impl Default for SorafsGateway {
             compliance: None,
             direct_mode: None,
         }
-    }
-}
+});
 impl SorafsGateway {
     /// Returns the effective anonymity policy, falling back to the rollout phase when unset.
     #[must_use]
@@ -10833,15 +10658,13 @@ pub struct SorafsGatewaySiteBindings {
     /// Maximum number of host entries accepted from the document.
     pub max_sites: NonZeroUsize,
 }
-impl Default for SorafsGatewaySiteBindings {
-    fn default() -> Self {
+impl_default!(SorafsGatewaySiteBindings => {
         Self {
             path: defaults::sorafs::gateway::site_bindings::path(),
             max_bytes: defaults::sorafs::gateway::site_bindings::MAX_BYTES,
             max_sites: defaults::sorafs::gateway::site_bindings::MAX_SITES,
         }
-    }
-}
+});
 /// Canonical CID-host suffixes for untrusted browser app delivery.
 #[derive(Debug, Clone)]
 pub struct SorafsGatewayCidHostSuffixes {
@@ -10850,14 +10673,12 @@ pub struct SorafsGatewayCidHostSuffixes {
     /// Taira-network CID-host suffix.
     pub taira: String,
 }
-impl Default for SorafsGatewayCidHostSuffixes {
-    fn default() -> Self {
+impl_default!(SorafsGatewayCidHostSuffixes => {
         Self {
             live: defaults::sorafs::gateway::untrusted_hosting::live_cid_host_suffix(),
             taira: defaults::sorafs::gateway::untrusted_hosting::taira_cid_host_suffix(),
         }
-    }
-}
+});
 /// Configuration for serving untrusted apps on CID-derived origins.
 #[derive(Debug, Clone)]
 pub struct SorafsGatewayUntrustedHosting {
@@ -10870,16 +10691,14 @@ pub struct SorafsGatewayUntrustedHosting {
     /// Restrict canonical redirects to browser HTML navigations.
     pub redirect_html_only: bool,
 }
-impl Default for SorafsGatewayUntrustedHosting {
-    fn default() -> Self {
+impl_default!(SorafsGatewayUntrustedHosting => {
         Self {
             enabled: defaults::sorafs::gateway::UNTRUSTED_HOSTING_ENABLED,
             cid_host_suffixes: SorafsGatewayCidHostSuffixes::default(),
             path_gateway_redirect: defaults::sorafs::gateway::PATH_GATEWAY_REDIRECT,
             redirect_html_only: defaults::sorafs::gateway::REDIRECT_HTML_ONLY,
         }
-    }
-}
+});
 /// Rolling-window rate limit applied to gateway clients.
 #[derive(Debug, Clone, Copy)]
 pub struct SorafsGatewayRateLimit {
@@ -10890,16 +10709,14 @@ pub struct SorafsGatewayRateLimit {
     /// Optional temporary ban duration.
     pub ban: Option<Duration>,
 }
-impl Default for SorafsGatewayRateLimit {
-    fn default() -> Self {
+impl_default!(SorafsGatewayRateLimit => {
         Self {
             max_requests: defaults::sorafs::gateway::rate_limit::MAX_REQUESTS
                 .and_then(NonZeroU32::new),
             window: defaults::sorafs::gateway::rate_limit::WINDOW,
             ban: defaults::sorafs::gateway::rate_limit::BAN,
         }
-    }
-}
+});
 /// Challenge toggles for ACME automation.
 #[derive(Debug, Clone, Copy)]
 pub struct SorafsGatewayAcmeChallenges {
@@ -10908,14 +10725,12 @@ pub struct SorafsGatewayAcmeChallenges {
     /// Whether TLS-ALPN-01 challenges should be solved.
     pub tls_alpn_01: bool,
 }
-impl Default for SorafsGatewayAcmeChallenges {
-    fn default() -> Self {
+impl_default!(SorafsGatewayAcmeChallenges => {
         Self {
             dns01: defaults::sorafs::gateway::acme::DNS01,
             tls_alpn_01: defaults::sorafs::gateway::acme::TLS_ALPN_01,
         }
-    }
-}
+});
 /// Exact non-secret identity expected from one injected gateway runtime provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsGatewayRuntimeProviderBinding {
@@ -10952,8 +10767,7 @@ pub struct SorafsGatewayAcme {
     /// Initial ECH enabled state exposed via telemetry.
     pub ech_enabled: bool,
 }
-impl Default for SorafsGatewayAcme {
-    fn default() -> Self {
+impl_default!(SorafsGatewayAcme => {
         Self {
             enabled: defaults::sorafs::gateway::acme::ENABLED,
             provider: None,
@@ -10967,8 +10781,7 @@ impl Default for SorafsGatewayAcme {
             challenges: SorafsGatewayAcmeChallenges::default(),
             ech_enabled: defaults::sorafs::gateway::acme::ECH_ENABLED,
         }
-    }
-}
+});
 /// One governed Ed25519 identity in the gateway compliance policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsGatewayComplianceSigner {
@@ -11075,16 +10888,14 @@ pub struct SorafsAdvertOverrides {
     /// Rendezvous topics broadcast for discovery.
     pub topics: Vec<String>,
 }
-impl Default for SorafsAdvertOverrides {
-    fn default() -> Self {
+impl_default!(SorafsAdvertOverrides => {
         Self {
             stake_pointer: None,
             availability: defaults::sorafs::storage::advert_availability(),
             max_latency_ms: defaults::sorafs::storage::ADVERT_MAX_LATENCY_MS,
             topics: defaults::sorafs::storage::advert_topics(),
         }
-    }
-}
+});
 /// One governed Ed25519 signer authorized to approve SoraFS pin manifests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsPinApprovalSigner {
@@ -11137,8 +10948,7 @@ pub struct SorafsPinPolicyConstraints {
     /// Maximum number of retained direct successors admitted for one manifest.
     pub max_successor_fanout: u32,
 }
-impl Default for SorafsPinPolicyConstraints {
-    fn default() -> Self {
+impl_default!(SorafsPinPolicyConstraints => {
         Self {
             min_replicas_floor: super::defaults::governance::sorafs_pin_policy::MIN_REPLICAS_FLOOR,
             max_replicas_ceiling:
@@ -11161,8 +10971,7 @@ impl Default for SorafsPinPolicyConstraints {
             max_successor_fanout:
                 super::defaults::governance::sorafs_pin_policy::MAX_SUCCESSOR_FANOUT,
         }
-    }
-}
+});
 /// Iroha Connect configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct Connect {
@@ -11337,8 +11146,7 @@ pub struct IsoReferenceData {
     /// Directory where loaded snapshots and provenance metadata should be cached.
     pub cache_dir: Option<PathBuf>,
 }
-impl Default for IsoReferenceData {
-    fn default() -> Self {
+impl_default!(IsoReferenceData => {
         Self {
             refresh_interval: Duration::from_secs(
                 super::defaults::torii::ISO_BRIDGE_REFERENCE_REFRESH_SECS,
@@ -11351,8 +11159,7 @@ impl Default for IsoReferenceData {
             cash_leg_path: None,
             cache_dir: None,
         }
-    }
-}
+});
 /// Zero-knowledge proof configuration namespace.
 #[derive(Debug, Clone)]
 pub struct Zk {
@@ -11479,8 +11286,7 @@ pub struct Sccp {
     /// Maximum BN254 Groth16 pairing-product checks committed in one block.
     pub max_bn254_pairing_checks_per_block: NonZeroU32,
 }
-impl Default for Sccp {
-    fn default() -> Self {
+impl_default!(Sccp => {
         Self {
             max_pending_outbound_messages: defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES,
             max_pending_outbound_payload_bytes:
@@ -11518,8 +11324,7 @@ impl Default for Sccp {
             max_bn254_pairing_checks_per_block:
                 defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_BLOCK,
         }
-    }
-}
+});
 /// CABAC runtime mode compiled into the host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CabacMode {
@@ -11576,11 +11381,9 @@ impl StreamingCodec {
         }
     }
 }
-impl Default for StreamingCodec {
-    fn default() -> Self {
+impl_default!(StreamingCodec => {
         Self::from_defaults()
-    }
-}
+});
 /// Norito streaming configuration used by the runtime.
 #[derive(Debug, Clone)]
 pub struct Streaming {
@@ -11626,11 +11429,9 @@ impl StreamingSync {
         }
     }
 }
-impl Default for StreamingSync {
-    fn default() -> Self {
+impl_default!(StreamingSync => {
         Self::from_defaults()
-    }
-}
+});
 /// SoraNet bridge defaults applied when provisioning streaming privacy routes.
 #[derive(Debug, Clone)]
 pub struct StreamingSoranet {
@@ -11747,8 +11548,7 @@ pub struct Offline {
     /// Estimated decoded Kagemusha verifier budget under the 256 MiB safety ceiling.
     pub kagemusha_max_decoded_bytes: u64,
 }
-impl Default for Offline {
-    fn default() -> Self {
+impl_default!(Offline => {
         Self {
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
@@ -11758,8 +11558,7 @@ impl Default for Offline {
                 defaults::settlement::offline::kagemusha_catalog_qualification_seal_path(),
             kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES,
         }
-    }
-}
+});
 /// Router configuration controlling shadow-price and buffer guard rails.
 #[derive(Debug, Clone, Copy)]
 pub struct Router {
@@ -11778,8 +11577,7 @@ pub struct Router {
     /// Buffer coverage horizon (hours).
     pub buffer_horizon_hours: u16,
 }
-impl Default for Router {
-    fn default() -> Self {
+impl_default!(Router => {
         Self {
             twap_window: Duration::from_secs(defaults::settlement::router::TWAP_WINDOW_SECS),
             epsilon_bps: defaults::settlement::router::EPSILON_BPS,
@@ -11789,8 +11587,7 @@ impl Default for Router {
             buffer_halt_pct: defaults::settlement::router::HALT_PCT,
             buffer_horizon_hours: defaults::settlement::router::BUFFER_HORIZON_HOURS,
         }
-    }
-}
+});
 /// Supported curves for Halo2 verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZkCurve {
@@ -11845,8 +11642,7 @@ pub struct Halo2 {
     /// Require transcript labels to be ASCII.
     pub enforce_transcript_label_ascii: bool,
 }
-impl Default for Halo2 {
-    fn default() -> Self {
+impl_default!(Halo2 => {
         Self {
             enabled: crate::parameters::defaults::zk::halo2::ENABLED,
             curve: ZkCurve::Pallas,
@@ -11871,8 +11667,7 @@ impl Default for Halo2 {
             enforce_transcript_label_ascii:
                 crate::parameters::defaults::zk::halo2::ENFORCE_TRANSCRIPT_LABEL_ASCII,
         }
-    }
-}
+});
 /// Native STARK/FRI verification settings.
 #[derive(Debug, Clone, Copy)]
 pub struct Stark {
@@ -11883,15 +11678,13 @@ pub struct Stark {
     /// Maximum accepted proof payload length (bytes).
     pub max_proof_bytes: usize,
 }
-impl Default for Stark {
-    fn default() -> Self {
+impl_default!(Stark => {
         Self {
             enabled: crate::parameters::defaults::zk::stark::ENABLED,
             max_envelope_bytes: crate::parameters::defaults::zk::stark::MAX_ENVELOPE_BYTES,
             max_proof_bytes: crate::parameters::defaults::zk::stark::MAX_PROOF_BYTES,
         }
-    }
-}
+});
 /// Telemetry capability flags derived from a [`TelemetryProfile`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TelemetryCapabilities {
@@ -11991,11 +11784,9 @@ impl From<user::TelemetryProfile> for TelemetryProfile {
         }
     }
 }
-impl Default for TelemetryCapabilities {
-    fn default() -> Self {
+impl_default!(TelemetryCapabilities => {
         Self::disabled()
-    }
-}
+});
 impl From<TelemetryProfile> for TelemetryCapabilities {
     fn from(profile: TelemetryProfile) -> Self {
         profile.capabilities()
@@ -12042,14 +11833,12 @@ pub struct TelemetryRedaction {
     /// Allow-list of field names exempted from keyword redaction.
     pub allowlist: Vec<String>,
 }
-impl Default for TelemetryRedaction {
-    fn default() -> Self {
+impl_default!(TelemetryRedaction => {
         Self {
             mode: TelemetryRedactionMode::Strict,
             allowlist: Vec::new(),
         }
-    }
-}
+});
 /// Telemetry integrity policy (hash chaining + optional signing key).
 #[derive(Debug, Clone)]
 pub struct TelemetryIntegrity {
@@ -12062,16 +11851,14 @@ pub struct TelemetryIntegrity {
     /// Optional key identifier for rotation workflows.
     pub signing_key_id: Option<String>,
 }
-impl Default for TelemetryIntegrity {
-    fn default() -> Self {
+impl_default!(TelemetryIntegrity => {
         Self {
             enabled: defaults::telemetry::integrity::ENABLED,
             state_dir: None,
             signing_key: None,
             signing_key_id: None,
         }
-    }
-}
+});
 /// Complete configuration needed to start regular telemetry.
 #[derive(Debug, Clone)]
 pub struct Telemetry {
@@ -12168,11 +11955,9 @@ impl Ivm {
         }
     }
 }
-impl Default for Ivm {
-    fn default() -> Self {
+impl_default!(Ivm => {
         Self::from_defaults()
-    }
-}
+});
 /// Startup banner settings.
 #[derive(Debug, Clone, Copy)]
 pub struct Banner {
@@ -12191,11 +11976,9 @@ impl Banner {
         }
     }
 }
-impl Default for Banner {
-    fn default() -> Self {
+impl_default!(Banner => {
         Self::from_defaults()
-    }
-}
+});
 /// Norito codec configuration (actual layer).
 ///
 /// Norito serialization layout and adaptive thresholds are canonical for this
@@ -12378,8 +12161,7 @@ impl FraudMonitoring {
             .find(|attester| attester.engine_id == key)
     }
 }
-impl Default for FraudMonitoring {
-    fn default() -> Self {
+impl_default!(FraudMonitoring => {
         Self {
             enabled: defaults::fraud_monitoring::ENABLED,
             service_endpoints: Vec::new(),
@@ -12391,6 +12173,5 @@ impl Default for FraudMonitoring {
             required_minimum_band: None,
             attesters: Vec::new(),
         }
-    }
-}
+});
 include!("actual/tests.rs");

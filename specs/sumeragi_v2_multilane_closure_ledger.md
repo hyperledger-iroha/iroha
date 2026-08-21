@@ -1734,9 +1734,9 @@ The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
   contains exactly 1,399 grouped and 1,401 diagnostics records. Its grouped and
 diagnostics
 suite-source SHA-256 values are
-  `4d9b205e962935852c69465e0c2f48224f4df93bd206c704df5d0478bd4ee510`
+  `1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`
 and
-  `1044887ddfeb9a1ad16d5d266782317cb37b94878e5d2777b7eea8253aab75ae`.
+  `973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`.
 The checked-in grouped fixture has SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -2043,9 +2043,9 @@ grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
   mutable-tree closure contains exactly 1,399 grouped and 1,401 diagnostics
 records, with grouped and diagnostics suite-source SHA-256 values
-  `4d9b205e962935852c69465e0c2f48224f4df93bd206c704df5d0478bd4ee510`
+  `1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`
 and
-  `1044887ddfeb9a1ad16d5d266782317cb37b94878e5d2777b7eea8253aab75ae`.
+  `973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`.
 The current grouped JSON and wire TSV SHA-256 values are
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and

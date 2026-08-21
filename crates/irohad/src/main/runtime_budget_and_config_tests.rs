@@ -1,5 +1,19 @@
 // Runtime storage-budget and fail-closed daemon configuration regressions.
 #[test]
+fn runtime_budget_rejects_zero_underflow_and_overflow() {
+    for probe in [
+        storage_budget_probe(1_000, 200, 0),
+        storage_budget_probe(1_000, 199, 0),
+        storage_budget_probe(1_000, 1, u64::MAX),
+    ] {
+        assert!(
+            derive_runtime_nexus_storage_budget(&[probe]).is_err(),
+            "invalid capacity arithmetic must fail closed"
+        );
+    }
+}
+
+#[test]
 fn statvfs_capacity_uses_the_fundamental_fragment_size() {
     assert_eq!(statvfs_fragment_size(4_096, 1_048_576), Some(4_096));
     assert_eq!(statvfs_fragment_size(0, 4_096), Some(4_096));

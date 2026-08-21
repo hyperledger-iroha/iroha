@@ -2118,6 +2118,106 @@ fn tc_body_rebind_retires_a_superseded_completion_and_releases_capacity() {
     assert_eq!(executor.pending_work(), 1);
 }
 #[test]
+fn tc_retires_unprotected_retryable_body_token_before_the_next_fetch() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let prepare_a = fixture.qc(wire::GlobalPhase::Prepare);
+    executor
+        .consume_effects(
+            vec![AdapterEffect::FetchBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+                manifest: Some(fixture.manifest.clone()),
+                certified_sources: certified_sources(&fixture, &prepare_a),
+                certificate: Some(prepare_a),
+            }],
+            &mut services,
+        )
+        .expect("begin the fetch later superseded by a different lock");
+    let task_a = services.fetch_tasks[0].clone();
+    let request_hash_a = HashOf::new(
+        task_a
+            .certified_request()
+            .expect("the first Fetch owns its signed certified request"),
+    );
+    let retryable = executor
+        .runtime
+        .reserve_body_available_with_owner(task_a.tag, fixture.manifest.clone(), task_a.ownership())
+        .expect("reserve A's unpublished BodyAvailable completion");
+    assert!(retryable.owns_new_slot());
+    assert_eq!(executor.outstanding_requests.len(), 1);
+    assert_eq!(
+        executor.certified_work.get(&request_hash_a),
+        Some(&task_a.id())
+    );
+    assert_eq!(executor.runtime.reserved_body_available, Some(retryable));
+    assert!(executor.runtime.completions.is_empty());
+
+    let timeout = timeout_at_view(&fixture, 0);
+    executor.runtime.round_tag = Some(tag(1));
+    executor
+        .consume_effects(
+            vec![AdapterEffect::EnterView {
+                tag: tag(1),
+                certificate: timeout,
+                protected_lock: None,
+            }],
+            &mut services,
+        )
+        .expect("the TC retires the unprotected stale fetch and its token");
+    assert!(executor.pending_fetches.is_empty());
+    assert!(executor.certified_work.is_empty());
+    assert!(executor.outstanding_requests.is_empty());
+    assert_eq!(services.cancelled_fetches, vec![task_a.id()]);
+    assert!(executor.runtime.reserved_body_available.is_none());
+    assert!(executor.runtime.completions.is_empty());
+
+    let (subject_b, body_b) = distinct_body(&fixture);
+    let manifest_b = canonical_payload_manifest(
+        &fixture.context,
+        round(&fixture.context, 1),
+        subject_b,
+        &body_b,
+    );
+    let mut prepare_b = fixture.qc(wire::GlobalPhase::Prepare);
+    prepare_b.round = manifest_b.round;
+    prepare_b.proposal_round = manifest_b.round;
+    prepare_b.subject = manifest_b.subject;
+    executor
+        .consume_effects(
+            vec![AdapterEffect::FetchBody {
+                tag: tag(1),
+                round: manifest_b.round,
+                subject: manifest_b.subject,
+                manifest: Some(manifest_b.clone()),
+                certified_sources: certified_sources(&fixture, &prepare_b),
+                certificate: Some(prepare_b),
+            }],
+            &mut services,
+        )
+        .expect("the successor body acquires the released pipeline");
+    let task_b = services
+        .fetch_tasks
+        .last()
+        .expect("replacement fetch")
+        .clone();
+    assert_eq!(
+        executor
+            .complete_body_reconstruction(&task_b, manifest_b.clone(), body_b, &mut services)
+            .expect("the next body publishes after stale-token retirement"),
+        CompletionDisposition::Accepted,
+    );
+    assert!(matches!(
+        executor.runtime.completions.as_slice(),
+        [RuntimeCompletion::BodyAvailable(completion_tag, manifest)]
+            if *completion_tag == tag(1) && manifest == &manifest_b
+    ));
+    assert!(!executor.output_guard.restart_required());
+    assert!(!executor.status().fail_closed);
+}
+#[test]
 fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
     let mut keys = (1_u8..=4)
         .map(|seed| {

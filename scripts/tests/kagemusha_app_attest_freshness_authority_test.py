@@ -395,6 +395,15 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
                     )
                 )
                 self.assertEqual(columns, authority.CHALLENGE_TABLE_COLUMNS)
+                catalog_columns = tuple(
+                    row[1]
+                    for row in state.connection.execute(
+                        "PRAGMA table_info(catalog_revalidations)"
+                    )
+                )
+                self.assertEqual(
+                    catalog_columns, authority.CATALOG_REVALIDATION_TABLE_COLUMNS
+                )
                 self.assertEqual(
                     state.connection.execute("PRAGMA journal_mode").fetchone(),
                     ("wal",),
@@ -407,12 +416,31 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
                     sidecar = Path(str(state.path) + suffix)
                     self.assertTrue(sidecar.is_file())
                     self.assertEqual(sidecar.stat().st_mode & 0o777, 0o600)
+                database_path = state.path
+            legacy = authority.sqlite3.connect(str(database_path))
+            try:
+                legacy.execute("DROP TABLE catalog_revalidations")
+                legacy.execute(
+                    "UPDATE authority_metadata SET schema_version = 1 WHERE singleton = 1"
+                )
+                legacy.commit()
+            finally:
+                legacy.close()
             with authority.AuthorityState(state_dir) as reopened:
                 self.assertEqual(
                     reopened.connection.execute(
                         "SELECT schema_version FROM authority_metadata"
                     ).fetchone(),
                     (authority.STATE_SCHEMA_VERSION,),
+                )
+                self.assertEqual(
+                    tuple(
+                        row[1]
+                        for row in reopened.connection.execute(
+                            "PRAGMA table_info(catalog_revalidations)"
+                        )
+                    ),
+                    authority.CATALOG_REVALIDATION_TABLE_COLUMNS,
                 )
 
     def test_authority_output_is_private_durable_and_never_replaced(self) -> None:
@@ -435,6 +463,76 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
                 )
             self.assertEqual(output.read_bytes(), expected)
 
+    def test_schema_v2_catalog_rows_migrate_to_active_terminal_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            state_dir.mkdir(mode=0o700)
+            database_path = (
+                state_dir / "app-attest-freshness-authority-v1.sqlite3"
+            )
+            legacy = authority.sqlite3.connect(str(database_path))
+            try:
+                legacy.executescript(
+                    """
+                    CREATE TABLE authority_metadata (
+                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                        schema_version INTEGER NOT NULL
+                    );
+                    INSERT INTO authority_metadata VALUES (1, 2);
+                    CREATE TABLE catalog_revalidations (
+                        promotion_id TEXT PRIMARY KEY,
+                        catalog_sha256 TEXT NOT NULL,
+                        receipt_id TEXT NOT NULL UNIQUE,
+                        issued_at_unix_ms INTEGER NOT NULL,
+                        expires_at_unix_ms INTEGER NOT NULL,
+                        authority_key_id TEXT NOT NULL,
+                        authority_public_key_sha256 TEXT NOT NULL,
+                        receipt_payload BLOB NOT NULL,
+                        CHECK (expires_at_unix_ms > issued_at_unix_ms)
+                    );
+                    """
+                )
+                legacy.execute(
+                    """
+                    INSERT INTO catalog_revalidations
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "1" * 64,
+                        "2" * 64,
+                        "3" * 64,
+                        1,
+                        2,
+                        "authority-key",
+                        "4" * 64,
+                        b"{}",
+                    ),
+                )
+                legacy.commit()
+            finally:
+                legacy.close()
+            database_path.chmod(0o600)
+
+            with authority.AuthorityState(state_dir) as migrated:
+                self.assertEqual(
+                    tuple(
+                        row[1]
+                        for row in migrated.connection.execute(
+                            "PRAGMA table_info(catalog_revalidations)"
+                        )
+                    ),
+                    authority.CATALOG_REVALIDATION_TABLE_COLUMNS,
+                )
+                self.assertEqual(
+                    migrated.connection.execute(
+                        """
+                        SELECT state, retired_at_unix_ms
+                          FROM catalog_revalidations WHERE promotion_id = ?
+                        """,
+                        ("1" * 64,),
+                    ).fetchone(),
+                    ("active", None),
+                )
     def test_state_rejects_writable_ancestor_and_preplanted_wal_alias(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             unsafe = Path(temporary) / "unsafe"
@@ -936,6 +1034,386 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
                         consumed_at_unix_ms=now_ms + 2,
                     )
 
+    def test_catalog_promotion_id_is_durable_and_cannot_be_rebound(self) -> None:
+        now_ms = 2_000_000_000_000
+        promotion_id = hashlib.sha256(b"promotion-run-one").hexdigest()
+        bindings = sorted(
+            (
+                {
+                    "release_manifest_sha256": hashlib.sha256(
+                        b"release-one"
+                    ).hexdigest(),
+                    "evidence_sha256": hashlib.sha256(b"evidence-one").hexdigest(),
+                    "consumption_receipt_sha256": hashlib.sha256(
+                        b"consumption-one"
+                    ).hexdigest(),
+                },
+                {
+                    "release_manifest_sha256": hashlib.sha256(
+                        b"release-two"
+                    ).hexdigest(),
+                    "evidence_sha256": hashlib.sha256(b"evidence-two").hexdigest(),
+                    "consumption_receipt_sha256": hashlib.sha256(
+                        b"consumption-two"
+                    ).hexdigest(),
+                },
+            ),
+            key=lambda value: value["release_manifest_sha256"],
+        )
+        statuses = [
+            {
+                **binding,
+                "app_attest_key_id": f"key-{index}",
+                "apple_status_checked_at_unix_ms": now_ms - index,
+                "apple_status": "good",
+                "apple_status_source": production_evidence.ONLINE_REVOCATION_SOURCE,
+                "refreshed_apple_receipt_sha256": hashlib.sha256(
+                    f"apple-{index}".encode()
+                ).hexdigest(),
+                "risk_metric": index,
+            }
+            for index, binding in enumerate(bindings)
+        ]
+        catalog_sha256 = production_evidence.catalog_revalidation_digest(
+            bindings, candidate_evidence
+        )
+        authority_key_sha256 = candidate_evidence.signer_public_key_sha256(
+            self.key_root / "authority.pub.pem"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            with authority.AuthorityState(state_dir) as state:
+                receipt, recovered = state.commit_catalog_revalidation(
+                    promotion_id=promotion_id,
+                    catalog_sha256=catalog_sha256,
+                    release_statuses=statuses,
+                    authority_key_id="authority-key",
+                    authority_public_key_sha256=authority_key_sha256,
+                    issued_at_unix_ms=now_ms,
+                )
+                self.assertFalse(recovered)
+            with authority.AuthorityState(state_dir) as restarted:
+                replayed, recovered = restarted.commit_catalog_revalidation(
+                    promotion_id=promotion_id,
+                    catalog_sha256=catalog_sha256,
+                    release_statuses=statuses,
+                    authority_key_id="authority-key",
+                    authority_public_key_sha256=authority_key_sha256,
+                    issued_at_unix_ms=now_ms + 1,
+                )
+                self.assertTrue(recovered)
+                self.assertEqual(replayed, receipt)
+                substituted = [dict(status) for status in statuses]
+                substituted[0]["risk_metric"] = 99
+                replayed, recovered = restarted.commit_catalog_revalidation(
+                    promotion_id=promotion_id,
+                    catalog_sha256=catalog_sha256,
+                    release_statuses=substituted,
+                    authority_key_id="authority-key",
+                    authority_public_key_sha256=authority_key_sha256,
+                    issued_at_unix_ms=now_ms + 2,
+                )
+                self.assertTrue(recovered)
+                self.assertEqual(replayed, receipt)
+
+                rebound_statuses = [dict(status) for status in statuses]
+                rebound_statuses[0]["evidence_sha256"] = hashlib.sha256(
+                    b"substituted-evidence"
+                ).hexdigest()
+                rebound_bindings = [
+                    {
+                        field: status[field]
+                        for field in production_evidence.CATALOG_REVALIDATION_BINDING_FIELDS
+                    }
+                    for status in rebound_statuses
+                ]
+                rebound_catalog_sha256 = (
+                    production_evidence.catalog_revalidation_digest(
+                        rebound_bindings, candidate_evidence
+                    )
+                )
+                with self.assertRaisesRegex(
+                    authority.AuthorityError, "immutable release catalog"
+                ):
+                    restarted.commit_catalog_revalidation(
+                        promotion_id=promotion_id,
+                        catalog_sha256=rebound_catalog_sha256,
+                        release_statuses=rebound_statuses,
+                        authority_key_id="authority-key",
+                        authority_public_key_sha256=authority_key_sha256,
+                        issued_at_unix_ms=now_ms + 3,
+                    )
+                with self.assertRaisesRegex(
+                    authority.AuthorityError, "another catalog or authority"
+                ):
+                    restarted.commit_catalog_revalidation(
+                        promotion_id=promotion_id,
+                        catalog_sha256=catalog_sha256,
+                        release_statuses=statuses,
+                        authority_key_id="substituted-authority-key",
+                        authority_public_key_sha256=authority_key_sha256,
+                        issued_at_unix_ms=now_ms + 4,
+                    )
+                with self.assertRaisesRegex(
+                    authority.AuthorityError, "already consumed by an expired"
+                ):
+                    expiry_observation = (
+                        now_ms
+                        + production_evidence.MAX_ONLINE_RECEIPT_LIFETIME_MS
+                        + 1
+                    )
+                    restarted.commit_catalog_revalidation(
+                        promotion_id=promotion_id,
+                        catalog_sha256=catalog_sha256,
+                        release_statuses=statuses,
+                        authority_key_id="authority-key",
+                        authority_public_key_sha256=authority_key_sha256,
+                        issued_at_unix_ms=expiry_observation,
+                    )
+                self.assertEqual(
+                    restarted.connection.execute(
+                        """
+                        SELECT state, retired_at_unix_ms
+                          FROM catalog_revalidations WHERE promotion_id = ?
+                        """,
+                        (promotion_id,),
+                    ).fetchone(),
+                    ("expired", expiry_observation),
+                )
+
+                recovery_promotion_id = hashlib.sha256(
+                    b"promotion-run-expired-during-recovery"
+                ).hexdigest()
+                restarted.commit_catalog_revalidation(
+                    promotion_id=recovery_promotion_id,
+                    catalog_sha256=catalog_sha256,
+                    release_statuses=statuses,
+                    authority_key_id="authority-key",
+                    authority_public_key_sha256=authority_key_sha256,
+                    issued_at_unix_ms=now_ms,
+                )
+                with self.assertRaisesRegex(
+                    authority.AuthorityError, "already consumed by an expired"
+                ):
+                    restarted.recover_catalog_revalidation(
+                        promotion_id=recovery_promotion_id,
+                        catalog_sha256=catalog_sha256,
+                        bindings=bindings,
+                        authority_key_id="authority-key",
+                        authority_public_key_sha256=authority_key_sha256,
+                        evaluation_time_unix_ms=expiry_observation,
+                    )
+
+            # A wall-clock rollback, including after restart, cannot revive
+            # either promotion id after its first observed expiry.
+            with authority.AuthorityState(state_dir) as rolled_back:
+                for retired_promotion_id in (
+                    promotion_id,
+                    recovery_promotion_id,
+                ):
+                    with self.assertRaisesRegex(
+                        authority.AuthorityError, "already consumed by an expired"
+                    ):
+                        rolled_back.recover_catalog_revalidation(
+                            promotion_id=retired_promotion_id,
+                            catalog_sha256=catalog_sha256,
+                            bindings=bindings,
+                            authority_key_id="authority-key",
+                            authority_public_key_sha256=authority_key_sha256,
+                            evaluation_time_unix_ms=now_ms + 1,
+                        )
+                with self.assertRaisesRegex(
+                    authority.AuthorityError, "already consumed by an expired"
+                ):
+                    rolled_back.commit_catalog_revalidation(
+                        promotion_id=promotion_id,
+                        catalog_sha256=catalog_sha256,
+                        release_statuses=statuses,
+                        authority_key_id="authority-key",
+                        authority_public_key_sha256=authority_key_sha256,
+                        issued_at_unix_ms=now_ms + 1,
+                    )
+
+    def test_persisted_catalog_record_rejects_row_and_payload_corruption(
+        self,
+    ) -> None:
+        now_ms = 2_000_000_000_000
+        promotion_id = hashlib.sha256(b"persisted-record-promotion").hexdigest()
+        binding = {
+            "release_manifest_sha256": hashlib.sha256(b"manifest").hexdigest(),
+            "evidence_sha256": hashlib.sha256(b"evidence").hexdigest(),
+            "consumption_receipt_sha256": hashlib.sha256(
+                b"consumption"
+            ).hexdigest(),
+        }
+        bindings = [binding]
+        statuses = [
+            {
+                **binding,
+                "app_attest_key_id": "app-attest-key",
+                "apple_status_checked_at_unix_ms": now_ms,
+                "apple_status": "good",
+                "apple_status_source": production_evidence.ONLINE_REVOCATION_SOURCE,
+                "refreshed_apple_receipt_sha256": hashlib.sha256(
+                    b"refreshed"
+                ).hexdigest(),
+                "risk_metric": 3,
+            }
+        ]
+        catalog_sha256 = production_evidence.catalog_revalidation_digest(
+            bindings, candidate_evidence
+        )
+        authority_key_sha256 = candidate_evidence.signer_public_key_sha256(
+            self.key_root / "authority.pub.pem"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            with authority.AuthorityState(Path(temporary) / "state") as state:
+                receipt, recovered = state.commit_catalog_revalidation(
+                    promotion_id=promotion_id,
+                    catalog_sha256=catalog_sha256,
+                    release_statuses=statuses,
+                    authority_key_id="authority-key",
+                    authority_public_key_sha256=authority_key_sha256,
+                    issued_at_unix_ms=now_ms,
+                )
+                self.assertFalse(recovered)
+                row = state.connection.execute(
+                    """
+                    SELECT promotion_id, catalog_sha256, receipt_id,
+                           issued_at_unix_ms, expires_at_unix_ms,
+                           authority_key_id, authority_public_key_sha256,
+                           receipt_payload, state, retired_at_unix_ms
+                      FROM catalog_revalidations WHERE promotion_id = ?
+                    """,
+                    (promotion_id,),
+                ).fetchone()
+                self.assertIsNotNone(row)
+                assert row is not None
+
+                def validate(candidate_row: tuple[object, ...]) -> None:
+                    observed = authority._validate_persisted_catalog_revalidation_record(
+                        candidate_row,
+                        expected_promotion_id=promotion_id,
+                        expected_catalog_sha256=catalog_sha256,
+                        expected_bindings=bindings,
+                        expected_authority_key_id="authority-key",
+                        expected_authority_public_key_sha256=authority_key_sha256,
+                        evaluation_time_unix_ms=now_ms,
+                    )
+                    self.assertEqual(observed.receipt, receipt)
+
+                validate(row)
+
+                def mutate_payload(
+                    mutation: object,
+                ) -> tuple[object, ...]:
+                    value = candidate_evidence.parse_strict_json(
+                        row[7] + b"\n", "persisted catalog test payload"
+                    )
+                    assert callable(mutation)
+                    mutation(value)
+                    changed = list(row)
+                    changed[7] = candidate_evidence.canonical_signature_payload(value)
+                    return tuple(changed)
+
+                payload_mutations = (
+                    ("top-level extra", lambda value: value.__setitem__("extra", 1)),
+                    ("top-level missing", lambda value: value.pop("status")),
+                    (
+                        "nested extra",
+                        lambda value: value["release_statuses"][0].__setitem__(
+                            "extra", 1
+                        ),
+                    ),
+                    (
+                        "nested missing",
+                        lambda value: value["release_statuses"][0].pop(
+                            "risk_metric"
+                        ),
+                    ),
+                    ("schema", lambda value: value.__setitem__("schema", "wrong")),
+                    ("version", lambda value: value.__setitem__("version", True)),
+                    ("status", lambda value: value.__setitem__("status", "good")),
+                    (
+                        "receipt id",
+                        lambda value: value.__setitem__(
+                            "receipt_id", hashlib.sha256(b"other-receipt").hexdigest()
+                        ),
+                    ),
+                    (
+                        "promotion id",
+                        lambda value: value.__setitem__(
+                            "promotion_id", hashlib.sha256(b"other-run").hexdigest()
+                        ),
+                    ),
+                    (
+                        "catalog digest",
+                        lambda value: value.__setitem__(
+                            "catalog_sha256", hashlib.sha256(b"other-catalog").hexdigest()
+                        ),
+                    ),
+                    (
+                        "timestamp",
+                        lambda value: value.__setitem__(
+                            "issued_at_unix_ms", now_ms + 1
+                        ),
+                    ),
+                    (
+                        "signer",
+                        lambda value: value.__setitem__(
+                            "signer_key_id", "other-authority-key"
+                        ),
+                    ),
+                    (
+                        "binding",
+                        lambda value: value["release_statuses"][0].__setitem__(
+                            "evidence_sha256",
+                            hashlib.sha256(b"other-evidence").hexdigest(),
+                        ),
+                    ),
+                )
+                for label, mutation in payload_mutations:
+                    with self.subTest(label=label), self.assertRaises(
+                        authority.AuthorityError
+                    ):
+                        validate(mutate_payload(mutation))
+
+                row_mutations = (
+                    row[:-1],
+                    (*row[:1], hashlib.sha256(b"other-catalog").hexdigest(), *row[2:]),
+                    (*row[:2], hashlib.sha256(b"other-receipt").hexdigest(), *row[3:]),
+                    (*row[:5], "other-authority-key", *row[6:]),
+                    (*row[:6], hashlib.sha256(b"other-authority").hexdigest(), *row[7:]),
+                    (*row[:7], "not-a-blob", *row[8:]),
+                    (*row[:8], "active", now_ms),
+                    (*row[:8], "expired", None),
+                )
+                for index, changed_row in enumerate(row_mutations):
+                    with self.subTest(row_mutation=index), self.assertRaises(
+                        authority.AuthorityError
+                    ):
+                        validate(changed_row)
+
+                noncanonical = list(row)
+                noncanonical[7] = row[7] + b" "
+                with self.assertRaises(authority.AuthorityError):
+                    validate(tuple(noncanonical))
+
+                state.connection.execute(
+                    "UPDATE catalog_revalidations SET receipt_payload = ? "
+                    "WHERE promotion_id = ?",
+                    (row[7] + b" ", promotion_id),
+                )
+                with self.assertRaises(authority.AuthorityError):
+                    state.recover_catalog_revalidation(
+                        promotion_id=promotion_id,
+                        catalog_sha256=catalog_sha256,
+                        bindings=bindings,
+                        authority_key_id="authority-key",
+                        authority_public_key_sha256=authority_key_sha256,
+                        evaluation_time_unix_ms=now_ms + 1,
+                    )
+
     def test_concurrent_substitutions_have_exactly_one_winner(self) -> None:
         now_ms = 2_000_000_000_000
         first = self._fake_validated(evidence_label="first")
@@ -986,6 +1464,91 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
             for thread in threads:
                 thread.join(timeout=10)
             self.assertEqual(sorted(results), ["committed", "rejected"])
+
+    def test_concurrent_catalog_statuses_recover_one_durable_winner(self) -> None:
+        now_ms = 2_000_000_000_000
+        promotion_id = hashlib.sha256(b"concurrent-catalog-promotion").hexdigest()
+        binding = {
+            "release_manifest_sha256": hashlib.sha256(b"manifest").hexdigest(),
+            "evidence_sha256": hashlib.sha256(b"evidence").hexdigest(),
+            "consumption_receipt_sha256": hashlib.sha256(
+                b"consumption"
+            ).hexdigest(),
+        }
+        bindings = [binding]
+        catalog_sha256 = production_evidence.catalog_revalidation_digest(
+            bindings, candidate_evidence
+        )
+        authority_key_sha256 = candidate_evidence.signer_public_key_sha256(
+            self.key_root / "authority.pub.pem"
+        )
+
+        def statuses(sequence: int) -> list[dict[str, object]]:
+            return [
+                {
+                    **binding,
+                    "app_attest_key_id": "app-attest-key",
+                    "apple_status_checked_at_unix_ms": now_ms - sequence,
+                    "apple_status": "good",
+                    "apple_status_source": production_evidence.ONLINE_REVOCATION_SOURCE,
+                    "refreshed_apple_receipt_sha256": hashlib.sha256(
+                        f"refreshed-{sequence}".encode()
+                    ).hexdigest(),
+                    "risk_metric": sequence,
+                }
+            ]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            with authority.AuthorityState(state_dir):
+                pass
+            barrier = threading.Barrier(2)
+            results: list[tuple[dict[str, object], bool]] = []
+            failures: list[BaseException] = []
+            lock = threading.Lock()
+
+            def worker(sequence: int) -> None:
+                try:
+                    with authority.AuthorityState(state_dir) as worker_state:
+                        barrier.wait(timeout=5)
+                        result = worker_state.commit_catalog_revalidation(
+                            promotion_id=promotion_id,
+                            catalog_sha256=catalog_sha256,
+                            release_statuses=statuses(sequence),
+                            authority_key_id="authority-key",
+                            authority_public_key_sha256=authority_key_sha256,
+                            issued_at_unix_ms=now_ms,
+                        )
+                except BaseException as error:
+                    with lock:
+                        failures.append(error)
+                else:
+                    with lock:
+                        results.append(result)
+
+            threads = [
+                threading.Thread(target=worker, args=(sequence,))
+                for sequence in (1, 2)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=15)
+                self.assertFalse(thread.is_alive())
+            self.assertEqual(failures, [])
+            self.assertEqual(sorted(recovered for _, recovered in results), [False, True])
+            self.assertEqual(results[0][0], results[1][0])
+            self.assertEqual(
+                candidate_evidence.canonical_signature_payload(results[0][0]),
+                candidate_evidence.canonical_signature_payload(results[1][0]),
+            )
+            with authority.AuthorityState(state_dir) as state:
+                self.assertEqual(
+                    state.connection.execute(
+                        "SELECT COUNT(*) FROM catalog_revalidations"
+                    ).fetchone(),
+                    (1,),
+                )
 
     def test_complete_evidence_consumes_after_commit_and_recovers_crash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1156,6 +1719,170 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
                 evaluation_time_unix_ms=now_ms + 1,
             )
             self.assertEqual(errors, [])
+
+    def test_two_time_separated_releases_receive_one_current_catalog_receipt(
+        self,
+    ) -> None:
+        now_ms = authority._now_ms()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixtures: list[fixture_support.ProductionFixture] = []
+            measurements: list[Path] = []
+            for index, age_days in enumerate((2, 1), start=1):
+                release_root = root / f"release-{index}"
+                release_root.mkdir(mode=0o700)
+                fixture = fixture_support.ProductionFixture(
+                    fixture_support.Fixture(
+                        release_root,
+                        self.key_root / "lab.key.pem",
+                        self.key_root / "lab.pub.pem",
+                    ),
+                    self.key_root / "authority.key.pem",
+                    self.key_root / "authority.pub.pem",
+                    release_manifest_sha256=hashlib.sha256(
+                        f"release-manifest-{index}".encode()
+                    ).hexdigest(),
+                    evaluated_at_unix_ms=(
+                        now_ms - age_days * 24 * 60 * 60 * 1000
+                    ),
+                )
+                measurement = root / f"capture-measurements-{index}.json"
+                candidate_evidence.write_private_json(
+                    measurement, fixture.capture_app_code_sign_measurements
+                )
+                fixtures.append(fixture)
+                measurements.append(measurement)
+            self.assertEqual(
+                fixtures[0].policy.read_bytes(), fixtures[1].policy.read_bytes()
+            )
+            promotion_id = hashlib.sha256(b"catalog-promotion-run").hexdigest()
+            request = {
+                "schema": authority.CATALOG_REVALIDATION_REQUEST_SCHEMA,
+                "version": 1,
+                "promotion_id": promotion_id,
+                "releases": [
+                    {
+                        "evidence_path": str(fixture.evidence.resolve()),
+                        "artifact_root": str(fixture.raw.resolve()),
+                        "consumption_receipt_path": str(
+                            fixture.freshness_receipt.resolve()
+                        ),
+                        "capture_app_code_sign_measurements_path": str(
+                            measurement.resolve()
+                        ),
+                    }
+                    for fixture, measurement in reversed(
+                        list(zip(fixtures, measurements))
+                    )
+                ],
+            }
+            request_path = root / "catalog-revalidation-request.json"
+            candidate_evidence.write_private_json(request_path, request)
+            output = root / "catalog-revalidation-receipt.json"
+            refreshed = self._cms_receipt(
+                app_id="A1B2C3D4E5.org.hyperledger.iroha.kagemusha.appattestlab",
+                public_key=fixtures[0].assertion_public_key,
+                creation=datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc),
+            )
+            jwt_path = self._write_jwt(root, "A1B2C3D4E5", now_ms)
+            with authority.AuthorityState(root / "state") as state:
+                with self.assertRaisesRegex(RuntimeError, "synthetic catalog crash"):
+                    authority.revalidate_catalog(
+                        state,
+                        request_path=request_path,
+                        production_policy_path=fixtures[0].policy,
+                        trusted_lab_key_id=fixtures[0].key_id,
+                        trusted_lab_public_key_path=fixtures[0].public_key,
+                        original_receipt_authority_key_id=(
+                            fixtures[0].freshness_key_id
+                        ),
+                        original_receipt_authority_public_key_path=(
+                            fixtures[0].freshness_public_key
+                        ),
+                        authority_key_id=fixtures[0].freshness_key_id,
+                        authority_private_key_path=(
+                            self.key_root / "authority.key.pem"
+                        ),
+                        authority_public_key_path=(
+                            self.key_root / "authority.pub.pem"
+                        ),
+                        maximum_risk_metric=3,
+                        devicecheck_jwt_file=jwt_path,
+                        output_path=output,
+                        apple_transport=lambda embedded, _jwt: (
+                            refreshed
+                            if embedded == b"synthetic-receipt-not-production"
+                            else b"substituted"
+                        ),
+                        evaluation_time=lambda: now_ms,
+                        after_commit=lambda: (_ for _ in ()).throw(
+                            RuntimeError("synthetic catalog crash")
+                        ),
+                        apple_root_path=self.key_root / "apple-test-root.pem",
+                        openssl_path=Path("/usr/bin/openssl"),
+                        expected_apple_root_sha256=self._root_digest("apple-test"),
+                    )
+                self.assertFalse(output.exists())
+                self.assertEqual(
+                    state.connection.execute(
+                        "SELECT COUNT(*) FROM catalog_revalidations"
+                    ).fetchone(),
+                    (1,),
+                )
+            with authority.AuthorityState(root / "state") as restarted:
+                receipt = authority.revalidate_catalog(
+                    restarted,
+                    request_path=request_path,
+                    production_policy_path=fixtures[0].policy,
+                    trusted_lab_key_id=fixtures[0].key_id,
+                    trusted_lab_public_key_path=fixtures[0].public_key,
+                    original_receipt_authority_key_id=(
+                        fixtures[0].freshness_key_id
+                    ),
+                    original_receipt_authority_public_key_path=(
+                        fixtures[0].freshness_public_key
+                    ),
+                    authority_key_id=fixtures[0].freshness_key_id,
+                    authority_private_key_path=(
+                        self.key_root / "authority.key.pem"
+                    ),
+                    authority_public_key_path=(
+                        self.key_root / "authority.pub.pem"
+                    ),
+                    maximum_risk_metric=3,
+                    output_path=output,
+                    apple_transport=lambda _embedded, _jwt: (_ for _ in ()).throw(
+                        AssertionError("crash recovery must not call Apple")
+                    ),
+                    evaluation_time=lambda: now_ms + 1,
+                )
+            self.assertTrue(output.is_file())
+            self.assertEqual(len(receipt["release_statuses"]), 2)
+            bindings = sorted(
+                (
+                    production_evidence.catalog_revalidation_binding(
+                        fixture.release_manifest_sha256,
+                        fixture.evidence.read_bytes(),
+                        fixture.freshness_receipt.read_bytes(),
+                    )
+                    for fixture in fixtures
+                ),
+                key=lambda value: value["release_manifest_sha256"],
+            )
+            validation_errors = (
+                production_evidence.validate_catalog_revalidation_receipt(
+                    output,
+                    fixtures[0].freshness_key_id,
+                    fixtures[0].freshness_public_key,
+                    promotion_id,
+                    bindings,
+                    fixtures[0].key_id,
+                    fixtures[0].public_key,
+                    candidate_evidence,
+                    evaluation_time_unix_ms=now_ms + 1,
+                )
+            )
+            self.assertEqual(validation_errors, [])
 
     @staticmethod
     def _write_jwt(directory: Path, team_id: str, now_ms: int) -> Path:

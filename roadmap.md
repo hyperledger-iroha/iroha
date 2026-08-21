@@ -7,6 +7,27 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Workspace review closure
 
+- Run the remaining release-wide workspace matrix against the regenerated
+  eight-limb Blake2b-256 FastPQ proof/trace fixtures and the first-release AXT
+  hard cut. Retired single-field metadata proofs, pre-incarnation handles, and
+  pre-ratchet snapshots must not be accepted or migrated by relabelling;
+  pre-transition-set block results and fixtures must be regenerated rather
+  than defaulting the required set to empty.
+
+- TODO: add an authenticated cancellation/rebind protocol for an exact pending
+  QueuePlan whose fresh dataspace/role topology changes (for example after an
+  SNS lease transition). Candidate assembly now defers such work without
+  poisoning proposals, but the immutable obligation otherwise remains pending
+  until canonical application.
+- TODO: specify and implement authenticated, irreversible AXT family retirement,
+  deterministic family-budget compaction, and per-issuer admission quotas using
+  the permanent dataspace generation and exact asset incarnation. V1 retains
+  every cumulative family record until a consensus retirement proof and
+  resource policy are specified and audited. Capacity-only or unaudited expiry
+  eviction is not acceptable because it can reset remaining allowance without
+  proving that the exact signed family is permanently unusable; a future
+  strict-after expiry rule may participate only as one authenticated input to
+  that irreversible retirement proof.
 - Validate the bounded high-view pacemaker and corrected selected-Serve
   late-Fetch regression in the four-validator loss/hold/heal corridor. The
   promotion canary must submit real work, observe it commit within the finite
@@ -1094,9 +1115,9 @@ contains 84 legs, 864/864 production tests across 43 modules, 522/522 G-UNIT
 rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The grouped SDK closure is 1,399 paths at
-`4d9b205e962935852c69465e0c2f48224f4df93bd206c704df5d0478bd4ee510`,
+`1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`,
 and diagnostics is 1,401 paths at
-`1044887ddfeb9a1ad16d5d266782317cb37b94878e5d2777b7eea8253aab75ae`.
+`973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`.
 The newly declared Java typed-intent path remains untracked, so the exact
 tracked-source gate still awaits authorized staging. These are mutable-tree
 source inventories, not a sealed receipt.
@@ -1190,9 +1211,9 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 52 parents and 316
+source check. The reviewed Rust include topology contains 58 parents and 371
 direct entries; its canonical payload SHA-256 is
-`1688c7fe596fd8216c6705e66b7e8281dde732cf8e4ab4ce1faa6bee8d4cb137`.
+`57f78fbce0ece469dd6c7c821ebb727d5df0d14773dd497c2820452c335dd213`.
 The release-inventory contract is statically reconciled at 84/864/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker and static Apalache-runner contract remain under current-source
@@ -1208,9 +1229,9 @@ hashes to
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`;
 its staged grouped and diagnostics suite-source manifests contain 1,399 and
 1,401 records respectively and hash to
-`4d9b205e962935852c69465e0c2f48224f4df93bd206c704df5d0478bd4ee510`
+`1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`
 and
-`1044887ddfeb9a1ad16d5d266782317cb37b94878e5d2777b7eea8253aab75ae`;
+`973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`;
 the synchronized 48-line wire TSV hashes to
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The current grouped harness inventories OpenAPI `7`, Python `63`, JavaScript
@@ -1307,9 +1328,9 @@ The remaining work is evidence-driven and must stay in order:
   `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`,
   staged grouped/diagnostics suite-source manifests at exactly 1,399 and 1,401
   records with SHA-256 values
-  `4d9b205e962935852c69465e0c2f48224f4df93bd206c704df5d0478bd4ee510`
+  `1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`
   and
-  `1044887ddfeb9a1ad16d5d266782317cb37b94878e5d2777b7eea8253aab75ae`,
+  `973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
   `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.

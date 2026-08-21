@@ -392,6 +392,7 @@ def test_repository_verus_evidence_binds_extracted_runtime_providers() -> None:
     module = load_module()
     providers = {
         "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "crates/iroha_core/src/sumeragi/v2_wire_registry_and_authentication.rs",
         "crates/iroha_core/src/sumeragi/v2_ready_durable_validate_adapter_preview.rs",
         "crates/iroha_core/src/sumeragi/v2_runtime_effect_ownership_core_impl.rs",
         "crates/iroha_core/src/sumeragi/v2_runtime_effect_ownership_rebind_impl.rs",
@@ -406,6 +407,7 @@ def test_repository_verus_evidence_binds_extracted_runtime_providers() -> None:
     assert adapter.count(
         'include!("v2_authenticated_recovered_adapter_startup_impl.rs");'
     ) == 1
+    assert adapter.count('include!("v2_wire_registry_and_authentication.rs");') == 1
     assert adapter.count('include!("v2_ready_durable_validate_adapter_preview.rs");') == 1
     assert runtime.count('include!("v2_runtime_effect_ownership_core_impl.rs");') == 1
     assert runtime.count(

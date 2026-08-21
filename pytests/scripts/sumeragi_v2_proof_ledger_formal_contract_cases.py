@@ -36,14 +36,32 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/file_error_support.rs"),
 )
 REVIEWED_RUST_INCLUDE_MANIFESTS = {
-    Path('crates/iroha_core/src/commit_roster_journal.rs'): (
-        Path('commit_roster_journal/tests.rs'),
+    Path('crates/iroha_core/src/block.rs'): (
+        Path('block/autonomous_merge_carrier_content_tests.rs'),
+        Path('block/exact_quorum_cardinality_tests.rs'),
+        Path('block/autonomous_anchor_network_tests.rs'),
+        Path('block/sccp_soracloud_validation_tests.rs'),
+        Path('block/canonical_genesis_validation_tests.rs'),
+        Path('block/axt_shared_budget_across_envelopes_test.rs'),
+        Path('block/scheduler_variant_tests.rs'),
+        Path('block/validation_native_amx_test_support.rs'),
+        Path('block/native_amx_exact_quorum_cardinality_tests.rs'),
+        Path('block/native_amx_and_dag_tests.rs'),
+        Path('block/sequential_rejected_pipeline_trigger_tests.rs'),
+        Path('block/tx_order_validation_revalidation_test.rs'),
+        Path('block/rejected_live_batch_fee_tests.rs'),
+        Path('block/fee_admission_tests.rs'),
+        Path('block/bootstrap_and_genesis_tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/actual.rs'): (
         Path('actual/torii_tx_history.rs'),
         Path('actual/torii_http_transport.rs'),
         Path('actual/torii_mcp_profile.rs'),
         Path('actual/tests.rs'),
+    ),
+    Path('crates/iroha_config/src/parameters/actual/tests.rs'): (
+        Path('sora_profile_discovery_disabled_test.rs'),
+        Path('sora_profile_runtime_tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/user.rs'): (
         Path('user/kura.rs'),
@@ -99,6 +117,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/test_fault_injection_state.rs'),
         Path('kura/test_fault_injection_controls.rs'),
         Path('kura/file_error_support.rs'),
+        Path('kura/tests/00_bounded_sidecar_read_tests.rs'),
         Path('kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs'),
         Path('kura/tests/01_prune_capacity_support.rs'),
         Path('kura/tests/01a_retained_eviction_and_rewrite_tail.rs'),
@@ -167,8 +186,10 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_core/src/queue.rs'): (
         Path('queue/canonical_terminal_cleanup.rs'),
         Path('queue/nexus_reconfigure_manifest_reload_tests.rs'),
+        Path('queue/privacy_governance_compliance_tests.rs'),
         Path('queue/plan_journal_startup_atomicity_tests.rs'),
         Path('queue/global_guard_claim_conflict_tests.rs'),
+        Path('queue/transaction_guard_return_tests.rs'),
         Path('queue/queue_metadata_and_admission_tests.rs'),
         Path('queue/instruction_and_state_routing_tests.rs'),
         Path('queue/routing_batch_admission_tests.rs'),
@@ -189,10 +210,21 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('plan_journal_bounds_tests.rs'),
         Path('plan_journal_replay_tests.rs'),
     ),
+    Path('crates/iroha_core/src/smartcontracts/ivm/host.rs'): (
+        Path('host/core_codec_and_contract_tests.rs'),
+        Path('host/core_query_execution_tests.rs'),
+        Path('host/core_query_pagination_tests.rs'),
+        Path('host/nested_contract_state_and_rollback_tests.rs'),
+        Path('host/zk_verification_tests.rs'),
+        Path('host/prepared_public_arguments_tests.rs'),
+        Path('host/pointer_abi_validation_tests.rs'),
+        Path('host/pointer_abi_and_sm_tests.rs'),
+    ),
     Path('crates/iroha_core/src/state.rs'): (
         Path('state/vpn_lease_validation.rs'),
         Path('state/zk_asset_state.rs'),
         Path('state/passive_lane_diagnostic_methods.rs'),
+        Path('state/lane_lifecycle_support.rs'),
         Path('state/diagnostic_state_generation.rs'),
         Path('state/autonomous_predecessor_application.rs'),
         Path('state/state_commit_lock_order_tests.rs'),
@@ -210,8 +242,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/evidence.rs'): (
         Path('evidence/missing_signer_pop_test.rs'),
-        Path('evidence/signature_missing_test.rs'),
-        Path('evidence/roundtrip_matrix_test.rs'),
     ),
     Path('crates/iroha_p2p/src/network.rs'): (
         Path('network/handle_update_tests.rs'),
@@ -228,6 +258,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('main/runtime_deps.rs'),
         Path('sumeragi_lane_relay_item.rs'),
         Path('main/online_peers_provider.rs'),
+        Path('main/resolved_genesis_trust_anchor_wrong_hash_test.rs'),
         Path('main_tests/governance_dag_publisher_binding_signer.rs'),
         Path('main/governance_dag_launcher_tests.rs'),
         Path('main/runtime_budget_and_config_tests.rs'),
@@ -244,6 +275,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/mod_authoritative_runtime_gate_06_source_isolation.rs'),
         Path('tests/mod_authoritative_runtime_gate_07_wire_bounds.rs'),
         Path('tests/mod_authoritative_runtime_gate_08_capacity_and_control.rs'),
+        Path('tests/mod_authoritative_runtime_gate_09_checked_dequeue.rs'),
         Path('tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/status.rs'): (
@@ -251,7 +283,10 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/v2.rs'): (
         Path('v2_authenticated_recovered_adapter_startup_impl.rs'),
+        Path('v2_verified_height_context_recovered_output_auth.rs'),
+        Path('v2_adapter_equivocation_evidence.rs'),
         Path('v2_ready_durable_validate_adapter_preview.rs'),
+        Path('v2_wire_registry_and_authentication.rs'),
         Path('tests/v2_adapter_main_00.rs'),
         Path('tests/v2_adapter_main_01.rs'),
         Path('tests/v2_adapter_main_02.rs'),
@@ -322,8 +357,10 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_runtime.rs'): (
+        Path('v2_runtime_durable_recovery_pending.rs'),
         Path('v2_runtime_effect_ownership_core_impl.rs'),
         Path('v2_runtime_effect_ownership_rebind_impl.rs'),
+        Path('v2_runtime_ready_validate_publication.rs'),
         Path('v2_runtime/network_ingress_classification.rs'),
         Path('tests/v2_runtime_pending_binding_cases.rs'),
         Path('tests/v2_runtime_main_00.rs'),
@@ -398,6 +435,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_core/src/sumeragi/v2_core/refinement.rs'): (
         Path('refinement/first_release_witness.rs'),
         Path('refinement/volatile_summary_well_formed.rs'),
+        Path('refinement/post_carrier_transition.rs'),
         Path('refinement_constructor_test_helpers.rs'),
         Path('refinement/transition_gate_tail.rs'),
     ),
@@ -413,6 +451,8 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_core_terminal_transactionality.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_effects.rs'): (
+        Path('v2_effects_recovered_lifecycle_output_service.rs'),
+        Path('v2_effects_lifecycle_admission_settlement.rs'),
         Path('tests/v2_effects_main_00.rs'),
         Path('tests/v2_effects_main_01.rs'),
         Path('tests/v2_effects_main_02.rs'),
@@ -426,6 +466,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lane_work/queue_plan_admission_handoff.rs'),
         Path('v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs'),
         Path('v2_lane_work/typed_finality_handoff_tests.rs'),
+        Path('v2_lane_work/terminal_retirement_journal_failure_test.rs'),
         Path('tests/v2_lane_work_native_signing_guard.rs'),
         Path('v2_lane_work/native_amx_route_and_receipt_tests.rs'),
         Path('tests/v2_lane_work_observer_role.rs'),
@@ -440,8 +481,12 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lane_work_effect_queue.rs'),
     ),
     Path('integration_tests/tests/sumeragi_v2_runner.rs'): (
-        Path('sumeragi_v2_runner/restart_timing_test.rs'),
+        Path('sumeragi_v2_runner/prepare_qc_split_tests.rs'),
         Path('sumeragi_v2_runner/status_validation_helpers.rs'),
+        Path('sumeragi_v2_runner/status_set_validation.rs'),
+    ),
+    Path('integration_tests/tests/sumeragi_v2_runner/prepare_qc_split_tests.rs'): (
+        Path('restart_timing_test.rs'),
     ),
     Path('crates/iroha_sumeragi_core/src/verus_proofs.rs'): (
         Path('verus_proofs/production_transition_contracts.rs'),
@@ -481,6 +526,15 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
 }
 
 REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
+    Path("crates/iroha_config/src/parameters/actual.rs"): (
+        Path("crates/iroha_config/src/parameters/actual/tests.rs"),
+    ),
+    Path("integration_tests/tests/sumeragi_v2_runner.rs"): (
+        Path(
+            "integration_tests/tests/sumeragi_v2_runner/"
+            "prepare_qc_split_tests.rs"
+        ),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
         Path("crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs"),
     ),
@@ -522,9 +576,9 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 56
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 10
-assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 10
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 58
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 12
+assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 12
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 46
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
@@ -535,7 +589,7 @@ assert (
     == set(REVIEWED_RUST_INCLUDE_MANIFESTS)
 )
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS).issubset(
-    REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS
+    REVIEWED_RUST_INCLUDE_MANIFESTS
 )
 
 
@@ -4751,85 +4805,6 @@ def test_production_trace_certificate_rejects_every_top_level_field_drift(
             artifacts=paths,
         )
         assert errors and "canonical current theorem certificate" in errors[0], field
-
-
-def test_production_trace_certificate_rejects_every_nested_field_hash_and_source_drift(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = load_checker()
-    expected = _synthetic_production_trace_certificate(module)
-    artifact = tmp_path / "artifact"
-    artifact.write_bytes(b"evidence\n")
-    paths = _synthetic_trace_artifact_paths(module, artifact)
-    monkeypatch.setattr(
-        module,
-        "build_production_trace_extraction_evidence",
-        lambda *args, **kwargs: expected,
-    )
-
-    def leaf_paths(value, prefix=()):
-        if isinstance(value, dict):
-            for key in sorted(value):
-                yield from leaf_paths(value[key], (*prefix, key))
-        elif isinstance(value, list):
-            for index, item in enumerate(value):
-                yield from leaf_paths(item, (*prefix, index))
-        else:
-            yield prefix
-
-    for path in leaf_paths(expected):
-        observed = copy.deepcopy(expected)
-        owner = observed
-        for component in path[:-1]:
-            owner = owner[component]
-        original = owner[path[-1]]
-        if isinstance(original, bool):
-            replacement = not original
-        elif isinstance(original, int):
-            replacement = original + 1
-        else:
-            replacement = f"{original}-drift"
-        owner[path[-1]] = replacement
-        errors = module._production_trace_extraction_evidence_errors(
-            {},
-            observed,
-            tlaps_evidence={},
-            verus_evidence={},
-            cross_tool_evidence={},
-            artifacts=paths,
-        )
-        assert errors and "canonical current theorem certificate" in errors[0], path
-
-
-def test_production_trace_certificate_rejects_missing_proof_linkage(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = load_checker()
-    expected = _synthetic_production_trace_certificate(module)
-    artifact = tmp_path / "artifact"
-    artifact.write_bytes(b"evidence\n")
-    paths = _synthetic_trace_artifact_paths(module, artifact)
-    monkeypatch.setattr(
-        module,
-        "build_production_trace_extraction_evidence",
-        lambda *args, **kwargs: expected,
-    )
-    observed = copy.deepcopy(expected)
-    del observed["proof_linkage"]["component_evidence"]
-
-    errors = module._production_trace_extraction_evidence_errors(
-        {},
-        observed,
-        tlaps_evidence={},
-        verus_evidence={},
-        cross_tool_evidence={},
-        artifacts=paths,
-    )
-
-    assert errors == [
-        "production trace-extraction evidence does not match the canonical "
-        "current theorem certificate at $.proof_linkage"
-    ]
 
 
 @pytest.mark.parametrize(

@@ -113,6 +113,37 @@ const AUTHENTICATED_ARTIFACT_ROLES_V4: [(
         KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
     ),
 ];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReleaseInventoryStateV4 {
+    Candidate,
+    Promoted,
+}
+impl ReleaseInventoryStateV4 {
+    const fn includes_promotion_record(self) -> bool {
+        matches!(self, Self::Promoted)
+    }
+    const fn exact_file_count(self) -> usize {
+        match self {
+            Self::Candidate => 16,
+            Self::Promoted => 17,
+        }
+    }
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Candidate => "pre-promotion candidate",
+            Self::Promoted => "promoted release",
+        }
+    }
+}
+fn verify_publish_verify_release_v4<T, V, P>(mut verify: V, publish: P) -> Result<T>
+where
+    V: FnMut(ReleaseInventoryStateV4) -> Result<T>,
+    P: FnOnce(&T) -> Outcome,
+{
+    let candidate = verify(ReleaseInventoryStateV4::Candidate)?;
+    publish(&candidate)?;
+    verify(ReleaseInventoryStateV4::Promoted)
+}
 fn validate_artifacts_sequentially<I, T, E, F>(
     artifacts: I,
     mut validate: F,
@@ -155,7 +186,7 @@ enum Command {
 }
 #[derive(Debug, ClapArgs)]
 struct VerifyReleaseV4Args {
-    /// Immutable directory containing the exact ABI-21/V4 release inventory.
+    /// Immutable directory containing the exact seventeen-file promoted ABI-21/V4 inventory.
     #[arg(long)]
     bundle_dir: PathBuf,
     /// Canonical release policy provisioned alongside the candidate release.
@@ -173,13 +204,13 @@ struct VerifyReleaseV4Args {
 }
 #[derive(Debug, ClapArgs)]
 struct PromoteReleaseV4Args {
-    /// Immutable directory containing the exact ABI-21/V4 release inventory.
+    /// Directory containing the exact sixteen-file pre-promotion ABI-21/V4 candidate.
     #[arg(long)]
     bundle_dir: PathBuf,
     /// Canonical release policy provisioned alongside the candidate release.
     #[arg(long)]
     release_policy: PathBuf,
-    /// New path for the canonical Norito promotion record; it is never overwritten.
+    /// Exact absent `<bundle-dir>/promotion-record-v4.norito` leaf; it is never overwritten.
     #[arg(long)]
     promotion_record: PathBuf,
     /// Signed physical-device benchmark evidence file.
@@ -237,6 +268,7 @@ impl<T: Write> RunArgs<T> for Args {
                     &policy_bytes,
                     &args.benchmark_evidence,
                     &args.cryptographic_review,
+                    ReleaseInventoryStateV4::Promoted,
                     memory_guard,
                 )?;
                 let report = verified.verification_report()?;
@@ -247,18 +279,27 @@ impl<T: Write> RunArgs<T> for Args {
                     start_kagemusha_generation_memory_guard_v4(args.memory_limit_bytes)
                         .map_err(|error| eyre!("Kagemusha memory guard failed: {error}"))?;
                 let policy_bytes = configured_policy_bytes(&args.release_policy)?;
-                let verified = verify_release_directory_v4(
-                    &args.bundle_dir,
-                    &policy_bytes,
-                    &args.benchmark_evidence,
-                    &args.cryptographic_review,
-                    memory_guard,
+                let canonical_root = canonical_release_root(&args.bundle_dir)?;
+                require_new_promotion_record_path_v4(&canonical_root, &args.promotion_record)?;
+                let verified = verify_publish_verify_release_v4(
+                    |inventory_state| {
+                        verify_release_directory_v4(
+                            &canonical_root,
+                            &policy_bytes,
+                            &args.benchmark_evidence,
+                            &args.cryptographic_review,
+                            inventory_state,
+                            memory_guard,
+                        )
+                    },
+                    |candidate| {
+                        let record = candidate.promotion_record()?;
+                        record.validate().map_err(|error| eyre!(error))?;
+                        let record_bytes = norito::to_bytes(&record)
+                            .wrap_err("failed to encode Kagemusha V4 promotion record")?;
+                        publish_new_durable_file(writer, &args.promotion_record, &record_bytes)
+                    },
                 )?;
-                let record = verified.promotion_record()?;
-                record.validate().map_err(|error| eyre!(error))?;
-                let record_bytes = norito::to_bytes(&record)
-                    .wrap_err("failed to encode Kagemusha V4 promotion record")?;
-                publish_new_durable_file(writer, &args.promotion_record, &record_bytes)?;
                 writeln!(
                     writer,
                     "{}",
@@ -708,6 +749,7 @@ fn verify_release_directory_v4(
     policy_bytes: &[u8],
     benchmark_evidence_path: &Path,
     cryptographic_review_path: &Path,
+    inventory_state: ReleaseInventoryStateV4,
     memory_guard: KagemushaGenerationMemoryGuardV4,
 ) -> Result<VerifiedReleaseV4> {
     let root = canonical_release_root(bundle_dir)?;
@@ -899,7 +941,7 @@ fn verify_release_directory_v4(
         bail!("authenticated Kagemusha V4 material does not bind the canonical manifest");
     }
     verify_roster_v4(&root, &manifest)?;
-    verify_exact_inventory_v4(&root, &manifest)?;
+    verify_exact_inventory_v4(&root, &manifest, inventory_state)?;
     let subject = manifest
         .release_attestation_subject()
         .map_err(|error| eyre!(error))?;
@@ -915,16 +957,18 @@ fn verify_release_directory_v4(
         authenticated,
         report,
     };
-    let expected_promotion = norito::to_bytes(&verified.promotion_record()?)
-        .wrap_err("failed to encode canonical Kagemusha V4 promotion record")?;
-    let promotion = read_regular_bounded(
-        &root,
-        PROMOTION_RECORD_FILE_NAME_V4,
-        MAX_MANIFEST_BYTES,
-        "Kagemusha V4 promotion record",
-    )?;
-    if promotion != expected_promotion {
-        bail!("Kagemusha V4 promotion record is not candidate-bound to this release");
+    if inventory_state.includes_promotion_record() {
+        let expected_promotion = norito::to_bytes(&verified.promotion_record()?)
+            .wrap_err("failed to encode canonical Kagemusha V4 promotion record")?;
+        let promotion = read_regular_bounded(
+            &root,
+            PROMOTION_RECORD_FILE_NAME_V4,
+            MAX_MANIFEST_BYTES,
+            "Kagemusha V4 promotion record",
+        )?;
+        if promotion != expected_promotion {
+            bail!("Kagemusha V4 promotion record is not candidate-bound to this release");
+        }
     }
     Ok(verified)
 }
@@ -1076,6 +1120,7 @@ fn insert_expected_release_file_v4(
 fn verify_exact_inventory_v4(
     root: &Path,
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+    inventory_state: ReleaseInventoryStateV4,
 ) -> Outcome {
     let mut expected = BTreeSet::new();
     for (file_name, role) in [
@@ -1095,9 +1140,15 @@ fn verify_exact_inventory_v4(
             KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
             "qualification receipt",
         ),
-        (PROMOTION_RECORD_FILE_NAME_V4, "promotion record"),
     ] {
         insert_expected_release_file_v4(&mut expected, file_name, role)?;
+    }
+    if inventory_state.includes_promotion_record() {
+        insert_expected_release_file_v4(
+            &mut expected,
+            PROMOTION_RECORD_FILE_NAME_V4,
+            "promotion record",
+        )?;
     }
     insert_expected_release_file_v4(
         &mut expected,
@@ -1115,9 +1166,18 @@ fn verify_exact_inventory_v4(
             "authenticated artifact",
         )?;
     }
-    if expected.len() != 17 {
+    if inventory_state.includes_promotion_record() {
+        if expected.len() != 17 {
+            bail!(
+                "Kagemusha V4 promoted release contract must name exactly seventeen unique files"
+            );
+        }
+    }
+    if expected.len() != inventory_state.exact_file_count() {
         bail!(
-            "Kagemusha V4 release contract must name exactly seventeen unique files, found {}",
+            "Kagemusha V4 {} contract must name exactly {} unique files, found {}",
+            inventory_state.label(),
+            inventory_state.exact_file_count(),
             expected.len()
         );
     }
@@ -1163,6 +1223,20 @@ fn canonical_release_root(path: &Path) -> Result<PathBuf> {
     reject_unsafe_mode(&metadata, "Kagemusha release directory")?;
     path.canonicalize()
         .wrap_err("failed to canonicalize Kagemusha release directory")
+}
+fn require_new_promotion_record_path_v4(canonical_root: &Path, supplied: &Path) -> Outcome {
+    let expected = canonical_root.join(PROMOTION_RECORD_FILE_NAME_V4);
+    if !supplied.is_absolute() || supplied.as_os_str() != expected.as_os_str() {
+        bail!(
+            "promotion record must be the exact canonical absent `{}` bundle leaf",
+            PROMOTION_RECORD_FILE_NAME_V4
+        );
+    }
+    match fs::symlink_metadata(supplied) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => bail!("promotion record destination already exists and will not be replaced"),
+        Err(error) => Err(error).wrap_err("failed to inspect promotion record destination"),
+    }
 }
 struct PinnedRegularFile {
     file: File,
@@ -2226,12 +2300,14 @@ impl VerificationReportV4 {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUTHENTICATED_ARTIFACT_ROLES_V4, PrepareReleaseCircuitParamsV4Args,
-        RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4, RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
-        REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE, insert_expected_release_file_v4,
+        AUTHENTICATED_ARTIFACT_ROLES_V4, PROMOTION_RECORD_FILE_NAME_V4,
+        PrepareReleaseCircuitParamsV4Args, RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
+        RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4, REPORT_ARTIFACT_PURPOSES_V4,
+        REPORT_ROSTER_PURPOSE, ReleaseInventoryStateV4, insert_expected_release_file_v4,
         parse_manifest_sha256, parse_nonzero_canonical_u64, prepare_release_circuit_params_v4,
-        read_regular_bounded, roster_release_generations_match_v4, validate_artifacts_sequentially,
-        validate_device_attestation_policy_for_atomic_activation,
+        read_regular_bounded, require_new_promotion_record_path_v4,
+        roster_release_generations_match_v4, validate_artifacts_sequentially,
+        validate_device_attestation_policy_for_atomic_activation, verify_publish_verify_release_v4,
     };
     #[cfg(unix)]
     use super::{
@@ -2257,7 +2333,13 @@ mod tests {
         OfflineDeviceAttestationPolicy, OfflineDeviceAttestationTrustedRoot,
         OfflineIosAppAttestationPolicy,
     };
-    use std::{cell::Cell, collections::BTreeSet, fs, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        collections::BTreeSet,
+        fs,
+        path::Path,
+        rc::Rc,
+    };
     const POLICY_EVALUATION_TIME_MS: u64 = 1_800_000_000_000;
     struct LivePayload {
         live: Rc<Cell<usize>>,
@@ -2724,6 +2806,83 @@ mod tests {
         assert_eq!(REPORT_ROSTER_PURPOSE, "topup_finality_roster");
     }
     #[test]
+    fn promotion_flow_executes_candidate_publish_and_promoted_verification_in_order() {
+        let events = RefCell::new(Vec::new());
+        let result = verify_publish_verify_release_v4(
+            |state| {
+                events.borrow_mut().push(match state {
+                    ReleaseInventoryStateV4::Candidate => "verify-16",
+                    ReleaseInventoryStateV4::Promoted => "verify-17",
+                });
+                Ok(state.exact_file_count())
+            },
+            |candidate_count| {
+                assert_eq!(*candidate_count, 16);
+                events.borrow_mut().push("publish-no-replace");
+                Ok(())
+            },
+        )
+        .expect("non-circular promotion flow succeeds");
+        assert_eq!(result, 17);
+        assert_eq!(
+            events.into_inner(),
+            ["verify-16", "publish-no-replace", "verify-17"]
+        );
+    }
+    #[test]
+    fn promotion_flow_never_reaches_publication_or_full_verification_after_failure() {
+        let events = RefCell::new(Vec::new());
+        let error = verify_publish_verify_release_v4(
+            |state| {
+                events.borrow_mut().push(state.label());
+                if state == ReleaseInventoryStateV4::Candidate {
+                    return Err(color_eyre::eyre::eyre!("candidate rejected"));
+                }
+                Ok(())
+            },
+            |_| {
+                events.borrow_mut().push("publish");
+                Ok(())
+            },
+        )
+        .expect_err("candidate failure must stop the flow");
+        assert!(error.to_string().contains("candidate rejected"));
+        assert_eq!(events.into_inner(), ["pre-promotion candidate"]);
+    }
+    #[test]
+    fn promotion_record_target_is_the_exact_absent_canonical_bundle_leaf() {
+        let root = tempfile::tempdir().expect("temporary release root");
+        let canonical_root = root.path().canonicalize().expect("canonical release root");
+        let expected = canonical_root.join(PROMOTION_RECORD_FILE_NAME_V4);
+        require_new_promotion_record_path_v4(&canonical_root, &expected)
+            .expect("the exact absent promotion leaf is accepted");
+
+        let relative = Path::new(PROMOTION_RECORD_FILE_NAME_V4);
+        assert!(require_new_promotion_record_path_v4(&canonical_root, relative).is_err());
+        assert!(
+            require_new_promotion_record_path_v4(
+                &canonical_root,
+                &canonical_root.join("other-promotion.norito"),
+            )
+            .is_err()
+        );
+        let lexical_alias = canonical_root.join(".").join(PROMOTION_RECORD_FILE_NAME_V4);
+        assert!(require_new_promotion_record_path_v4(&canonical_root, &lexical_alias).is_err());
+
+        fs::write(&expected, b"preexisting record").expect("create existing destination");
+        assert!(require_new_promotion_record_path_v4(&canonical_root, &expected).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn promotion_record_target_rejects_a_dangling_symlink() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().expect("temporary release root");
+        let canonical_root = root.path().canonicalize().expect("canonical release root");
+        let expected = canonical_root.join(PROMOTION_RECORD_FILE_NAME_V4);
+        symlink("missing-record", &expected).expect("create dangling destination symlink");
+        assert!(require_new_promotion_record_path_v4(&canonical_root, &expected).is_err());
+    }
+    #[test]
     fn release_inventory_rejects_role_name_collision_instead_of_collapsing_it() {
         let mut expected = BTreeSet::new();
         insert_expected_release_file_v4(
@@ -2864,7 +3023,9 @@ mod tests {
     fn atomic_activation_rejects_missing_duplicate_and_noncanonical_policy_entries() {
         let policy = valid_device_attestation_policy();
         let mut missing_platform = policy.clone();
-        missing_platform.trusted_roots.pop();
+        missing_platform
+            .trusted_roots
+            .retain(|root| root.platform != "android-keymint");
         assert!(
             validate_device_attestation_policy_for_atomic_activation(
                 &missing_platform,

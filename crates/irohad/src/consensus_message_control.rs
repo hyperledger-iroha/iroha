@@ -287,6 +287,54 @@ fn record_proposal_round_evidence<R, O>(
     Ok(true)
 }
 
+fn resolve_deferred_rules_for_proposal(
+    rules: &mut [Rule],
+    sender: &PeerId,
+    authenticated_via: &PeerId,
+    height: u64,
+    view: u64,
+    manifest_hash: HashOf<PayloadManifest>,
+) -> Result<bool, ControlError> {
+    let mut resolved = false;
+    for rule in rules.iter_mut().filter(|rule| {
+        rule.kind == MessageKind::PayloadChunk
+            && &rule.sender == sender
+            && &rule.authenticated_via == authenticated_via
+            && rule.proposal_height == Some(height)
+            && rule.proposal_view == Some(view)
+    }) {
+        match rule.manifest_hash {
+            None => {
+                rule.manifest_hash = Some(manifest_hash);
+                resolved = true;
+            }
+            Some(existing) if existing != manifest_hash => {
+                return Err(ControlError::InvalidMessageDescriptor);
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(resolved)
+}
+
+fn resolve_deferred_rules_from_evidence(
+    rules: &mut [Rule],
+    proposal_round_evidence: &BTreeMap<ProposalManifestRoute, ProposalRound>,
+) -> Result<bool, ControlError> {
+    let mut resolved = false;
+    for (route, round) in proposal_round_evidence {
+        resolved |= resolve_deferred_rules_for_proposal(
+            rules,
+            &route.sender,
+            &route.authenticated_via,
+            round.height,
+            round.view,
+            route.manifest_hash,
+        )?;
+    }
+    Ok(resolved)
+}
+
 fn resolve_deferred_chunk_rules<R, O>(
     state: &mut State<R, O>,
     meta: &MessageMeta,
@@ -301,24 +349,23 @@ fn resolve_deferred_chunk_rules<R, O>(
     };
     let evidence_changed =
         record_proposal_round_evidence(state, meta, height, view, manifest_hash)?;
-    let mut resolved = false;
-    for rule in state.rules.iter_mut().filter(|rule| {
-        rule.kind == MessageKind::PayloadChunk
-            && rule.sender == meta.sender
-            && rule.authenticated_via == meta.authenticated_via
-            && rule.proposal_height == Some(height)
-            && rule.proposal_view == Some(view)
-    }) {
-        match rule.manifest_hash {
-            None => {
-                rule.manifest_hash = Some(manifest_hash);
-                resolved = true;
-            }
-            Some(existing) if existing != manifest_hash => {
-                return Err(ControlError::InvalidMessageDescriptor);
-            }
-            Some(_) => {}
-        }
+    let mut resolved = resolve_deferred_rules_for_proposal(
+        &mut state.rules,
+        &meta.sender,
+        &meta.authenticated_via,
+        height,
+        view,
+        manifest_hash,
+    )?;
+    if let Some(next_rules) = state.drain_next_rules.as_mut() {
+        resolved |= resolve_deferred_rules_for_proposal(
+            next_rules,
+            &meta.sender,
+            &meta.authenticated_via,
+            height,
+            view,
+            manifest_hash,
+        )?;
     }
     let mut releases_changed = false;
     if (evidence_changed || resolved) && state.drain_next_rules.is_none() {
@@ -853,7 +900,7 @@ fn fail_hold_overflow<R, O>(state: &mut State<R, O>) {
 }
 fn apply_command<R, O>(
     state: &mut State<R, O>,
-    command: Command,
+    mut command: Command,
     digest: Hash,
 ) -> Result<(), ControlError> {
     if state.fatal {
@@ -877,6 +924,7 @@ fn apply_command<R, O>(
         return Err(ControlError::DrainWithExplicitRelease);
     }
     validate_release_sequences(&command.release, state.held.keys().copied())?;
+    resolve_deferred_rules_from_evidence(&mut command.rules, &state.proposal_round_evidence)?;
     state.revision = command.revision;
     state.command_digest = Some(digest);
     state.queue_capacity = command.queue_capacity;
@@ -2429,6 +2477,112 @@ mod tests {
         assert!(state.release_pending.is_empty());
     }
     #[test]
+    fn command_installation_resolves_deferred_rule_from_prior_proposal_evidence() {
+        let target_proposal = proposal_meta_at(10, 0, 0x35);
+        let mut state = State::<NetworkReplyRoute>::default();
+        assert!(
+            !resolve_deferred_chunk_rules(&mut state, &target_proposal)
+                .expect("record target Proposal before command")
+        );
+        let deferred = deferred_chunk_rule_for(&target_proposal, 10, 0, 7);
+
+        apply_command(
+            &mut state,
+            Command {
+                revision: 1,
+                queue_capacity: 4,
+                rules: vec![deferred],
+                release: Vec::new(),
+                drain: false,
+            },
+            Hash::new(b"prior-proposal-command"),
+        )
+        .expect("install command from exact prior Proposal evidence");
+
+        assert_eq!(state.rules[0].manifest_hash, target_proposal.manifest_hash);
+        assert!(rule_matches_with_proposal_evidence(
+            &state.rules[0],
+            &chunk_meta_for(&target_proposal, 7),
+            &state.proposal_round_evidence,
+        ));
+    }
+    #[test]
+    fn command_installation_rejects_ambiguous_prior_proposal_evidence() {
+        let first = proposal_meta_at(10, 0, 0x36);
+        let second = proposal_meta_at(10, 0, 0x37);
+        let mut state = State::<NetworkReplyRoute>::default();
+        assert!(!resolve_deferred_chunk_rules(&mut state, &first).expect("record first Proposal"));
+        assert!(
+            !resolve_deferred_chunk_rules(&mut state, &second)
+                .expect("record equivocating Proposal")
+        );
+
+        let result = apply_command(
+            &mut state,
+            Command {
+                revision: 1,
+                queue_capacity: 4,
+                rules: vec![deferred_chunk_rule_for(&first, 10, 0, 7)],
+                release: Vec::new(),
+                drain: false,
+            },
+            Hash::new(b"ambiguous-prior-proposal-command"),
+        );
+
+        assert!(matches!(
+            result,
+            Err(ControlError::InvalidMessageDescriptor)
+        ));
+        assert_eq!(state.revision, 0);
+        assert!(state.rules.is_empty());
+    }
+    #[test]
+    fn proposal_during_drain_resolves_post_drain_deferred_rule() {
+        let target_proposal = proposal_meta_at(10, 0, 0x38);
+        let mut state = State::<NetworkReplyRoute>::default();
+        retain_chunk(
+            &mut state,
+            1,
+            MessageMeta {
+                manifest_hash: Some(manifest_hash(0x39)),
+                ..chunk_meta_for(&target_proposal, 7)
+            },
+        );
+        apply_command(
+            &mut state,
+            Command {
+                revision: 1,
+                queue_capacity: 4,
+                rules: vec![deferred_chunk_rule_for(&target_proposal, 10, 0, 7)],
+                release: Vec::new(),
+                drain: true,
+            },
+            Hash::new(b"post-drain-deferred-command"),
+        )
+        .expect("begin drain with deferred post-fence rule");
+        assert_eq!(state.release_pending, VecDeque::from([1]));
+        assert_eq!(
+            state.drain_next_rules.as_ref().expect("active drain")[0].manifest_hash,
+            None
+        );
+
+        assert!(
+            resolve_deferred_chunk_rules(&mut state, &target_proposal)
+                .expect("resolve post-drain rule while drain is active")
+        );
+        assert_eq!(
+            state.drain_next_rules.as_ref().expect("active drain")[0].manifest_hash,
+            target_proposal.manifest_hash
+        );
+
+        state.held.clear();
+        state.held_bytes = 0;
+        state.release_pending.clear();
+        finish_drain_if_empty(&mut state);
+        assert!(state.drain_next_rules.is_none());
+        assert_eq!(state.rules[0].manifest_hash, target_proposal.manifest_hash);
+    }
+    #[test]
     fn proposal_round_evidence_is_fifo_bounded() {
         let mut state = State::<NetworkReplyRoute>::default();
         let base = proposal_meta_at(1, 0, 0x34);
@@ -2641,6 +2795,12 @@ mod tests {
             parse_command(&command(vec![uppercase_hash])),
             Err(ControlError::NonCanonicalField("block_hash"))
         ));
+        for kind in [MessageKind::VrfCommit, MessageKind::VrfReveal] {
+            assert!(matches!(
+                parse_command(&command(vec![rule_value(&rule(peer(5), kind, 9, 0))])),
+                Err(ControlError::KindHasNoExactRound)
+            ));
+        }
     }
     #[test]
     fn payload_chunk_rule_roundtrips_and_rejects_incompatible_coordinates() {

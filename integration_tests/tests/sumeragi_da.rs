@@ -318,21 +318,21 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         let matched_sequences = loop {
             let mut matched_sequences = vec![Vec::new(); peers.len()];
             for (receiver_index, peer) in peers.iter().enumerate() {
-                let observation = peer
+                let ack = peer
                     .consensus_message_control()
                     .ok_or_else(|| eyre!("{} lacks message control", peer.mnemonic()))?
-                    .read_observation()?;
+                    .read_ack()?;
                 ensure!(
-                    observation.ack.revision == 2
-                        && observation.ack.queue_capacity == PACKET_LOSS_QUEUE_CAPACITY
-                        && !observation.ack.draining
-                        && !observation.ack.fatal
-                        && observation.ack.dropped == 0
-                        && observation.ack.overflowed == 0,
+                    ack.revision == 2
+                        && ack.queue_capacity == PACKET_LOSS_QUEUE_CAPACITY
+                        && !ack.draining
+                        && !ack.fatal
+                        && ack.dropped == 0
+                        && ack.overflowed == 0,
                     "{} drifted from its acknowledged deferred chunk selector command",
                     peer.mnemonic()
                 );
-                for held in &observation.ack.held {
+                for held in &ack.held {
                     if held.kind != ConsensusMessageControlKind::PayloadChunk
                         || held.height.is_some()
                         || held.view.is_some()
@@ -343,13 +343,12 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                     {
                         continue;
                     }
-                    let Some((manifest_hash, Some(index))) =
-                        observation.payload_coordinates(held.sequence)
+                    let (Some(manifest_hash), Some(index)) =
+                        (held.manifest_hash, held.chunk_index)
                     else {
                         continue;
                     };
-                    let exact_rule = observation
-                        .ack
+                    let exact_rule = ack
                         .rules
                         .iter()
                         .find(|rule| {

@@ -118,6 +118,10 @@ fn build_handle(
     per_use: Option<u128>,
 ) -> AssetHandle {
     AssetHandle {
+        asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+        ])
+        .expect("valid AXT fixture asset id"),
         scope: scope.iter().map(|s| (*s).to_string()).collect(),
         subject: HandleSubject {
             account: account.to_string(),
@@ -413,7 +417,7 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: account.into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -564,7 +568,7 @@ fn assert_invalid_handle_values_rejected_without_state_mutation<T: IVMHost>(
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: account.into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -710,6 +714,10 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
     );
     let binding = axt::compute_binding(&descriptor).expect("compute binding");
     let handle = AssetHandle {
+        asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+        ])
+        .expect("valid AXT fixture asset id"),
         scope: vec!["transfer".into()],
         subject: HandleSubject {
             account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
@@ -744,7 +752,7 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(200_u64)),
         },
     };
@@ -842,7 +850,7 @@ fn default_host_rejects_late_proof_manifest_root_mismatch_at_commit() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(10_u64)),
         },
     };
@@ -950,7 +958,7 @@ fn default_host_rejects_binding_mismatch() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -994,7 +1002,7 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(150_u64)),
         },
     };
@@ -1011,7 +1019,7 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(40_u64)),
         },
     };
@@ -1058,12 +1066,11 @@ fn default_host_rejects_handle_scope_mismatch() {
     let handle = build_handle(
         dsid,
         binding,
-        &["transfer"],
+        &["burn"],
         "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         50,
         None,
     );
-    let proof = proof_blob_for(dsid, [1; 32], b"default-scope-mismatch", None);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -1071,13 +1078,13 @@ fn default_host_rejects_handle_scope_mismatch() {
                 0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
             ])
             .expect("valid AXT fixture asset id"),
-            kind: "burn".into(),
+            kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(10_u64)),
         },
     };
-    let result = use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof));
+    let result = use_handle(&mut vm, &mut host, &handle, &intent, None);
     assert!(
         matches!(result, Err(VMError::PermissionDenied)),
         "unexpected result {result:?}"
@@ -1110,7 +1117,6 @@ fn default_host_rejects_handle_subject_mismatch() {
         80,
         None,
     );
-    let proof = proof_blob_for(dsid, [1; 32], b"default-subject-mismatch", None);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -1120,11 +1126,11 @@ fn default_host_rejects_handle_subject_mismatch() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(10_u64)),
         },
     };
-    let result = use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof));
+    let result = use_handle(&mut vm, &mut host, &handle, &intent, None);
     assert!(
         matches!(result, Err(VMError::PermissionDenied)),
         "unexpected result {result:?}"
@@ -1166,7 +1172,7 @@ fn default_host_rejects_commit_without_required_proof() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(10_u64)),
         },
     };
@@ -1216,7 +1222,7 @@ fn handle_proof_fails_closed_without_verifier() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(15_u64)),
         },
     };
@@ -1267,7 +1273,7 @@ fn default_host_rejects_handle_with_invalid_manifest_root() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(10_u64)),
         },
     };
@@ -1315,7 +1321,7 @@ fn default_host_rejects_handle_with_empty_scope() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -1362,7 +1368,7 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -1422,7 +1428,7 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -1535,7 +1541,7 @@ fn commit_requires_proof_for_every_dataspace() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -1552,7 +1558,7 @@ fn commit_requires_proof_for_every_dataspace() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -1741,7 +1747,9 @@ fn wsv_host_policy_checks_root_and_expiry() {
     let manifest_root = [9u8; 32];
     let mut host =
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
-            .with_axt_manifest_root(dsid, manifest_root);
+            .with_axt_manifest_root(dsid, manifest_root)
+            .with_axt_active_handle_era(dsid, 1)
+            .with_axt_next_handle_counter(dsid, 7);
     host.set_current_time_ms(50);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1775,13 +1783,12 @@ fn wsv_host_policy_checks_root_and_expiry() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
-    let proof = proof_blob_for(dsid, manifest_root, b"policy-root-expiry", None);
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &expired_handle, &intent, Some(&proof)),
+        use_handle(&mut vm, &mut host, &expired_handle, &intent, None),
         Err(VMError::PermissionDenied)
     ));
     let mut bad_root = build_handle(
@@ -1795,7 +1802,7 @@ fn wsv_host_policy_checks_root_and_expiry() {
     bad_root.expiry_slot = 60;
     bad_root.manifest_view_root = vec![1; 32];
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &bad_root, &intent, Some(&proof)),
+        use_handle(&mut vm, &mut host, &bad_root, &intent, None),
         Err(VMError::PermissionDenied)
     ));
     let mut ok_handle = build_handle(
@@ -1808,8 +1815,12 @@ fn wsv_host_policy_checks_root_and_expiry() {
     );
     ok_handle.expiry_slot = 60;
     ok_handle.manifest_view_root = manifest_root.to_vec();
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &ok_handle, &intent, None),
+        Ok(use_handle_gas(&ok_handle, &intent, None))
+    );
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &ok_handle, &intent, Some(&proof)),
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
 }
@@ -1859,6 +1870,7 @@ fn wsv_host_preflights_slot_length_and_skew_then_fails_closed() {
     handle.expiry_slot = 1;
     handle.max_clock_skew_ms = Some(15);
     handle.manifest_view_root = manifest_root.to_vec();
+    handle.sub_nonce = 1;
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -1868,13 +1880,16 @@ fn wsv_host_preflights_slot_length_and_skew_then_fails_closed() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
-    let proof = proof_blob_for(dsid, manifest_root, b"slot-skew", None);
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &handle, &intent, None),
+        Ok(use_handle_gas(&handle, &intent, None))
+    );
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
 }
@@ -1924,6 +1939,7 @@ fn wsv_host_rejects_handle_skew_above_config() {
     handle.expiry_slot = 10;
     handle.max_clock_skew_ms = Some(10);
     handle.manifest_view_root = manifest_root.to_vec();
+    handle.sub_nonce = 1;
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -1933,13 +1949,12 @@ fn wsv_host_rejects_handle_skew_above_config() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
-    let proof = proof_blob_for(dsid, manifest_root, b"skew-above-config", None);
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
+        use_handle(&mut vm, &mut host, &handle, &intent, None),
         Err(VMError::PermissionDenied)
     ));
 }
@@ -2041,6 +2056,7 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
     );
     handle.expiry_slot = 20;
     handle.manifest_view_root = manifest_root.to_vec();
+    handle.sub_nonce = 1;
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -2050,7 +2066,7 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
@@ -2067,7 +2083,9 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
     let dsid = DataSpaceId::new(125);
     let mut host =
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
-            .with_axt_manifest_root(dsid, [0; 32]);
+            .with_axt_manifest_root(dsid, [0; 32])
+            .with_axt_active_handle_era(dsid, 1)
+            .with_axt_next_handle_counter(dsid, 7);
     host.set_current_time_ms(10);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -2096,16 +2114,12 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: caller.to_string(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
-    let proof = axt::ProofBlob {
-        payload: vec![0; 32],
-        expiry_slot: Some(30),
-    };
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &zero_root_handle, &intent, Some(&proof)),
+        use_handle(&mut vm, &mut host, &zero_root_handle, &intent, None),
         Err(VMError::PermissionDenied)
     ));
 }
@@ -2143,16 +2157,12 @@ fn wsv_host_rejects_missing_policy_binding() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: caller.to_string(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
-    let proof = axt::ProofBlob {
-        payload: vec![7],
-        expiry_slot: Some(15),
-    };
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
+        use_handle(&mut vm, &mut host, &handle, &intent, None),
         Err(VMError::PermissionDenied)
     ));
 }
@@ -2164,7 +2174,9 @@ fn wsv_host_policy_checks_target_lane() {
     let manifest_root = [1u8; 32];
     let mut host =
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
-            .with_axt_target_lane(dsid, 7);
+            .with_axt_target_lane(dsid, 7)
+            .with_axt_active_handle_era(dsid, 1)
+            .with_axt_next_handle_counter(dsid, 7);
     host.set_axt_manifest_root(dsid, manifest_root);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -2198,13 +2210,12 @@ fn wsv_host_policy_checks_target_lane() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
-    let proof = proof_blob_for(dsid, manifest_root, b"lane-policy", None);
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &wrong_lane, &intent, Some(&proof)),
+        use_handle(&mut vm, &mut host, &wrong_lane, &intent, None),
         Err(VMError::PermissionDenied)
     ));
     let mut ok_lane = build_handle(
@@ -2216,8 +2227,12 @@ fn wsv_host_policy_checks_target_lane() {
         None,
     );
     ok_lane.target_lane = LaneId::new(7);
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &ok_lane, &intent, None),
+        Ok(use_handle_gas(&ok_lane, &intent, None))
+    );
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &ok_lane, &intent, Some(&proof)),
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
 }
@@ -2268,23 +2283,28 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: caller.to_string(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
-    let proof = proof_blob_for(dsid, manifest_root, b"lane-policy-snapshot", None);
     let mut wrong_lane = build_handle(dsid, binding, &["transfer"], &caller.to_string(), 10, None);
     wrong_lane.target_lane = LaneId::new(1);
     wrong_lane.manifest_view_root = manifest_root.to_vec();
+    wrong_lane.sub_nonce = 1;
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &wrong_lane, &intent, Some(&proof)),
+        use_handle(&mut vm, &mut host, &wrong_lane, &intent, None),
         Err(VMError::PermissionDenied)
     ));
     let mut ok_lane = build_handle(dsid, binding, &["transfer"], &caller.to_string(), 10, None);
     ok_lane.target_lane = LaneId::new(4);
     ok_lane.manifest_view_root = manifest_root.to_vec();
+    ok_lane.sub_nonce = 1;
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &ok_lane, &intent, None),
+        Ok(use_handle_gas(&ok_lane, &intent, None))
+    );
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &ok_lane, &intent, Some(&proof)),
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
 }
@@ -2358,6 +2378,7 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
     );
     handle.expiry_slot = 10;
     handle.manifest_view_root = manifest_root.to_vec();
+    handle.sub_nonce = 1;
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -2367,13 +2388,16 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
-    let proof = proof_blob_for(dsid, manifest_root, b"policy-current-slot", None);
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &handle, &intent, None),
+        Ok(use_handle_gas(&handle, &intent, None))
+    );
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
 }
@@ -2411,11 +2435,10 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };
-    let proof = proof_blob_for(dsid, manifest_root, b"era-nonce-policy", None);
     let mut low_era = build_handle(
         dsid,
         binding,
@@ -2425,8 +2448,9 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         None,
     );
     low_era.handle_era = 2;
+    low_era.sub_nonce = 5;
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &low_era, &intent, Some(&proof)),
+        use_handle(&mut vm, &mut host, &low_era, &intent, None),
         Err(VMError::PermissionDenied)
     ));
     let mut low_nonce = build_handle(
@@ -2437,9 +2461,10 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         10,
         None,
     );
+    low_nonce.handle_era = 3;
     low_nonce.sub_nonce = 4;
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &low_nonce, &intent, Some(&proof)),
+        use_handle(&mut vm, &mut host, &low_nonce, &intent, None),
         Err(VMError::PermissionDenied)
     ));
     let mut ok = build_handle(
@@ -2452,8 +2477,12 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
     );
     ok.handle_era = 3;
     ok.sub_nonce = 5;
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &ok, &intent, None),
+        Ok(use_handle_gas(&ok, &intent, None))
+    );
     assert!(matches!(
-        use_handle(&mut vm, &mut host, &ok, &intent, Some(&proof)),
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
 }
@@ -2493,7 +2522,7 @@ fn axt_policy_rejects_handle_usage() {
             .expect("valid AXT fixture asset id"),
             kind: "transfer".into(),
             from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             amount: Some(Quantity::from(1_u64)),
         },
     };

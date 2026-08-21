@@ -1,4 +1,56 @@
 #[test]
+fn signing_guard_is_restart_safe_and_rejects_equivocation() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let context = MergeSigningContextV1 {
+        epoch_id: 4,
+        view: 2,
+        carrier_height: 9,
+        parent_hash: HashOf::from_untyped_unchecked(Hash::new(b"parent-9")),
+        validator_set_hash: HashOf::new(&vec![peer(b"validator")]),
+    };
+    let first = Hash::new(b"first");
+    let second = Hash::new(b"second");
+    let candidate = signing_candidate(&context, b"first");
+    let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
+    guard
+        .authorize(context.clone(), first, &candidate)
+        .expect("first authorization");
+    guard
+        .authorize(context.clone(), first, &candidate)
+        .expect("idempotent authorization");
+    let mut unsupported_candidate = candidate.clone();
+    unsupported_candidate.version = MergeLedgerCandidate::VERSION + 1;
+    assert_eq!(
+        guard.authorize(context.clone(), first, &unsupported_candidate),
+        Err(MergeSidecarError::LocalSigningEquivocation)
+    );
+    assert_eq!(
+        guard.authorize(context.clone(), second, &candidate),
+        Err(MergeSidecarError::LocalSigningEquivocation)
+    );
+    drop(guard);
+    let restarted = MergeSigningGuard::open(temp.path()).expect("restart guard");
+    let (recovered_digest, recovered_candidate, recovered_bytes) = restarted
+        .authorized_candidate(&context)
+        .expect("read durable candidate")
+        .expect("candidate survives restart");
+    assert_eq!(recovered_digest, first);
+    assert_eq!(recovered_candidate, candidate);
+    assert_eq!(recovered_bytes, candidate.canonical_bytes());
+    assert_eq!(
+        restarted.authorize(context.clone(), second, &candidate),
+        Err(MergeSidecarError::LocalSigningEquivocation)
+    );
+    let mut substituted = candidate.clone();
+    substituted.global_state_root = Hash::new(b"substituted candidate body");
+    assert_eq!(
+        restarted.authorize(context, first, &substituted),
+        Err(MergeSidecarError::LocalSigningEquivocation),
+        "equal digest cannot substitute different canonical candidate bytes"
+    );
+}
+
+#[test]
 fn signing_guard_rejects_legacy_journal_without_implicit_recovery() {
     let temp = tempfile::tempdir().expect("temp dir");
     fs::create_dir(temp.path().join(LEGACY_SIGNING_GUARD_DIRS[0])).expect("create legacy journal");

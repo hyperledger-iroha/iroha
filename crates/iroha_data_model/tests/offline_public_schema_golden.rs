@@ -1,10 +1,14 @@
 //! Golden structural schemas for first-release public Offline requests and release provenance.
 use iroha_data_model::offline::{
+    KagemushaExactBytesDigestV1, KagemushaFinalizedBlockWireV1,
     KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
     KagemushaRecursiveSpendCryptographicReviewSubjectV4, KagemushaRecursiveSpendPromotedReleaseV4,
     KagemushaRecursiveSpendQualificationReceiptV4, KagemushaRecursiveSpendRedeemRequestV4,
     KagemushaRecursiveSpendReleaseActivationV4, KagemushaRecursiveSpendReleaseAttestationSubjectV4,
     KagemushaRecursiveSpendReleaseRecordV4, KagemushaRecursiveSpendTopUpRequestV4,
+    KagemushaV4ActivationFinalityReceiptBodyV1, KagemushaV4ActivationFinalityReceiptV1,
+    KagemushaV4PromotionBindingV1, KagemushaV4ValidatorQualificationSealBodyV1,
+    KagemushaV4ValidatorQualificationSealV1,
 };
 use iroha_schema::IntoSchema;
 use sha2::{Digest as _, Sha256};
@@ -51,6 +55,30 @@ fn public_kagemusha_release_provenance_schemas_are_frozen_for_abi21_v4() {
             "946c1385d266363ceae083ed95bf5855".to_owned(),
             "74ee082e0e6722c579e28bcfd7b55572".to_owned(),
             "0e748d6348dcdd81fe50042e12affb9b".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn public_kagemusha_activation_receipt_schemas_are_frozen_for_first_release() {
+    assert_eq!(
+        [
+            structural_schema_hash::<KagemushaExactBytesDigestV1>(),
+            structural_schema_hash::<KagemushaV4PromotionBindingV1>(),
+            structural_schema_hash::<KagemushaV4ValidatorQualificationSealBodyV1>(),
+            structural_schema_hash::<KagemushaV4ValidatorQualificationSealV1>(),
+            structural_schema_hash::<KagemushaFinalizedBlockWireV1>(),
+            structural_schema_hash::<KagemushaV4ActivationFinalityReceiptBodyV1>(),
+            structural_schema_hash::<KagemushaV4ActivationFinalityReceiptV1>(),
+        ],
+        [
+            "6ac84133729450e2392f324aae6d4e98".to_owned(),
+            "0fadd89106b4d767a2f3fa08e5f347b2".to_owned(),
+            "1515a8f6642258e5fa36149b3f65c7cd".to_owned(),
+            "984109c9a925c4724380f32cb90277fb".to_owned(),
+            "ffa8c340c1cb5b1ac1fb3393f0278008".to_owned(),
+            "52437162d2eddc16d47de914ed850a7c".to_owned(),
+            "c57a922d03191b30e9eadfae4b2a5327".to_owned(),
         ]
     );
 }

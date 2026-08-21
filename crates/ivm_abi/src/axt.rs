@@ -9,10 +9,14 @@ use crate::{
     error::VMError,
 };
 use iroha_crypto::{Hash, Signature};
+#[cfg(test)]
+use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use iroha_data_model::nexus::{
     AssetHandle as ModelAssetHandle, AxtBinding, AxtDescriptor as ModelAxtDescriptor,
-    AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
-    AxtPolicyEntry as ModelAxtPolicyEntry, AxtPolicySnapshot as ModelAxtPolicySnapshot,
+    AxtHandleBudgetKey as ModelAxtHandleBudgetKey,
+    AxtHandleBudgetRecord as ModelAxtHandleBudgetRecord, AxtHandleFragment,
+    AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry as ModelAxtPolicyEntry,
+    AxtPolicySnapshot as ModelAxtPolicySnapshot,
     AxtPolicySnapshotValidationError as ModelAxtPolicySnapshotValidationError,
     AxtProofEnvelope as ModelAxtProofEnvelope, AxtTouchSpec as ModelAxtTouchSpec, DataSpaceId,
     GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
@@ -640,6 +644,8 @@ fn canonical_nonempty_strings(values: &[String]) -> bool {
 /// Subset of the AssetHandle ticket encoded by asset dataspace capability issuers.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct AssetHandle {
+    /// Exact asset definition authorized by the issuer signature.
+    pub asset_definition_id: AssetDefinitionId,
     /// Declared permissions (example values such as "transfer").
     pub scope: Vec<String>,
     /// Subject bound to the capability.
@@ -718,6 +724,7 @@ pub fn validate_asset_handle(handle: &AssetHandle) -> Result<(), VMError> {
             .issuer_manifest_root
             .iter()
             .all(|byte| *byte == 0)
+        || handle.issuer_context.validate().is_err()
         || handle.issuer_context.abi_version != 1
         || handle.issuer_context.abi_hash.iter().all(|byte| *byte == 0)
     {
@@ -732,6 +739,7 @@ pub fn validate_asset_handle(handle: &AssetHandle) -> Result<(), VMError> {
 /// Returns the same error classification as [`validate_asset_handle`].
 pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMError> {
     validate_asset_handle(&AssetHandle {
+        asset_definition_id: handle.asset_definition_id.clone(),
         scope: handle.scope.clone(),
         subject: HandleSubject {
             account: handle.subject.account.clone(),
@@ -755,6 +763,39 @@ pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMEr
         issuer_context: handle.issuer_context,
         issuer_signature: handle.issuer_signature.clone(),
     })
+}
+impl TryFrom<&AssetHandle> for ModelAssetHandle {
+    type Error = VMError;
+
+    fn try_from(handle: &AssetHandle) -> Result<Self, Self::Error> {
+        let binding = handle.binding_array().ok_or(VMError::NoritoInvalid)?;
+        let manifest_view_root = manifest_root_array(handle)?;
+        Ok(Self {
+            asset_definition_id: handle.asset_definition_id.clone(),
+            scope: handle.scope.clone(),
+            subject: ModelHandleSubject {
+                account: handle.subject.account.clone(),
+                origin_dsid: handle.subject.origin_dsid,
+            },
+            budget: ModelHandleBudget {
+                remaining: handle.budget.remaining.clone(),
+                per_use: handle.budget.per_use.clone(),
+            },
+            handle_era: handle.handle_era,
+            sub_nonce: handle.sub_nonce,
+            group_binding: ModelGroupBinding {
+                composability_group_id: handle.group_binding.composability_group_id.clone(),
+                epoch_id: handle.group_binding.epoch_id,
+            },
+            target_lane: handle.target_lane,
+            axt_binding: AxtBinding::new(binding),
+            manifest_view_root,
+            expiry_slot: handle.expiry_slot,
+            max_clock_skew_ms: handle.max_clock_skew_ms,
+            issuer_context: handle.issuer_context,
+            issuer_signature: handle.issuer_signature.clone(),
+        })
+    }
 }
 /// Capability subject metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -897,6 +938,9 @@ pub fn validate_remote_spend_intent_commitment(
     effective_amount: &Quantity,
     proof: &ProofBlob,
 ) -> Result<(), VMError> {
+    if handle.asset_definition_id != intent.op.asset_definition_id {
+        return Err(VMError::PermissionDenied);
+    }
     validate_remote_spend_intent_commitment_components(
         expected_remote_spend_intent_commitment_v1(handle, intent, effective_amount)?,
         &proof.payload,
@@ -916,6 +960,9 @@ pub fn validate_model_remote_spend_intent_commitment(
     effective_amount: &Quantity,
     proof: &ModelProofBlob,
 ) -> Result<(), VMError> {
+    if handle.asset_definition_id != intent.op.asset_definition_id {
+        return Err(VMError::PermissionDenied);
+    }
     validate_remote_spend_intent_commitment_components(
         expected_model_remote_spend_intent_commitment_v1(handle, intent, effective_amount),
         &proof.payload,
@@ -937,7 +984,9 @@ pub fn validate_model_remote_spend_intent_commitment_from_proof_facts(
     effective_amount: &Quantity,
     facts: &AxtProofUseFacts,
 ) -> Result<(), VMError> {
-    if facts.dsid != intent.asset_dsid {
+    if facts.dsid != intent.asset_dsid
+        || handle.asset_definition_id != intent.op.asset_definition_id
+    {
         return Err(VMError::PermissionDenied);
     }
     validate_remote_spend_intent_commitment_components_from_commitments(
@@ -951,15 +1000,20 @@ pub fn validate_model_remote_spend_intent_commitment_from_proof_facts(
 /// # Errors
 ///
 /// Returns [`VMError::NoritoInvalid`] if the handle descriptor binding is not
-/// exactly 32 bytes.
+/// exactly 32 bytes, and [`VMError::PermissionDenied`] if the intent names an
+/// asset other than the one authenticated by the handle issuer.
 pub fn expected_remote_spend_intent_commitment_v1(
     handle: &AssetHandle,
     intent: &RemoteSpendIntent,
     effective_amount: &Quantity,
 ) -> Result<[u8; 32], VMError> {
+    if handle.asset_definition_id != intent.op.asset_definition_id {
+        return Err(VMError::PermissionDenied);
+    }
     let binding = handle.binding_array().ok_or(VMError::NoritoInvalid)?;
     let replay_key = AxtHandleReplayKey::from_parts(
         intent.asset_dsid,
+        handle.issuer_context.asset_definition_incarnation,
         binding,
         handle.handle_era,
         handle.sub_nonce,
@@ -967,7 +1021,7 @@ pub fn expected_remote_spend_intent_commitment_v1(
     );
     Ok(compute_remote_spend_intent_commitment_v1(
         replay_key,
-        &intent.op.asset_definition_id,
+        &handle.asset_definition_id,
         &intent.op.kind,
         &intent.op.from,
         &intent.op.to,
@@ -984,7 +1038,7 @@ pub fn expected_model_remote_spend_intent_commitment_v1(
 ) -> [u8; 32] {
     compute_remote_spend_intent_commitment_v1(
         AxtHandleReplayKey::from_handle(intent.asset_dsid, handle),
-        &intent.op.asset_definition_id,
+        &handle.asset_definition_id,
         &intent.op.kind,
         &intent.op.from,
         &intent.op.to,
@@ -1254,6 +1308,9 @@ impl HostAxtState {
         }
         validate_asset_handle(&usage.handle)?;
         validate_remote_spend_intent(&usage.intent)?;
+        if usage.handle.asset_definition_id != usage.intent.op.asset_definition_id {
+            return Err(VMError::PermissionDenied);
+        }
         if !self.expected_dsids.contains(&usage.intent.asset_dsid) {
             return Err(VMError::PermissionDenied);
         }
@@ -1322,28 +1379,18 @@ impl HostAxtState {
         &self.handle_fragments
     }
     pub fn validate_commit(&self) -> Result<(), VMError> {
-        struct HandleAccumulator {
-            key: HandleBudgetKey,
-            total: Quantity,
-            per_dsid: BTreeMap<DataSpaceId, Quantity>,
-        }
-        impl HandleAccumulator {
-            fn new(key: HandleBudgetKey) -> Self {
-                Self {
-                    key,
-                    total: Quantity::zero(),
-                    per_dsid: BTreeMap::new(),
-                }
-            }
-        }
         for dsid in &self.expected_dsids {
             if self.descriptor.touch_for(dsid).is_some() && !self.touches.contains_key(dsid) {
                 return Err(VMError::PermissionDenied);
             }
         }
         let mut seen_nonces: BTreeSet<(DataSpaceId, [u8; 32], u64, LaneId, u64)> = BTreeSet::new();
-        let mut accumulators: Vec<HandleAccumulator> = Vec::new();
+        let mut accumulators: BTreeMap<HandleBudgetKey, ModelAxtHandleBudgetRecord> =
+            BTreeMap::new();
         for usage in &self.handles {
+            if usage.handle.asset_definition_id != usage.intent.op.asset_definition_id {
+                return Err(VMError::PermissionDenied);
+            }
             let binding = usage.handle.binding_array().ok_or(VMError::NoritoInvalid)?;
             let key = (
                 usage.intent.asset_dsid,
@@ -1370,46 +1417,12 @@ impl HostAxtState {
             if usage.proof.is_none() && !self.proofs.contains_key(&usage.intent.asset_dsid) {
                 return Err(VMError::PermissionDenied);
             }
-            let budget_key =
-                HandleBudgetKey::try_from_handle(usage.intent.asset_dsid, &usage.handle)?;
-            let accumulator = match accumulators.iter().position(|acc| acc.key == budget_key) {
-                Some(existing) => &mut accumulators[existing],
-                None => {
-                    accumulators.push(HandleAccumulator::new(budget_key));
-                    accumulators
-                        .last_mut()
-                        .expect("accumulator was just pushed")
-                }
-            };
-            accumulator.total = accumulator
-                .total
-                .checked_add(&usage.amount)
+            let budget_key = try_handle_budget_key(usage.intent.asset_dsid, &usage.handle)?;
+            accumulators
+                .entry(budget_key.clone())
+                .or_insert_with(ModelAxtHandleBudgetRecord::empty)
+                .try_consume(&budget_key, &usage.amount, 0)
                 .map_err(|_| VMError::PermissionDenied)?;
-            let ds_total = accumulator
-                .per_dsid
-                .entry(usage.intent.asset_dsid)
-                .or_insert_with(Quantity::zero);
-            *ds_total = ds_total
-                .checked_add(&usage.amount)
-                .map_err(|_| VMError::PermissionDenied)?;
-            if accumulator.total > accumulator.key.budget_remaining {
-                return Err(VMError::PermissionDenied);
-            }
-            if let Some(per_use) = accumulator.key.budget_per_use.as_ref()
-                && &*ds_total > per_use
-            {
-                return Err(VMError::PermissionDenied);
-            }
-        }
-        for accumulator in &accumulators {
-            if accumulator.total > accumulator.key.budget_remaining {
-                return Err(VMError::PermissionDenied);
-            }
-            if let Some(per_use) = accumulator.key.budget_per_use.as_ref()
-                && accumulator.per_dsid.values().any(|total| total > per_use)
-            {
-                return Err(VMError::PermissionDenied);
-            }
         }
         let mut dataspace_proofs_present: BTreeSet<DataSpaceId> =
             self.proofs.keys().copied().collect();
@@ -1438,32 +1451,7 @@ pub struct HandleUsage {
 impl TryFrom<&HandleUsage> for AxtHandleFragment {
     type Error = VMError;
     fn try_from(usage: &HandleUsage) -> Result<Self, Self::Error> {
-        let binding = usage.handle.binding_array().ok_or(VMError::NoritoInvalid)?;
-        let manifest_view_root = manifest_root_array(&usage.handle)?;
-        let handle = ModelAssetHandle {
-            scope: usage.handle.scope.clone(),
-            subject: ModelHandleSubject {
-                account: usage.handle.subject.account.clone(),
-                origin_dsid: usage.handle.subject.origin_dsid,
-            },
-            budget: ModelHandleBudget {
-                remaining: usage.handle.budget.remaining.clone(),
-                per_use: usage.handle.budget.per_use.clone(),
-            },
-            handle_era: usage.handle.handle_era,
-            sub_nonce: usage.handle.sub_nonce,
-            group_binding: ModelGroupBinding {
-                composability_group_id: usage.handle.group_binding.composability_group_id.clone(),
-                epoch_id: usage.handle.group_binding.epoch_id,
-            },
-            target_lane: usage.handle.target_lane,
-            axt_binding: AxtBinding::new(binding),
-            manifest_view_root,
-            expiry_slot: usage.handle.expiry_slot,
-            max_clock_skew_ms: usage.handle.max_clock_skew_ms,
-            issuer_context: usage.handle.issuer_context,
-            issuer_signature: usage.handle.issuer_signature.clone(),
-        };
+        let handle = ModelAssetHandle::try_from(&usage.handle)?;
         let intent = ModelRemoteSpendIntent {
             asset_dsid: usage.intent.asset_dsid,
             op: ModelSpendOp {
@@ -1499,42 +1487,24 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
         })
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct HandleBudgetKey {
+/// Canonical consensus key used to aggregate an issuer-signed handle family.
+pub type HandleBudgetKey = ModelAxtHandleBudgetKey;
+/// Derive the canonical consensus budget key from a pointer-ABI handle.
+///
+/// # Errors
+///
+/// Returns [`VMError::NoritoInvalid`] for malformed fixed-width fields and
+/// [`VMError::PermissionDenied`] when `asset_dsid` is not the dataspace
+/// authenticated by the issuer context.
+pub fn try_handle_budget_key(
     asset_dsid: DataSpaceId,
-    binding: [u8; 32],
-    handle_era: u64,
-    target_lane: u32,
-    manifest_root: [u8; 32],
-    scope: Vec<String>,
-    subject_account: String,
-    subject_origin: Option<u64>,
-    group_binding: GroupBinding,
-    expiry_slot: u64,
-    budget_remaining: Quantity,
-    budget_per_use: Option<Quantity>,
-    max_clock_skew_ms: Option<u32>,
-}
-impl HandleBudgetKey {
-    fn try_from_handle(asset_dsid: DataSpaceId, handle: &AssetHandle) -> Result<Self, VMError> {
-        let manifest_root = manifest_root_array(handle)?;
-        let binding = handle.binding_array().ok_or(VMError::NoritoInvalid)?;
-        Ok(Self {
-            asset_dsid,
-            binding,
-            handle_era: handle.handle_era,
-            target_lane: handle.target_lane.as_u32(),
-            manifest_root,
-            scope: handle.scope.clone(),
-            subject_account: handle.subject.account.clone(),
-            subject_origin: handle.subject.origin_dsid.map(DataSpaceId::as_u64),
-            group_binding: handle.group_binding.clone(),
-            expiry_slot: handle.expiry_slot,
-            budget_remaining: handle.budget.remaining.clone(),
-            budget_per_use: handle.budget.per_use.clone(),
-            max_clock_skew_ms: handle.max_clock_skew_ms,
-        })
+    handle: &AssetHandle,
+) -> Result<HandleBudgetKey, VMError> {
+    if handle.issuer_context.asset_dsid != asset_dsid {
+        return Err(VMError::PermissionDenied);
     }
+    let model = ModelAssetHandle::try_from(handle)?;
+    Ok(HandleBudgetKey::from_handle(&model))
 }
 fn manifest_root_array(handle: &AssetHandle) -> Result<[u8; 32], VMError> {
     if handle.manifest_view_root.len() != 32 {
@@ -1674,6 +1644,7 @@ mod tests {
         per_use: Option<u128>,
     ) -> AssetHandle {
         AssetHandle {
+            asset_definition_id: test_asset_definition_id(),
             scope: vec!["transfer".into()],
             subject: HandleSubject {
                 account: ACCOUNT_FROM_LITERAL.into(),
@@ -1694,7 +1665,10 @@ mod tests {
             manifest_view_root: vec![1; 32],
             expiry_slot: 99,
             max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
+            issuer_context: AxtHandleIssuerContextV1 {
+                asset_dsid: dsid,
+                ..AxtHandleIssuerContextV1::default()
+            },
             issuer_signature: Signature::from_bytes(&[1_u8; 64]),
         }
     }
@@ -2078,6 +2052,28 @@ mod tests {
             ),
             Ok(())
         );
+        let mut reincarnated_model_handle = model_handle.clone();
+        reincarnated_model_handle
+            .issuer_context
+            .asset_definition_incarnation = AxtAssetIncarnationV1::derive(
+            &reincarnated_model_handle.issuer_context.network_id,
+            &reincarnated_model_handle.asset_definition_id,
+            &iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new(b"ivm-abi-reincarnated-remote-spend-registration"),
+            ),
+            &Hash::new(b"ivm-abi-reincarnated-remote-spend-execution"),
+            1,
+        );
+        assert_eq!(
+            validate_model_remote_spend_intent_commitment_from_proof_facts(
+                &reincarnated_model_handle,
+                &model_clear,
+                &clear_amount,
+                &facts,
+            ),
+            Err(VMError::PermissionDenied),
+            "a claim for a retired asset incarnation must not authorize the current handle"
+        );
         let mut substituted_model = model_clear.clone();
         substituted_model.op.to = ACCOUNT_FROM_LITERAL.to_owned();
         assert_eq!(
@@ -2149,6 +2145,28 @@ mod tests {
                 &proof,
             ),
             Err(VMError::PermissionDenied)
+        );
+        let mut reincarnated_handle = clear_handle.clone();
+        reincarnated_handle
+            .issuer_context
+            .asset_definition_incarnation = AxtAssetIncarnationV1::derive(
+            &reincarnated_handle.issuer_context.network_id,
+            &reincarnated_handle.asset_definition_id,
+            &iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new(b"ivm-abi-reincarnated-remote-spend-registration"),
+            ),
+            &Hash::new(b"ivm-abi-reincarnated-remote-spend-execution"),
+            1,
+        );
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &reincarnated_handle,
+                &clear,
+                &clear_amount,
+                &proof,
+            ),
+            Err(VMError::PermissionDenied),
+            "a proof for the retired incarnation must not authorize a current-incarnation handle"
         );
         let mut second_handle = clear_handle.clone();
         second_handle.sub_nonce += 1;
@@ -2749,6 +2767,228 @@ mod tests {
         ));
     }
     #[test]
+    fn commit_keeps_budgets_separate_for_distinct_signed_assets() {
+        let dsid = DataSpaceId::new(6);
+        let descriptor = AxtDescriptor {
+            dsids: vec![dsid],
+            touches: vec![AxtTouchSpec {
+                dsid,
+                read: vec!["orders".into()],
+                write: vec!["ledger".into()],
+            }],
+        };
+        let binding = compute_binding(&descriptor).expect("binding");
+        let mut state = HostAxtState::new(descriptor, binding);
+        state
+            .record_touch(dsid, sample_touch_manifest())
+            .expect("touch matches descriptor");
+        let first_handle = sample_handle(dsid, binding, 100, None);
+        let mut second_handle = first_handle.clone();
+        second_handle.sub_nonce = second_handle.sub_nonce.saturating_add(1);
+        second_handle.asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("test asset domain"),
+            "iris".parse().expect("test asset name"),
+        );
+        let mut second_intent = sample_intent(dsid, Some(60));
+        second_intent.op.asset_definition_id = second_handle.asset_definition_id.clone();
+        let proof = Some(ProofBlob {
+            payload: vec![9],
+            expiry_slot: None,
+        });
+        state
+            .record_handle(HandleUsage {
+                handle: first_handle,
+                intent: sample_intent(dsid, Some(60)),
+                proof: proof.clone(),
+                amount: quantity(60),
+                amount_commitment: None,
+            })
+            .expect("first asset usage within its budget");
+        state
+            .record_handle(HandleUsage {
+                handle: second_handle,
+                intent: second_intent,
+                proof,
+                amount: quantity(60),
+                amount_commitment: None,
+            })
+            .expect("second asset usage within its independent budget");
+
+        assert_eq!(state.validate_commit(), Ok(()));
+    }
+    #[test]
+    fn handle_budget_key_groups_sub_nonces_but_separates_signed_assets() {
+        let dsid = DataSpaceId::new(6);
+        let binding = [0x5A; 32];
+        let first = sample_handle(dsid, binding, 100, None);
+        let mut next_nonce = first.clone();
+        next_nonce.sub_nonce = next_nonce.sub_nonce.saturating_add(1);
+
+        let first_key = try_handle_budget_key(dsid, &first).expect("valid handle key");
+        let next_nonce_key =
+            try_handle_budget_key(dsid, &next_nonce).expect("valid next-nonce handle key");
+        assert_eq!(
+            first_key, next_nonce_key,
+            "sub-nonces share the issuer-signed aggregate budget"
+        );
+
+        let mut other_asset = next_nonce;
+        other_asset.asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("test asset domain"),
+            "iris".parse().expect("test asset name"),
+        );
+        let other_asset_key =
+            try_handle_budget_key(dsid, &other_asset).expect("valid other-asset handle key");
+        assert_ne!(
+            first_key, other_asset_key,
+            "distinct issuer-signed assets must not share a budget"
+        );
+    }
+    #[test]
+    fn handle_budget_key_is_identical_for_abi_and_model_handles() {
+        let dsid = DataSpaceId::new(6);
+        let mut abi_handle = sample_handle(dsid, [0x5A; 32], 123, Some(17));
+        abi_handle.asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("test asset domain"),
+            "iris".parse().expect("test asset name"),
+        );
+        abi_handle.scope = vec!["burn".into(), "transfer".into()];
+        abi_handle.subject.origin_dsid = Some(DataSpaceId::new(42));
+        abi_handle.handle_era = 33;
+        abi_handle.group_binding.composability_group_id = vec![0x44; 32];
+        abi_handle.group_binding.epoch_id = 71;
+        abi_handle.target_lane = LaneId::new(9);
+        abi_handle.manifest_view_root = vec![0xA5; 32];
+        abi_handle.expiry_slot = 456;
+        abi_handle.max_clock_skew_ms = Some(987);
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"ivm-abi-budget-key-network"),
+        ));
+        let registration_header_hash =
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new(b"ivm-abi-budget-key-asset-registration"),
+            );
+        let execution_identity = Hash::new(b"ivm-abi-budget-key-asset-execution");
+        abi_handle.issuer_context = AxtHandleIssuerContextV1 {
+            network_id,
+            asset_dsid: dsid,
+            asset_definition_incarnation: AxtAssetIncarnationV1::derive(
+                &network_id,
+                &abi_handle.asset_definition_id,
+                &registration_header_hash,
+                &execution_identity,
+                0,
+            ),
+            issuer: iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
+                b"ivm-abi-budget-key-issuer",
+            )),
+            issuer_manifest_root: [0xB1; 32],
+            code_root: [0xB2; 32],
+            abi_version: 1,
+            abi_hash: [0xB3; 32],
+        };
+        let mut intent = sample_intent(dsid, Some(1));
+        intent.op.asset_definition_id = abi_handle.asset_definition_id.clone();
+        let model_handle = AxtHandleFragment::try_from(&HandleUsage {
+            handle: abi_handle.clone(),
+            intent,
+            proof: None,
+            amount: quantity(1),
+            amount_commitment: None,
+        })
+        .expect("canonical model handle")
+        .handle;
+
+        let abi_key = try_handle_budget_key(dsid, &abi_handle).expect("canonical pointer-ABI key");
+        let model_key = HandleBudgetKey::from_handle(&model_handle);
+        assert_eq!(
+            abi_key, model_key,
+            "ABI and persisted handles must normalize to one budget identity"
+        );
+
+        let assert_model_mutation_changes_key = |mutated: ModelAssetHandle, field: &str| {
+            assert_ne!(
+                abi_key,
+                HandleBudgetKey::from_handle(&mutated),
+                "{field} must remain part of the normalized budget identity"
+            );
+        };
+        let mut mutated = model_handle.clone();
+        mutated.asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("test asset domain"),
+            "rose".parse().expect("test asset name"),
+        );
+        assert_model_mutation_changes_key(mutated, "asset definition");
+        let mut mutated = model_handle.clone();
+        mutated.subject.origin_dsid = Some(DataSpaceId::new(43));
+        assert_model_mutation_changes_key(mutated, "subject origin");
+        let mut mutated = model_handle.clone();
+        mutated.group_binding.composability_group_id = vec![0x45; 32];
+        assert_model_mutation_changes_key(mutated, "composability group");
+        let mut mutated = model_handle.clone();
+        mutated.group_binding.epoch_id = 72;
+        assert_model_mutation_changes_key(mutated, "group epoch");
+        let mut mutated = model_handle.clone();
+        mutated.target_lane = LaneId::new(10);
+        assert_model_mutation_changes_key(mutated, "target lane");
+        let mut mutated = model_handle.clone();
+        mutated.manifest_view_root = [0xA6; 32];
+        assert_model_mutation_changes_key(mutated, "manifest root");
+        let mut mutated = model_handle.clone();
+        mutated.budget.remaining = quantity(124);
+        assert_model_mutation_changes_key(mutated, "remaining budget");
+        let mut mutated = model_handle.clone();
+        mutated.budget.per_use = Some(quantity(18));
+        assert_model_mutation_changes_key(mutated, "per-use budget");
+        let mut mutated = model_handle.clone();
+        mutated.expiry_slot = 457;
+        assert_model_mutation_changes_key(mutated, "expiry slot");
+        let mut mutated = model_handle.clone();
+        mutated.max_clock_skew_ms = Some(988);
+        assert_model_mutation_changes_key(mutated, "clock skew");
+        let mut mutated = model_handle.clone();
+        mutated.issuer_context.network_id =
+            iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::new(b"ivm-abi-other-budget-key-network"),
+            ));
+        assert_model_mutation_changes_key(mutated, "issuer network");
+        let mut mutated = model_handle.clone();
+        mutated.issuer_context.asset_dsid = DataSpaceId::new(7);
+        assert_model_mutation_changes_key(mutated, "issuer dataspace");
+        let mut mutated = model_handle.clone();
+        mutated.issuer_context.asset_definition_incarnation = AxtAssetIncarnationV1::derive(
+            &mutated.issuer_context.network_id,
+            &mutated.asset_definition_id,
+            &iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new(b"ivm-abi-other-asset-registration"),
+            ),
+            &Hash::new(b"ivm-abi-other-asset-execution"),
+            0,
+        );
+        assert_model_mutation_changes_key(mutated, "asset-definition incarnation");
+        let mut mutated = model_handle.clone();
+        mutated.issuer_context.issuer = iroha_data_model::nexus::UniversalAccountId::from_hash(
+            Hash::new(b"ivm-abi-other-budget-key-issuer"),
+        );
+        assert_model_mutation_changes_key(mutated, "issuer identity");
+        let mut mutated = model_handle.clone();
+        mutated.issuer_context.issuer_manifest_root = [0xB4; 32];
+        assert_model_mutation_changes_key(mutated, "issuer manifest root");
+        let mut mutated = model_handle.clone();
+        mutated.issuer_context.code_root = [0xB5; 32];
+        assert_model_mutation_changes_key(mutated, "issuer code root");
+        let mut mutated = model_handle.clone();
+        mutated.issuer_context.abi_version = 2;
+        assert_model_mutation_changes_key(mutated, "issuer ABI version");
+        let mut mutated = model_handle;
+        mutated.issuer_context.abi_hash = [0xB6; 32];
+        assert_model_mutation_changes_key(mutated, "issuer ABI hash");
+    }
+    #[test]
     fn commit_rejects_per_use_overspend_per_dataspace() {
         let dsid = DataSpaceId::new(7);
         let descriptor = AxtDescriptor {
@@ -2825,6 +3065,41 @@ mod tests {
             .record_handle(usage)
             .expect_err("duplicate sub-nonce must be rejected");
         assert!(matches!(err, VMError::PermissionDenied));
+    }
+    #[test]
+    fn record_handle_rejects_asset_not_authenticated_by_handle_issuer() {
+        let dsid = DataSpaceId::new(8);
+        let descriptor = AxtDescriptor {
+            dsids: vec![dsid],
+            touches: vec![AxtTouchSpec {
+                dsid,
+                read: vec!["orders".into()],
+                write: vec!["ledger".into()],
+            }],
+        };
+        let binding = compute_binding(&descriptor).expect("binding");
+        let mut state = HostAxtState::new(descriptor, binding);
+        state
+            .record_touch(dsid, sample_touch_manifest())
+            .expect("touch recorded");
+        let handle = sample_handle(dsid, binding, 50, None);
+        let mut intent = sample_intent(dsid, Some(10));
+        intent.op.asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("test asset domain"),
+            "iris".parse().expect("test asset name"),
+        );
+
+        assert_eq!(
+            state.record_handle(HandleUsage {
+                handle,
+                intent,
+                proof: None,
+                amount: quantity(10),
+                amount_commitment: None,
+            }),
+            Err(VMError::PermissionDenied),
+            "one signed handle must not authorize a different asset in the same dataspace"
+        );
     }
     #[test]
     fn record_handle_allows_out_of_order_sub_nonce() {

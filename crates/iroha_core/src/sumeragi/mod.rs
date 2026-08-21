@@ -3921,7 +3921,6 @@ pub(crate) enum FairV2IngressDequeueDisposition {
     RetireObsolete,
 }
 include!("fair_v2_ingress_selector.rs");
-
 fn select_fair_v2_ingress_candidate<T>(
     candidates: &[Vec<T>],
     projection: impl Fn(&T) -> (u64, FairV2IngressQueueGateVerdict, bool),

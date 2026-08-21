@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard Torii's narrow wrapper macros against semantic inventory drift."""
+"""Guard Torii's narrow wrapper and route macros against semantic drift."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ SOURCE_PATH = ROOT / "crates/iroha_torii/src/lib.rs"
 
 
 class GuardError(AssertionError):
-    """The generated wrapper surface no longer matches its direct preimage."""
+    """A generated wrapper or route surface no longer matches its direct preimage."""
 
 
 @dataclass(frozen=True)
@@ -258,6 +258,14 @@ FAMILIES = {
     ),
 }
 
+ROUTE_MACRO_DEFINITION_SHA256 = {
+    "catalog_route_policy": "98402ff8feed4a1df42e099a14acccf60449b583a29795d0c1fb154f518646ca",
+    "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
+    "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
+}
+ROUTE_ROW_COUNT = 548
+ROUTE_TUPLE_SHA256 = "4b2b96ad9d742f23b665ace1e4a293c4c22d712370ac317d97b624826b809bdb"
+
 
 def _normalized_tokens(source: str) -> bytes:
     """Discard layout/comments while preserving string and raw-string bytes."""
@@ -455,8 +463,387 @@ def _expected_invocation(
     return _normalized_tokens(f"{name}!({','.join(rows)}{suffix});")
 
 
+def _matching_delimiter(
+    source: str, opening: int, left: str = "(", right: str = ")"
+) -> int:
+    """Find a balanced delimiter while ignoring comments and string contents."""
+
+    depth = 0
+    index = opening
+    state = "code"
+    block_depth = 0
+    while index < len(source):
+        char = source[index]
+        if state == "code":
+            if source.startswith("//", index):
+                state = "line_comment"
+                index += 2
+                continue
+            if source.startswith("/*", index):
+                state = "block_comment"
+                block_depth = 1
+                index += 2
+                continue
+            if char == '"':
+                state = "string"
+            elif char == left:
+                depth += 1
+            elif char == right:
+                depth -= 1
+                if depth == 0:
+                    return index
+            index += 1
+            continue
+        if state == "line_comment":
+            if char == "\n":
+                state = "code"
+            index += 1
+            continue
+        if state == "block_comment":
+            if source.startswith("/*", index):
+                block_depth += 1
+                index += 2
+            elif source.startswith("*/", index):
+                block_depth -= 1
+                index += 2
+                if block_depth == 0:
+                    state = "code"
+            else:
+                index += 1
+            continue
+        if char == "\\":
+            index += 2
+        elif char == '"':
+            state = "code"
+            index += 1
+        else:
+            index += 1
+    raise GuardError("unterminated source delimiter")
+
+
+def _split_top_level(source: str, delimiter: str) -> list[str]:
+    """Split on one delimiter outside nested Rust token groups."""
+
+    output: list[str] = []
+    start = 0
+    stack: list[str] = []
+    index = 0
+    state = "code"
+    block_depth = 0
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    while index < len(source):
+        char = source[index]
+        if state == "code":
+            if source.startswith("//", index):
+                state = "line_comment"
+                index += 2
+                continue
+            if source.startswith("/*", index):
+                state = "block_comment"
+                block_depth = 1
+                index += 2
+                continue
+            if char == '"':
+                state = "string"
+            elif char in pairs:
+                stack.append(pairs[char])
+            elif stack and char == stack[-1]:
+                stack.pop()
+            elif char == delimiter and not stack:
+                output.append(source[start:index].strip())
+                start = index + 1
+            index += 1
+            continue
+        if state == "line_comment":
+            if char == "\n":
+                state = "code"
+            index += 1
+            continue
+        if state == "block_comment":
+            if source.startswith("/*", index):
+                block_depth += 1
+                index += 2
+            elif source.startswith("*/", index):
+                block_depth -= 1
+                index += 2
+                if block_depth == 0:
+                    state = "code"
+            else:
+                index += 1
+            continue
+        if char == "\\":
+            index += 2
+        elif char == '"':
+            state = "code"
+            index += 1
+        else:
+            index += 1
+    if source[start:].strip():
+        output.append(source[start:].strip())
+    return output
+
+
+def _route_macro_definition(source: str, name: str) -> str:
+    try:
+        start = source.index(f"macro_rules! {name}")
+        opening = source.index("{", start)
+    except ValueError as error:
+        raise GuardError(f"{name} definition is missing") from error
+    closing = _matching_delimiter(source, opening, "{", "}")
+    return source[start : closing + 1]
+
+
+def _cfg_target_end(source: str, target: int) -> int:
+    """Return the end of the item, block, or statement governed by a cfg."""
+
+    stack: list[str] = []
+    index = target
+    state = "code"
+    block_depth = 0
+    pairs = {"(": ")", "[": "]"}
+    while index < len(source):
+        char = source[index]
+        if state == "code":
+            if source.startswith("//", index):
+                state = "line_comment"
+                index += 2
+                continue
+            if source.startswith("/*", index):
+                state = "block_comment"
+                block_depth = 1
+                index += 2
+                continue
+            if char == '"':
+                state = "string"
+            elif char in pairs:
+                stack.append(pairs[char])
+            elif stack and char == stack[-1]:
+                stack.pop()
+            elif not stack and char == "{":
+                return _matching_delimiter(source, index, "{", "}") + 1
+            elif not stack and char == ";":
+                return index + 1
+            index += 1
+            continue
+        if state == "line_comment":
+            if char == "\n":
+                state = "code"
+            index += 1
+            continue
+        if state == "block_comment":
+            if source.startswith("/*", index):
+                block_depth += 1
+                index += 2
+            elif source.startswith("*/", index):
+                block_depth -= 1
+                index += 2
+                if block_depth == 0:
+                    state = "code"
+            else:
+                index += 1
+            continue
+        if char == "\\":
+            index += 2
+        elif char == '"':
+            state = "code"
+            index += 1
+        else:
+            index += 1
+    raise GuardError("cfg attribute has no governed source target")
+
+
+def _route_cfg_ranges(
+    source: str, corridor_start: int, corridor_end: int
+) -> list[tuple[int, int, str]]:
+    ranges = []
+    pattern = re.compile(r"#\[cfg\s*\(")
+    for match in pattern.finditer(source, corridor_start, corridor_end):
+        opening = source.index("(", match.start())
+        closing = _matching_delimiter(source, opening)
+        expression = "".join(source[opening + 1 : closing].split())
+        cursor = source.find("]", closing) + 1
+        while True:
+            while cursor < len(source) and source[cursor].isspace():
+                cursor += 1
+            if not source.startswith("#[", cursor):
+                break
+            cursor = _matching_delimiter(source, cursor + 1, "[", "]") + 1
+        ranges.append((cursor, _cfg_target_end(source, cursor), expression))
+    return ranges
+
+
+def _route_cfg_at(position: int, ranges: list[tuple[int, int, str]]) -> str:
+    active = [item for item in ranges if item[0] <= position < item[1]]
+    active.sort(key=lambda item: item[0])
+    return "&".join(expression for _, _, expression in active) or "always"
+
+
+def _route_semantics(policy: str, arguments: list[str]) -> tuple[str, str, str]:
+    method = policy.rsplit("_", 1)[-1].upper()
+    if method not in {"GET", "POST", "DELETE", "ANY"}:
+        raise GuardError(f"unknown route method policy: {policy}")
+
+    def require(width: int) -> None:
+        if len(arguments) != width:
+            raise GuardError(f"{policy} row width drifted")
+
+    if policy.startswith("limited_canonical_account_"):
+        require(4)
+        limit = f"max({arguments[2]});auth({arguments[3]})"
+        auth = f"canonical-account({arguments[1]}.clone())"
+    elif policy.startswith("layered_canonical_account_"):
+        require(4)
+        limit = f"layer({arguments[2]}.clone());auth({arguments[3]})"
+        auth = f"canonical-account({arguments[1]}.clone())"
+    elif policy == "canonical_account_proof_post":
+        require(3)
+        limit = f"proof({arguments[2]})"
+        auth = f"canonical-account-proof({arguments[1]}.clone())"
+    elif policy.startswith("canonical_account_"):
+        require(3)
+        limit = f"auth({arguments[2]})"
+        auth = f"canonical-account({arguments[1]}.clone())"
+    elif policy.startswith("limited_operator_"):
+        require(3)
+        limit = f"max({arguments[2]})"
+        auth = f"operator({arguments[1]}.clone())"
+    elif policy.startswith("operator_") and policy != "operator_credential_post":
+        require(2)
+        limit = "none"
+        auth = f"operator({arguments[1]}.clone())"
+    elif policy.startswith("limited_hardened_canonical_signature_"):
+        require(2)
+        if policy != "limited_hardened_canonical_signature_get":
+            raise GuardError(f"unknown hardened route policy: {policy}")
+        limit = f"max({arguments[1]});harden-reputation"
+        auth = "handler:CanonicalAccountSignature"
+    elif policy.startswith("limited_"):
+        require(2)
+        limit = f"max({arguments[1]})"
+        stem = policy[len("limited_") :].rsplit("_", 1)[0]
+        try:
+            auth = {
+                "public": "public",
+                "canonical_signature": "handler:CanonicalAccountSignature",
+                "canonical_signed": "handler:CanonicalSignedBody",
+                "protocol_handshake": "handler:ProtocolHandshake",
+            }[stem]
+        except KeyError as error:
+            raise GuardError(f"unknown limited route policy: {policy}") from error
+    elif policy.startswith("layered_"):
+        require(2)
+        limit = f"layer({arguments[1]}.clone())"
+        stem = policy[len("layered_") :].rsplit("_", 1)[0]
+        try:
+            auth = {
+                "public": "public",
+                "canonical_signature": "handler:CanonicalAccountSignature",
+                "canonical_signed": "handler:CanonicalSignedBody",
+            }[stem]
+        except KeyError as error:
+            raise GuardError(f"unknown layered route policy: {policy}") from error
+    else:
+        require(1)
+        limit = "none"
+        stem = policy.rsplit("_", 1)[0]
+        try:
+            auth = {
+                "public": "public",
+                "unauthenticated": "unauthenticated",
+                "canonical_signature": "handler:CanonicalAccountSignature",
+                "canonical_signed": "handler:CanonicalSignedBody",
+                "protocol_handshake": "handler:ProtocolHandshake",
+                "operator_credential": "handler:OperatorCredentialExchange",
+                "onboarding": "onboarding",
+            }[stem]
+        except KeyError as error:
+            raise GuardError(f"unknown direct route policy: {policy}") from error
+    return method, limit, auth
+
+
+def _route_table_rows(source: str) -> list[tuple[str, str, str, str, str, str]]:
+    try:
+        corridor_start = source.index(
+            '    #[cfg(feature = "telemetry")]\n'
+            "    #[allow(clippy::unused_self)]\n"
+            "    fn add_telemetry_routes"
+        )
+        corridor_end = source.index(
+            "    fn add_runtime_governance_routes", corridor_start
+        )
+    except ValueError as error:
+        raise GuardError("Torii route-builder corridor markers drifted") from error
+    cfg_ranges = _route_cfg_ranges(source, corridor_start, corridor_end)
+    positioned_rows = []
+    for name, local_catalog in (
+        ("mount_catalog_route_rows", False),
+        ("mount_local_catalog_route_rows", True),
+    ):
+        pattern = re.compile(rf"\b{re.escape(name)}!\s*\(")
+        for match in pattern.finditer(source, corridor_start, corridor_end):
+            opening = source.index("(", match.start())
+            closing = _matching_delimiter(source, opening)
+            semicolon = closing + 1
+            while semicolon < len(source) and source[semicolon].isspace():
+                semicolon += 1
+            if semicolon >= len(source) or source[semicolon] != ";":
+                raise GuardError(f"{name} invocation must end with a semicolon")
+            parts = _split_top_level(source[opening + 1 : closing], ";")
+            header = _split_top_level(parts[0], ",") if parts else []
+            if len(header) != 2 or header[0] != "builder":
+                raise GuardError(f"{name} header drifted")
+            catalog = header[1]
+            cfg = _route_cfg_at(match.start(), cfg_ranges)
+            for row in parts[1:]:
+                row_match = re.fullmatch(
+                    r"([A-Z0-9_]+)\s*=>\s*([a-z0-9_]+)\s*(\(.*\))",
+                    row,
+                    re.S,
+                )
+                if not row_match:
+                    raise GuardError(f"{name} row syntax drifted")
+                descriptor, policy, argument_group = row_match.groups()
+                arguments = _split_top_level(argument_group[1:-1], ",")
+                if not arguments:
+                    raise GuardError(f"{name} row has no handler")
+                method, limit, auth = _route_semantics(policy, arguments)
+                module = "runtime_governance" if local_catalog else catalog
+                positioned_rows.append(
+                    (
+                        match.start(),
+                        (
+                            cfg,
+                            method,
+                            f"route_catalog::{module}::{descriptor}",
+                            arguments[0],
+                            limit,
+                            auth,
+                        ),
+                    )
+                )
+    positioned_rows.sort(key=lambda item: item[0])
+    return [row for _, row in positioned_rows]
+
+
+def _validate_route_tables(source: str) -> None:
+    for name, expected in ROUTE_MACRO_DEFINITION_SHA256.items():
+        definition = _route_macro_definition(source, name)
+        if _sha256(_normalized_tokens(definition)) != expected:
+            raise GuardError(f"{name} definition drifted")
+    rows = _route_table_rows(source)
+    if len(rows) != ROUTE_ROW_COUNT:
+        raise GuardError("Torii route row count drifted")
+    digest = _sha256(
+        json.dumps(rows, separators=(",", ":"), ensure_ascii=True).encode()
+    )
+    if digest != ROUTE_TUPLE_SHA256:
+        raise GuardError(
+            "ordered Torii (cfg, method, descriptor, handler, limit, auth) inventory drifted"
+        )
+
+
 def validate_source(source: str) -> None:
-    """Validate exact definitions, inputs, expansions, and source ordering."""
+    """Validate exact wrapper/route definitions, expansions, and source ordering."""
 
     wrapper_names: list[str] = []
     positions: dict[str, list[int]] = {}
@@ -499,10 +886,11 @@ def validate_source(source: str) -> None:
         < source.index("async fn handler_iso_status(")
     ):
         raise GuardError("ISO submission/status logical order drifted")
+    _validate_route_tables(source)
 
 
 class ToriiWrapperMacroInventoryTest(unittest.TestCase):
-    """Exercise the source guard and representative fail-closed mutations."""
+    """Exercise both source inventories and representative fail-closed mutations."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -550,6 +938,44 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 "",
             ),
             ("$message_type:literal", "$message_type:expr"),
+        )
+        for old, new in mutations:
+            with self.subTest(old=old, new=new):
+                self.assertIn(old, self.source)
+                mutated = self.source.replace(old, new, 1)
+                with self.assertRaises(GuardError):
+                    validate_source(mutated)
+
+    def test_route_policy_inventory_and_cfg_mutations_fail(self) -> None:
+        mutations = (
+            (
+                "STATUS => unauthenticated_get(handler_status_root);\n"
+                "            STATUS_TAIL => unauthenticated_get(handler_status_tail);",
+                "STATUS_TAIL => unauthenticated_get(handler_status_tail);\n"
+                "            STATUS => unauthenticated_get(handler_status_root);",
+            ),
+            (
+                "TRANSACTION => limited_canonical_signed_post("
+                "handler_post_transaction, body_limit);",
+                "TRANSACTION => limited_canonical_signed_post("
+                "handler_post_transaction, iso_body_limit);",
+            ),
+            (
+                "PACEMAKER => operator_get(handler_pacemaker_status, app_state);",
+                "PACEMAKER => public_get(handler_pacemaker_status);",
+            ),
+            (
+                '#[cfg(feature = "telemetry")]\n'
+                "    #[allow(clippy::unused_self)]\n"
+                "    fn add_telemetry_routes",
+                '#[cfg(feature = "app_api")]\n'
+                "    #[allow(clippy::unused_self)]\n"
+                "    fn add_telemetry_routes",
+            ),
+            (
+                "catalog_get($handler).authenticated_operator($state.clone())",
+                "catalog_get($handler).authenticated_operator($state)",
+            ),
         )
         for old, new in mutations:
             with self.subTest(old=old, new=new):

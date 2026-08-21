@@ -3,10 +3,11 @@
 mod axt_golden;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::nexus::{
-    AssetHandle, AxtBinding, AxtDescriptor, AxtHandleFragment, AxtHandleIssuerContextV1,
-    AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtTouchFragment, AxtTouchSpec,
-    AxtValidationError, DataSpaceId, GroupBinding, HandleBudget, HandleSubject, LaneId,
-    RemoteSpendIntent, SpendOp, TouchManifest, UniversalAccountId, validate_descriptor,
+    AssetHandle, AxtAssetIncarnationV1, AxtBinding, AxtDescriptor, AxtHandleCounterRecord,
+    AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyBinding,
+    AxtPolicyEntry, AxtPolicySnapshot, AxtTouchFragment, AxtTouchSpec, AxtValidationError,
+    DataSpaceId, GroupBinding, HandleBudget, HandleSubject, LaneId, RemoteSpendIntent, SpendOp,
+    TouchManifest, UniversalAccountId, validate_descriptor,
 };
 use iroha_data_model::{
     NetworkId, asset::id::AssetDefinitionId, block::BlockHeader, domain::DomainId,
@@ -70,12 +71,30 @@ fn encoded_account(public_key_hex: &str) -> String {
     iroha_data_model::account::AccountId::new(public_key_hex.parse().expect("public key"))
         .to_string()
 }
+fn sample_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::derive_from_components(
+        DomainId::try_new("axt", "universal").expect("asset domain"),
+        "rose".parse().expect("asset name"),
+    )
+}
 fn sample_issuer_context() -> AxtHandleIssuerContextV1 {
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"axt-policy-vectors-network"),
+    ));
+    let registration_header_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"axt-policy-vectors-asset-registration-header",
+    ));
+    let execution_identity = Hash::new(b"axt-policy-vectors-asset-registration-execution");
     AxtHandleIssuerContextV1 {
-        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::new(b"axt-policy-vectors-network"),
-        )),
+        network_id,
         asset_dsid: DataSpaceId::new(7),
+        asset_definition_incarnation: AxtAssetIncarnationV1::derive(
+            &network_id,
+            &sample_asset_definition_id(),
+            &registration_header_hash,
+            &execution_identity,
+            0,
+        ),
         issuer: UniversalAccountId::from_hash(Hash::new(b"axt-policy-vectors-issuer")),
         issuer_manifest_root: [0x22; 32],
         code_root: Hash::new(b"axt-policy-vectors-code").into(),
@@ -85,6 +104,7 @@ fn sample_issuer_context() -> AxtHandleIssuerContextV1 {
 }
 fn sample_handle(binding: AxtBinding) -> AssetHandle {
     AssetHandle {
+        asset_definition_id: sample_asset_definition_id(),
         scope: vec!["register".into(), "transfer".into()],
         subject: HandleSubject {
             account: encoded_account(
@@ -127,14 +147,19 @@ fn sample_policy_snapshot() -> AxtPolicySnapshot {
         entries,
     }
 }
+fn sample_handle_counter() -> AxtHandleCounterRecord {
+    AxtHandleCounterRecord::try_from_parts(7, 9).expect("valid permanent AXT ratchet fixture")
+}
+fn sample_handle_replay_key() -> AxtHandleReplayKey {
+    let descriptor = sample_descriptor();
+    let handle = sample_handle(sample_binding(&descriptor));
+    AxtHandleReplayKey::from_handle(DataSpaceId::new(7), &handle)
+}
 fn sample_intent() -> RemoteSpendIntent {
     RemoteSpendIntent {
         asset_dsid: DataSpaceId::new(7),
         op: SpendOp {
-            asset_definition_id: AssetDefinitionId::derive_from_components(
-                DomainId::try_new("axt", "universal").expect("asset domain"),
-                "rose".parse().expect("asset name"),
-            ),
+            asset_definition_id: sample_asset_definition_id(),
             kind: "transfer".into(),
             from: encoded_account(
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
@@ -175,6 +200,34 @@ fn policy_snapshot_roundtrip_matches_golden() {
     let decoded: AxtPolicySnapshot =
         norito::decode_from_bytes(axt_golden::AXT_POLICY).expect("decode policy fixture");
     assert_eq!(decoded, snapshot);
+}
+#[test]
+fn handle_counter_roundtrip_matches_golden() {
+    let counter = sample_handle_counter();
+    let bytes = norito::to_bytes(&counter).expect("encode handle counter ratchet");
+    assert_bytes_match(
+        "handle counter ratchet",
+        &bytes,
+        axt_golden::AXT_HANDLE_COUNTER,
+    );
+    let decoded: AxtHandleCounterRecord = norito::decode_from_bytes(axt_golden::AXT_HANDLE_COUNTER)
+        .expect("decode handle counter fixture");
+    decoded.validate().expect("validate decoded handle counter");
+    assert_eq!(decoded, counter);
+}
+#[test]
+fn handle_replay_key_roundtrip_matches_golden() {
+    let key = sample_handle_replay_key();
+    let bytes = norito::to_bytes(&key).expect("encode handle replay key");
+    assert_bytes_match(
+        "handle replay key",
+        &bytes,
+        axt_golden::AXT_HANDLE_REPLAY_KEY,
+    );
+    let decoded: AxtHandleReplayKey = norito::decode_from_bytes(axt_golden::AXT_HANDLE_REPLAY_KEY)
+        .expect("decode handle replay key fixture");
+    decoded.validate().expect("validate decoded replay key");
+    assert_eq!(decoded, key);
 }
 #[test]
 fn descriptor_validation_errors_are_stable() {
@@ -233,12 +286,22 @@ fn print_golden_vectors() {
     let binding = sample_binding(&descriptor);
     let handle = sample_handle(binding);
     let snapshot = sample_policy_snapshot();
+    let counter = sample_handle_counter();
+    let replay_key = AxtHandleReplayKey::from_handle(DataSpaceId::new(7), &handle);
     let descriptor_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
     let snapshot_bytes = norito::to_bytes(&snapshot).expect("encode snapshot");
     println!("descriptor: {}", hex::encode(descriptor_bytes));
     println!("handle: {}", hex::encode(handle_bytes));
     println!("policy: {}", hex::encode(snapshot_bytes));
+    println!(
+        "handle counter: {}",
+        hex::encode(norito::to_bytes(&counter).expect("encode handle counter ratchet"))
+    );
+    println!(
+        "handle replay key: {}",
+        hex::encode(norito::to_bytes(&replay_key).expect("encode handle replay key"))
+    );
     let touch_fragment = AxtTouchFragment {
         dsid: descriptor.dsids[0],
         manifest: TouchManifest {

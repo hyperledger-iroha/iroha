@@ -129,6 +129,53 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
     assert!(!executor.status().fail_closed);
 }
 #[test]
+fn durable_sign_preemption_retires_a_retryable_body_token() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));
+    let mut services = fixture.services();
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    executor
+        .consume_effects(
+            vec![AdapterEffect::FetchBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+                manifest: Some(fixture.manifest.clone()),
+                certified_sources: certified_sources(&fixture, &prepare),
+                certificate: Some(prepare),
+            }],
+            &mut services,
+        )
+        .expect("fill pending-work capacity with one certified fetch");
+    let task = services.fetch_tasks[0].clone();
+    let retryable = executor
+        .runtime
+        .reserve_body_available_with_owner(task.tag, fixture.manifest.clone(), task.ownership())
+        .expect("reserve the unpublished BodyAvailable completion");
+    assert!(retryable.owns_new_slot());
+    assert_eq!(
+        executor
+            .body_ownership_projection()
+            .runtime_body_reservation,
+        Some(retryable),
+        "the retryable completion must retain its exact Fetch owner",
+    );
+    assert!(executor.runtime.completions.is_empty());
+
+    executor
+        .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+        .expect("durable signing preempts the retryable fetch and its token");
+    assert_eq!(services.cancelled_fetches, vec![task.id()]);
+    assert!(executor.pending_fetches.is_empty());
+    assert!(executor.certified_work.is_empty());
+    assert!(executor.outstanding_requests.is_empty());
+    assert!(executor.runtime.reserved_body_available.is_none());
+    assert!(executor.runtime.completions.is_empty());
+    assert_eq!(executor.pending_signatures.len(), 1);
+    assert!(!executor.output_guard.restart_required());
+    assert!(!executor.status().fail_closed);
+}
+#[test]
 fn retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));

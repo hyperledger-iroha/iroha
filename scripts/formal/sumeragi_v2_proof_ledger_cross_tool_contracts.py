@@ -2986,6 +2986,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
                     "crates/iroha_core/src/sumeragi/v2_body_store.rs",
                     "crates/iroha_core/src/sumeragi/v2_effects.rs",
+                    "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
                     "crates/iroha_core/src/sumeragi/v2_worker.rs",
                 ),
@@ -3039,26 +3040,36 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 source_item_seals=_HISTORICAL_BODY_SOURCE_ITEM_SEALS,
                 production_call_sites=(
                     CrossToolProductionCallContract(
-                        source="crates/iroha_core/src/sumeragi/v2_effects.rs",
-                        item="accept_certified_body_response_inner",
-                        item_token_sha256=(
-                            "bb0c8b87aa2efd09eebf75ed149d55ae44d974cd0aa24a8f8c15ca83b4da44f4"
+                        source=(
+                            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs"
                         ),
-                        brace_context=((
-                            "impl", "<", "R", ":", "EffectRuntime", ">",
-                            "V2EffectExecutor", "<", "R", ">",
-                        ),),
+                        item="complete_certified_fetch_body_persistence",
+                        item_token_sha256=(
+                            "0a7c5d29372bc8970f88d82f74f36e1e7a06635f51a12ff7475e63b221577851"
+                        ),
+                        brace_context=(("impl", "LifecycleCoordinator"),),
                         projection="historical_trace",
                         required_expression="""
-                            if !production_historical_body_pipeline_trace_refines_indexed_async_kernel(
+                            check_production_historical_body_pipeline_transition(
                                 historical_trace
-                            ) {
-                                return Err(self.fail_closed_transport(
-                                    "certified body admission did not preserve its exact historical pipeline owner",
-                                    services,
-                                ));
-                            }
+                            )
                         """,
+                        token_consumptions=(
+                            "let _authorized_historical_pipeline = checked_transition.into_projection();",
+                        ),
+                        mutation_boundaries=(
+                            "output_guard.begin_fail_stop_operation()",
+                            "ready_mutation.persist_exact_staged_successor()",
+                            "exact_dequeue.commit(ingress)",
+                            "durable_registry.commit_after_exact_dequeue(dequeued)",
+                            "ready.commit()",
+                            "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
+                            "service_prepared.commit(operation.permit())",
+                            "work_ack.commit()",
+                        ),
+                        projection_bindings=(
+                            "let historical_trace = ProductionHistoricalBodyPipelineTraceProjection {",
+                        ),
                     ),
                 ),
             ),

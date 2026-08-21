@@ -580,11 +580,9 @@
             "bash \"$grouped_parity_harness\" --suite-source-manifest-sha256",
             "symbols[\"_sdk_suite_source_manifest\"](",
             "symbols[\"_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE\"]",
-            "|| \"$resolver_grouped_suite_source_manifest_sha256\"",
-            "|| \"$receipt_suite_source_manifest_sha256\"",
             "!= \"$grouped_suite_source_manifest_sha256\"",
-            "grouped Native AMX V2 fixture/resolver/receipt source binding is invalid",
-            "must derive SDK suite-source digests at freeze/replay instead of embedding mutable values"
+            "grouped Native AMX V2 fixture/suite source binding is invalid",
+            "grouped Native AMX V2 suite-source manifest SHA-256"
           ]
         }
       ]

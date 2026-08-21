@@ -18,10 +18,10 @@ Key guarantees:
 - AXT proof envelopes bind proof bytes to a dataspace, its active manifest root,
   and the FastPQ V1 verifier metadata before the host caches the verification
   result for the configured slot window.
-- IVM hosts derive per-dataspace AXT policy and issuer identity from committed Space Directory state. A handle must carry a valid domain-separated V1 signature from the single-key UAID account bound to the active `(dataspace, manifest root)`, target the catalog lane, use the exact active era and exact next counter, and satisfy expiry. Missing, ambiguous, multisignature, or inconsistent issuer indexes fail closed before FASTPQ verification.
+- IVM hosts derive per-dataspace AXT policy and issuer identity from committed Space Directory state. A handle must carry a valid domain-separated V1 signature from the single-key UAID account bound to the active `(dataspace, manifest root)`, target the catalog lane, use the exact authorization generation and next counter from the permanent per-dataspace ratchet, and satisfy expiry. Missing, ambiguous, multisignature, or inconsistent issuer indexes fail closed before FASTPQ verification.
 - Slot expiry uses `nexus.axt.slot_length_ms` (default `1` ms, validated between `1` ms and `600_000` ms) plus the bounded `nexus.axt.max_clock_skew_ms` (default `0` ms, capped by the slot length and `60_000` ms). Hosts compute `current_slot = block.creation_time_ms / slot_length_ms`, apply the skew allowance to proof and handle expiry checks, and reject handles that advertise a larger skew than the configured limit.
 - Proof cache TTL bounds reuse: `nexus.axt.proof_cache_ttl_slots` (default `1`, validated `1`–`64`) limits how long accepted or rejected proofs stay in the host cache; entries drop once the TTL window or the proof’s `expiry_slot` elapses so replay protection stays bounded.
-- Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) sets the minimum slot window of handle-usage history retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once both the retention window and handle expiry have elapsed (whichever is later). A block carries the deterministic post-state policy snapshot; Kura replay installs that snapshot and rebuilds the ledger without advancing counters a second time.
+- Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) sets the minimum slot window of handle-usage history retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once both the retention window and handle expiry have elapsed (whichever is later). A block carries the deterministic post-state policy snapshot. Kura idempotently applies post-snapshot envelopes without advancing counters or cumulative charges a second time; only replay from genesis reconstructs the complete ledger, and a checkpoint restore requires its authenticated pre-snapshot ledger.
 - Debugging cache status: Torii exposes `/v1/debug/axt/cache` (telemetry/developer gate) to return the current AXT policy snapshot version, the most recent reject (lane/reason/version), cached proofs (dataspace/status/manifest root/slots), and reject hints (`active_handle_era`/`next_handle_counter`). Use this endpoint to confirm slot/manifest rotations are reflected in cache state and to refresh handles deterministically during troubleshooting.
 
 ## Slot Timing Model
@@ -40,7 +40,7 @@ t=0ms           70ms             300ms              600ms       840ms    1000ms
   IVM/AMX 250 ms, settlement 40 ms, and a 40 ms guard.
 - Transactions breaching the DA window are logged as missing availability evidence and retried in the next slot; all other breaches surface codes such as `AMX_TIMEOUT` or `SETTLEMENT_ROUTER_UNAVAILABLE`.
 - The guard slice absorbs telemetry export and final auditing so the slot still closes at 1 s even if exporters lag briefly.
-- Configuration tips: defaults keep expiry strict (`slot_length_ms = 1`, `max_clock_skew_ms = 0`). For a 1 s cadence set `slot_length_ms = 1_000` and `max_clock_skew_ms = 250`; for a 2 s cadence use `slot_length_ms = 2_000` and `max_clock_skew_ms = 500`. Values outside the validated window (`1`–`600_000` ms or `max_clock_skew_ms` greater than the slot length/`60_000` ms) are rejected at config-parse time, and advertised handle skew must stay within the configured bound.
+- Configuration tips for genesis or an explicit chain-boundary migration: defaults keep expiry strict (`slot_length_ms = 1`, `max_clock_skew_ms = 0`). For a 1 s cadence set `slot_length_ms = 1_000` and `max_clock_skew_ms = 250`; for a 2 s cadence use `slot_length_ms = 2_000` and `max_clock_skew_ms = 500`. Values outside the validated window (`1`–`600_000` ms or `max_clock_skew_ms` greater than the slot length/`60_000` ms) are rejected at config-parse time, and advertised handle skew must stay within the configured bound. Do not reinterpret existing handle expiry slots by changing these values on a live chain.
 
 ### Cross-DS swim lane
 
@@ -88,13 +88,14 @@ evidence.
 
 ### AXT golden fixtures
 
-Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_data_model/tests/fixtures/axt_golden.rs`, with a regeneration helper in `crates/iroha_data_model/tests/axt_policy_vectors.rs` (`print_golden_vectors`). CoreHost consumes the same fixtures in `core_host_enforces_fixture_snapshot_fields` (`crates/ivm/tests/core_host_policy.rs`) to exercise lane binding, manifest root matching, expiry freshness, exact era/sub-nonce matching, and missing-dataspace rejections.
+Norito fixtures for the descriptor, signed handle, policy snapshot, two-dimensional authorization counter, and incarnation-bound replay key live at `crates/iroha_data_model/tests/fixtures/axt_golden.rs`, with a regeneration helper in `crates/iroha_data_model/tests/axt_policy_vectors.rs` (`print_golden_vectors`). CoreHost consumes the applicable descriptor/handle/policy fields in `core_host_enforces_fixture_snapshot_fields` (`crates/ivm/tests/core_host_policy.rs`) to exercise lane binding, manifest root matching, expiry freshness, exact generation/sub-nonce matching, and missing-dataspace rejections.
 - A multi-dataspace JSON fixture (`crates/iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json`) pins the descriptor/touch schema, canonical header-framed Norito bytes for the data-model type, and the Poseidon binding derived from the bare Norito payload (`compute_descriptor_binding`). Poseidon byte packing appends `0x01` and zero-pads to an eight-byte boundary before field-sponge padding. The `axt_descriptor_fixture` test guards the encoded bytes, and SDKs can use `AxtDescriptorBuilder::builder` plus `TouchManifest::from_read_write` to assemble deterministic samples for docs/SDKs.
 
 ### Lane catalog mapping and manifests
 
-- AXT policy snapshots are built from the Space Directory manifest set and lane catalog. Each dataspace is mapped to its configured lane; active manifests contribute the manifest hash, exact activation epoch (`active_handle_era`), and exact next counter (`next_handle_counter`). UAID bindings without an active manifest still emit a policy entry with a zeroed manifest root so lane gating remains active until a real manifest lands.
-- `current_slot` in the snapshot is derived from the latest committed block timestamp (`creation_time_ms / slot_length_ms`), falling back to the block height only before a committed header is available.
+- AXT policy snapshots are built from the Space Directory manifest set, lane catalog, and permanent per-dataspace handle-counter records. Each dataspace is mapped to its configured lane; active manifests contribute the manifest hash and activation epoch, while both `active_handle_era` and `next_handle_counter` are projected from the non-resetting authorization ratchet. If one or more effective manifest, issuer key, lane/incarnation, active/placeholder, removal, or reactivation transitions affect a dataspace in one block, the durable authorization generation and counter advance exactly once for that dataspace at the block boundary. The sticky `BlockResult.axt_transitioned_dataspaces` set makes transient A→B→A changes visible to validation and deterministic replay. Handles from an earlier generation therefore remain invalid even when they were pre-signed with a future sub-nonce. Generation zero is the absent/inactive sentinel; the first active generation is at least one. A never-authorized UAID binding without an active manifest may emit a zeroed manifest root, era, and counter; if a ratchet already exists, the placeholder must carry its exact retained generation and next value.
+- `current_slot` is derived from the exact candidate header timestamp during execution. Committed query/IVM views use a cached header only when its hash equals the current WSV tip, otherwise an authenticated matching-tip snapshot anchor; a non-genesis view without either source fails closed and never substitutes block height.
+- `slot_length_ms` and `max_clock_skew_ms` are bound by the execution-policy hash. A coordinated timing-policy change is a state-format hard cut that must migrate the policy and invalidate every outstanding handle rather than reinterpret existing expiry slots.
 - Telemetry surfaces the hydrated snapshot as `iroha_axt_policy_snapshot_version` (lower 64 bits of the Norito-encoded snapshot hash) and cache events via `iroha_axt_policy_snapshot_cache_events_total{event=cache_hit|cache_miss}`. Reject counters use the labels `lane`, `manifest`, `era`, `sub_nonce`, and `expiry` so operators can immediately see which field blocked a handle.
 
 ### Cross-dataspace composability checklist
@@ -107,7 +108,7 @@ Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_
 
 1. Build an AXT descriptor listing the dataspace bucket that the remote spend uses plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
 2. Call `AXT_TOUCH` for the remote dataspace with the manifest view you expect; optionally attach a proof via `AXT_VERIFY_DS_PROOF` if the host requires it.
-3. Request or refresh the asset handle and invoke `AXT_USE_ASSET_HANDLE` with a `RemoteSpendIntent` that spends inside the remote dataspace (no bridge leg). Budget enforcement uses the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above.
+3. Request or refresh an asset-specific handle and invoke `AXT_USE_ASSET_HANDLE` with a `RemoteSpendIntent` that spends the exact signed `AssetDefinitionId` inside the remote dataspace (no bridge leg). The handle's issuer-signed asset must equal `RemoteSpendIntent.op.asset_definition_id`; budget enforcement uses that asset identity plus the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above.
 4. Commit via `AXT_COMMIT`; if the host returns `PermissionDenied`, use the reject label to decide whether to fetch a fresh handle (expiry/sub_nonce/era) or fix the manifest/lane binding.
 
 ## Operator Expectations
@@ -174,7 +175,7 @@ The canonical data-model types live in
 | `AxtProofEnvelope.da_commitment` | Outer mirror of the proof-bound optional DA commitment. `axt_fastpq_da_commitment_v1` is always present as 33 bytes: `0 || 32*0` for `None`, or `1 || digest` for `Some(digest)`. |
 | `AxtProofEnvelope.proof` | Non-empty backend proof bytes. |
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
-| `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the exact authenticated handle replay key (dataspace, descriptor binding, era, sub-nonce, and target lane), exact `AssetDefinitionId`, `transfer` operation, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by `USE_ASSET_HANDLE` must contain and consume exactly one matching claim. |
+| `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the exact authenticated handle replay key (dataspace, asset-definition incarnation, descriptor binding, era, sub-nonce, and target lane), exact `AssetDefinitionId`, `transfer` operation, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by `USE_ASSET_HANDLE` must contain and consume exactly one matching claim. |
 | `committed_amount` | Optional non-zero scalar that must exactly match the canonical 16-byte little-endian `u128` in `axt_fastpq_committed_amount_v1` metadata inserted before the FastPQ batch seal and proof are generated. Missing or mismatched proof-bound metadata is rejected. |
 | `amount_commitment` | Optional deterministic hidden-amount copy checked against the spend intent; recomputing it cannot replace or alter the proof-bound `committed_amount`. |
 
@@ -196,9 +197,24 @@ than requests to synthesize defaults.
 This is a first-release proof-format hard cut. Proofs and snapshots generated
 without the required metadata, or with the retired single-field metadata
 projection, are invalid and must be regenerated rather than relabelled.
-`SpendOp.asset_definition_id` and the claim's full `AxtHandleReplayKey` are
-required wire fields; pre-change handles, claims, proofs, and JSON fixtures do
-not decode as V1 and must be regenerated together.
+`AssetHandleDraft.asset_definition_id`, `AssetHandle.asset_definition_id`,
+`SpendOp.asset_definition_id`, and the claim's full `AxtHandleReplayKey` are
+required wire fields. Every persisted `AxtReplayRecord` also carries the exact
+normalized `AxtHandleBudgetKey` derived from the authenticated handle; replay
+records from the earlier compact-key-only layout are invalid.
+`AxtHandleIssuerContextV1.asset_definition_incarnation`
+is also required and binds the signature to the exact registration lifecycle of
+that asset. Core derives the non-zero token from the network, canonical asset
+UUID, executing-header hash, deterministic execution identity, and lifecycle
+ordinal at the exact absent-to-present registration event. Host use and final
+block admission both require the current token to equal the immutable
+block-start token, so registration, unregistration, or re-registration of the
+same asset cannot be mixed with an AXT use in one block. Unrelated asset writes
+do not rotate the token. The handle asset and its incarnation are part of the
+canonical issuer-signature payload. Pre-change handles, claims, proofs, and
+JSON fixtures either fail the new required-field decode or fail exact V1
+claim, metadata, signature, or binding validation and must be regenerated
+together.
 
 One cryptographically verified proof may be reused for multiple handles in the
 same dataspace only when its binding contains one distinct handle-bound claim
@@ -214,9 +230,24 @@ profile only; they do not prove authority and cannot carry remote-spend claims.
 Hosts and block admission derive each expected commitment from the actual
 authenticated handle and require exact per-proof set consumption. Duplicate
 use of one claim, a proof claim with no corresponding handle, or replay under a
-different era, sub-nonce, lane, dataspace, or descriptor fails closed. An empty
+different asset incarnation, era, sub-nonce, lane, dataspace, or descriptor
+fails closed. An empty
 set remains valid for standalone `VERIFY_DS_PROOF` but cannot authorize a
-handle. The asset definition must also exist in committed world state. A
+handle. The asset definition must also exist in committed world state, and its
+current non-zero `AxtAssetIncarnationV1` must equal the issuer-signed context.
+Core derives the token from a dedicated V1 domain separator, the exact
+`NetworkId`, canonical asset-definition UUID, registration transaction's
+executing header hash (`StateTransaction::_curr_block.hash()`), deterministic
+execution identity, and big-endian lifecycle ordinal. The final two fields
+distinguish exact events when autonomous executions share a header context. Only an
+absent-to-present registration or re-registration installs a new token;
+ordinary metadata, ownership, mintability, mint, or burn updates do not rotate
+it. `USE_ASSET_HANDLE`, commit revalidation, and block admission all require the
+current token to equal both the issuer-signed token and the immutable block-start
+token, so unregister/re-register and stale-handle use cannot coexist in one
+block. An unrelated asset registration leaves other tokens and handles valid.
+This prevents a same-ID re-registration from reviving an old handle without
+allowing unrelated registry activity to revoke other tenants. A
 dataspace-restricted definition selects the exact signed intent/proof dataspace
 bucket; its owning domain is not balance-scope authority. A global definition
 is valid only when that signed dataspace is universal.
@@ -230,9 +261,11 @@ Issuers construct an unsigned `AssetHandleDraft`; signing consumes that draft
 and returns an admission-ready `AssetHandle` with a mandatory signature. The
 signature binds the exact genesis-derived `NetworkId`, committed issuer UAID and
 manifest root, executing code root, ABI version/hash, dataspace, descriptor
-digest, scope, subject, budget, group/lane context, exact active era/next
-counter, expiry, and skew allowance. The host reconstructs this context from
-committed state and the executing IVM before any FASTPQ work.
+digest, exact `AssetDefinitionId`, scope, subject, budget, group/lane context,
+exact active era/next counter, expiry, and skew allowance. The host reconstructs
+this context from committed state and the executing IVM before any FASTPQ work,
+and rejects a handle whose signed asset differs from the remote-spend intent or
+matched proof transcript.
 
 ### Generation and use
 
@@ -261,7 +294,7 @@ committed state and the executing IVM before any FASTPQ work.
 - Retrying strategy: missing availability evidence → no action (the tx stays in mempool); `AMX_TIMEOUT` or `PVO_MISSING_OR_EXPIRED` → rebuild artefacts and back off exponentially.
 - Tests should include both cache hits and cold starts (forcing the host to verify the proof with the same `max_k`) to guard against determinism regressions.
 - Proof blobs (`ProofBlob`) MUST encode the complete V1 `AxtProofEnvelope { dsid, manifest_root, da_commitment, proof, fastpq_binding, committed_amount, amount_commitment }`; every nullable slot is encoded explicitly. Hosts bind proofs to the Space Directory manifest root and cache pass/fail results per dataspace/slot with `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}`. Expired or manifest-mismatched artefacts are rejected before commit and subsequent retries in the same slot short-circuit on the cached `reject`.
-- Proof cache reuse is slot-scoped: verified proofs stay hot across envelopes within the same slot and are evicted automatically when the slot advances so retries remain deterministic.
+- Proof cache reuse is bounded by the configured `proof_cache_ttl_slots` and the proof's own expiry: verified proofs may stay hot across envelopes and later slots through that exact deterministic window, then expire automatically.
 
 ### Static read/write analyzer
 
@@ -280,16 +313,44 @@ AXT handle verification now defaults to the Space Directory snapshot when the ho
 - lane binding: handle `target_lane` must match the Space Directory entry;
 - manifest binding: non-zero `manifest_root` values must match the handle’s `manifest_view_root`;
 - expiry: `current_slot` greater than the handle’s `expiry_slot` is rejected;
-- counters: `handle_era` must equal the active manifest era and `sub_nonce` must equal the next committed counter; stale and caller-selected future values are rejected, advancement uses checked arithmetic, and CoreHost includes both the active envelope and earlier completed envelopes in the same transaction when deriving the next counter;
-- replay scope: the canonical replay key is `(asset_dsid, descriptor_binding, handle_era, sub_nonce, target_lane)`, where `asset_dsid` comes from the authenticated issuer/policy context. Distinct dataspaces therefore retain independent per-dataspace counters even when they share a lane and identical counter values; optional `origin_dsid` is not replay authority;
+- counters: `handle_era` must be non-zero and equal the permanent per-dataspace authorization generation, and `sub_nonce` must equal its next value; stale and caller-selected future values are rejected, advancement uses checked arithmetic, and CoreHost includes both the active envelope and earlier completed envelopes in the same transaction when deriving the next counter. The ratchet is required consensus state and is never reset or removed by manifest rotation, issuer-key changes, lane reassignment/incarnation, dataspace removal, or restart. One or more effective policy transitions in a block advance both generation and next counter exactly once per affected dataspace at the block boundary; the authenticated transition set preserves even transient A→B→A changes, so an earlier-generation handle cannot revive at any pre-signed sub-nonce;
+- replay scope: the canonical replay key is `(asset_dsid, asset_definition_incarnation, descriptor_binding, handle_era, sub_nonce, target_lane)`, where `asset_dsid` and the non-zero incarnation come from the authenticated issuer/policy context. Re-registering the same asset identifier therefore cannot reuse a historical proof or replay entry. Distinct dataspaces retain independent per-dataspace counters even when they share a lane and identical counter values; optional `origin_dsid` is not replay authority;
 - account identity: `HandleSubject.account` and `RemoteSpendIntent.op.{from,to}` must carry exact canonical I105 account identifiers; aliases, padded text, and alternate encodings are rejected before policy evaluation;
-- issuer authentication: the signature must bind every V1 policy/network field and verify with the single-key account resolved from the active manifest's committed UAID and dataspace binding;
+- issuer authentication: the signature must bind the exact asset definition, its current non-zero registration incarnation, and every V1 policy/network field, and verify with the single-key account resolved from the active manifest's committed UAID and dataspace binding;
 - membership: handles for dataspaces absent from the snapshot are denied.
 
 Failures map to `PermissionDenied`. IVM policy tests cover field-level allow/deny
 cases, while CoreHost regressions cover active and completed-envelope counter
 progression.
-Block validation authenticates unique handles before FASTPQ verification, scopes replay and budget aggregation by the authenticated asset dataspace, groups handles by their exact V1 issuer/network/policy scope, and reconstructs each committed per-dataspace pre-state counter with checked subtraction from the advertised post-state. It then requires exact ordered counter progression and exact equality with the advertised post-state, with a consensus ceiling of 65,536 authenticated handles per block. It also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), checks handle intent invariants, and aggregates handle budgets per dataspace.
+Block validation authenticates unique handles before FASTPQ verification, scopes replay by the authenticated asset dataspace, groups budgets by the complete normalized V1 issuer-signed capability statement, and reconstructs each committed per-dataspace pre-state counter with checked subtraction from the advertised post-state. It then requires exact ordered counter progression and exact equality with the advertised post-state, with a consensus ceiling of 65,536 authenticated handles per block. It also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), and checks exact signed-handle/intent/proof asset equality.
+Normalized signed handle-family consumption is consensus-persisted and aggregates across completed transaction envelopes, all envelope records in a block, and later blocks; splitting sequential `sub_nonce` values therefore cannot reset `remaining` or `per_use` limits.
+V1 does not yet prune this ledger. The permanent dataspace generation and exact
+asset incarnation provide the authority fences needed for a future deterministic
+compactor, but the first-release implementation deliberately retains every
+accepted family record until that compaction rule and its resource limits are
+specified and tested. Operators must account for this authenticated state
+growth.
+
+Unexpired exact-use replay guards, policy state, and permanent per-dataspace authorization ratchets are also consensus-persisted. Lane retirement, reassignment, issuer/key change, and dataspace removal never reset or delete a ratchet; they monotonically revoke both its generation and current counter. Replay guards use this two-dimensional authority, so deterministic cleanup cannot make an older or pre-signed future handle current after an identity cycle. Block admission hydrates replay and family-budget records only for referenced handles from the pre-block MVCC undo view, so validation cost is proportional to touched handles rather than historical ledger size.
+
+Each replay guard cross-links its compact replay identity to the complete signed
+handle-family key. Normal host execution, transaction recording, and Kura
+reconstruction derive that key only from the authenticated handle. World
+restore rejects a replay/family shared-field mismatch or a missing or invalid
+referenced budget record. Kura may skip an already-applied cumulative charge
+only when the stored and recomputed family keys are exactly equal; presenting
+the same compact replay key under a different signed budget, scope, subject,
+asset, expiry, or issuer context fails closed.
+
+Canonical and auxiliary tiered state both account for the permanent counter,
+live asset-incarnation, and family-budget maps. Incarnation rows track exactly
+the currently registered asset definitions and are removed on unregister;
+counter and V1 family-budget rows are non-pruning. Tiered cold payloads retain
+canonical Norito-encoded keys and Norito JSON values and include their measured
+bytes, so the operational cost of every persistent security record is visible
+rather than omitted from state-tiering decisions.
+
+These persisted AXT stores and transition evidence are a first-release state- and block-format hard cut. Policy rows, permanent counters, family budgets, replay records, the exact asset-incarnation map, and `BlockResult.axt_transitioned_dataspaces` are required canonical fields and change WSV checkpoint or block-result bytes even when initially empty. Snapshot restoration additionally requires an exact bijection between live asset definitions and valid non-zero incarnation records; missing, extra, or corrupt records are rejected rather than backfilled. Pre-cut snapshots/checkpoints/blocks, including replay records without an exact family key, must not be loaded by defaulting a missing store or field to an empty value; deployments must re-genesis or rebuild at a chain boundary that invalidates every pre-cut handle and family. Exact-use replay rows remain deterministically prunable under the permanent generation fence, while cumulative family-budget rows are deliberately non-pruning in V1.
 
 ## Error Catalog
 
@@ -319,8 +380,8 @@ SDK teams should mirror these codes in integration tests so `iroha_cli`, Android
 
 - Run the focused data-model, IVM, core-host, and integration suites:
   `cargo test -p iroha_data_model axt`,
-  `cargo test -p ivm --test axt_host_flow`,
-  `cargo test -p iroha_core --test ivm_corehost_axt`, and
+  `cargo test -p ivm --test ivm_group_01 'axt_host_flow::'`,
+  `cargo test -p iroha_core --features app_api --lib 'ivm_corehost_axt_tests::'`, and
   `cargo test -p integration_tests --test native_amx_routing`.
 - Archive chaos-drill evidence under `ops/drill-log.md`.
 - Each acceptance record includes the slot SLO report, outstanding error spikes,

@@ -1,4 +1,4 @@
-name: Promote Kagemusha V4 production release
+name: Verify Kagemusha V4 production readiness (publication blocked)
 
 on:
   workflow_dispatch:
@@ -43,17 +43,23 @@ jobs:
           retention-days: 1
 
   production-promotion:
+    name: Verify reviewed production inputs (does not publish or activate)
     needs: controller-build
     environment: kagemusha-v4-production
     runs-on: [self-hosted, macOS, ARM64, kagemusha-production]
     timeout-minutes: 180
     steps:
+      - name: Check out the exact workflow commit for identity binding
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
       - name: Download the controller image into quarantine
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: kagemusha-controller-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/kagemusha-controller-quarantine
-      - name: Install, qualify, and run the protected promotion gate
+      - name: Install, qualify, and run the protected readiness gate
         shell: bash
         env:
           KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH: ${{ vars.KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH }}
@@ -67,7 +73,7 @@ jobs:
           KAGEMUSHA_V4_ARTIFACT_ROOT: ${{ vars.KAGEMUSHA_V4_ARTIFACT_ROOT }}
           KAGEMUSHA_V4_KAGAMI_BIN: ${{ vars.KAGEMUSHA_V4_KAGAMI_BIN }}
           KAGEMUSHA_V4_KAGAMI_SHA256: ${{ vars.KAGEMUSHA_V4_KAGAMI_SHA256 }}
-          KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN: ${{ vars.KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN }}
+          KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN: /Library/SORA/Kagemusha/bin/iroha_authenticated_tool_controller
           KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256: ${{ vars.KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256 }}
           KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE: ${{ vars.KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE }}
           KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256: ${{ vars.KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256 }}
@@ -99,10 +105,80 @@ jobs:
           KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY: ${{ vars.KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY }}
           KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID: ${{ vars.KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID }}
           KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY: ${{ vars.KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY }}
+          PROMOTION_GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PROMOTION_GITHUB_REF: ${{ github.ref }}
+          PROMOTION_GITHUB_REF_PROTECTED: ${{ github.ref_protected }}
+          PROMOTION_GITHUB_REPOSITORY: ${{ github.repository }}
+          PROMOTION_GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          PROMOTION_GITHUB_RUN_ID: ${{ github.run_id }}
+          PROMOTION_GITHUB_SHA: ${{ github.sha }}
+          PROMOTION_GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+          PROMOTION_GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PROMOTION_GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
           set -Eeuo pipefail
           test "$(uname -s)" = Darwin
           test "$(uname -m)" = arm64
+          test "$PROMOTION_GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$PROMOTION_GITHUB_REPOSITORY" = hyperledger-iroha/iroha
+          test "$PROMOTION_GITHUB_REF_PROTECTED" = true
+          test "$PROMOTION_GITHUB_WORKFLOW_REF" = \
+            "hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@$PROMOTION_GITHUB_REF"
+          [[ "$PROMOTION_GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PROMOTION_GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PROMOTION_GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$PROMOTION_GITHUB_SHA" != "$(printf '0%.0s' {1..40})"
+          test "$PROMOTION_GITHUB_WORKFLOW_SHA" = "$PROMOTION_GITHUB_SHA"
+          workflow_checkout_root="$(
+            /usr/bin/env -i \
+              GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+              GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 \
+              HOME=/var/empty LANG=C LC_ALL=C PATH=/usr/bin:/bin \
+              /usr/bin/git -C "$PROMOTION_GITHUB_WORKSPACE" rev-parse --show-toplevel
+          )"
+          test "$workflow_checkout_root" = \
+            "$(cd "$PROMOTION_GITHUB_WORKSPACE" && pwd -P)"
+          workflow_checkout_head="$(
+            /usr/bin/env -i \
+              GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+              GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 \
+              HOME=/var/empty LANG=C LC_ALL=C PATH=/usr/bin:/bin \
+              /usr/bin/git -C "$PROMOTION_GITHUB_WORKSPACE" \
+                rev-parse --verify 'HEAD^{commit}'
+          )"
+          test "$workflow_checkout_head" = "$PROMOTION_GITHUB_SHA"
+          readonly gate_suffix="/ci/check_kagemusha_production_readiness.sh"
+          [[ "$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH" == *"$gate_suffix" ]]
+          reviewed_checkout="${KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH%"$gate_suffix"}"
+          [[ "$reviewed_checkout" == /* && "$reviewed_checkout" != "/" ]]
+          test "$(cd "$reviewed_checkout" && pwd -P)" = "$reviewed_checkout"
+          reviewed_checkout_head="$(
+            /usr/bin/env -i \
+              GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+              GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 \
+              HOME=/var/empty LANG=C LC_ALL=C PATH=/usr/bin:/bin \
+              /usr/bin/git -c safe.directory="$reviewed_checkout" \
+                -C "$reviewed_checkout" \
+                rev-parse --verify 'HEAD^{commit}'
+          )"
+          test "$reviewed_checkout_head" = "$PROMOTION_GITHUB_SHA"
+          readonly promotion_identity_domain="iroha.kagemusha.github-promotion-run.v1"
+          KAGEMUSHA_V4_PROMOTION_ID="$(
+            /usr/bin/printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+              "$promotion_identity_domain" \
+              "$PROMOTION_GITHUB_REPOSITORY" \
+              "$PROMOTION_GITHUB_WORKFLOW_REF" \
+              "$PROMOTION_GITHUB_WORKFLOW_SHA" \
+              "$PROMOTION_GITHUB_RUN_ID" \
+              "$PROMOTION_GITHUB_RUN_ATTEMPT" \
+              | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+          )"
+          [[ "$KAGEMUSHA_V4_PROMOTION_ID" =~ ^[0-9a-f]{64}$ ]]
+          test "$KAGEMUSHA_V4_PROMOTION_ID" != "$(printf '0%.0s' {1..64})"
+          readonly KAGEMUSHA_V4_PROMOTION_ID
+          readonly catalog_revalidation_receipt_root="/Library/SORA/Kagemusha/catalog-revalidation"
+          KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT="$catalog_revalidation_receipt_root/$KAGEMUSHA_V4_PROMOTION_ID.json"
+          readonly KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT
           quarantine="$RUNNER_TEMP/kagemusha-controller-quarantine"
           controller_source="$quarantine/iroha_authenticated_tool_controller"
           observed_inventory_sha256="$(
@@ -157,23 +233,23 @@ jobs:
           [[ "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256" =~ ^[0-9a-f]{64}$ ]]
           test "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256" != "$(printf '0%.0s' {1..64})"
           test "$(/usr/bin/shasum -a 256 "$controller_source" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"
-          [[ "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" == /* ]]
-          controller_parent="${KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN%/*}"
-          controller_name="${KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN##*/}"
-          test -n "$controller_name"
+          readonly controller_parent="/Library/SORA/Kagemusha/bin"
+          readonly controller_name="iroha_authenticated_tool_controller"
+          readonly controller_install_path="$controller_parent/$controller_name"
+          test "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" = \
+            "$controller_install_path"
+          readonly KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN
           test "$(cd "$controller_parent" && pwd -P)" = "$controller_parent"
-          test "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" = "$controller_parent/$controller_name"
-          [[ "$controller_name" != "." && "$controller_name" != ".." ]]
           require_root_custodied_directory_chain "$controller_parent"
-          controller_install_candidate="$controller_parent/.${controller_name}.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.new"
-          sudo -n /bin/test ! -d "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
-          sudo -n /bin/test ! -L "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
-          sudo -n /bin/test ! -e "$controller_install_candidate"
-          sudo -n /bin/test ! -L "$controller_install_candidate"
-          sudo -n /usr/bin/install -o root -g wheel -m 0555 "$controller_source" "$controller_install_candidate"
-          test "$(sudo -n /usr/bin/shasum -a 256 "$controller_install_candidate" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"
-          sudo -n /usr/bin/cmp "$controller_source" "$controller_install_candidate"
-          sudo -n /bin/mv -f -- "$controller_install_candidate" "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          controller_install_candidate="$controller_parent/.${controller_name}.${PROMOTION_GITHUB_RUN_ID}.${PROMOTION_GITHUB_RUN_ATTEMPT}.new"
+          /usr/bin/sudo -n /bin/test ! -d "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          /usr/bin/sudo -n /bin/test ! -L "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          /usr/bin/sudo -n /bin/test ! -e "$controller_install_candidate"
+          /usr/bin/sudo -n /bin/test ! -L "$controller_install_candidate"
+          /usr/bin/sudo -n /usr/bin/install -o root -g wheel -m 0555 "$controller_source" "$controller_install_candidate"
+          test "$(/usr/bin/sudo -n /usr/bin/shasum -a 256 "$controller_install_candidate" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"
+          /usr/bin/sudo -n /usr/bin/cmp "$controller_source" "$controller_install_candidate"
+          /usr/bin/sudo -n /bin/mv -f -- "$controller_install_candidate" "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
           test -f "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
           test ! -L "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
           read -r controller_uid controller_gid controller_links controller_size controller_mode \
@@ -191,30 +267,30 @@ jobs:
           [[ "$controller_marker" != *+ ]]
           test -z "$(/usr/bin/xattr "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN")"
           require_root_custodied_directory_chain "$controller_parent"
-          test "$(sudo -n /usr/bin/shasum -a 256 "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"
-          sudo -n /usr/bin/cmp "$controller_source" "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
-          qualification_result="$(sudo -n /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin TMPDIR=/private/var/tmp "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" qualify-host-v1)"
+          test "$(/usr/bin/sudo -n /usr/bin/shasum -a 256 "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"
+          /usr/bin/sudo -n /usr/bin/cmp "$controller_source" "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN"
+          qualification_result="$(/usr/bin/sudo -n /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin TMPDIR=/private/var/tmp "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" qualify-host-v1)"
           test "$qualification_result" = "authenticated-tool-controller: macOS host qualification passed"
           [[ "$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH" == /* ]]
           [[ "$KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256" =~ ^[0-9a-f]{64}$ ]]
           test "$KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256" != "$(printf '0%.0s' {1..64})"
           test "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256" != "$(printf '0%.0s' {1..64})"
-          test "$(sudo -n /usr/bin/shasum -a 256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256"
-          gate_launch_dir="$(sudo -n /usr/bin/mktemp -d /private/var/db/iroha-kagemusha-readiness-v1/gate-launch.XXXXXX)"
+          test "$(/usr/bin/sudo -n /usr/bin/shasum -a 256 "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256"
+          gate_launch_dir="$(/usr/bin/sudo -n /usr/bin/mktemp -d /private/var/db/iroha-kagemusha-readiness-v1/gate-launch.XXXXXX)"
           case "$gate_launch_dir" in
             /private/var/db/iroha-kagemusha-readiness-v1/gate-launch.*) ;;
             *) echo "authenticated gate snapshot escaped its fixed staging parent" >&2; exit 1 ;;
           esac
           gate_snapshot="$gate_launch_dir/check_kagemusha_production_readiness.sh"
           cleanup_gate_snapshot() {
-            sudo -n /bin/rm -f -- "$gate_snapshot"
-            sudo -n /bin/rmdir -- "$gate_launch_dir"
+            /usr/bin/sudo -n /bin/rm -f -- "$gate_snapshot"
+            /usr/bin/sudo -n /bin/rmdir -- "$gate_launch_dir"
           }
           trap cleanup_gate_snapshot EXIT
-          sudo -n /usr/bin/install -o root -g wheel -m 0555 "$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH" "$gate_snapshot"
-          test "$(sudo -n /usr/bin/shasum -a 256 "$gate_snapshot" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256"
-          sudo -n /usr/bin/env -i \
+          /usr/bin/sudo -n /usr/bin/install -o root -g wheel -m 0555 "$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH" "$gate_snapshot"
+          test "$(/usr/bin/sudo -n /usr/bin/shasum -a 256 "$gate_snapshot" | /usr/bin/awk '{print $1}')" = "$KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256"
+          /usr/bin/sudo -n /usr/bin/env -i \
             LANG=C LC_ALL=C PATH=/usr/bin:/bin TMPDIR=/private/var/tmp \
             KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH="$KAGEMUSHA_PRODUCTION_READINESS_GATE_PATH" \
             KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256="$KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256" \
@@ -259,6 +335,8 @@ jobs:
             KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY" \
             KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID" \
             KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY" \
+            KAGEMUSHA_V4_PROMOTION_ID="$KAGEMUSHA_V4_PROMOTION_ID" \
+            KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT="$KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT" \
             "$KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN" \
               launch-kagemusha-readiness-v1 \
               --expected-macos-build "$KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD" \

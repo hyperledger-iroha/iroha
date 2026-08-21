@@ -44190,6 +44190,182 @@ where
         }
     }
 }
+macro_rules! catalog_route_policy {
+    (canonical_account_delete($handler:path, $state:ident, $auth_limit:expr)) => {
+        catalog_delete($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
+    };
+    (canonical_account_get($handler:path, $state:ident, $auth_limit:expr)) => {
+        catalog_get($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
+    };
+    (canonical_account_post($handler:path, $state:ident, $auth_limit:expr)) => {
+        catalog_post($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
+    };
+    (canonical_account_proof_post($handler:path, $state:ident, $proof_limit:expr)) => {
+        catalog_post($handler)
+            .authenticated_canonical_account_proof_body($state.clone(), $proof_limit)
+    };
+    (canonical_signature_delete($handler:path)) => {
+        catalog_delete($handler)
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
+    };
+    (canonical_signature_get($handler:path)) => {
+        catalog_get($handler)
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
+    };
+    (canonical_signature_post($handler:path)) => {
+        catalog_post($handler)
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
+    };
+    (canonical_signed_post($handler:path)) => {
+        catalog_post($handler).authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody)
+    };
+    (layered_canonical_account_post($handler:path, $state:ident, $layer:ident, $auth_limit:expr)) => {
+        catalog_post($handler)
+            .layer($layer.clone())
+            .authenticated_canonical_account_body($state.clone(), $auth_limit)
+    };
+    (layered_canonical_signature_get($handler:path, $layer:ident)) => {
+        catalog_get($handler)
+            .layer($layer.clone())
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
+    };
+    (layered_canonical_signature_post($handler:path, $layer:ident)) => {
+        catalog_post($handler)
+            .layer($layer.clone())
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
+    };
+    (layered_canonical_signed_post($handler:path, $layer:ident)) => {
+        catalog_post($handler)
+            .layer($layer.clone())
+            .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody)
+    };
+    (layered_public_get($handler:path, $layer:ident)) => {
+        catalog_get($handler).layer($layer.clone())
+    };
+    (limited_canonical_account_get($handler:path, $state:ident, $body_limit:expr, $auth_limit:expr)) => {
+        catalog_get($handler)
+            .layer(DefaultBodyLimit::max($body_limit))
+            .authenticated_canonical_account_body($state.clone(), $auth_limit)
+    };
+    (limited_canonical_account_post($handler:path, $state:ident, $body_limit:expr, $auth_limit:expr)) => {
+        catalog_post($handler)
+            .layer(DefaultBodyLimit::max($body_limit))
+            .authenticated_canonical_account_body($state.clone(), $auth_limit)
+    };
+    (limited_canonical_signature_post($handler:path, $limit:expr)) => {
+        catalog_post($handler)
+            .layer(DefaultBodyLimit::max($limit))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
+    };
+    (limited_canonical_signed_post($handler:path, $limit:expr)) => {
+        catalog_post($handler)
+            .layer(DefaultBodyLimit::max($limit))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody)
+    };
+    (limited_hardened_canonical_signature_get($handler:path, $limit:expr)) => {
+        catalog_get($handler)
+            .layer(DefaultBodyLimit::max($limit))
+            .layer(axum::middleware::from_fn(
+                sorafs::api::harden_reputation_route_responses,
+            ))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
+    };
+    (limited_operator_get($handler:path, $state:ident, $limit:expr)) => {
+        catalog_get($handler)
+            .layer(DefaultBodyLimit::max($limit))
+            .authenticated_operator($state.clone())
+    };
+    (limited_operator_post($handler:path, $state:ident, $limit:expr)) => {
+        catalog_post($handler)
+            .layer(DefaultBodyLimit::max($limit))
+            .authenticated_operator($state.clone())
+    };
+    (limited_protocol_handshake_get($handler:path, $limit:expr)) => {
+        catalog_get($handler)
+            .layer(DefaultBodyLimit::max($limit))
+            .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
+    };
+    (limited_protocol_handshake_post($handler:path, $limit:expr)) => {
+        catalog_post($handler)
+            .layer(DefaultBodyLimit::max($limit))
+            .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
+    };
+    (limited_public_get($handler:path, $limit:expr)) => {
+        catalog_get($handler).layer(DefaultBodyLimit::max($limit))
+    };
+    (limited_public_post($handler:path, $limit:expr)) => {
+        catalog_post($handler).layer(DefaultBodyLimit::max($limit))
+    };
+    (onboarding_get($handler:path)) => {
+        catalog_get($handler).authenticated_onboarding()
+    };
+    (onboarding_post($handler:path)) => {
+        catalog_post($handler).authenticated_onboarding()
+    };
+    (operator_credential_post($handler:path)) => {
+        catalog_post($handler)
+            .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange)
+    };
+    (operator_delete($handler:path, $state:ident)) => {
+        catalog_delete($handler).authenticated_operator($state.clone())
+    };
+    (operator_get($handler:path, $state:ident)) => {
+        catalog_get($handler).authenticated_operator($state.clone())
+    };
+    (operator_post($handler:path, $state:ident)) => {
+        catalog_post($handler).authenticated_operator($state.clone())
+    };
+    (protocol_handshake_delete($handler:path)) => {
+        catalog_delete($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
+    };
+    (protocol_handshake_get($handler:path)) => {
+        catalog_get($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
+    };
+    (protocol_handshake_post($handler:path)) => {
+        catalog_post($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
+    };
+    (public_get($handler:path)) => {
+        catalog_get($handler)
+    };
+    (public_post($handler:path)) => {
+        catalog_post($handler)
+    };
+    (unauthenticated_any($handler:path)) => {
+        catalog_any($handler).unauthenticated()
+    };
+    (unauthenticated_get($handler:path)) => {
+        catalog_get($handler).unauthenticated()
+    };
+}
+
+macro_rules! mount_catalog_route_rows {
+    (
+        $builder:ident, $catalog:ident;
+        $($descriptor:ident => $policy:ident $arguments:tt;)+
+    ) => {
+        $(
+            $builder.route(
+                &route_catalog::$catalog::$descriptor,
+                catalog_route_policy!($policy $arguments),
+            );
+        )+
+    };
+}
+
+macro_rules! mount_local_catalog_route_rows {
+    (
+        $builder:ident, $catalog:ident;
+        $($descriptor:ident => $policy:ident $arguments:tt;)+
+    ) => {
+        $(
+            $builder.route(
+                &$catalog::$descriptor,
+                catalog_route_policy!($policy $arguments),
+            );
+        )+
+    };
+}
+
 impl Torii {
     #[cfg(feature = "app_api")]
     fn spawn_musubi_search_projection_worker(&self, shutdown_signal: ShutdownSignal) {
@@ -44336,30 +44512,18 @@ impl Torii {
     #[cfg(feature = "telemetry")]
     #[allow(clippy::unused_self)]
     fn add_telemetry_routes(&self, builder: &mut RouterBuilder) {
-        builder.route(
-            &route_catalog::diagnostic::STATUS,
-            catalog_get(handler_status_root).unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::diagnostic::STATUS_TAIL,
-            catalog_get(handler_status_tail).unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::diagnostic::METRICS,
-            catalog_get(handler_metrics).unauthenticated(),
+        mount_catalog_route_rows!(
+            builder, diagnostic;
+            STATUS => unauthenticated_get(handler_status_root);
+            STATUS_TAIL => unauthenticated_get(handler_status_tail);
+            METRICS => unauthenticated_get(handler_metrics);
         );
         let app_state = builder.state().clone();
-        builder.route(
-            &route_catalog::telemetry::PACEMAKER,
-            catalog_get(handler_pacemaker_status).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::telemetry::DEBUG_AXT_CACHE,
-            catalog_get(handler_debug_axt_cache).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::telemetry::DEBUG_WITNESS,
-            catalog_get(handler_debug_witness).authenticated_operator(app_state.clone()),
+        mount_catalog_route_rows!(
+            builder, telemetry;
+            PACEMAKER => operator_get(handler_pacemaker_status, app_state);
+            DEBUG_AXT_CACHE => operator_get(handler_debug_axt_cache, app_state);
+            DEBUG_WITNESS => operator_get(handler_debug_witness, app_state);
         );
         builder.route(
             &route_catalog::telemetry::SORANET_PRIVACY_EVENT,
@@ -44597,65 +44761,45 @@ impl Torii {
     fn add_sumeragi_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         let app_state = builder.state().clone();
-        macro_rules! mount_get {
-            ($descriptor:ident, $handler:expr) => {
-                builder.route(&route_catalog::sumeragi::$descriptor, catalog_get($handler));
-            };
-        }
-        macro_rules! mount_operator_get {
-            ($descriptor:ident, $handler:expr) => {
-                builder.route(
-                    &route_catalog::sumeragi::$descriptor,
-                    catalog_get($handler).authenticated_operator(app_state.clone()),
-                );
-            };
-        }
-        mount_operator_get!(EVIDENCE_COUNT, handler_sumeragi_evidence_count);
-        mount_operator_get!(EVIDENCE_LIST, handler_sumeragi_evidence);
-        mount_get!(SCCP_MESSAGE_PROOF, handler_sccp_message_proof);
-        mount_get!(SCCP_PROOF_REQUEST, handler_sccp_proof_request);
-        mount_get!(SCCP_MESSAGES_RECENT, handler_sccp_messages_recent);
-        mount_get!(SCCP_CAPABILITIES, handler_sccp_capabilities);
-        mount_get!(SCCP_REGISTRY, handler_sccp_registry);
-        mount_get!(
-            SCCP_SORA_OUTBOUND_MATERIAL,
-            handler_sccp_sora_outbound_material
+        mount_catalog_route_rows!(
+            builder, sumeragi;
+            EVIDENCE_COUNT => operator_get(handler_sumeragi_evidence_count, app_state);
+            EVIDENCE_LIST => operator_get(handler_sumeragi_evidence, app_state);
+            SCCP_MESSAGE_PROOF => public_get(handler_sccp_message_proof);
+            SCCP_PROOF_REQUEST => public_get(handler_sccp_proof_request);
+            SCCP_MESSAGES_RECENT => public_get(handler_sccp_messages_recent);
+            SCCP_CAPABILITIES => public_get(handler_sccp_capabilities);
+            SCCP_REGISTRY => public_get(handler_sccp_registry);
+            SCCP_SORA_OUTBOUND_MATERIAL => public_get(handler_sccp_sora_outbound_material);
+            VRF_PENALTIES => operator_get(handler_sumeragi_vrf_penalties, app_state);
+            VRF_EPOCH => operator_get(handler_sumeragi_vrf_epoch, app_state);
+            BRIDGE_FINALITY => public_get(handler_bridge_finality_proof);
+            BRIDGE_FINALITY_ATTESTATION => public_get(handler_bridge_finality_attestation);
+            BRIDGE_FINALITY_BUNDLE => public_get(handler_bridge_finality_bundle);
         );
-        mount_operator_get!(VRF_PENALTIES, handler_sumeragi_vrf_penalties);
-        mount_operator_get!(VRF_EPOCH, handler_sumeragi_vrf_epoch);
-        mount_get!(BRIDGE_FINALITY, handler_bridge_finality_proof);
-        mount_get!(
-            BRIDGE_FINALITY_ATTESTATION,
-            handler_bridge_finality_attestation
-        );
-        mount_get!(BRIDGE_FINALITY_BUNDLE, handler_bridge_finality_bundle);
         #[cfg(feature = "telemetry")]
         {
-            mount_operator_get!(STATUS, handler_sumeragi_status);
-            mount_operator_get!(DIAGNOSTICS, handler_sumeragi_diagnostics);
-            builder.route(
-                &route_catalog::sumeragi::STATUS_SSE,
-                catalog_get(handler_sumeragi_status_sse)
-                    .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+            mount_catalog_route_rows!(
+                builder, sumeragi;
+                STATUS => operator_get(handler_sumeragi_status, app_state);
+                DIAGNOSTICS => operator_get(handler_sumeragi_diagnostics, app_state);
+                STATUS_SSE => protocol_handshake_get(handler_sumeragi_status_sse);
+                LEADER => operator_get(handler_sumeragi_leader, app_state);
+                BLS_KEYS => operator_get(handler_sumeragi_bls_keys, app_state);
+                QC => operator_get(handler_sumeragi_qc, app_state);
+                CONSENSUS_KEYS => operator_get(handler_sumeragi_consensus_keys, app_state);
+                KEY_LIFECYCLE => operator_get(handler_sumeragi_key_lifecycle, app_state);
+                PARAMETERS => operator_get(handler_sumeragi_params, app_state);
             );
-            mount_operator_get!(LEADER, handler_sumeragi_leader);
-            mount_operator_get!(BLS_KEYS, handler_sumeragi_bls_keys);
-            mount_operator_get!(QC, handler_sumeragi_qc);
-            mount_operator_get!(CONSENSUS_KEYS, handler_sumeragi_consensus_keys);
-            mount_operator_get!(KEY_LIFECYCLE, handler_sumeragi_key_lifecycle);
-            mount_operator_get!(PARAMETERS, handler_sumeragi_params);
         }
     }
     fn add_core_info_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         let app_state = builder.state().clone();
-        builder.route(
-            &route_catalog::core::CONFIGURATION_GET,
-            catalog_get(handler_get_configuration).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::core::CONFIGURATION_POST,
-            catalog_post(handler_post_configuration).authenticated_operator(app_state.clone()),
+        mount_catalog_route_rows!(
+            builder, core;
+            CONFIGURATION_GET => operator_get(handler_get_configuration, app_state);
+            CONFIGURATION_POST => operator_post(handler_post_configuration, app_state);
         );
         #[cfg(any(feature = "p2p_ws", feature = "connect"))]
         builder.route(
@@ -44663,83 +44807,32 @@ impl Torii {
             catalog_post(handler_internal_torii_proxy_request)
                 .authenticated_torii_proxy_peer(app_state.clone()),
         );
-        builder.route(
-            &route_catalog::core::API_VERSION,
-            catalog_get(handler_version),
+        mount_catalog_route_rows!(
+            builder, core;
+            API_VERSION => public_get(handler_version);
         );
         builder.route(
             &route_catalog::core::PEERS,
             catalog_get(handler_peers).authenticated_operator(app_state),
         );
-        builder.route(
-            &route_catalog::core::HEALTH,
-            catalog_get(handler_health).unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::core::READYZ,
-            catalog_get(handler_readyz).unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::core::LIVEZ,
-            catalog_get(handler_livez).unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::core::NEXUS_LIFECYCLE_GET,
-            catalog_get(handler_get_nexus_lane_lifecycle),
-        );
-        builder.route(
-            &route_catalog::core::VPN_PROFILE,
-            catalog_get(handler_get_vpn_profile),
-        );
-        builder.route(
-            &route_catalog::core::VPN_QUOTE_CREATE,
-            catalog_post(handler_create_vpn_quote)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::core::VPN_SESSION_CREATE,
-            catalog_post(handler_create_vpn_session)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::core::VPN_RECEIPTS,
-            catalog_get(handler_list_vpn_receipts)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::core::VPN_RECEIPT_SUBMIT,
-            catalog_post(handler_submit_vpn_receipt)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::core::VPN_SESSION,
-            catalog_get(handler_get_vpn_session)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::core::VPN_SESSION_DELETE,
-            catalog_delete(handler_delete_vpn_session)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::core::LEDGER_HEADERS,
-            catalog_get(handler_ledger_headers),
-        );
-        builder.route(
-            &route_catalog::core::LEDGER_STATE_ROOT,
-            catalog_get(handler_ledger_state_root),
-        );
-        builder.route(
-            &route_catalog::core::LEDGER_STATE_PROOF,
-            catalog_get(handler_ledger_state_proof),
-        );
-        builder.route(
-            &route_catalog::core::LEDGER_EXECUTED_BLOCK_WIRE,
-            catalog_get(handler_ledger_executed_block_wire),
-        );
-        builder.route(
-            &route_catalog::core::LEDGER_BLOCK_PROOF,
-            catalog_get(handler_block_proof),
+        mount_catalog_route_rows!(
+            builder, core;
+            HEALTH => unauthenticated_get(handler_health);
+            READYZ => unauthenticated_get(handler_readyz);
+            LIVEZ => unauthenticated_get(handler_livez);
+            NEXUS_LIFECYCLE_GET => public_get(handler_get_nexus_lane_lifecycle);
+            VPN_PROFILE => public_get(handler_get_vpn_profile);
+            VPN_QUOTE_CREATE => canonical_signature_post(handler_create_vpn_quote);
+            VPN_SESSION_CREATE => canonical_signature_post(handler_create_vpn_session);
+            VPN_RECEIPTS => canonical_signature_get(handler_list_vpn_receipts);
+            VPN_RECEIPT_SUBMIT => canonical_signature_post(handler_submit_vpn_receipt);
+            VPN_SESSION => canonical_signature_get(handler_get_vpn_session);
+            VPN_SESSION_DELETE => canonical_signature_delete(handler_delete_vpn_session);
+            LEDGER_HEADERS => public_get(handler_ledger_headers);
+            LEDGER_STATE_ROOT => public_get(handler_ledger_state_root);
+            LEDGER_STATE_PROOF => public_get(handler_ledger_state_proof);
+            LEDGER_EXECUTED_BLOCK_WIRE => public_get(handler_ledger_executed_block_wire);
+            LEDGER_BLOCK_PROOF => public_get(handler_block_proof);
         );
     }
     #[cfg(not(feature = "app_api"))]
@@ -44749,54 +44842,17 @@ impl Torii {
     #[cfg(feature = "app_api")]
     fn add_alias_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
-        builder.route(
-            &route_catalog::aliases::SETUP_PLAN,
-            catalog_post(handler_alias_setup_plan)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::aliases::LEASE_RENEW_PLAN,
-            catalog_post(handler_alias_lease_renew_plan)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::aliases::AUTO_RENEW_PLAN,
-            catalog_post(handler_alias_auto_renew_plan)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::aliases::RESOLVE,
-            catalog_post(handler_alias_resolve)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES)),
-        );
-        builder.route(
-            &route_catalog::aliases::RESOLVE_INDEX,
-            catalog_post(handler_alias_resolve_index)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES)),
-        );
-        builder.route(
-            &route_catalog::aliases::BY_ACCOUNT,
-            catalog_post(handler_public_alias_lookup_by_account)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES)),
-        );
-        builder.route(
-            &route_catalog::aliases::RETAIL_RECIPIENT_LOOKUP,
-            catalog_post(handler_retail_recipient_lookup)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::aliases::RETAIL_RECIPIENT_ROUTE,
-            catalog_post(handler_retail_recipient_route)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::aliases::ASSET_RESOLVE,
-            catalog_post(handler_asset_alias_resolve),
+        mount_catalog_route_rows!(
+            builder, aliases;
+            SETUP_PLAN => limited_canonical_signature_post(handler_alias_setup_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            LEASE_RENEW_PLAN => limited_canonical_signature_post(handler_alias_lease_renew_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            AUTO_RENEW_PLAN => limited_canonical_signature_post(handler_alias_auto_renew_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            RESOLVE => limited_public_post(handler_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            RESOLVE_INDEX => limited_public_post(handler_alias_resolve_index, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            BY_ACCOUNT => limited_public_post(handler_public_alias_lookup_by_account, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            RETAIL_RECIPIENT_LOOKUP => limited_canonical_signature_post(handler_retail_recipient_lookup, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            RETAIL_RECIPIENT_ROUTE => limited_canonical_signature_post(handler_retail_recipient_route, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            ASSET_RESOLVE => public_post(handler_asset_alias_resolve);
         );
     }
     #[cfg(not(feature = "app_api"))]
@@ -44810,25 +44866,18 @@ impl Torii {
             .get()
             .try_into()
             .expect("transaction body limit should fit usize");
-        builder.route(
-            &route_catalog::fees::QUOTE,
-            catalog_post(handler_fee_quote)
-                .layer(DefaultBodyLimit::max(quote_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::fees::SPONSOR_PROGRAM_BY_ID,
-            catalog_post(handler_fee_sponsor_program_by_id)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        mount_catalog_route_rows!(
+            builder, fees;
+            QUOTE => limited_canonical_signature_post(handler_fee_quote, quote_body_limit);
+            SPONSOR_PROGRAM_BY_ID => limited_canonical_signature_post(handler_fee_sponsor_program_by_id, EXACT_ALIAS_READ_MAX_BODY_BYTES);
         );
     }
     fn add_time_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         let app_state = builder.state().clone();
-        builder.route(
-            &route_catalog::core::TIME_NOW,
-            catalog_get(handler_time_now),
+        mount_catalog_route_rows!(
+            builder, core;
+            TIME_NOW => public_get(handler_time_now);
         );
         builder.route(
             &route_catalog::core::TIME_STATUS,
@@ -44838,9 +44887,9 @@ impl Torii {
     #[cfg(feature = "schema")]
     #[allow(clippy::unused_self)]
     fn add_schema_routes(&self, builder: &mut RouterBuilder) {
-        builder.route(
-            &route_catalog::diagnostic::SCHEMA,
-            catalog_get(handler_schema),
+        mount_catalog_route_rows!(
+            builder, diagnostic;
+            SCHEMA => public_get(handler_schema);
         );
     }
     #[cfg(not(feature = "schema"))]
@@ -44851,36 +44900,20 @@ impl Torii {
     #[allow(clippy::unused_self)]
     fn add_openapi_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
-        builder.route(
-            &route_catalog::diagnostic::OPENAPI_JSON,
-            catalog_get(handler_openapi),
-        );
-        builder.route(
-            &route_catalog::diagnostic::OPENAPI,
-            catalog_get(handler_openapi),
+        mount_catalog_route_rows!(
+            builder, diagnostic;
+            OPENAPI_JSON => public_get(handler_openapi);
+            OPENAPI => public_get(handler_openapi);
         );
     }
     #[allow(clippy::unused_self)]
     fn add_operator_auth_routes(&self, builder: &mut RouterBuilder) {
-        builder.route(
-            &route_catalog::operator_authentication::REGISTRATION_OPTIONS,
-            catalog_post(operator_auth::handle_operator_register_options)
-                .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange),
-        );
-        builder.route(
-            &route_catalog::operator_authentication::REGISTRATION_VERIFY,
-            catalog_post(operator_auth::handle_operator_register_verify)
-                .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange),
-        );
-        builder.route(
-            &route_catalog::operator_authentication::LOGIN_OPTIONS,
-            catalog_post(operator_auth::handle_operator_login_options)
-                .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange),
-        );
-        builder.route(
-            &route_catalog::operator_authentication::LOGIN_VERIFY,
-            catalog_post(operator_auth::handle_operator_login_verify)
-                .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange),
+        mount_catalog_route_rows!(
+            builder, operator_authentication;
+            REGISTRATION_OPTIONS => operator_credential_post(operator_auth::handle_operator_register_options);
+            REGISTRATION_VERIFY => operator_credential_post(operator_auth::handle_operator_register_verify);
+            LOGIN_OPTIONS => operator_credential_post(operator_auth::handle_operator_login_options);
+            LOGIN_VERIFY => operator_credential_post(operator_auth::handle_operator_login_verify);
         );
     }
     #[cfg(feature = "profiling")]
@@ -44907,101 +44940,29 @@ impl Torii {
         let iso_body_limit =
             iso_bridge_body_limit(self.iso_bridge_max_body_bytes.get(), body_limit);
         let app_state = builder.state().clone();
-        builder.route(
-            &route_catalog::pipeline::TRANSACTION,
-            catalog_post(handler_post_transaction)
-                .layer(DefaultBodyLimit::max(body_limit))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
+        mount_catalog_route_rows!(
+            builder, pipeline;
+            TRANSACTION => limited_canonical_signed_post(handler_post_transaction, body_limit);
+            TRANSACTION_ENTRYPOINT => limited_canonical_signed_post(handler_post_transaction_entrypoint, body_limit);
+            TRANSACTIONS_BATCH => limited_canonical_signed_post(handler_post_transactions_batch, body_limit);
         );
-        builder.route(
-            &route_catalog::pipeline::TRANSACTION_ENTRYPOINT,
-            catalog_post(handler_post_transaction_entrypoint)
-                .layer(DefaultBodyLimit::max(body_limit))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::pipeline::TRANSACTIONS_BATCH,
-            catalog_post(handler_post_transactions_batch)
-                .layer(DefaultBodyLimit::max(body_limit))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::iso20022::PACS008_SUBMIT,
-            catalog_post(handler_iso_pacs008)
-                .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::PACS009_SUBMIT,
-            catalog_post(handler_iso_pacs009)
-                .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::PACS002_SUBMIT,
-            catalog_post(handler_iso_pacs002_submit)
-                .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::PACS004_SUBMIT,
-            catalog_post(handler_iso_pacs004_submit)
-                .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::CAMT056_SUBMIT,
-            catalog_post(handler_iso_camt056_submit)
-                .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::SESE023_SUBMIT,
-            catalog_post(handler_iso_sese023_submit)
-                .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::SESE024_SUBMIT,
-            catalog_post(handler_iso_sese024_submit)
-                .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::SESE025_SUBMIT,
-            catalog_post(handler_iso_sese025_submit)
-                .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::COLR012_SUBMIT,
-            catalog_post(handler_iso_colr012_submit)
-                .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::MESSAGE,
-            catalog_get(handler_iso_status).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::AUDIT_MESSAGES,
-            catalog_get(handler_iso_audit_messages).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::MESSAGE_PACS002,
-            catalog_get(handler_iso_pacs002).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::MESSAGE_PACS004,
-            catalog_get(handler_iso_pacs004).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::MESSAGE_CAMT029,
-            catalog_get(handler_iso_camt029).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::iso20022::MESSAGE_SESE024,
-            catalog_get(handler_iso_sese024).authenticated_operator(app_state.clone()),
+        mount_catalog_route_rows!(
+            builder, iso20022;
+            PACS008_SUBMIT => limited_operator_post(handler_iso_pacs008, app_state, iso_body_limit);
+            PACS009_SUBMIT => limited_operator_post(handler_iso_pacs009, app_state, iso_body_limit);
+            PACS002_SUBMIT => limited_operator_post(handler_iso_pacs002_submit, app_state, iso_body_limit);
+            PACS004_SUBMIT => limited_operator_post(handler_iso_pacs004_submit, app_state, iso_body_limit);
+            CAMT056_SUBMIT => limited_operator_post(handler_iso_camt056_submit, app_state, iso_body_limit);
+            SESE023_SUBMIT => limited_operator_post(handler_iso_sese023_submit, app_state, iso_body_limit);
+            SESE024_SUBMIT => limited_operator_post(handler_iso_sese024_submit, app_state, iso_body_limit);
+            SESE025_SUBMIT => limited_operator_post(handler_iso_sese025_submit, app_state, iso_body_limit);
+            COLR012_SUBMIT => limited_operator_post(handler_iso_colr012_submit, app_state, iso_body_limit);
+            MESSAGE => operator_get(handler_iso_status, app_state);
+            AUDIT_MESSAGES => operator_get(handler_iso_audit_messages, app_state);
+            MESSAGE_PACS002 => operator_get(handler_iso_pacs002, app_state);
+            MESSAGE_PACS004 => operator_get(handler_iso_pacs004, app_state);
+            MESSAGE_CAMT029 => operator_get(handler_iso_camt029, app_state);
+            MESSAGE_SESE024 => operator_get(handler_iso_sese024, app_state);
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_SESE025,
@@ -45019,69 +44980,21 @@ impl Torii {
                 .get()
                 .try_into()
                 .expect("DA body limit should fit usize");
-            builder.route(
-                &route_catalog::data_availability::INGEST,
-                catalog_post(da::handler_post_da_ingest)
-                    .layer(DefaultBodyLimit::max(body_limit))
-                    .authenticated_canonical_account_body(app_state.clone(), body_limit),
-            );
-            builder.route(
-                &route_catalog::data_availability::MANIFEST,
-                catalog_get(da::handler_get_da_manifest),
+            mount_catalog_route_rows!(
+                builder, data_availability;
+                INGEST => limited_canonical_account_post(da::handler_post_da_ingest, app_state, body_limit, body_limit);
+                MANIFEST => public_get(da::handler_get_da_manifest);
             );
         }
-        builder.route(
-            &route_catalog::data_availability::PROOF_POLICIES,
-            catalog_get(da::commitments::handler_list_proof_policies),
-        );
-        builder.route(
-            &route_catalog::data_availability::PROOF_POLICY_SNAPSHOT,
-            catalog_get(da::commitments::handler_proof_policy_bundle),
-        );
-        builder.route(
-            &route_catalog::data_availability::COMMITMENTS,
-            catalog_post(da::commitments::handler_list_commitments).layer(DefaultBodyLimit::max(
-                da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
-            )),
-        );
-        builder.route(
-            &route_catalog::data_availability::COMMITMENTS_PROVE,
-            catalog_post(da::commitments::handler_prove_commitment)
-                .layer(DefaultBodyLimit::max(
-                    da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
-                ))
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
-                ),
-        );
-        builder.route(
-            &route_catalog::data_availability::COMMITMENTS_VERIFY,
-            catalog_post(da::commitments::handler_verify_commitment)
-                .layer(DefaultBodyLimit::max(
-                    da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
-                ))
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
-                ),
-        );
-        builder.route(
-            &route_catalog::data_availability::PIN_INTENTS,
-            catalog_post(da::pin_intents::handler_list_pin_intents).layer(DefaultBodyLimit::max(
-                da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
-            )),
-        );
-        builder.route(
-            &route_catalog::data_availability::PIN_INTENTS_PROVE,
-            catalog_post(da::pin_intents::handler_prove_pin_intent)
-                .layer(DefaultBodyLimit::max(
-                    da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
-                ))
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
-                ),
+        mount_catalog_route_rows!(
+            builder, data_availability;
+            PROOF_POLICIES => public_get(da::commitments::handler_list_proof_policies);
+            PROOF_POLICY_SNAPSHOT => public_get(da::commitments::handler_proof_policy_bundle);
+            COMMITMENTS => limited_public_post(da::commitments::handler_list_commitments, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES);
+            COMMITMENTS_PROVE => limited_canonical_account_post(da::commitments::handler_prove_commitment, app_state, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES);
+            COMMITMENTS_VERIFY => limited_canonical_account_post(da::commitments::handler_verify_commitment, app_state, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES);
+            PIN_INTENTS => limited_public_post(da::pin_intents::handler_list_pin_intents, da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES);
+            PIN_INTENTS_PROVE => limited_canonical_account_post(da::pin_intents::handler_prove_pin_intent, app_state, da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES, da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES);
         );
         builder.route(
             &route_catalog::data_availability::PIN_INTENTS_VERIFY,
@@ -45111,85 +45024,39 @@ impl Torii {
             .get()
             .try_into()
             .expect("Musubi body limit should fit usize");
-        macro_rules! route {
-            ($descriptor:ident, $handler:path) => {
-                builder.route(
-                    &route_catalog::musubi::$descriptor,
-                    catalog_post($handler)
-                        .layer(DefaultBodyLimit::max(body_limit))
-                        .authenticated_canonical_account_body(app_state.clone(), body_limit),
-                );
-            };
-        }
-        route!(EXACT_PACKAGE, musubi::handler_find_exact_package);
-        route!(EXACT_RELEASE, musubi::handler_find_exact_release);
-        route!(
-            PROVIDER_BUNDLE_ATTESTATION,
-            musubi::handler_find_provider_bundle_attestation
-        );
-        route!(RESOLVER_INDEX, musubi::handler_find_resolver_index);
-        route!(VERSIONS, musubi::handler_find_versions);
-        route!(MAINTAINERS, musubi::handler_find_maintainers);
-        route!(ARCHIVE_LOCATIONS, musubi::handler_find_archive_locations);
-        route!(ARCHIVE_RETENTION, musubi::handler_find_archive_retention);
-        route!(ALIAS, musubi::handler_find_alias);
-        route!(ALIAS_HISTORY, musubi::handler_find_alias_history);
-        route!(ORDERED_PREFIX, musubi::handler_find_ordered_prefix);
-        route!(SEARCH, musubi::handler_search_packages);
-        route!(
-            NAMESPACE_BINDING_REGISTER,
-            musubi::handler_build_namespace_binding_register
-        );
-        route!(ARCHIVE_REGISTER, musubi::handler_build_archive_register);
-        route!(
-            PROVIDER_BUNDLE_ATTESTATION_REGISTER,
-            musubi::handler_build_provider_bundle_attestation_register
-        );
-        route!(
-            ARCHIVE_LOCATION_ADD,
-            musubi::handler_build_archive_location_add
-        );
-        route!(
-            ARCHIVE_LOCATION_RETIRE,
-            musubi::handler_build_archive_location_retire
-        );
-        route!(RELEASE_PUBLISH, musubi::handler_build_release_publish);
-        route!(RELEASE_YANK_SET, musubi::handler_build_release_yank_set);
-        route!(
-            PACKAGE_METADATA_SET,
-            musubi::handler_build_package_metadata_set
-        );
-        route!(
-            PACKAGE_MEMBER_INVITE,
-            musubi::handler_build_package_member_invite
-        );
-        route!(
-            PACKAGE_MEMBER_ACCEPT,
-            musubi::handler_build_package_member_accept
-        );
-        route!(
-            PACKAGE_MEMBER_INVITATION_REVOKE,
-            musubi::handler_build_package_member_invitation_revoke
-        );
-        route!(
-            PACKAGE_MEMBER_SET_ROLE,
-            musubi::handler_build_package_member_set_role
-        );
-        route!(
-            PACKAGE_MEMBER_REMOVE,
-            musubi::handler_build_package_member_remove
-        );
-        route!(ALIAS_REGISTER, musubi::handler_build_alias_register);
-        route!(PACKAGE_RECOVER, musubi::handler_build_package_recover);
-        route!(ALIAS_RETARGET, musubi::handler_build_alias_retarget);
-        route!(ARTIFACT_TAKEDOWN, musubi::handler_build_artifact_takedown);
-        route!(
-            REGISTRY_POLICY_SET,
-            musubi::handler_build_registry_policy_set
-        );
-        route!(
-            RELEASE_DIGEST_ASSERT,
-            musubi::handler_build_release_digest_assert
+        mount_catalog_route_rows!(
+            builder, musubi;
+            EXACT_PACKAGE => limited_canonical_account_post(musubi::handler_find_exact_package, app_state, body_limit, body_limit);
+            EXACT_RELEASE => limited_canonical_account_post(musubi::handler_find_exact_release, app_state, body_limit, body_limit);
+            PROVIDER_BUNDLE_ATTESTATION => limited_canonical_account_post(musubi::handler_find_provider_bundle_attestation, app_state, body_limit, body_limit);
+            RESOLVER_INDEX => limited_canonical_account_post(musubi::handler_find_resolver_index, app_state, body_limit, body_limit);
+            VERSIONS => limited_canonical_account_post(musubi::handler_find_versions, app_state, body_limit, body_limit);
+            MAINTAINERS => limited_canonical_account_post(musubi::handler_find_maintainers, app_state, body_limit, body_limit);
+            ARCHIVE_LOCATIONS => limited_canonical_account_post(musubi::handler_find_archive_locations, app_state, body_limit, body_limit);
+            ARCHIVE_RETENTION => limited_canonical_account_post(musubi::handler_find_archive_retention, app_state, body_limit, body_limit);
+            ALIAS => limited_canonical_account_post(musubi::handler_find_alias, app_state, body_limit, body_limit);
+            ALIAS_HISTORY => limited_canonical_account_post(musubi::handler_find_alias_history, app_state, body_limit, body_limit);
+            ORDERED_PREFIX => limited_canonical_account_post(musubi::handler_find_ordered_prefix, app_state, body_limit, body_limit);
+            SEARCH => limited_canonical_account_post(musubi::handler_search_packages, app_state, body_limit, body_limit);
+            NAMESPACE_BINDING_REGISTER => limited_canonical_account_post(musubi::handler_build_namespace_binding_register, app_state, body_limit, body_limit);
+            ARCHIVE_REGISTER => limited_canonical_account_post(musubi::handler_build_archive_register, app_state, body_limit, body_limit);
+            PROVIDER_BUNDLE_ATTESTATION_REGISTER => limited_canonical_account_post(musubi::handler_build_provider_bundle_attestation_register, app_state, body_limit, body_limit);
+            ARCHIVE_LOCATION_ADD => limited_canonical_account_post(musubi::handler_build_archive_location_add, app_state, body_limit, body_limit);
+            ARCHIVE_LOCATION_RETIRE => limited_canonical_account_post(musubi::handler_build_archive_location_retire, app_state, body_limit, body_limit);
+            RELEASE_PUBLISH => limited_canonical_account_post(musubi::handler_build_release_publish, app_state, body_limit, body_limit);
+            RELEASE_YANK_SET => limited_canonical_account_post(musubi::handler_build_release_yank_set, app_state, body_limit, body_limit);
+            PACKAGE_METADATA_SET => limited_canonical_account_post(musubi::handler_build_package_metadata_set, app_state, body_limit, body_limit);
+            PACKAGE_MEMBER_INVITE => limited_canonical_account_post(musubi::handler_build_package_member_invite, app_state, body_limit, body_limit);
+            PACKAGE_MEMBER_ACCEPT => limited_canonical_account_post(musubi::handler_build_package_member_accept, app_state, body_limit, body_limit);
+            PACKAGE_MEMBER_INVITATION_REVOKE => limited_canonical_account_post(musubi::handler_build_package_member_invitation_revoke, app_state, body_limit, body_limit);
+            PACKAGE_MEMBER_SET_ROLE => limited_canonical_account_post(musubi::handler_build_package_member_set_role, app_state, body_limit, body_limit);
+            PACKAGE_MEMBER_REMOVE => limited_canonical_account_post(musubi::handler_build_package_member_remove, app_state, body_limit, body_limit);
+            ALIAS_REGISTER => limited_canonical_account_post(musubi::handler_build_alias_register, app_state, body_limit, body_limit);
+            PACKAGE_RECOVER => limited_canonical_account_post(musubi::handler_build_package_recover, app_state, body_limit, body_limit);
+            ALIAS_RETARGET => limited_canonical_account_post(musubi::handler_build_alias_retarget, app_state, body_limit, body_limit);
+            ARTIFACT_TAKEDOWN => limited_canonical_account_post(musubi::handler_build_artifact_takedown, app_state, body_limit, body_limit);
+            REGISTRY_POLICY_SET => limited_canonical_account_post(musubi::handler_build_registry_policy_set, app_state, body_limit, body_limit);
+            RELEASE_DIGEST_ASSERT => limited_canonical_account_post(musubi::handler_build_release_digest_assert, app_state, body_limit, body_limit);
         );
     }
     /// Contracts and VK registry routes
@@ -45221,68 +45088,16 @@ impl Torii {
             app: app_state.clone(),
             operator_max_body_bytes: transaction_max_content_len,
         };
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
-            catalog_get(handler_get_contract_code_bytes)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
-            catalog_post(handler_post_contract_alias_set)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
-            catalog_post(handler_contract_alias_resolve)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST,
-            catalog_post(deployment_state::handler_contract_deployment_state)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ASSETS_TRANSFER_POST,
-            catalog_post(handler_post_asset_transfer)
-                .layer(DefaultBodyLimit::max(ASSET_TRANSFER_MAX_BODY_BYTES))
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    ASSET_TRANSFER_MAX_BODY_BYTES,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_POST,
-            catalog_post(handler_post_contract_call)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_BATCH_PREPARE_POST,
-            catalog_post(handler_post_contract_call_batch_prepare)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
-            catalog_post(handler_post_contract_call_simulate)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
+        mount_catalog_route_rows!(
+            builder, contracts_and_verification_keys;
+            CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => layered_canonical_signature_get(handler_get_contract_code_bytes, contracts_body_limit);
+            CONTRACTS_ALIASES_POST => layered_canonical_account_post(handler_post_contract_alias_set, app_state, contracts_body_limit, transaction_max_content_len);
+            CONTRACTS_ALIASES_RESOLVE_POST => limited_canonical_signature_post(handler_contract_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            CONTRACTS_DEPLOYMENT_STATE_POST => limited_canonical_signature_post(deployment_state::handler_contract_deployment_state, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            ASSETS_TRANSFER_POST => limited_canonical_account_post(handler_post_asset_transfer, app_state, ASSET_TRANSFER_MAX_BODY_BYTES, ASSET_TRANSFER_MAX_BODY_BYTES);
+            CONTRACTS_CALL_POST => layered_canonical_account_post(handler_post_contract_call, app_state, contracts_body_limit, transaction_max_content_len);
+            CONTRACTS_CALL_BATCH_PREPARE_POST => layered_canonical_account_post(handler_post_contract_call_batch_prepare, app_state, contracts_body_limit, transaction_max_content_len);
+            CONTRACTS_CALL_SIMULATE_POST => layered_canonical_account_post(handler_post_contract_call_simulate, app_state, contracts_body_limit, transaction_max_content_len);
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
@@ -45304,808 +45119,143 @@ impl Torii {
                 ))
                 .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_VIEW_POST,
-            catalog_post(handler_post_contract_view)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_VIEW_BATCH_POST,
-            catalog_post(handler_post_contract_view_batch)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_MULTISIG_PROPOSE_POST,
-            catalog_post(handler_post_contract_call_multisig_propose)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_MULTISIG_APPROVE_POST,
-            catalog_post(handler_post_contract_call_multisig_approve)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_STATE_GET,
-            catalog_get(handler_get_contract_state).layer(contracts_body_limit.clone()),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MINT_REQUESTS_GET,
-            catalog_get(handler_get_mint_requests).layer(contracts_body_limit.clone()),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MINT_REQUESTS_BY_REQUEST_ID_GET,
-            catalog_get(handler_get_mint_request).layer(contracts_body_limit.clone()),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSE_POST,
-            catalog_post(handler_post_multisig_propose)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVE_POST,
-            catalog_post(handler_post_multisig_approve)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_CANCEL_POST,
-            catalog_post(handler_post_multisig_cancel)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_SPEC_POST,
-            catalog_post(handler_post_multisig_spec)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-            catalog_post(handler_post_multisig_proposals_query)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
-            catalog_post(handler_post_multisig_proposals_resolve)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_POLICY_SET_POST,
-            catalog_post(handler_post_account_recovery_policy_set)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_PROPOSE_POST,
-            catalog_post(handler_post_account_recovery_propose)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_APPROVE_POST,
-            catalog_post(handler_post_account_recovery_approve)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_FINALIZE_POST,
-            catalog_post(handler_post_account_recovery_finalize)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_STATUS_POST,
-            catalog_post(handler_post_account_recovery_status)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES))
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    MULTISIG_READ_MAX_BODY_BYTES,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
-            catalog_post(handler_post_asset_transfer_control_get)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ZK_VK_REGISTER_POST,
-            catalog_post(handler_post_vk_register)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ZK_VK_UPDATE_POST,
-            catalog_post(handler_post_vk_update)
-                .layer(contracts_body_limit.clone())
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_DECLARE_POST,
-            catalog_post(handler_post_sorafs_capacity_declare)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_TELEMETRY_POST,
-            catalog_post(handler_post_sorafs_capacity_telemetry)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_POR_PROOF_POST,
-            catalog_post(handler_post_sorafs_capacity_por_proof)
-                .layer(DefaultBodyLimit::max(por_proof_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_POR_VERDICT_POST,
-            catalog_post(handler_post_sorafs_capacity_por_verdict)
-                .layer(DefaultBodyLimit::max(por_verdict_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_POR_STATUS_GET,
-            catalog_get(handler_get_sorafs_por_status).layer(DefaultBodyLimit::max(0)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_POR_EXPORT_GET,
-            catalog_get(handler_get_sorafs_por_export).layer(DefaultBodyLimit::max(0)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_POR_INGESTION_BY_MANIFEST_DIGEST_HEX_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_por_ingestion)
-                .layer(DefaultBodyLimit::max(0)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_POR_REPORT_BY_ISO_WEEK_GET,
-            catalog_get(handler_get_sorafs_por_report).layer(DefaultBodyLimit::max(0)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_POR_VRF_POST,
-            catalog_post(handler_post_sorafs_por_vrf)
-                .layer(DefaultBodyLimit::max(
-                    sorafs_manifest::por::PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1,
-                ))
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    sorafs_manifest::por::PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1,
-                ),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_ORDERS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_orderbook_order)
-                .layer(DefaultBodyLimit::max(orderbook_transaction_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_CANCEL_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_orderbook_cancel)
-                .layer(DefaultBodyLimit::max(orderbook_transaction_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_RECEIPTS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_orderbook_receipt)
-                .layer(DefaultBodyLimit::max(orderbook_transaction_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_RECEIPTS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_orderbook_receipts)
-                .layer(DefaultBodyLimit::max(0)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_BOOK_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_orderbook_book)
-                .layer(DefaultBodyLimit::max(0)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_TRADES_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_orderbook_trades)
-                .layer(DefaultBodyLimit::max(0)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_CHANNELS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_orderbook_channels)
-                .layer(DefaultBodyLimit::max(0)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_orderbook_events)
-                .layer(DefaultBodyLimit::max(0)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_STREAM_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_orderbook_events_stream)
-                .layer(DefaultBodyLimit::max(0))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_WS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_orderbook_events_ws)
-                .layer(DefaultBodyLimit::max(0))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_POLICY_GET,
-            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_policy)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_PROVIDERS_GET,
-            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET,
-            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_TOP_UP_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_WITHDRAW_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_withdrawal)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_GET,
-            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_movements)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_GET,
-            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_movement)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_DECISION_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_movement_decision)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_DRAW_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_credit_draw)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_REPAY_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_credit_repay)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_appeal)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_GET,
-            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_appeals)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_GET,
-            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_appeal)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_DECISION_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_appeal_decision)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_GET,
-            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_events)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_STREAM_GET,
-            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_events_stream)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_WS_GET,
-            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_events_ws)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_FEEDS_BY_FEED_ID_GET,
-            catalog_get(
-                sorafs::gateway_compliance_api::handle_get_sorafs_gateway_compliance_feed,
-            )
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_STATUS_GET,
-            catalog_get(
-                sorafs::gateway_compliance_api::handle_get_sorafs_gateway_compliance_status,
-            )
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_STAGE_POST,
-            catalog_post(
-                sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_stage,
-            )
-            .layer(DefaultBodyLimit::max(
-                sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
-            ))
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_ACKNOWLEDGE_POST,
-            catalog_post(
-                sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_acknowledge,
-            )
-            .layer(DefaultBodyLimit::max(
-                sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
-            ))
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_PROMOTE_POST,
-            catalog_post(
-                sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_promote,
-            )
-            .layer(DefaultBodyLimit::max(0))
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_ROLLBACK_POST,
-            catalog_post(
-                sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_rollback,
-            )
-            .layer(DefaultBodyLimit::max(
-                sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
-            ))
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_PRICING_CONFIG_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_appeal_pricing_config),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_PRICING_STATUS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_appeal_pricing_status),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_PRICING_QUOTE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_appeal_pricing_quote),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_SETTLE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_settle),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DISBURSE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_disburse),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_CONFIRM_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_confirm)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_SETTLE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_settle)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_SUBMIT_SETTLEMENT_POST,
-            catalog_post(
-                sorafs::api::handle_post_sorafs_appeal_finance_deposit_submit_settlement,
-            )
-            .layer(contracts_body_limit.clone())
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_RECONCILE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_reconcile)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_BY_ESCROW_ID_HEX_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_appeal_finance_deposit)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_dead_letter_prepare)
-                .layer(DefaultBodyLimit::max(
-                    iroha_torii_shared::sorafs_moderation_api::SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1,
-                ))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_dead_letter_apply)
-                .layer(DefaultBodyLimit::max(
-                    iroha_torii_shared::sorafs_moderation_api::SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1,
-                ))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_announce)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_moderation_ballots),
-        );
-        builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_GET,
-        catalog_get(sorafs::api::handle_get_sorafs_moderation_ballot),
-    );
-        builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_NO_SHOW_PLAN_GET,
-        catalog_get(sorafs::api::handle_get_sorafs_moderation_ballot_no_show_plan),
-    );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ELIGIBILITY_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_eligibility)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_SORTITION_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_sortition)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ASSIGNMENTS_ACCEPT_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_assignment_accept)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ACTIVATE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_activate)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_COMMITS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_commit)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_CHALLENGES_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_challenge)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_CHALLENGES_RESOLVE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_challenge_resolution)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_REVEALS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_reveal)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_TALLY_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_tally)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_EVENTS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_moderation_ballot_events),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_MODEL_REGISTRY_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_moderation_model_registry),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_MODEL_REGISTRY_REPRO_MANIFESTS_POST,
-            catalog_post(
-                sorafs::api::handle_post_sorafs_moderation_model_registry_repro_manifest,
-            )
-            .layer(contracts_body_limit.clone())
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_MODEL_REGISTRY_CORPORA_POST,
-            catalog_post(
-                sorafs::api::handle_post_sorafs_moderation_model_registry_corpus_manifest,
-            )
-            .layer(contracts_body_limit.clone())
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_SCREENING_RESULTS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_screening_result)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_SCREENING_RESULTS_GET,
-        catalog_get(sorafs::api::handle_get_sorafs_moderation_screening_results),
-    );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_moderation_quarantine),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_REVIEW_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_review)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_RELEASE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_release)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_HANDOFF_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_appeal_handoff)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_moderation_quarantine_operator_panel)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_object)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_moderation_quarantine_object)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_SESSION_CHALLENGE_POST,
-            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_session_challenge)
-                .layer(DefaultBodyLimit::max(128 * 1024))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_SESSION_POST,
-            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_session)
-                .layer(DefaultBodyLimit::max(128 * 1024))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_MANIFEST_BY_SESSION_ID_HEX_GET,
-            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_manifest)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_SEGMENT_BY_SESSION_ID_HEX_GET,
-            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_segment)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_LOG_BY_SESSION_ID_HEX_POST,
-            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_log)
-                .layer(DefaultBodyLimit::max(128 * 1024))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_AUDIT_GET,
-            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_audit)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_STATUS_GET,
-            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_status)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_LEGAL_HOLD_POST,
-            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_legal_hold)
-                .layer(DefaultBodyLimit::max(128 * 1024))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_LEGAL_HOLD_BY_HOLD_ID_HEX_RELEASE_POST,
-            catalog_post(
-                sorafs::evidence_viewer_api::handle_post_evidence_legal_hold_release,
-            )
-            .layer(DefaultBodyLimit::max(128 * 1024))
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_RETENTION_GET,
-            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_retention)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_RETENTION_POST,
-            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_retention)
-                .layer(DefaultBodyLimit::max(128 * 1024))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_ERASURE_POST,
-            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_erasure)
-                .layer(DefaultBodyLimit::max(128 * 1024))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_VIEWER_GET,
-            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_viewer).unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_VIEWER_CSS_GET,
-            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_viewer_css)
-                .unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::EVIDENCE_VIEWER_JS_GET,
-            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_viewer_js)
-                .unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_REPORT_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_report)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_SLASH_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_slash)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_CLAIM_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_claim)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_HEARTBEAT_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_heartbeat)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_COMPLETE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_complete)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_FAIL_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_fail)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_APPEAL_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_appeal)
-                .layer(contracts_body_limit.clone())
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_STATUS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_repair_status),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_TASKS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_repair_tasks),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_TASKS_BY_TICKET_ID_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_repair_task),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_EVENTS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_repair_events),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ZK_VK_BY_BACKEND_BY_NAME_GET,
-            catalog_get(handler_get_vk_by_backend_name),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ZK_VK_GET,
-            catalog_get(handler_list_vk),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ZK_PROOFS_GET,
-            catalog_get(handler_list_proofs),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ZK_PROOFS_COUNT_GET,
-            catalog_get(handler_count_proofs),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::ZK_PROOF_BY_BACKEND_BY_HASH_GET,
-            catalog_get(handler_get_proof_by_backend_hash),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_GET,
-            catalog_get(handler_get_contract_code),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_CONTRACT_VIEW_GET,
-            catalog_get(handler_get_contract_code_view)
-                .authenticated_canonical_account_body(app_state.clone(), 0),
+        mount_catalog_route_rows!(
+            builder, contracts_and_verification_keys;
+            CONTRACTS_VIEW_POST => layered_canonical_account_post(handler_post_contract_view, app_state, contracts_body_limit, transaction_max_content_len);
+            CONTRACTS_VIEW_BATCH_POST => layered_canonical_account_post(handler_post_contract_view_batch, app_state, contracts_body_limit, transaction_max_content_len);
+            CONTRACTS_CALL_MULTISIG_PROPOSE_POST => layered_canonical_account_post(handler_post_contract_call_multisig_propose, app_state, contracts_body_limit, transaction_max_content_len);
+            CONTRACTS_CALL_MULTISIG_APPROVE_POST => layered_canonical_account_post(handler_post_contract_call_multisig_approve, app_state, contracts_body_limit, transaction_max_content_len);
+            CONTRACTS_STATE_GET => layered_public_get(handler_get_contract_state, contracts_body_limit);
+            MINT_REQUESTS_GET => layered_public_get(handler_get_mint_requests, contracts_body_limit);
+            MINT_REQUESTS_BY_REQUEST_ID_GET => layered_public_get(handler_get_mint_request, contracts_body_limit);
+            MULTISIG_PROPOSE_POST => layered_canonical_account_post(handler_post_multisig_propose, app_state, contracts_body_limit, transaction_max_content_len);
+            MULTISIG_APPROVE_POST => layered_canonical_account_post(handler_post_multisig_approve, app_state, contracts_body_limit, transaction_max_content_len);
+            MULTISIG_CANCEL_POST => layered_canonical_account_post(handler_post_multisig_cancel, app_state, contracts_body_limit, transaction_max_content_len);
+            MULTISIG_SPEC_POST => limited_canonical_signature_post(handler_post_multisig_spec, MULTISIG_READ_MAX_BODY_BYTES);
+            MULTISIG_PROPOSALS_QUERY_POST => limited_canonical_signature_post(handler_post_multisig_proposals_query, MULTISIG_READ_MAX_BODY_BYTES);
+            MULTISIG_PROPOSALS_RESOLVE_POST => limited_canonical_signature_post(handler_post_multisig_proposals_resolve, MULTISIG_READ_MAX_BODY_BYTES);
+            ACCOUNT_RECOVERY_POLICY_SET_POST => layered_canonical_account_post(handler_post_account_recovery_policy_set, app_state, contracts_body_limit, transaction_max_content_len);
+            ACCOUNT_RECOVERY_PROPOSE_POST => layered_canonical_account_post(handler_post_account_recovery_propose, app_state, contracts_body_limit, transaction_max_content_len);
+            ACCOUNT_RECOVERY_APPROVE_POST => layered_canonical_account_post(handler_post_account_recovery_approve, app_state, contracts_body_limit, transaction_max_content_len);
+            ACCOUNT_RECOVERY_FINALIZE_POST => layered_canonical_account_post(handler_post_account_recovery_finalize, app_state, contracts_body_limit, transaction_max_content_len);
+            ACCOUNT_RECOVERY_STATUS_POST => limited_canonical_account_post(handler_post_account_recovery_status, app_state, MULTISIG_READ_MAX_BODY_BYTES, MULTISIG_READ_MAX_BODY_BYTES);
+            CONTROLS_ASSET_TRANSFER_QUERY_POST => layered_canonical_account_post(handler_post_asset_transfer_control_get, app_state, contracts_body_limit, transaction_max_content_len);
+            ZK_VK_REGISTER_POST => layered_canonical_account_post(handler_post_vk_register, app_state, contracts_body_limit, transaction_max_content_len);
+            ZK_VK_UPDATE_POST => layered_canonical_account_post(handler_post_vk_update, app_state, contracts_body_limit, transaction_max_content_len);
+            SORAFS_CAPACITY_DECLARE_POST => layered_canonical_signed_post(handler_post_sorafs_capacity_declare, contracts_body_limit);
+            SORAFS_CAPACITY_TELEMETRY_POST => layered_canonical_signed_post(handler_post_sorafs_capacity_telemetry, contracts_body_limit);
+            SORAFS_CAPACITY_POR_PROOF_POST => limited_operator_post(handler_post_sorafs_capacity_por_proof, app_state, por_proof_body_limit);
+            SORAFS_CAPACITY_POR_VERDICT_POST => limited_operator_post(handler_post_sorafs_capacity_por_verdict, app_state, por_verdict_body_limit);
+            SORAFS_POR_STATUS_GET => limited_public_get(handler_get_sorafs_por_status, 0);
+            SORAFS_POR_EXPORT_GET => limited_public_get(handler_get_sorafs_por_export, 0);
+            SORAFS_POR_INGESTION_BY_MANIFEST_DIGEST_HEX_GET => limited_public_get(sorafs::api::handle_get_sorafs_por_ingestion, 0);
+            SORAFS_POR_REPORT_BY_ISO_WEEK_GET => limited_public_get(handler_get_sorafs_por_report, 0);
+            SORAFS_POR_VRF_POST => limited_canonical_account_post(handler_post_sorafs_por_vrf, app_state, sorafs_manifest::por::PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1, sorafs_manifest::por::PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1);
+            SORAFS_ORDERBOOK_ORDERS_POST => limited_canonical_signed_post(sorafs::api::handle_post_sorafs_orderbook_order, orderbook_transaction_body_limit);
+            SORAFS_ORDERBOOK_CANCEL_POST => limited_canonical_signed_post(sorafs::api::handle_post_sorafs_orderbook_cancel, orderbook_transaction_body_limit);
+            SORAFS_ORDERBOOK_RECEIPTS_POST => limited_canonical_signed_post(sorafs::api::handle_post_sorafs_orderbook_receipt, orderbook_transaction_body_limit);
+            SORAFS_ORDERBOOK_RECEIPTS_GET => limited_public_get(sorafs::api::handle_get_sorafs_orderbook_receipts, 0);
+            SORAFS_ORDERBOOK_BOOK_GET => limited_public_get(sorafs::api::handle_get_sorafs_orderbook_book, 0);
+            SORAFS_ORDERBOOK_TRADES_GET => limited_public_get(sorafs::api::handle_get_sorafs_orderbook_trades, 0);
+            SORAFS_ORDERBOOK_CHANNELS_GET => limited_public_get(sorafs::api::handle_get_sorafs_orderbook_channels, 0);
+            SORAFS_ORDERBOOK_EVENTS_GET => limited_public_get(sorafs::api::handle_get_sorafs_orderbook_events, 0);
+            SORAFS_ORDERBOOK_EVENTS_STREAM_GET => limited_protocol_handshake_get(sorafs::api::handle_get_sorafs_orderbook_events_stream, 0);
+            SORAFS_ORDERBOOK_EVENTS_WS_GET => limited_protocol_handshake_get(sorafs::api::handle_get_sorafs_orderbook_events_ws, 0);
+            SORAFS_RESERVE_POLICY_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_policy);
+            SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
+            SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
+            SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);
+            SORAFS_RESERVE_WITHDRAW_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_withdrawal, contracts_body_limit);
+            SORAFS_RESERVE_MOVEMENTS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_movements);
+            SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_movement);
+            SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_DECISION_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_movement_decision, contracts_body_limit);
+            SORAFS_RESERVE_CREDIT_DRAW_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_credit_draw, contracts_body_limit);
+            SORAFS_RESERVE_CREDIT_REPAY_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_credit_repay, contracts_body_limit);
+            SORAFS_RESERVE_APPEALS_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_appeal, contracts_body_limit);
+            SORAFS_RESERVE_APPEALS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_appeals);
+            SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_appeal);
+            SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_DECISION_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_appeal_decision, contracts_body_limit);
+            SORAFS_RESERVE_EVENTS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_events);
+            SORAFS_RESERVE_EVENTS_STREAM_GET => protocol_handshake_get(sorafs::reserve_api::handle_get_sorafs_reserve_events_stream);
+            SORAFS_RESERVE_EVENTS_WS_GET => protocol_handshake_get(sorafs::reserve_api::handle_get_sorafs_reserve_events_ws);
+            SORAFS_GATEWAY_COMPLIANCE_FEEDS_BY_FEED_ID_GET => canonical_signature_get(sorafs::gateway_compliance_api::handle_get_sorafs_gateway_compliance_feed);
+            SORAFS_GATEWAY_COMPLIANCE_STATUS_GET => canonical_signature_get(sorafs::gateway_compliance_api::handle_get_sorafs_gateway_compliance_status);
+            SORAFS_GATEWAY_COMPLIANCE_STAGE_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_stage, sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1);
+            SORAFS_GATEWAY_COMPLIANCE_ACKNOWLEDGE_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_acknowledge, sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1);
+            SORAFS_GATEWAY_COMPLIANCE_PROMOTE_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_promote, 0);
+            SORAFS_GATEWAY_COMPLIANCE_ROLLBACK_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_rollback, sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1);
+            SORAFS_APPEALS_PRICING_CONFIG_GET => public_get(sorafs::api::handle_get_sorafs_appeal_pricing_config);
+            SORAFS_APPEALS_PRICING_STATUS_GET => public_get(sorafs::api::handle_get_sorafs_appeal_pricing_status);
+            SORAFS_APPEALS_PRICING_QUOTE_POST => public_post(sorafs::api::handle_post_sorafs_appeal_pricing_quote);
+            SORAFS_APPEALS_FINANCE_SETTLE_POST => public_post(sorafs::api::handle_post_sorafs_appeal_finance_settle);
+            SORAFS_APPEALS_FINANCE_DISBURSE_POST => public_post(sorafs::api::handle_post_sorafs_appeal_finance_disburse);
+            SORAFS_APPEALS_FINANCE_DEPOSITS_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit, contracts_body_limit);
+            SORAFS_APPEALS_FINANCE_DEPOSITS_CONFIRM_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_confirm, contracts_body_limit);
+            SORAFS_APPEALS_FINANCE_DEPOSITS_SETTLE_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_settle, contracts_body_limit);
+            SORAFS_APPEALS_FINANCE_DEPOSITS_SUBMIT_SETTLEMENT_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_submit_settlement, contracts_body_limit);
+            SORAFS_APPEALS_FINANCE_DEPOSITS_RECONCILE_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_reconcile, contracts_body_limit);
+            SORAFS_APPEALS_FINANCE_DEPOSITS_BY_ESCROW_ID_HEX_GET => canonical_signature_get(sorafs::api::handle_get_sorafs_appeal_finance_deposit);
+            SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST => limited_canonical_signature_post(sorafs::api::handle_post_sorafs_moderation_dead_letter_prepare, iroha_torii_shared::sorafs_moderation_api::SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1);
+            SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST => limited_canonical_signature_post(sorafs::api::handle_post_sorafs_moderation_dead_letter_apply, iroha_torii_shared::sorafs_moderation_api::SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1);
+            SORAFS_MODERATION_BALLOTS_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_moderation_ballot_announce, contracts_body_limit);
+            SORAFS_MODERATION_BALLOTS_GET => public_get(sorafs::api::handle_get_sorafs_moderation_ballots);
+            SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_GET => public_get(sorafs::api::handle_get_sorafs_moderation_ballot);
+            SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_NO_SHOW_PLAN_GET => public_get(sorafs::api::handle_get_sorafs_moderation_ballot_no_show_plan);
+            SORAFS_MODERATION_BALLOTS_ELIGIBILITY_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_moderation_ballot_eligibility, contracts_body_limit);
+            SORAFS_MODERATION_BALLOTS_SORTITION_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_moderation_ballot_sortition, contracts_body_limit);
+            SORAFS_MODERATION_BALLOTS_ASSIGNMENTS_ACCEPT_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_moderation_ballot_assignment_accept, contracts_body_limit);
+            SORAFS_MODERATION_BALLOTS_ACTIVATE_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_moderation_ballot_activate, contracts_body_limit);
+            SORAFS_MODERATION_BALLOTS_COMMITS_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_moderation_ballot_commit, contracts_body_limit);
+            SORAFS_MODERATION_BALLOTS_CHALLENGES_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_moderation_ballot_challenge, contracts_body_limit);
+            SORAFS_MODERATION_BALLOTS_CHALLENGES_RESOLVE_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_moderation_ballot_challenge_resolution, contracts_body_limit);
+            SORAFS_MODERATION_BALLOTS_REVEALS_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_moderation_ballot_reveal, contracts_body_limit);
+            SORAFS_MODERATION_BALLOTS_TALLY_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_moderation_ballot_tally, contracts_body_limit);
+            SORAFS_MODERATION_BALLOTS_EVENTS_GET => public_get(sorafs::api::handle_get_sorafs_moderation_ballot_events);
+            SORAFS_MODERATION_MODEL_REGISTRY_GET => public_get(sorafs::api::handle_get_sorafs_moderation_model_registry);
+            SORAFS_MODERATION_MODEL_REGISTRY_REPRO_MANIFESTS_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_moderation_model_registry_repro_manifest, contracts_body_limit);
+            SORAFS_MODERATION_MODEL_REGISTRY_CORPORA_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_moderation_model_registry_corpus_manifest, contracts_body_limit);
+            SORAFS_MODERATION_SCREENING_RESULTS_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_moderation_screening_result, contracts_body_limit);
+            SORAFS_MODERATION_SCREENING_RESULTS_GET => public_get(sorafs::api::handle_get_sorafs_moderation_screening_results);
+            SORAFS_MODERATION_QUARANTINE_GET => public_get(sorafs::api::handle_get_sorafs_moderation_quarantine);
+            SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_REVIEW_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_moderation_quarantine_review, contracts_body_limit);
+            SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_RELEASE_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_moderation_quarantine_release, contracts_body_limit);
+            SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_HANDOFF_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_moderation_quarantine_appeal_handoff, contracts_body_limit);
+            SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET => canonical_signature_get(sorafs::api::handle_get_sorafs_moderation_quarantine_operator_panel);
+            SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_POST => layered_canonical_signature_post(sorafs::api::handle_post_sorafs_moderation_quarantine_object, contracts_body_limit);
+            SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_GET => canonical_signature_get(sorafs::api::handle_get_sorafs_moderation_quarantine_object);
+            EVIDENCE_SESSION_CHALLENGE_POST => limited_canonical_signature_post(sorafs::evidence_viewer_api::handle_post_evidence_session_challenge, 128*1024);
+            EVIDENCE_SESSION_POST => limited_canonical_signature_post(sorafs::evidence_viewer_api::handle_post_evidence_session, 128*1024);
+            EVIDENCE_MANIFEST_BY_SESSION_ID_HEX_GET => canonical_signature_get(sorafs::evidence_viewer_api::handle_get_evidence_manifest);
+            EVIDENCE_SEGMENT_BY_SESSION_ID_HEX_GET => canonical_signature_get(sorafs::evidence_viewer_api::handle_get_evidence_segment);
+            EVIDENCE_LOG_BY_SESSION_ID_HEX_POST => limited_canonical_signature_post(sorafs::evidence_viewer_api::handle_post_evidence_log, 128*1024);
+            EVIDENCE_AUDIT_GET => canonical_signature_get(sorafs::evidence_viewer_api::handle_get_evidence_audit);
+            EVIDENCE_STATUS_GET => canonical_signature_get(sorafs::evidence_viewer_api::handle_get_evidence_status);
+            EVIDENCE_LEGAL_HOLD_POST => limited_canonical_signature_post(sorafs::evidence_viewer_api::handle_post_evidence_legal_hold, 128*1024);
+            EVIDENCE_LEGAL_HOLD_BY_HOLD_ID_HEX_RELEASE_POST => limited_canonical_signature_post(sorafs::evidence_viewer_api::handle_post_evidence_legal_hold_release, 128*1024);
+            EVIDENCE_RETENTION_GET => canonical_signature_get(sorafs::evidence_viewer_api::handle_get_evidence_retention);
+            EVIDENCE_RETENTION_POST => limited_canonical_signature_post(sorafs::evidence_viewer_api::handle_post_evidence_retention, 128*1024);
+            EVIDENCE_ERASURE_POST => limited_canonical_signature_post(sorafs::evidence_viewer_api::handle_post_evidence_erasure, 128*1024);
+            EVIDENCE_VIEWER_GET => unauthenticated_get(sorafs::evidence_viewer_api::handle_get_evidence_viewer);
+            EVIDENCE_VIEWER_CSS_GET => unauthenticated_get(sorafs::evidence_viewer_api::handle_get_evidence_viewer_css);
+            EVIDENCE_VIEWER_JS_GET => unauthenticated_get(sorafs::evidence_viewer_api::handle_get_evidence_viewer_js);
+            SORAFS_AUDIT_REPAIR_REPORT_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_repair_report, contracts_body_limit);
+            SORAFS_AUDIT_REPAIR_SLASH_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_repair_slash, contracts_body_limit);
+            SORAFS_AUDIT_REPAIR_CLAIM_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_repair_claim, contracts_body_limit);
+            SORAFS_AUDIT_REPAIR_HEARTBEAT_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_repair_heartbeat, contracts_body_limit);
+            SORAFS_AUDIT_REPAIR_COMPLETE_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_repair_complete, contracts_body_limit);
+            SORAFS_AUDIT_REPAIR_FAIL_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_repair_fail, contracts_body_limit);
+            SORAFS_AUDIT_REPAIR_APPEAL_POST => layered_canonical_signed_post(sorafs::api::handle_post_sorafs_repair_appeal, contracts_body_limit);
+            SORAFS_AUDIT_REPAIR_STATUS_GET => public_get(sorafs::api::handle_get_sorafs_repair_status);
+            SORAFS_AUDIT_REPAIR_TASKS_GET => public_get(sorafs::api::handle_get_sorafs_repair_tasks);
+            SORAFS_AUDIT_REPAIR_TASKS_BY_TICKET_ID_GET => public_get(sorafs::api::handle_get_sorafs_repair_task);
+            SORAFS_AUDIT_REPAIR_EVENTS_GET => public_get(sorafs::api::handle_get_sorafs_repair_events);
+            ZK_VK_BY_BACKEND_BY_NAME_GET => public_get(handler_get_vk_by_backend_name);
+            ZK_VK_GET => public_get(handler_list_vk);
+            ZK_PROOFS_GET => public_get(handler_list_proofs);
+            ZK_PROOFS_COUNT_GET => public_get(handler_count_proofs);
+            ZK_PROOF_BY_BACKEND_BY_HASH_GET => public_get(handler_get_proof_by_backend_hash);
+            CONTRACTS_CODE_BY_CODE_HASH_GET => public_get(handler_get_contract_code);
+            CONTRACTS_CODE_BY_CODE_HASH_CONTRACT_VIEW_GET => canonical_account_get(handler_get_contract_code_view, app_state, 0);
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_POST,
@@ -46126,10 +45276,9 @@ impl Torii {
     fn add_network_stream_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         #[cfg(feature = "p2p_ws")]
-        builder.route(
-            &route_catalog::streaming::P2P,
-            catalog_get(handler_p2p_ws)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        mount_catalog_route_rows!(
+            builder, streaming;
+            P2P => protocol_handshake_get(handler_p2p_ws);
         );
         #[cfg(not(feature = "p2p_ws"))]
         builder.route(
@@ -46194,31 +45343,14 @@ impl Torii {
     fn add_policy_and_pipeline_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         let app_state = builder.state().clone();
-        builder.route(
-            &route_catalog::pipeline::TRANSACTION_STATUS,
-            catalog_get(handler_pipeline_transaction_status),
-        );
-        builder.route(
-            &route_catalog::pipeline::TRANSACTION_DETAILS,
-            catalog_post(handler_pipeline_transaction_details)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::pipeline::PREFLIGHT,
-            catalog_get(handler_pipeline_preflight).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::pipeline::TRIGGER_COMPLETIONS,
-            catalog_get(handler_trigger_completions),
-        );
-        builder.route(
-            &route_catalog::pipeline::RECOVERY,
-            catalog_get(handler_pipeline_recovery).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::pipeline::RECOVERY_FASTPQ_PROOFS,
-            catalog_get(handler_pipeline_recovery_fastpq_proofs)
-                .authenticated_operator(app_state.clone()),
+        mount_catalog_route_rows!(
+            builder, pipeline;
+            TRANSACTION_STATUS => public_get(handler_pipeline_transaction_status);
+            TRANSACTION_DETAILS => canonical_signed_post(handler_pipeline_transaction_details);
+            PREFLIGHT => operator_get(handler_pipeline_preflight, app_state);
+            TRIGGER_COMPLETIONS => public_get(handler_trigger_completions);
+            RECOVERY => operator_get(handler_pipeline_recovery, app_state);
+            RECOVERY_FASTPQ_PROOFS => operator_get(handler_pipeline_recovery_fastpq_proofs, app_state);
         );
         builder.route(
             &route_catalog::pipeline::POLICY,
@@ -46228,10 +45360,9 @@ impl Torii {
     /// Signed Norito query endpoint
     fn add_query_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
-        builder.route(
-            &route_catalog::pipeline::QUERY,
-            catalog_post(handler_signed_query_admitted)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
+        mount_catalog_route_rows!(
+            builder, pipeline;
+            QUERY => canonical_signed_post(handler_signed_query_admitted);
         );
     }
     /// Proof record read route
@@ -46239,9 +45370,9 @@ impl Torii {
         let _ = self;
         let app_state = builder.state().clone();
         #[cfg(feature = "app_api")]
-        builder.route(
-            &route_catalog::pipeline::PROOF,
-            catalog_get(handler_proof_record_get),
+        mount_catalog_route_rows!(
+            builder, pipeline;
+            PROOF => public_get(handler_proof_record_get);
         );
         builder.route(
             &route_catalog::pipeline::PROOF_RETENTION,
@@ -46251,9 +45382,9 @@ impl Torii {
     /// Native MCP capability and JSON-RPC bridge routes.
     fn add_mcp_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
-        builder.route(
-            &route_catalog::mcp_transport::CAPABILITIES,
-            catalog_get(handler_mcp_capabilities),
+        mount_catalog_route_rows!(
+            builder, mcp_transport;
+            CAPABILITIES => public_get(handler_mcp_capabilities);
         );
         builder.route(
             &route_catalog::mcp_transport::JSON_RPC,
@@ -46266,26 +45397,12 @@ impl Torii {
     fn add_connect_routes(&self, builder: &mut RouterBuilder) {
         const CONNECT_SESSION_BODY_MAX_BYTES: usize = 64 * 1024;
         let app_state = builder.state().clone();
-        builder.route(
-            &route_catalog::connect::SESSION_CREATE,
-            catalog_post(handler_connect_session)
-                .layer(DefaultBodyLimit::max(CONNECT_SESSION_BODY_MAX_BYTES))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::connect::SESSION_DELETE,
-            catalog_delete(handler_connect_session_delete)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::connect::WEBSOCKET,
-            catalog_get(handler_connect_ws)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::connect::SESSION_STATUS,
-            catalog_get(handler_connect_session_status)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        mount_catalog_route_rows!(
+            builder, connect;
+            SESSION_CREATE => limited_protocol_handshake_post(handler_connect_session, CONNECT_SESSION_BODY_MAX_BYTES);
+            SESSION_DELETE => protocol_handshake_delete(handler_connect_session_delete);
+            WEBSOCKET => protocol_handshake_get(handler_connect_ws);
+            SESSION_STATUS => protocol_handshake_get(handler_connect_session_status);
         );
         builder.route(
             &route_catalog::connect::STATUS,
@@ -46311,286 +45428,110 @@ impl Torii {
             offline_redeem_body_limit(transaction_max_content_len);
         let offline_recipient_lineage_body_limit_bytes =
             <iroha_torii_shared::offline_api::OfflineRecipientLineageRequest as crate::utils::extractors::OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES;
-        builder.route(
-            &route_catalog::offline::READINESS,
-            catalog_get(handler_offline_readiness),
+        mount_catalog_route_rows!(
+            builder, offline;
+            READINESS => public_get(handler_offline_readiness);
+            RECIPIENT_LINEAGE => limited_canonical_account_post(handler_offline_recipient_lineage, app_state, offline_recipient_lineage_body_limit_bytes, offline_recipient_lineage_body_limit_bytes);
+            TOP_UP => limited_canonical_signed_post(handler_offline_top_up, offline_top_up_body_limit_bytes);
+            REDEEM => limited_canonical_signed_post(handler_offline_redeem, offline_redeem_body_limit_bytes);
+            OPERATION => public_get(handler_offline_operation_status);
         );
-        builder.route(
-            &route_catalog::offline::RECIPIENT_LINEAGE,
-            catalog_post(handler_offline_recipient_lineage)
-                .layer(DefaultBodyLimit::max(
-                    offline_recipient_lineage_body_limit_bytes,
-                ))
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    offline_recipient_lineage_body_limit_bytes,
-                ),
-        );
-        builder.route(
-            &route_catalog::offline::TOP_UP,
-            catalog_post(handler_offline_top_up)
-                .layer(DefaultBodyLimit::max(offline_top_up_body_limit_bytes))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::offline::REDEEM,
-            catalog_post(handler_offline_redeem)
-                .layer(DefaultBodyLimit::max(offline_redeem_body_limit_bytes))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
-        );
-        builder.route(
-            &route_catalog::offline::OPERATION,
-            catalog_get(handler_offline_operation_status),
-        );
-        builder.route(
-            &route_catalog::application_api::APP_API_BINDINGS_GET,
-            catalog_get(app_api::handle_get_app_api_bindings),
-        );
-        builder.route(
-            &route_catalog::application_api::APP_API_CID_BY_CID_GET,
-            catalog_get(app_api::handle_get_app_api_cid_manifest),
-        );
-        builder.route(
-            &route_catalog::application_api::APP_API_CID_BY_CID_BY_PATH_GET,
-            catalog_get(app_api::handle_get_app_api_cid_path),
-        );
-        builder.route(
-            &route_catalog::application_api::APP_API_CID_BY_CID_BY_PATH_POST,
-            catalog_post(app_api::handle_post_app_api_cid_path)
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::application_api::APP_API_ACTIVE_BY_PATH_GET,
-            catalog_get(app_api::handle_get_app_api_active_path),
-        );
-        builder.route(
-            &route_catalog::application_api::APP_API_ACTIVE_BY_PATH_POST,
-            catalog_post(app_api::handle_post_app_api_active_path)
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::application_api::API_CID_BY_CID_GET,
-            catalog_get(app_api::handle_get_app_api_cid_manifest),
-        );
-        builder.route(
-            &route_catalog::application_api::API_CID_BY_CID_BY_PATH_GET,
-            catalog_get(app_api::handle_get_app_api_cid_path),
-        );
-        builder.route(
-            &route_catalog::application_api::API_CID_BY_CID_BY_PATH_POST,
-            catalog_post(app_api::handle_post_app_api_cid_path)
-                .authenticated_canonical_account_body(
-                    app_state.clone(),
-                    transaction_max_content_len,
-                ),
-        );
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_GET,
-            catalog_get(handler_account_get),
-        );
-        builder.route(
-            &route_catalog::application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET,
-            catalog_get(handler_internal_account_get),
-        );
-        builder.route(
-            &route_catalog::application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET,
-            catalog_get(handler_internal_account_transaction_get),
-        );
-        builder.route(
-            &route_catalog::application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET,
-            catalog_get(handler_internal_account_asset_get),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            APP_API_BINDINGS_GET => public_get(app_api::handle_get_app_api_bindings);
+            APP_API_CID_BY_CID_GET => public_get(app_api::handle_get_app_api_cid_manifest);
+            APP_API_CID_BY_CID_BY_PATH_GET => public_get(app_api::handle_get_app_api_cid_path);
+            APP_API_CID_BY_CID_BY_PATH_POST => canonical_account_post(app_api::handle_post_app_api_cid_path, app_state, transaction_max_content_len);
+            APP_API_ACTIVE_BY_PATH_GET => public_get(app_api::handle_get_app_api_active_path);
+            APP_API_ACTIVE_BY_PATH_POST => canonical_account_post(app_api::handle_post_app_api_active_path, app_state, transaction_max_content_len);
+            API_CID_BY_CID_GET => public_get(app_api::handle_get_app_api_cid_manifest);
+            API_CID_BY_CID_BY_PATH_GET => public_get(app_api::handle_get_app_api_cid_path);
+            API_CID_BY_CID_BY_PATH_POST => canonical_account_post(app_api::handle_post_app_api_cid_path, app_state, transaction_max_content_len);
+            ACCOUNTS_BY_ACCOUNT_ID_GET => public_get(handler_account_get);
+            INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET => public_get(handler_internal_account_get);
+            INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET => public_get(handler_internal_account_transaction_get);
+            INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => public_get(handler_internal_account_asset_get);
         );
         mount_account_transactions_query(builder, app_state.clone(), transaction_max_content_len);
-        builder.route(
-            &route_catalog::application_api::TRANSACTIONS_HISTORY_GET,
-            catalog_get(handler_transactions_history_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ACTIVITY_GET,
-            catalog_get(handler_contracts_activity_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_EVENTS_GET,
-            catalog_get(handler_contracts_events_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_SWAPS_FILLS_GET,
-            catalog_get(handler_contracts_rollups_swaps_fills_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET,
-            catalog_get(handler_contracts_rollups_swaps_candles_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET,
-            catalog_get(handler_contracts_rollups_uranai_markets_history_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET,
-            catalog_get(handler_contracts_rollups_trader_activity_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET,
-            catalog_get(handler_contracts_rollups_trader_account_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_INTENTS_GET,
-            catalog_get(handler_contracts_rollups_intents_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET,
-            catalog_get(handler_contracts_rollups_vault_positions_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET,
-            catalog_get(handler_contracts_rollups_operators_status_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET,
-            catalog_get(handler_contracts_rollups_margin_health_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_RWA_LOTS_GET,
-            catalog_get(handler_contracts_rollups_rwa_lots_get),
-        );
-        builder.route(
-            &route_catalog::application_api::CONTRACTS_ROLLUPS_DLMM_HOOKS_GET,
-            catalog_get(handler_contracts_rollups_dlmm_hooks_get),
-        );
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET,
-            catalog_get(handler_account_assets),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            TRANSACTIONS_HISTORY_GET => public_get(handler_transactions_history_get);
+            CONTRACTS_ACTIVITY_GET => public_get(handler_contracts_activity_get);
+            CONTRACTS_EVENTS_GET => public_get(handler_contracts_events_get);
+            CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => public_get(handler_contracts_rollups_swaps_fills_get);
+            CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET => public_get(handler_contracts_rollups_swaps_candles_get);
+            CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET => public_get(handler_contracts_rollups_uranai_markets_history_get);
+            CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET => public_get(handler_contracts_rollups_trader_activity_get);
+            CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET => public_get(handler_contracts_rollups_trader_account_get);
+            CONTRACTS_ROLLUPS_INTENTS_GET => public_get(handler_contracts_rollups_intents_get);
+            CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET => public_get(handler_contracts_rollups_vault_positions_get);
+            CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET => public_get(handler_contracts_rollups_operators_status_get);
+            CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET => public_get(handler_contracts_rollups_margin_health_get);
+            CONTRACTS_ROLLUPS_RWA_LOTS_GET => public_get(handler_contracts_rollups_rwa_lots_get);
+            CONTRACTS_ROLLUPS_DLMM_HOOKS_GET => public_get(handler_contracts_rollups_dlmm_hooks_get);
+            ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => public_get(handler_account_assets);
         );
         mount_account_assets_query(builder, app_state.clone(), transaction_max_content_len);
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET,
-            catalog_get(handler_account_permissions),
-        );
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET,
-            catalog_get(handler_account_transactions_get),
-        );
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET,
-            catalog_get(handler_account_history_get),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => public_get(handler_account_permissions);
+            ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => public_get(handler_account_transactions_get);
+            ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET => public_get(handler_account_history_get);
         );
         mount_signed_proof_query(builder);
-        builder.route(
-            &route_catalog::application_api::ZK_PROOF_TAGS_BY_BACKEND_BY_HASH_GET,
-            catalog_get(handler_proof_tags),
-        );
-        builder.route(
-            &route_catalog::application_api::DOMAINS_GET,
-            catalog_get(handler_domains_list),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            ZK_PROOF_TAGS_BY_BACKEND_BY_HASH_GET => public_get(handler_proof_tags);
+            DOMAINS_GET => public_get(handler_domains_list);
         );
         mount_domains_query(builder, app_state.clone(), transaction_max_content_len);
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_GET,
-            catalog_get(handler_accounts_list),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            ACCOUNTS_GET => public_get(handler_accounts_list);
         );
         mount_accounts_query(builder, app_state.clone(), transaction_max_content_len);
         mount_transactions_query(builder, app_state.clone(), transaction_max_content_len);
         mount_visible_transactions_query(builder, app_state.clone(), transaction_max_content_len);
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_ONBOARD_PLAN_POST,
-            catalog_post(handler_accounts_onboard_plan).authenticated_onboarding(),
-        );
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_ONBOARD_POST,
-            catalog_post(handler_accounts_onboard).authenticated_onboarding(),
-        );
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_ONBOARDING_READINESS_GET,
-            catalog_get(handler_accounts_onboarding_readiness).authenticated_onboarding(),
-        );
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_FAUCET_PUZZLE_GET,
-            catalog_get(handler_accounts_faucet_puzzle),
-        );
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_FAUCET_POST,
-            catalog_post(handler_accounts_faucet)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET,
-            catalog_get(handler_account_aliases),
-        );
-        builder.route(
-            &route_catalog::application_api::ACCOUNTS_BY_UAID_PORTFOLIO_GET,
-            catalog_get(handler_accounts_portfolio),
-        );
-        builder.route(
-            &route_catalog::application_api::NEXUS_PUBLIC_LANES_BY_LANE_ID_VALIDATORS_GET,
-            catalog_get(handler_nexus_public_lane_validators),
-        );
-        builder.route(
-            &route_catalog::application_api::NEXUS_PUBLIC_LANES_BY_LANE_ID_STAKE_GET,
-            catalog_get(handler_nexus_public_lane_stake),
-        );
-        builder.route(
-            &route_catalog::application_api::NEXUS_PUBLIC_LANES_BY_LANE_ID_REWARDS_PENDING_GET,
-            catalog_get(handler_nexus_public_lane_rewards),
-        );
-        builder.route(
-            &route_catalog::application_api::NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET,
-            catalog_get(handler_nexus_dataspaces_account_summary),
-        );
-        builder.route(
-            &route_catalog::application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_GET,
-            catalog_get(handler_space_directory_bindings),
-        );
-        builder.route(
-            &route_catalog::application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET,
-            catalog_get(handler_space_directory_manifests),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            ACCOUNTS_ONBOARD_PLAN_POST => onboarding_post(handler_accounts_onboard_plan);
+            ACCOUNTS_ONBOARD_POST => onboarding_post(handler_accounts_onboard);
+            ACCOUNTS_ONBOARDING_READINESS_GET => onboarding_get(handler_accounts_onboarding_readiness);
+            ACCOUNTS_FAUCET_PUZZLE_GET => public_get(handler_accounts_faucet_puzzle);
+            ACCOUNTS_FAUCET_POST => protocol_handshake_post(handler_accounts_faucet);
+            ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => public_get(handler_account_aliases);
+            ACCOUNTS_BY_UAID_PORTFOLIO_GET => public_get(handler_accounts_portfolio);
+            NEXUS_PUBLIC_LANES_BY_LANE_ID_VALIDATORS_GET => public_get(handler_nexus_public_lane_validators);
+            NEXUS_PUBLIC_LANES_BY_LANE_ID_STAKE_GET => public_get(handler_nexus_public_lane_stake);
+            NEXUS_PUBLIC_LANES_BY_LANE_ID_REWARDS_PENDING_GET => public_get(handler_nexus_public_lane_rewards);
+            NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET => public_get(handler_nexus_dataspaces_account_summary);
+            SPACE_DIRECTORY_UAIDS_BY_UAID_GET => public_get(handler_space_directory_bindings);
+            SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET => public_get(handler_space_directory_manifests);
         );
         add_authenticated_application_compute_routes(
             builder,
             app_state.clone(),
             transaction_max_content_len,
         );
-        builder.route(
-            &route_catalog::application_api::RAM_LFE_PROGRAM_POLICIES_GET,
-            catalog_get(handler_ram_lfe_program_policies),
-        );
-        builder.route(
-            &route_catalog::application_api::IDENTIFIER_POLICIES_GET,
-            catalog_get(handler_identifier_policies),
-        );
-        builder.route(
-            &route_catalog::application_api::IDENTIFIERS_RECEIPTS_BY_RECEIPT_HASH_GET,
-            catalog_get(handler_identifier_receipt_lookup),
-        );
-        builder.route(
-            &route_catalog::application_api::REPO_AGREEMENTS_GET,
-            catalog_get(handler_repo_agreements),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            RAM_LFE_PROGRAM_POLICIES_GET => public_get(handler_ram_lfe_program_policies);
+            IDENTIFIER_POLICIES_GET => public_get(handler_identifier_policies);
+            IDENTIFIERS_RECEIPTS_BY_RECEIPT_HASH_GET => public_get(handler_identifier_receipt_lookup);
+            REPO_AGREEMENTS_GET => public_get(handler_repo_agreements);
         );
         mount_repo_agreements_query(builder, app_state.clone(), transaction_max_content_len);
         #[cfg(feature = "push")]
-        builder.route(
-            &route_catalog::application_api::NOTIFY_DEVICES_POST,
-            catalog_post(handler_push_register_device)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            NOTIFY_DEVICES_POST => canonical_signature_post(handler_push_register_device);
         );
         #[cfg(feature = "push")]
-        builder.route(
-            &route_catalog::application_api::NOTIFY_DEVICES_DELETE,
-            catalog_delete(handler_push_unregister_device)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::application_api::SNS_NAMES_BY_NAMESPACE_BY_LITERAL_GET,
-            catalog_get(sns::handle_get_name),
-        );
-        builder.route(
-            &route_catalog::application_api::SNS_POLICIES_BY_SUFFIX_ID_GET,
-            catalog_get(sns::handle_get_policy),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            NOTIFY_DEVICES_DELETE => canonical_signature_delete(handler_push_unregister_device);
+            SNS_NAMES_BY_NAMESPACE_BY_LITERAL_GET => public_get(sns::handle_get_name);
+            SNS_POLICIES_BY_SUFFIX_ID_GET => public_get(sns::handle_get_policy);
         );
         macro_rules! mount_soracloud_read {
             ($route:ident, $handler:expr) => {
@@ -46602,13 +45543,10 @@ impl Torii {
             };
         }
         mount_soracloud_read!(SORACLOUD_STATUS_GET, handler_soracloud_status);
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_PUBLIC_DISCOVERY_GET,
-            catalog_get(soracloud::handle_service_public_discovery),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_REVISIONS_BY_SERVICE_VERSION_PUBLIC_DISCOVERY_GET,
-            catalog_get(soracloud::handle_service_revision_public_discovery),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            SORACLOUD_SERVICES_BY_SERVICE_NAME_PUBLIC_DISCOVERY_GET => public_get(soracloud::handle_service_public_discovery);
+            SORACLOUD_SERVICES_BY_SERVICE_NAME_REVISIONS_BY_SERVICE_VERSION_PUBLIC_DISCOVERY_GET => public_get(soracloud::handle_service_revision_public_discovery);
         );
         macro_rules! mount_soracloud_command {
             ($route:ident, $handler:ident) => {
@@ -46698,9 +45636,9 @@ impl Torii {
             SORACLOUD_MODEL_UPLOAD_REGISTER_POST,
             handle_uploaded_model_register
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_MODEL_UPLOAD_ENCRYPTION_RECIPIENT_GET,
-            catalog_get(soracloud::handle_uploaded_model_encryption_recipient),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            SORACLOUD_MODEL_UPLOAD_ENCRYPTION_RECIPIENT_GET => public_get(soracloud::handle_uploaded_model_encryption_recipient);
         );
         mount_soracloud_read!(
             SORACLOUD_MODEL_UPLOAD_STATUS_GET,
@@ -46766,32 +45704,26 @@ impl Torii {
             SORACLOUD_AGENT_AUTONOMY_STATUS_GET,
             soracloud::handle_agent_autonomy_status
         );
-        builder.route(
-            &route_catalog::application_api::ASSETS_DEFINITIONS_GET,
-            catalog_get(handler_assets_definitions_list),
-        );
-        builder.route(
-            &route_catalog::application_api::ASSETS_DEFINITIONS_BY_ASSET_GET,
-            catalog_get(handler_asset_definition_get),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            ASSETS_DEFINITIONS_GET => public_get(handler_assets_definitions_list);
+            ASSETS_DEFINITIONS_BY_ASSET_GET => public_get(handler_asset_definition_get);
         );
         mount_asset_definitions_query(builder, app_state.clone(), transaction_max_content_len);
-        builder.route(
-            &route_catalog::application_api::CONFIDENTIAL_ASSETS_BY_DEFINITION_ID_TRANSITIONS_GET,
-            catalog_get(handler_confidential_asset_transitions),
-        );
-        builder.route(
-            &route_catalog::application_api::NFTS_GET,
-            catalog_get(handler_nfts_list),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            CONFIDENTIAL_ASSETS_BY_DEFINITION_ID_TRANSITIONS_GET => public_get(handler_confidential_asset_transitions);
+            NFTS_GET => public_get(handler_nfts_list);
         );
         mount_nfts_query(builder, app_state.clone(), transaction_max_content_len);
-        builder.route(
-            &route_catalog::application_api::RWAS_GET,
-            catalog_get(handler_rwas_list),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            RWAS_GET => public_get(handler_rwas_list);
         );
         mount_rwas_query(builder, app_state.clone(), transaction_max_content_len);
-        builder.route(
-            &route_catalog::application_api::SUBSCRIPTIONS_PLANS_GET,
-            catalog_get(handler_subscription_plans_list),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            SUBSCRIPTIONS_PLANS_GET => public_get(handler_subscription_plans_list);
         );
         macro_rules! mount_subscription_mutation {
             ($route:ident, $handler:path) => {
@@ -46807,14 +45739,14 @@ impl Torii {
             };
         }
         mount_subscription_mutation!(SUBSCRIPTIONS_PLANS_POST, handler_subscription_plans_create);
-        builder.route(
-            &route_catalog::application_api::SUBSCRIPTIONS_GET,
-            catalog_get(handler_subscriptions_list),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            SUBSCRIPTIONS_GET => public_get(handler_subscriptions_list);
         );
         mount_subscription_mutation!(SUBSCRIPTIONS_POST, handler_subscriptions_create);
-        builder.route(
-            &route_catalog::application_api::SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_GET,
-            catalog_get(handler_subscription_get),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_GET => public_get(handler_subscription_get);
         );
         mount_subscription_mutation!(
             SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_PAUSE_POST,
@@ -46840,200 +45772,78 @@ impl Torii {
             SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_CHARGE_NOW_POST,
             handler_subscription_charge_now
         );
-        builder.route(
-            &route_catalog::application_api::PARAMETERS_GET,
-            catalog_get(handler_parameters),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_ACCOUNTS_GET,
-            catalog_get(handler_explorer_accounts_list),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_DOMAINS_GET,
-            catalog_get(handler_explorer_domains_list),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_ASSET_DEFINITIONS_GET,
-            catalog_get(handler_explorer_asset_definitions_list),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_ASSETS_GET,
-            catalog_get(handler_explorer_assets_list),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_NFTS_GET,
-            catalog_get(handler_explorer_nfts_list),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_RWAS_GET,
-            catalog_get(handler_explorer_rwas_list),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_BLOCKS_GET,
-            catalog_get(handler_explorer_blocks_list),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_HEALTH_GET,
-            catalog_get(handler_explorer_health),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_BLOCKS_STREAM_GET,
-            catalog_get(handler_explorer_blocks_stream)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_TRANSACTIONS_GET,
-            catalog_get(handler_explorer_transactions_list),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_TRANSACTIONS_LATEST_GET,
-            catalog_get(handler_explorer_transactions_latest),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_TRANSACTIONS_STREAM_GET,
-            catalog_get(handler_explorer_transactions_stream)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_INSTRUCTIONS_GET,
-            catalog_get(handler_explorer_instructions_list),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_INSTRUCTIONS_LATEST_GET,
-            catalog_get(handler_explorer_instructions_latest),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLES_DEFI_ATTESTATIONS_LATEST_GET,
-            catalog_get(handler_defi_oracle_attestation_latest),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLES_FEEDS_GET,
-            catalog_get(handler_oracle_feeds),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLES_FEEDS_BY_FEED_ID_HISTORY_GET,
-            catalog_get(handler_oracle_feed_history),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            PARAMETERS_GET => public_get(handler_parameters);
+            EXPLORER_ACCOUNTS_GET => public_get(handler_explorer_accounts_list);
+            EXPLORER_DOMAINS_GET => public_get(handler_explorer_domains_list);
+            EXPLORER_ASSET_DEFINITIONS_GET => public_get(handler_explorer_asset_definitions_list);
+            EXPLORER_ASSETS_GET => public_get(handler_explorer_assets_list);
+            EXPLORER_NFTS_GET => public_get(handler_explorer_nfts_list);
+            EXPLORER_RWAS_GET => public_get(handler_explorer_rwas_list);
+            EXPLORER_BLOCKS_GET => public_get(handler_explorer_blocks_list);
+            EXPLORER_HEALTH_GET => public_get(handler_explorer_health);
+            EXPLORER_BLOCKS_STREAM_GET => protocol_handshake_get(handler_explorer_blocks_stream);
+            EXPLORER_TRANSACTIONS_GET => public_get(handler_explorer_transactions_list);
+            EXPLORER_TRANSACTIONS_LATEST_GET => public_get(handler_explorer_transactions_latest);
+            EXPLORER_TRANSACTIONS_STREAM_GET => protocol_handshake_get(handler_explorer_transactions_stream);
+            EXPLORER_INSTRUCTIONS_GET => public_get(handler_explorer_instructions_list);
+            EXPLORER_INSTRUCTIONS_LATEST_GET => public_get(handler_explorer_instructions_latest);
+            SORACLES_DEFI_ATTESTATIONS_LATEST_GET => public_get(handler_defi_oracle_attestation_latest);
+            SORACLES_FEEDS_GET => public_get(handler_oracle_feeds);
+            SORACLES_FEEDS_BY_FEED_ID_HISTORY_GET => public_get(handler_oracle_feed_history);
         );
         #[cfg(feature = "telemetry")]
-        builder.route(
-            &route_catalog::application_api::EXPLORER_METRICS_GET,
-            catalog_get(handler_explorer_metrics),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            EXPLORER_METRICS_GET => public_get(handler_explorer_metrics);
         );
         #[cfg(feature = "telemetry")]
-        builder.route(
-            &route_catalog::application_api::EXPLORER_INSTRUCTIONS_STREAM_GET,
-            catalog_get(handler_explorer_instructions_stream)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            EXPLORER_INSTRUCTIONS_STREAM_GET => protocol_handshake_get(handler_explorer_instructions_stream);
         );
         #[cfg(feature = "telemetry")]
-        builder.route(
-            &route_catalog::application_api::TELEMETRY_PEERS_INFO_GET,
-            catalog_get(handler_telemetry_peers_info),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            TELEMETRY_PEERS_INFO_GET => public_get(handler_telemetry_peers_info);
         );
         #[cfg(feature = "telemetry")]
-        builder.route(
-            &route_catalog::application_api::TELEMETRY_PROPAGATION_GET,
-            catalog_get(handler_telemetry_propagation),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            TELEMETRY_PROPAGATION_GET => public_get(handler_telemetry_propagation);
         );
         #[cfg(feature = "telemetry")]
-        builder.route(
-            &route_catalog::application_api::TELEMETRY_LIVE_GET,
-            catalog_get(handler_telemetry_live),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET,
-            catalog_get(handler_explorer_account_detail),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET,
-            catalog_get(handler_explorer_account_qr),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_DOMAINS_BY_DOMAIN_ID_GET,
-            catalog_get(handler_explorer_domain_detail),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET,
-            catalog_get(handler_explorer_asset_definition_detail),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET,
-            catalog_get(handler_explorer_asset_definition_econometrics),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET,
-            catalog_get(handler_explorer_asset_definition_snapshot),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_ASSETS_BY_ASSET_ID_GET,
-            catalog_get(handler_explorer_asset_detail),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_NFTS_BY_NFT_ID_GET,
-            catalog_get(handler_explorer_nft_detail),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_RWAS_BY_RWA_ID_GET,
-            catalog_get(handler_explorer_rwa_detail),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_BLOCKS_BY_IDENTIFIER_GET,
-            catalog_get(handler_explorer_block_detail),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_TRANSACTIONS_BY_HASH_GET,
-            catalog_get(handler_explorer_transaction_detail),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET,
-            catalog_get(handler_explorer_instruction_detail),
-        );
-        builder.route(
-            &route_catalog::application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET,
-            catalog_get(handler_explorer_instruction_contract_view),
-        );
-        builder.route(
-            &route_catalog::application_api::KAIGI_CALLS_BY_CALL_ID_GET,
-            catalog_get(handler_kaigi_call),
-        );
-        builder.route(
-            &route_catalog::application_api::KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET,
-            catalog_get(handler_kaigi_call_signals),
-        );
-        builder.route(
-            &route_catalog::application_api::KAIGI_CALLS_BY_CALL_ID_EVENTS_GET,
-            catalog_get(handler_kaigi_call_events_sse)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::application_api::KAIGI_RELAYS_GET,
-            catalog_get(handler_kaigi_relays).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::application_api::KAIGI_RELAYS_BY_RELAY_ID_GET,
-            catalog_get(handler_kaigi_relay_detail).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::application_api::KAIGI_RELAYS_HEALTH_GET,
-            catalog_get(handler_kaigi_relays_health).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::application_api::KAIGI_RELAYS_EVENTS_GET,
-            catalog_get(handler_kaigi_relays_sse)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        mount_catalog_route_rows!(
+            builder, application_api;
+            TELEMETRY_LIVE_GET => public_get(handler_telemetry_live);
+            EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET => public_get(handler_explorer_account_detail);
+            EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET => public_get(handler_explorer_account_qr);
+            EXPLORER_DOMAINS_BY_DOMAIN_ID_GET => public_get(handler_explorer_domain_detail);
+            EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET => public_get(handler_explorer_asset_definition_detail);
+            EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET => public_get(handler_explorer_asset_definition_econometrics);
+            EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET => public_get(handler_explorer_asset_definition_snapshot);
+            EXPLORER_ASSETS_BY_ASSET_ID_GET => public_get(handler_explorer_asset_detail);
+            EXPLORER_NFTS_BY_NFT_ID_GET => public_get(handler_explorer_nft_detail);
+            EXPLORER_RWAS_BY_RWA_ID_GET => public_get(handler_explorer_rwa_detail);
+            EXPLORER_BLOCKS_BY_IDENTIFIER_GET => public_get(handler_explorer_block_detail);
+            EXPLORER_TRANSACTIONS_BY_HASH_GET => public_get(handler_explorer_transaction_detail);
+            EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET => public_get(handler_explorer_instruction_detail);
+            EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET => public_get(handler_explorer_instruction_contract_view);
+            KAIGI_CALLS_BY_CALL_ID_GET => public_get(handler_kaigi_call);
+            KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => public_get(handler_kaigi_call_signals);
+            KAIGI_CALLS_BY_CALL_ID_EVENTS_GET => protocol_handshake_get(handler_kaigi_call_events_sse);
+            KAIGI_RELAYS_GET => operator_get(handler_kaigi_relays, app_state);
+            KAIGI_RELAYS_BY_RELAY_ID_GET => operator_get(handler_kaigi_relay_detail, app_state);
+            KAIGI_RELAYS_HEALTH_GET => operator_get(handler_kaigi_relays_health, app_state);
+            KAIGI_RELAYS_EVENTS_GET => protocol_handshake_get(handler_kaigi_relays_sse);
         );
         if self.webhooks_enabled {
-            builder.route(
-                &route_catalog::application_api::WEBHOOKS_GET,
-                catalog_get(handler_webhooks_list).authenticated_operator(app_state.clone()),
-            );
-            builder.route(
-                &route_catalog::application_api::WEBHOOKS_POST,
-                catalog_post(handler_webhooks_create).authenticated_operator(app_state.clone()),
-            );
-            builder.route(
-                &route_catalog::application_api::WEBHOOKS_BY_ID_DELETE,
-                catalog_delete(handler_webhooks_delete).authenticated_operator(app_state.clone()),
+            mount_catalog_route_rows!(
+                builder, application_api;
+                WEBHOOKS_GET => operator_get(handler_webhooks_list, app_state);
+                WEBHOOKS_POST => operator_post(handler_webhooks_create, app_state);
+                WEBHOOKS_BY_ID_DELETE => operator_delete(handler_webhooks_delete, app_state);
             );
         } else {
             builder.route(
@@ -47055,50 +45865,25 @@ impl Torii {
     }
     fn add_soracloud_public_runtime_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
-        builder.route(
-            &route_catalog::soracloud_gateway::SORADNS_ROOT,
-            catalog_any(handler_soradns_public_alias_root).unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::soracloud_gateway::SORADNS_PATH,
-            catalog_any(handler_soradns_public_alias_path).unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::soracloud_gateway::LOCAL_ROOT,
-            catalog_any(handler_soracloud_public_local_read).unauthenticated(),
-        );
-        builder.route(
-            &route_catalog::soracloud_gateway::LOCAL_PATH,
-            catalog_any(handler_soracloud_public_local_read).unauthenticated(),
+        mount_catalog_route_rows!(
+            builder, soracloud_gateway;
+            SORADNS_ROOT => unauthenticated_any(handler_soradns_public_alias_root);
+            SORADNS_PATH => unauthenticated_any(handler_soradns_public_alias_path);
+            LOCAL_ROOT => unauthenticated_any(handler_soracloud_public_local_read);
+            LOCAL_PATH => unauthenticated_any(handler_soracloud_public_local_read);
         );
     }
     #[cfg(feature = "app_api")]
     fn add_sorafs_routes(&self, builder: &mut RouterBuilder) {
         // The public route set is a build-time contract. Runtime configuration changes
         // handler readiness, never which canonical paths exist.
-        builder.route(
-            &route_catalog::sorafs::STORAGE_PEERS,
-            catalog_get(sorafs::api::handle_get_sorafs_storage_peers),
-        );
-        builder.route(
-            &route_catalog::sorafs::PROVIDERS,
-            catalog_get(sorafs::api::handle_get_sorafs_providers),
-        );
-        builder.route(
-            &route_catalog::sorafs::PROVIDER_ADVERT,
-            catalog_post(sorafs::api::handle_post_sorafs_provider_advert)
-                .layer(DefaultBodyLimit::max(
-                    sorafs_manifest::provider_advert::PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1,
-                ))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::sorafs::ROUTING_PROVIDERS,
-            catalog_get(sorafs::delegated_routing::handle_get_routing_providers),
-        );
-        builder.route(
-            &route_catalog::sorafs::ROUTING_PEERS,
-            catalog_get(sorafs::delegated_routing::handle_get_routing_peers),
+        mount_catalog_route_rows!(
+            builder, sorafs;
+            STORAGE_PEERS => public_get(sorafs::api::handle_get_sorafs_storage_peers);
+            PROVIDERS => public_get(sorafs::api::handle_get_sorafs_providers);
+            PROVIDER_ADVERT => limited_protocol_handshake_post(sorafs::api::handle_post_sorafs_provider_advert, sorafs_manifest::provider_advert::PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1);
+            ROUTING_PROVIDERS => public_get(sorafs::delegated_routing::handle_get_routing_providers);
+            ROUTING_PEERS => public_get(sorafs::delegated_routing::handle_get_routing_peers);
         );
         let sorafs_body_limit: usize = self
             .transaction_max_content_len
@@ -47106,273 +45891,53 @@ impl Torii {
             .try_into()
             .expect("shouldn't exceed usize");
         let sorafs_operator_state = builder.state().clone();
-        macro_rules! capacity_get {
-            ($descriptor:ident, $handler:path) => {
-                builder.route(
-                    &route_catalog::sorafs::$descriptor,
-                    catalog_get($handler).layer(DefaultBodyLimit::max(sorafs_body_limit)),
-                );
-            };
-        }
-        macro_rules! capacity_post {
-            ($descriptor:ident, $handler:path) => {
-                builder.route(
-                    &route_catalog::sorafs::$descriptor,
-                    catalog_post($handler).layer(DefaultBodyLimit::max(sorafs_body_limit)),
-                );
-            };
-        }
-        macro_rules! capacity_authenticated_post {
-            ($descriptor:ident, $handler:path) => {
-                builder.route(
-                    &route_catalog::sorafs::$descriptor,
-                    catalog_post($handler)
-                        .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                        .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-                );
-            };
-        }
-        macro_rules! capacity_authenticated_get {
-            ($descriptor:ident, $handler:path) => {
-                builder.route(
-                    &route_catalog::sorafs::$descriptor,
-                    catalog_get($handler)
-                        .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                        .layer(axum::middleware::from_fn(
-                            sorafs::api::harden_reputation_route_responses,
-                        ))
-                        .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-                );
-            };
-        }
-        macro_rules! capacity_operator_get {
-            ($descriptor:ident, $handler:path) => {
-                builder.route(
-                    &route_catalog::sorafs::$descriptor,
-                    catalog_get($handler)
-                        .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                        .authenticated_operator(sorafs_operator_state.clone()),
-                );
-            };
-        }
-        macro_rules! capacity_operator_post {
-            ($descriptor:ident, $handler:path) => {
-                builder.route(
-                    &route_catalog::sorafs::$descriptor,
-                    catalog_post($handler)
-                        .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                        .authenticated_operator(sorafs_operator_state.clone()),
-                );
-            };
-        }
-        macro_rules! capacity_account_get {
-            ($descriptor:ident, $handler:path) => {
-                builder.route(
-                    &route_catalog::sorafs::$descriptor,
-                    catalog_get($handler)
-                        .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                        .authenticated_canonical_account_body(sorafs_operator_state.clone(), 0),
-                );
-            };
-        }
-        macro_rules! capacity_protocol_get {
-            ($descriptor:ident, $handler:path) => {
-                builder.route(
-                    &route_catalog::sorafs::$descriptor,
-                    catalog_get($handler)
-                        .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                        .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-                );
-            };
-        }
-        capacity_get!(
-            CAPACITY_STATE,
-            sorafs::api::handle_get_sorafs_capacity_state
-        );
-        builder.route(
-            &route_catalog::sorafs::BILLING_STATUS,
-            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_status)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::sorafs::BILLING_STATEMENTS,
-            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_statements)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::sorafs::BILLING_STATEMENT,
-            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_statement)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::sorafs::BILLING_STATEMENT_ACKNOWLEDGEMENTS,
-            catalog_post(
-                sorafs::hedging_billing_api::handle_post_sorafs_billing_statement_acknowledgement,
-            )
-            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::sorafs::BILLING_RECONCILIATION,
-            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_reconciliation)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::sorafs::HEDGING_EXPOSURE,
-            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_hedging_exposure)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::sorafs::HEDGING_INTENTS,
-            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_hedging_intents)
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_DASHBOARD,
-            sorafs::api::handle_get_sorafs_governance_dag_dashboard
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_HEAD,
-            sorafs::api::handle_get_sorafs_governance_dag_head
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_BLOCK,
-            sorafs::api::handle_get_sorafs_governance_dag_block
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_NODE,
-            sorafs::api::handle_get_sorafs_governance_dag_node
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_PUBLISH_INDEX,
-            sorafs::api::handle_get_sorafs_governance_dag_publish_index
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_PUBLISH_DIGEST,
-            sorafs::api::handle_get_sorafs_governance_dag_publish_digest
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_PUBLISH_KIND,
-            sorafs::api::handle_get_sorafs_governance_dag_publish_kind
-        );
-        capacity_get!(
-            TRANSPARENCY_CYCLES,
-            sorafs::api::handle_get_sorafs_transparency_cycles
-        );
-        capacity_get!(
-            TRANSPARENCY_CYCLE,
-            sorafs::api::handle_get_sorafs_transparency_cycle
-        );
-        capacity_get!(
-            TRANSPARENCY_CYCLE_ENTRY,
-            sorafs::api::handle_get_sorafs_transparency_cycle_entry
-        );
-        capacity_get!(
-            TRANSPARENCY_EXPLORER,
-            sorafs::api::handle_get_sorafs_transparency_explorer
-        );
-        capacity_get!(
-            TRANSPARENCY_EXPLORER_UI,
-            sorafs::api::handle_get_sorafs_transparency_explorer_ui
-        );
-        capacity_authenticated_post!(
-            TRANSPARENCY_PRIVACY_SOURCE_EVENT,
-            sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_source_event
-        );
-        capacity_authenticated_post!(
-            TRANSPARENCY_PRIVACY_PUBLISH_DUE,
-            sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_publish_due
-        );
-        capacity_get!(
-            TRANSPARENCY_TOKENS,
-            sorafs::api::handle_get_sorafs_transparency_token_issuances
-        );
-        capacity_authenticated_post!(
-            TRANSPARENCY_TOKEN_ISSUANCE,
-            sorafs::api::handle_post_sorafs_transparency_token_issuance
-        );
-        capacity_post!(
-            TRANSPARENCY_TOKEN_VERIFY,
-            sorafs::api::handle_post_sorafs_transparency_token_verify
-        );
-        capacity_get!(
-            APPEAL_FINANCE_REPORTS_GET,
-            sorafs::api::handle_get_sorafs_appeal_finance_reports
-        );
-        capacity_authenticated_post!(
-            APPEAL_FINANCE_REPORTS_POST,
-            sorafs::api::handle_post_sorafs_appeal_finance_report
-        );
-        capacity_get!(
-            APPEAL_FINANCE_WEEKLY_ROLLUPS_GET,
-            sorafs::api::handle_get_sorafs_appeal_finance_weekly_rollups
-        );
-        capacity_authenticated_post!(
-            APPEAL_FINANCE_WEEKLY_ROLLUPS_POST,
-            sorafs::api::handle_post_sorafs_appeal_finance_weekly_rollup
-        );
-        capacity_get!(
-            APPEAL_FINANCE_SETTLEMENT_RECEIPTS,
-            sorafs::api::handle_get_sorafs_appeal_finance_settlement_receipts
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_CAR_QUEUE,
-            sorafs::api::handle_get_sorafs_governance_dag_car_queue
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_CAR_QUEUE_DIGEST,
-            sorafs::api::handle_get_sorafs_governance_dag_car_queue_digest
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_CAR_QUEUE_KIND,
-            sorafs::api::handle_get_sorafs_governance_dag_car_queue_kind
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_CAR_QUEUE_ARCHIVE,
-            sorafs::api::handle_get_sorafs_governance_dag_car_queue_archive
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_RUNTIME,
-            sorafs::api::handle_get_sorafs_governance_dag_runtime
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_RUNTIME_HEAD,
-            sorafs::api::handle_get_sorafs_governance_dag_runtime_head
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_RUNTIME_BLOCK,
-            sorafs::api::handle_get_sorafs_governance_dag_runtime_block
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_RUNTIME_NODE,
-            sorafs::api::handle_get_sorafs_governance_dag_runtime_node
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_RUNTIME_DIGEST,
-            sorafs::api::handle_get_sorafs_governance_dag_runtime_digest
-        );
-        capacity_operator_get!(
-            GOVERNANCE_DAG_RUNTIME_KIND,
-            sorafs::api::handle_get_sorafs_governance_dag_runtime_kind
-        );
-        capacity_authenticated_get!(
-            REPUTATION_LATEST_GET,
-            sorafs::api::handle_get_sorafs_reputation_latest
-        );
-        capacity_authenticated_get!(
-            REPUTATION_SNAPSHOT,
-            sorafs::api::handle_get_sorafs_reputation_snapshot
-        );
-        capacity_authenticated_get!(
-            REPUTATION_PROVIDER,
-            sorafs::api::handle_get_sorafs_reputation_provider
-        );
-        capacity_authenticated_get!(
-            REPUTATION_WEIGHTS,
-            sorafs::api::handle_get_sorafs_reputation_weights
-        );
-        capacity_authenticated_get!(
-            REPUTATION_EVENTS,
-            sorafs::api::handle_get_sorafs_reputation_events
+        mount_catalog_route_rows!(
+            builder, sorafs;
+            CAPACITY_STATE => limited_public_get(sorafs::api::handle_get_sorafs_capacity_state, sorafs_body_limit);
+            BILLING_STATUS => canonical_signature_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_status);
+            BILLING_STATEMENTS => canonical_signature_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_statements);
+            BILLING_STATEMENT => canonical_signature_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_statement);
+            BILLING_STATEMENT_ACKNOWLEDGEMENTS => canonical_signature_post(sorafs::hedging_billing_api::handle_post_sorafs_billing_statement_acknowledgement);
+            BILLING_RECONCILIATION => canonical_signature_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_reconciliation);
+            HEDGING_EXPOSURE => canonical_signature_get(sorafs::hedging_billing_api::handle_get_sorafs_hedging_exposure);
+            HEDGING_INTENTS => canonical_signature_get(sorafs::hedging_billing_api::handle_get_sorafs_hedging_intents);
+            GOVERNANCE_DAG_DASHBOARD => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_dashboard, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_HEAD => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_head, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_BLOCK => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_block, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_NODE => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_node, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_PUBLISH_INDEX => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_publish_index, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_PUBLISH_DIGEST => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_publish_digest, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_PUBLISH_KIND => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_publish_kind, sorafs_operator_state, sorafs_body_limit);
+            TRANSPARENCY_CYCLES => limited_public_get(sorafs::api::handle_get_sorafs_transparency_cycles, sorafs_body_limit);
+            TRANSPARENCY_CYCLE => limited_public_get(sorafs::api::handle_get_sorafs_transparency_cycle, sorafs_body_limit);
+            TRANSPARENCY_CYCLE_ENTRY => limited_public_get(sorafs::api::handle_get_sorafs_transparency_cycle_entry, sorafs_body_limit);
+            TRANSPARENCY_EXPLORER => limited_public_get(sorafs::api::handle_get_sorafs_transparency_explorer, sorafs_body_limit);
+            TRANSPARENCY_EXPLORER_UI => limited_public_get(sorafs::api::handle_get_sorafs_transparency_explorer_ui, sorafs_body_limit);
+            TRANSPARENCY_PRIVACY_SOURCE_EVENT => limited_canonical_signature_post(sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_source_event, sorafs_body_limit);
+            TRANSPARENCY_PRIVACY_PUBLISH_DUE => limited_canonical_signature_post(sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_publish_due, sorafs_body_limit);
+            TRANSPARENCY_TOKENS => limited_public_get(sorafs::api::handle_get_sorafs_transparency_token_issuances, sorafs_body_limit);
+            TRANSPARENCY_TOKEN_ISSUANCE => limited_canonical_signature_post(sorafs::api::handle_post_sorafs_transparency_token_issuance, sorafs_body_limit);
+            TRANSPARENCY_TOKEN_VERIFY => limited_public_post(sorafs::api::handle_post_sorafs_transparency_token_verify, sorafs_body_limit);
+            APPEAL_FINANCE_REPORTS_GET => limited_public_get(sorafs::api::handle_get_sorafs_appeal_finance_reports, sorafs_body_limit);
+            APPEAL_FINANCE_REPORTS_POST => limited_canonical_signature_post(sorafs::api::handle_post_sorafs_appeal_finance_report, sorafs_body_limit);
+            APPEAL_FINANCE_WEEKLY_ROLLUPS_GET => limited_public_get(sorafs::api::handle_get_sorafs_appeal_finance_weekly_rollups, sorafs_body_limit);
+            APPEAL_FINANCE_WEEKLY_ROLLUPS_POST => limited_canonical_signature_post(sorafs::api::handle_post_sorafs_appeal_finance_weekly_rollup, sorafs_body_limit);
+            APPEAL_FINANCE_SETTLEMENT_RECEIPTS => limited_public_get(sorafs::api::handle_get_sorafs_appeal_finance_settlement_receipts, sorafs_body_limit);
+            GOVERNANCE_DAG_CAR_QUEUE => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_car_queue, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_CAR_QUEUE_DIGEST => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_car_queue_digest, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_CAR_QUEUE_KIND => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_car_queue_kind, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_CAR_QUEUE_ARCHIVE => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_car_queue_archive, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_RUNTIME => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_runtime, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_RUNTIME_HEAD => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_runtime_head, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_RUNTIME_BLOCK => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_runtime_block, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_RUNTIME_NODE => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_runtime_node, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_RUNTIME_DIGEST => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_runtime_digest, sorafs_operator_state, sorafs_body_limit);
+            GOVERNANCE_DAG_RUNTIME_KIND => limited_operator_get(sorafs::api::handle_get_sorafs_governance_dag_runtime_kind, sorafs_operator_state, sorafs_body_limit);
+            REPUTATION_LATEST_GET => limited_hardened_canonical_signature_get(sorafs::api::handle_get_sorafs_reputation_latest, sorafs_body_limit);
+            REPUTATION_SNAPSHOT => limited_hardened_canonical_signature_get(sorafs::api::handle_get_sorafs_reputation_snapshot, sorafs_body_limit);
+            REPUTATION_PROVIDER => limited_hardened_canonical_signature_get(sorafs::api::handle_get_sorafs_reputation_provider, sorafs_body_limit);
+            REPUTATION_WEIGHTS => limited_hardened_canonical_signature_get(sorafs::api::handle_get_sorafs_reputation_weights, sorafs_body_limit);
+            REPUTATION_EVENTS => limited_hardened_canonical_signature_get(sorafs::api::handle_get_sorafs_reputation_events, sorafs_body_limit);
         );
         builder.route(
             &route_catalog::sorafs::REPUTATION_EVENTS_STREAM,
@@ -47392,27 +45957,19 @@ impl Torii {
                 ))
                 .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
-        capacity_get!(PIN_REGISTRY, sorafs::api::handle_get_sorafs_pin_registry);
-        capacity_get!(PIN_MANIFEST, sorafs::api::handle_get_sorafs_pin_manifest);
-        builder.route(
-            &route_catalog::sorafs::PIN_REGISTER,
-            catalog_post(handler_post_sorafs_register_manifest)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
+        mount_catalog_route_rows!(
+            builder, sorafs;
+            PIN_REGISTRY => limited_public_get(sorafs::api::handle_get_sorafs_pin_registry, sorafs_body_limit);
+            PIN_MANIFEST => limited_public_get(sorafs::api::handle_get_sorafs_pin_manifest, sorafs_body_limit);
+            PIN_REGISTER => limited_canonical_signed_post(handler_post_sorafs_register_manifest, sorafs_body_limit);
+            ALIASES => limited_canonical_account_get(sorafs::api::handle_get_sorafs_aliases, sorafs_operator_state, sorafs_body_limit, 0);
+            REPLICATION => limited_canonical_account_get(sorafs::api::handle_get_sorafs_replication_orders, sorafs_operator_state, sorafs_body_limit, 0);
+            STORAGE_STATE => limited_operator_get(sorafs::api::handle_get_sorafs_storage_state, sorafs_operator_state, sorafs_body_limit);
+            CID_LOOKUP => limited_public_get(sorafs::api::handle_get_sorafs_cid_lookup, sorafs_body_limit);
+            STORAGE_MANIFEST => limited_public_get(sorafs::api::handle_get_sorafs_storage_manifest, sorafs_body_limit);
+            STORAGE_PLAN => limited_public_get(sorafs::api::handle_get_sorafs_storage_plan, sorafs_body_limit);
+            STORAGE_FETCH => limited_operator_post(sorafs::api::handle_post_sorafs_storage_fetch, sorafs_operator_state, sorafs_body_limit);
         );
-        capacity_account_get!(ALIASES, sorafs::api::handle_get_sorafs_aliases);
-        capacity_account_get!(
-            REPLICATION,
-            sorafs::api::handle_get_sorafs_replication_orders
-        );
-        capacity_operator_get!(STORAGE_STATE, sorafs::api::handle_get_sorafs_storage_state);
-        capacity_get!(CID_LOOKUP, sorafs::api::handle_get_sorafs_cid_lookup);
-        capacity_get!(
-            STORAGE_MANIFEST,
-            sorafs::api::handle_get_sorafs_storage_manifest
-        );
-        capacity_get!(STORAGE_PLAN, sorafs::api::handle_get_sorafs_storage_plan);
-        capacity_operator_post!(STORAGE_FETCH, sorafs::api::handle_post_sorafs_storage_fetch);
         let stream_token_app_state = builder.state().clone();
         builder.route(
             &route_catalog::sorafs::STORAGE_TOKEN,
@@ -47420,41 +45977,19 @@ impl Torii {
                 .layer(DefaultBodyLimit::max(sorafs_body_limit))
                 .authenticated_operator(stream_token_app_state),
         );
-        capacity_protocol_get!(
-            STORAGE_CAR,
-            sorafs::api::handle_get_sorafs_storage_car_range
+        mount_catalog_route_rows!(
+            builder, sorafs;
+            STORAGE_CAR => limited_protocol_handshake_get(sorafs::api::handle_get_sorafs_storage_car_range, sorafs_body_limit);
+            STORAGE_CHUNK => limited_protocol_handshake_get(sorafs::api::handle_get_sorafs_storage_chunk, sorafs_body_limit);
         );
-        capacity_protocol_get!(STORAGE_CHUNK, sorafs::api::handle_get_sorafs_storage_chunk);
         let proof_stream_state = builder.state().clone();
-        builder.route(
-            &route_catalog::sorafs::PROOF_STREAM,
-            catalog_post(sorafs::api::handle_post_sorafs_proof_stream)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_operator(proof_stream_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sorafs::PDP_CHALLENGE,
-            catalog_post(sorafs::api::handle_post_sorafs_pdp_challenge)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_operator(proof_stream_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sorafs::PDP_NEXT,
-            catalog_post(sorafs::api::handle_post_sorafs_pdp_next)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_operator(proof_stream_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sorafs::PDP_PROOF,
-            catalog_post(sorafs::api::handle_post_sorafs_pdp_proof)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_operator(proof_stream_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sorafs::PDP_STATUS,
-            catalog_post(sorafs::api::handle_post_sorafs_pdp_status)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_operator(proof_stream_state.clone()),
+        mount_catalog_route_rows!(
+            builder, sorafs;
+            PROOF_STREAM => limited_operator_post(sorafs::api::handle_post_sorafs_proof_stream, proof_stream_state, sorafs_body_limit);
+            PDP_CHALLENGE => limited_operator_post(sorafs::api::handle_post_sorafs_pdp_challenge, proof_stream_state, sorafs_body_limit);
+            PDP_NEXT => limited_operator_post(sorafs::api::handle_post_sorafs_pdp_next, proof_stream_state, sorafs_body_limit);
+            PDP_PROOF => limited_operator_post(sorafs::api::handle_post_sorafs_pdp_proof, proof_stream_state, sorafs_body_limit);
+            PDP_STATUS => limited_operator_post(sorafs::api::handle_post_sorafs_pdp_status, proof_stream_state, sorafs_body_limit);
         );
         builder.route(
             &route_catalog::sorafs::PDP_EXPORT,
@@ -47462,103 +45997,25 @@ impl Torii {
                 .layer(DefaultBodyLimit::max(sorafs_body_limit))
                 .authenticated_operator(proof_stream_state),
         );
-        macro_rules! pop_post {
-            ($descriptor:ident, $handler:path, $limit:expr) => {
-                builder.route(
-                    &route_catalog::sorafs::$descriptor,
-                    catalog_post($handler)
-                        .layer(DefaultBodyLimit::max($limit))
-                        .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-                );
-            };
-        }
-        pop_post!(
-            POP_ENROLLMENT,
-            sorafs::pop_api::handle_post_pop_enrollment,
-            sorafs::pop_api::POP_ENROLLMENT_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_ENROLLMENT_STATUS,
-            sorafs::pop_api::handle_post_pop_enrollment_status,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_APPROVAL,
-            sorafs::pop_api::handle_post_pop_approval,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_ISSUE,
-            sorafs::pop_api::handle_post_pop_issue,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_REVOCATION,
-            sorafs::pop_api::handle_post_pop_revocation,
-            sorafs::pop_api::POP_ENROLLMENT_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_REGISTRY_SUBMIT,
-            sorafs::pop_api::handle_post_pop_registry_submit,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_REGISTRY_RECONCILE,
-            sorafs::pop_api::handle_post_pop_registry_reconcile,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_REGISTRY_PROJECTION,
-            sorafs::pop_api::handle_post_pop_registry_projection,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_WALLET_DELIVERY,
-            sorafs::pop_api::handle_post_pop_wallet_delivery,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_WALLET_IMPORT,
-            sorafs::pop_api::handle_post_pop_wallet_import,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_WALLET_ACKNOWLEDGE,
-            sorafs::pop_api::handle_post_pop_wallet_acknowledge,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_WALLET_SYNCHRONIZE,
-            sorafs::pop_api::handle_post_pop_wallet_synchronize,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_WALLET_PROVE,
-            sorafs::pop_api::handle_post_pop_wallet_prove,
-            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
-        );
-        pop_post!(
-            POP_VERIFY,
-            sorafs::pop_api::handle_post_pop_verify,
-            sorafs::pop_api::POP_PROOF_REQUEST_MAX_BYTES_V1
-        );
-        builder.route(
-            &route_catalog::sorafs::SITE_MANIFEST,
-            catalog_get(sorafs::api::handle_get_sorafs_site_manifest)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::sorafs::CID_ROOT,
-            catalog_get(sorafs::api::handle_get_sorafs_cid_root)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::sorafs::CID_PATH,
-            catalog_get(sorafs::api::handle_get_sorafs_cid_path)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        mount_catalog_route_rows!(
+            builder, sorafs;
+            POP_ENROLLMENT => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_enrollment, sorafs::pop_api::POP_ENROLLMENT_REQUEST_MAX_BYTES_V1);
+            POP_ENROLLMENT_STATUS => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_enrollment_status, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_APPROVAL => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_approval, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_ISSUE => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_issue, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_REVOCATION => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_revocation, sorafs::pop_api::POP_ENROLLMENT_REQUEST_MAX_BYTES_V1);
+            POP_REGISTRY_SUBMIT => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_registry_submit, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_REGISTRY_RECONCILE => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_registry_reconcile, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_REGISTRY_PROJECTION => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_registry_projection, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_WALLET_DELIVERY => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_wallet_delivery, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_WALLET_IMPORT => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_wallet_import, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_WALLET_ACKNOWLEDGE => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_wallet_acknowledge, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_WALLET_SYNCHRONIZE => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_wallet_synchronize, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_WALLET_PROVE => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_wallet_prove, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
+            POP_VERIFY => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_verify, sorafs::pop_api::POP_PROOF_REQUEST_MAX_BYTES_V1);
+            SITE_MANIFEST => limited_protocol_handshake_get(sorafs::api::handle_get_sorafs_site_manifest, sorafs_body_limit);
+            CID_ROOT => limited_protocol_handshake_get(sorafs::api::handle_get_sorafs_cid_root, sorafs_body_limit);
+            CID_PATH => limited_protocol_handshake_get(sorafs::api::handle_get_sorafs_cid_path, sorafs_body_limit);
         );
     }
     #[cfg(feature = "app_api")]
@@ -47571,13 +46028,10 @@ impl Torii {
     }
     #[cfg(feature = "app_api")]
     fn add_soradns_routes(builder: &mut RouterBuilder) {
-        builder.route(
-            &route_catalog::content_directory::SORADNS_LATEST,
-            catalog_get(handler_soradns_directory_latest),
-        );
-        builder.route(
-            &route_catalog::content_directory::SORADNS_EVENTS,
-            catalog_get(handler_soradns_directory_events),
+        mount_catalog_route_rows!(
+            builder, content_directory;
+            SORADNS_LATEST => public_get(handler_soradns_directory_latest);
+            SORADNS_EVENTS => public_get(handler_soradns_directory_events);
         );
     }
     fn add_cataloged_runtime_governance_routes(&self, builder: &mut RouterBuilder) {
@@ -47593,90 +46047,27 @@ impl Torii {
             .expect("transaction content limit should fit usize");
         let proof_body_limit =
             usize::try_from(app_state.proof_limits.max_body_bytes).unwrap_or(usize::MAX);
-        macro_rules! mount_get {
-            ($descriptor:ident, $handler:expr) => {
-                builder.route(&routes::$descriptor, catalog_get($handler));
-            };
-        }
-        macro_rules! mount_post {
-            ($descriptor:ident, $handler:expr) => {
-                builder.route(&routes::$descriptor, catalog_post($handler));
-            };
-        }
-        macro_rules! mount_account_get {
-            ($descriptor:ident, $handler:expr) => {
-                builder.route(
-                    &routes::$descriptor,
-                    catalog_get($handler)
-                        .authenticated_canonical_account_body(app_state.clone(), 0),
-                );
-            };
-        }
-        macro_rules! mount_account_post {
-            ($descriptor:ident, $handler:expr) => {
-                builder.route(
-                    &routes::$descriptor,
-                    catalog_post($handler).authenticated_canonical_account_body(
-                        app_state.clone(),
-                        runtime_governance_body_limit,
-                    ),
-                );
-            };
-        }
-        macro_rules! mount_account_proof_post {
-            ($descriptor:ident, $handler:expr) => {
-                builder.route(
-                    &routes::$descriptor,
-                    catalog_post($handler).authenticated_canonical_account_proof_body(
-                        app_state.clone(),
-                        proof_body_limit,
-                    ),
-                );
-            };
-        }
-        mount_account_proof_post!(ZK_ROOTS, handler_zk_roots);
-        mount_account_proof_post!(ZK_MERKLE_PATH, handler_zk_merkle_path);
-        mount_account_proof_post!(ZK_VOTE_TALLY, handler_zk_vote_tally);
+        mount_local_catalog_route_rows!(
+            builder, routes;
+            ZK_ROOTS => canonical_account_proof_post(handler_zk_roots, app_state, proof_body_limit);
+            ZK_MERKLE_PATH => canonical_account_proof_post(handler_zk_merkle_path, app_state, proof_body_limit);
+            ZK_VOTE_TALLY => canonical_account_proof_post(handler_zk_vote_tally, app_state, proof_body_limit);
+        );
         mount_authenticated_zk_compute_routes!(builder, app_state, proof_body_limit);
-        mount_account_get!(RUNTIME_ABI_ACTIVE, handler_runtime_abi_active);
-        mount_get!(RUNTIME_ABI_HASH, handler_runtime_abi_hash);
-        mount_account_get!(RUNTIME_METRICS, handler_runtime_metrics);
-        mount_account_get!(NODE_CAPABILITIES, handler_node_capabilities);
-        mount_account_get!(PRIVACY_CAPABILITIES, handler_privacy_capabilities);
-        builder.route(
-            &routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
-            catalog_post(handler_post_bootle_lantern_issuance_authorize)
-                .layer(DefaultBodyLimit::max(1))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
-            catalog_post(handler_post_bootle_lantern_issuance_issue)
-                .layer(DefaultBodyLimit::max(
-                    privacy_issuance_api::BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1,
-                ))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        mount_account_get!(
-            NODE_PROJECTION_CHECKPOINT,
-            handler_node_query_projection_checkpoint
-        );
-        builder.route(
-            &routes::RUNTIME_UPGRADES,
-            catalog_get(handler_runtime_upgrades_list).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &routes::RUNTIME_UPGRADE_PROPOSE,
-            catalog_post(handler_runtime_propose_upgrade).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &routes::RUNTIME_UPGRADE_ACTIVATE,
-            catalog_post(handler_runtime_activate_upgrade)
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &routes::RUNTIME_UPGRADE_CANCEL,
-            catalog_post(handler_runtime_cancel_upgrade).authenticated_operator(app_state.clone()),
+        mount_local_catalog_route_rows!(
+            builder, routes;
+            RUNTIME_ABI_ACTIVE => canonical_account_get(handler_runtime_abi_active, app_state, 0);
+            RUNTIME_ABI_HASH => public_get(handler_runtime_abi_hash);
+            RUNTIME_METRICS => canonical_account_get(handler_runtime_metrics, app_state, 0);
+            NODE_CAPABILITIES => canonical_account_get(handler_node_capabilities, app_state, 0);
+            PRIVACY_CAPABILITIES => canonical_account_get(handler_privacy_capabilities, app_state, 0);
+            PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE => limited_protocol_handshake_post(handler_post_bootle_lantern_issuance_authorize, 1);
+            PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE => limited_protocol_handshake_post(handler_post_bootle_lantern_issuance_issue, privacy_issuance_api::BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1);
+            NODE_PROJECTION_CHECKPOINT => canonical_account_get(handler_node_query_projection_checkpoint, app_state, 0);
+            RUNTIME_UPGRADES => operator_get(handler_runtime_upgrades_list, app_state);
+            RUNTIME_UPGRADE_PROPOSE => operator_post(handler_runtime_propose_upgrade, app_state);
+            RUNTIME_UPGRADE_ACTIVATE => operator_post(handler_runtime_activate_upgrade, app_state);
+            RUNTIME_UPGRADE_CANCEL => operator_post(handler_runtime_cancel_upgrade, app_state);
         );
         #[cfg(feature = "app_api")]
         {
@@ -47690,153 +46081,67 @@ impl Torii {
                     ))
                     .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
             );
-            builder.route(
-                &routes::ZK_IVM_PROVE_GET,
-                catalog_get(handler_zk_ivm_prove_get)
-                    .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-            );
-            builder.route(
-                &routes::ZK_IVM_PROVE_DELETE,
-                catalog_delete(handler_zk_ivm_prove_delete)
-                    .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+            mount_local_catalog_route_rows!(
+                builder, routes;
+                ZK_IVM_PROVE_GET => canonical_signature_get(handler_zk_ivm_prove_get);
+                ZK_IVM_PROVE_DELETE => canonical_signature_delete(handler_zk_ivm_prove_delete);
             );
             let attachment_body_limit = crate::zk_attachments::max_bytes_cfg();
-            macro_rules! mount_attachment_get {
-                ($descriptor:ident, $handler:expr) => {
-                    builder.route(
-                        &routes::$descriptor,
-                        catalog_get($handler)
-                            .authenticated_canonical_account_body(app_state.clone(), 0),
-                    );
-                };
-            }
-            macro_rules! mount_attachment_post {
-                ($handler:expr) => {
-                    builder.route(
-                        &routes::ZK_ATTACHMENTS_POST,
-                        catalog_post($handler).authenticated_canonical_account_body(
-                            app_state.clone(),
-                            attachment_body_limit,
-                        ),
-                    );
-                };
-            }
-            macro_rules! mount_attachment_delete {
-                ($handler:expr) => {
-                    builder.route(
-                        &routes::ZK_ATTACHMENT_DELETE,
-                        catalog_delete($handler)
-                            .authenticated_canonical_account_body(app_state.clone(), 0),
-                    );
-                };
-            }
             if builder.state().zk_attachments_enabled {
-                mount_attachment_get!(ZK_ATTACHMENTS_GET, handler_zk_attachments_filtered);
-                mount_attachment_post!(handler_zk_attachments_create);
-                mount_attachment_get!(ZK_ATTACHMENT_GET, handler_zk_attachment_get);
-                mount_attachment_delete!(handler_zk_attachment_delete);
-                mount_attachment_get!(ZK_ATTACHMENTS_COUNT, handler_zk_attachments_count);
+                mount_local_catalog_route_rows!(
+                    builder, routes;
+                    ZK_ATTACHMENTS_GET => canonical_account_get(handler_zk_attachments_filtered, app_state, 0);
+                    ZK_ATTACHMENTS_POST => canonical_account_post(handler_zk_attachments_create, app_state, attachment_body_limit);
+                    ZK_ATTACHMENT_GET => canonical_account_get(handler_zk_attachment_get, app_state, 0);
+                    ZK_ATTACHMENT_DELETE => canonical_account_delete(handler_zk_attachment_delete, app_state, 0);
+                    ZK_ATTACHMENTS_COUNT => canonical_account_get(handler_zk_attachments_count, app_state, 0);
+                );
             } else {
-                mount_attachment_get!(ZK_ATTACHMENTS_GET, handler_zk_attachments_disabled);
-                mount_attachment_post!(handler_zk_attachments_disabled);
-                mount_attachment_get!(ZK_ATTACHMENT_GET, handler_zk_attachments_disabled);
-                mount_attachment_delete!(handler_zk_attachments_disabled);
-                mount_attachment_get!(ZK_ATTACHMENTS_COUNT, handler_zk_attachments_disabled);
+                mount_local_catalog_route_rows!(
+                    builder, routes;
+                    ZK_ATTACHMENTS_GET => canonical_account_get(handler_zk_attachments_disabled, app_state, 0);
+                    ZK_ATTACHMENTS_POST => canonical_account_post(handler_zk_attachments_disabled, app_state, attachment_body_limit);
+                    ZK_ATTACHMENT_GET => canonical_account_get(handler_zk_attachments_disabled, app_state, 0);
+                    ZK_ATTACHMENT_DELETE => canonical_account_delete(handler_zk_attachments_disabled, app_state, 0);
+                    ZK_ATTACHMENTS_COUNT => canonical_account_get(handler_zk_attachments_disabled, app_state, 0);
+                );
             }
-            builder.route(
-                &routes::NODE_PROJECTION_CHECKPOINT_PLAN,
-                catalog_post(handler_node_query_projection_checkpoint_plan)
-                    .authenticated_operator(app_state.clone()),
+            mount_local_catalog_route_rows!(
+                builder, routes;
+                NODE_PROJECTION_CHECKPOINT_PLAN => operator_post(handler_node_query_projection_checkpoint_plan, app_state);
+                NODE_PROJECTION_CHECKPOINT_PUBLISH => operator_post(handler_node_query_projection_checkpoint_publish, app_state);
+                NODE_PROJECTION_SHARD_CATALOG => operator_get(handler_node_query_projection_shard_catalog, app_state);
+                NODE_PROJECTION_SHARD_EXPORT => operator_get(handler_node_query_projection_shard_export, app_state);
+                MINISTRY_AGENDA_DRAFT => canonical_account_post(handler_ministry_agenda_proposal_draft, app_state, runtime_governance_body_limit);
+                MINISTRY_AGENDA_GET => canonical_account_get(handler_ministry_agenda_proposal_get, app_state, 0);
+                GOV_PROPOSE_DEPLOY => canonical_account_post(handler_gov_propose_deploy, app_state, runtime_governance_body_limit);
+                GOV_PROPOSE_SCCP => canonical_account_post(handler_gov_propose_sccp_route_governance, app_state, runtime_governance_body_limit);
+                GOV_CAPABILITIES => canonical_account_get(handler_gov_capabilities, app_state, 0);
+                GOV_CITIZEN_DRAFT => canonical_account_post(handler_gov_citizen_draft, app_state, runtime_governance_body_limit);
+                VALIDATION_FEE_CURRENT_POLICY_PROOF => canonical_account_post(validation_fee_api::handler_current_policy_proof, app_state, runtime_governance_body_limit);
+                VALIDATION_FEE_PROPOSALS => canonical_account_get(validation_fee_api::handler_proposals, app_state, 0);
+                VALIDATION_FEE_PROPOSAL_DETAIL => canonical_account_get(validation_fee_api::handler_proposal_detail, app_state, 0);
+                VALIDATION_FEE_PROPOSAL_DRAFT => canonical_account_post(validation_fee_api::handler_proposal_draft, app_state, runtime_governance_body_limit);
+                VALIDATION_FEE_PLAIN_BALLOT_DRAFT => canonical_account_post(validation_fee_api::handler_plain_ballot_draft, app_state, runtime_governance_body_limit);
+                GOV_PROPOSAL_GET => canonical_account_get(handler_gov_proposal_get, app_state, 0);
+                GOV_LOCKS_GET => canonical_account_get(handler_gov_locks_get, app_state, 0);
+                GOV_REFERENDUM_GET => canonical_account_get(handler_gov_referendum_get, app_state, 0);
+                GOV_TALLY_GET => canonical_account_get(handler_gov_tally_get, app_state, 0);
+                GOV_BALLOT_ZK_V1 => limited_canonical_account_post(handler_gov_ballot_zk_v1, app_state, proof_body_limit, proof_body_limit);
+                GOV_BALLOT_ZK_V1_PROOF => limited_canonical_account_post(handler_gov_ballot_zk_v1_ballot_proof, app_state, proof_body_limit, proof_body_limit);
+                GOV_BALLOT_PLAIN => limited_canonical_account_post(handler_gov_ballot_plain, app_state, proof_body_limit, proof_body_limit);
+                GOV_PARLIAMENT_BALLOT => limited_canonical_account_post(handler_gov_parliament_ballot, app_state, proof_body_limit, proof_body_limit);
+                GOV_FINALIZE => public_post(handler_gov_finalize);
+                GOV_PROTECTED_POST => operator_post(handler_gov_protected_set, app_state);
+                GOV_PROTECTED_GET => canonical_account_get(handler_gov_protected_get, app_state, 0);
+                GOV_STREAM => protocol_handshake_get(handler_gov_stream);
+                GOV_UNLOCK_STATS => canonical_account_get(handler_gov_unlock_stats, app_state, 0);
+                GOV_CONTRACT_GET => canonical_account_get(handler_gov_contract_get, app_state, 0);
+                GOV_ENACT => canonical_account_post(handler_gov_enact, app_state, runtime_governance_body_limit);
+                GOV_COUNCIL_CURRENT => canonical_account_get(handler_gov_council_current, app_state, 0);
+                GOV_CITIZENS_COUNT => canonical_account_get(handler_gov_citizen_count, app_state, 0);
+                GOV_CITIZEN_STATUS => canonical_account_get(handler_gov_citizen_status, app_state, 0);
             );
-            builder.route(
-                &routes::NODE_PROJECTION_CHECKPOINT_PUBLISH,
-                catalog_post(handler_node_query_projection_checkpoint_publish)
-                    .authenticated_operator(app_state.clone()),
-            );
-            builder.route(
-                &routes::NODE_PROJECTION_SHARD_CATALOG,
-                catalog_get(handler_node_query_projection_shard_catalog)
-                    .authenticated_operator(app_state.clone()),
-            );
-            builder.route(
-                &routes::NODE_PROJECTION_SHARD_EXPORT,
-                catalog_get(handler_node_query_projection_shard_export)
-                    .authenticated_operator(app_state.clone()),
-            );
-            mount_account_post!(
-                MINISTRY_AGENDA_DRAFT,
-                handler_ministry_agenda_proposal_draft
-            );
-            mount_account_get!(MINISTRY_AGENDA_GET, handler_ministry_agenda_proposal_get);
-            mount_account_post!(GOV_PROPOSE_DEPLOY, handler_gov_propose_deploy);
-            mount_account_post!(GOV_PROPOSE_SCCP, handler_gov_propose_sccp_route_governance);
-            mount_account_get!(GOV_CAPABILITIES, handler_gov_capabilities);
-            mount_account_post!(GOV_CITIZEN_DRAFT, handler_gov_citizen_draft);
-            mount_account_post!(
-                VALIDATION_FEE_CURRENT_POLICY_PROOF,
-                validation_fee_api::handler_current_policy_proof
-            );
-            mount_account_get!(
-                VALIDATION_FEE_PROPOSALS,
-                validation_fee_api::handler_proposals
-            );
-            mount_account_get!(
-                VALIDATION_FEE_PROPOSAL_DETAIL,
-                validation_fee_api::handler_proposal_detail
-            );
-            mount_account_post!(
-                VALIDATION_FEE_PROPOSAL_DRAFT,
-                validation_fee_api::handler_proposal_draft
-            );
-            mount_account_post!(
-                VALIDATION_FEE_PLAIN_BALLOT_DRAFT,
-                validation_fee_api::handler_plain_ballot_draft
-            );
-            mount_account_get!(GOV_PROPOSAL_GET, handler_gov_proposal_get);
-            mount_account_get!(GOV_LOCKS_GET, handler_gov_locks_get);
-            mount_account_get!(GOV_REFERENDUM_GET, handler_gov_referendum_get);
-            mount_account_get!(GOV_TALLY_GET, handler_gov_tally_get);
-            builder.route(
-                &routes::GOV_BALLOT_ZK_V1,
-                catalog_post(handler_gov_ballot_zk_v1)
-                    .layer(DefaultBodyLimit::max(proof_body_limit))
-                    .authenticated_canonical_account_body(app_state.clone(), proof_body_limit),
-            );
-            builder.route(
-                &routes::GOV_BALLOT_ZK_V1_PROOF,
-                catalog_post(handler_gov_ballot_zk_v1_ballot_proof)
-                    .layer(DefaultBodyLimit::max(proof_body_limit))
-                    .authenticated_canonical_account_body(app_state.clone(), proof_body_limit),
-            );
-            builder.route(
-                &routes::GOV_BALLOT_PLAIN,
-                catalog_post(handler_gov_ballot_plain)
-                    .layer(DefaultBodyLimit::max(proof_body_limit))
-                    .authenticated_canonical_account_body(app_state.clone(), proof_body_limit),
-            );
-            builder.route(
-                &routes::GOV_PARLIAMENT_BALLOT,
-                catalog_post(handler_gov_parliament_ballot)
-                    .layer(DefaultBodyLimit::max(proof_body_limit))
-                    .authenticated_canonical_account_body(app_state.clone(), proof_body_limit),
-            );
-            mount_post!(GOV_FINALIZE, handler_gov_finalize);
-            builder.route(
-                &routes::GOV_PROTECTED_POST,
-                catalog_post(handler_gov_protected_set).authenticated_operator(app_state.clone()),
-            );
-            mount_account_get!(GOV_PROTECTED_GET, handler_gov_protected_get);
-            builder.route(
-                &routes::GOV_STREAM,
-                catalog_get(handler_gov_stream)
-                    .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-            );
-            mount_account_get!(GOV_UNLOCK_STATS, handler_gov_unlock_stats);
-            mount_account_get!(GOV_CONTRACT_GET, handler_gov_contract_get);
-            mount_account_post!(GOV_ENACT, handler_gov_enact);
-            mount_account_get!(GOV_COUNCIL_CURRENT, handler_gov_council_current);
-            mount_account_get!(GOV_CITIZENS_COUNT, handler_gov_citizen_count);
-            mount_account_get!(GOV_CITIZEN_STATUS, handler_gov_citizen_status);
         }
     }
     fn add_runtime_governance_routes(&self, builder: &mut RouterBuilder) {

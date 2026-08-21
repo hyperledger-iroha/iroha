@@ -32,13 +32,13 @@ def test_release_inventory_constants_match_current_source_seal(
             "2df7516317611dcc3fc0f959cca1e80a7b6aa3670a90d2add798f744cfebbd4c"
         ),
         "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit": (
-            "da01b212e5b3db1163c100f1088e943c074aa124c2f225a4c068052d79e499f9"
+            "ea093accfdb33740bc7f21e9c26b17e74a1d7600c885ff45a5718caed8cb457a"
         ),
         "locked_publication_fence_serializes_unrelated_append_and_preserves_it": (
-            "3f863e16e284ffd980a06b45cd16d3ee4cfd4559a8f7ff23687a55d32ff7481b"
+            "c88fcd11bd701f1a67ffc441fe1cc4bdc08f9be32e5a8270373ea83335a6131f"
         ),
         "dropping_locked_publication_fence_releases_producer_without_dequeue": (
-            "4375aa5205367018773fec586aefb2c44940f502e6de1ae94b8e6e221a350d6f"
+            "a31983eba320245b25089ebfcbc6fbd5a5c024fc76b81946329510cf9177e687"
         ),
     }
     assert (
@@ -209,14 +209,14 @@ def test_release_inventory_constants_match_current_source_seal(
     assert receipt_module_counts["kura::tests"] == 18
     assert receipt_module_counts["sumeragi::authoritative_runtime_gate_tests"] == 42
     assert receipt_module_counts["sumeragi::v2::tests"] == 48
-    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 71
+    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 70
     assert receipt_module_counts["sumeragi::v2_lane_work::tests"] == 63
     assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 65
     assert receipt_module_counts["sumeragi::v2_certified_serve_payload_store::tests"] == 11
-    assert receipt_module_counts["sumeragi::v2_lifecycle_coordinator"] == 39
+    assert receipt_module_counts["sumeragi::v2_lifecycle_coordinator"] == 42
     assert receipt_module_counts["sumeragi::v2_runner::tests"] == 37
     assert receipt_module_counts["sumeragi::v2_runner::lifecycle_height_driver::tests"] == 1
-    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 88
+    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 90
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)

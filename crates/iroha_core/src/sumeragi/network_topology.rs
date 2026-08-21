@@ -255,6 +255,7 @@ impl Topology {
         self.1 = 0;
     }
     /// Canonicalize the internal peer ordering without changing the view index.
+    #[cfg(test)]
     pub(crate) fn canonicalize_order(&mut self) {
         if self.0.is_empty() {
             return;

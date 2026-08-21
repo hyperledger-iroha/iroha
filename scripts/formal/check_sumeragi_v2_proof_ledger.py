@@ -865,7 +865,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     # Refresh after atomic-reservation work stops touching v2_runner.rs.
     "successor_retry": "a99d3aec22c01501fabb4e6b90526ae066b6728ab78043301476653432fac5fd",
     "historical_certificate": "9028b1db75d71c3ab5e72573e5c3e7b46d92c0ffe4a1cd1805ebfde379fbdbfa",
-    "historical_body": "61abf0bd81035ebb5776a4a8893fd955249d6b2dfc2dcb23904749e75e71de79",
+    "historical_body": "0a7c5d29372bc8970f88d82f74f36e1e7a06635f51a12ff7475e63b221577851",
     "terminal_application": "18c9adfc440c9e4302dd5e1b78c71beec18927bc30170ad1db8b4953d40df2b2",
 }
 
@@ -1217,31 +1217,28 @@ def _total_gate_call_sites(
         ),
         "ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync": (
             CrossToolProductionCallContract(
-                "crates/iroha_core/src/sumeragi/v2_effects.rs",
-                "accept_certified_body_response_inner",
-                "prospective_trace",
+                "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+                "complete_certified_fetch_body_persistence",
+                "historical_trace",
                 """
                     check_production_historical_body_pipeline_transition(
-                        prospective_trace
+                        historical_trace
                     )
                 """,
-                ((
-                    "impl",
-                    "<",
-                    "R",
-                    ":",
-                    "EffectRuntime",
-                    ">",
-                    "V2EffectExecutor",
-                    "<",
-                    "R",
-                    ">",
-                ),),
+                (("impl", "LifecycleCoordinator"),),
                 hashes["historical_body"],
-                token_consumptions=(
-                    "let prospective_trace = checked_transition.into_projection();",
+                token_consumptions=("let _authorized_historical_pipeline = checked_transition.into_projection();",),
+                mutation_boundaries=(
+                    "output_guard.begin_fail_stop_operation()",
+                    "ready_mutation.persist_exact_staged_successor()",
+                    "exact_dequeue.commit(ingress)",
+                    "durable_registry.commit_after_exact_dequeue(dequeued)",
+                    "ready.commit()",
+                    "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
+                    "service_prepared.commit(operation.permit())",
+                    "work_ack.commit()",
                 ),
-                mutation_boundaries=("self.plan_fetch_completion(",),
+                projection_bindings=("let historical_trace = ProductionHistoricalBodyPipelineTraceProjection {",),
             ),
         ),
         "ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal": (
@@ -6882,9 +6879,12 @@ def _cross_tool_total_call_site_payload(
     item = items[0]
     allowed_attributes = {("#", "[", "must_use", "]")}
     if call_site.item == "run_lifecycle_active_height":
-        allowed_attributes.add(tuple(rust_code_tokens(
-            "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]"
-        )))
+        allowed_attributes.add(tuple(rust_code_tokens("#[allow(clippy::too_many_arguments, clippy::too_many_lines)]")))
+    if (call_site.source, call_site.item) == (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "complete_certified_fetch_body_persistence",
+    ):
+        allowed_attributes.add(tuple(rust_code_tokens("#[allow(clippy::too_many_arguments, clippy::result_large_err)]")))
     unexpected_attributes = tuple(
         attribute
         for attribute in item.attributes

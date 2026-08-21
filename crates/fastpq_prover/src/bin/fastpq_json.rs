@@ -132,10 +132,10 @@ struct ProofRequest {
     /// Norito-encoded lane envelope carrying a compact global-finality reference.
     #[norito(default)]
     finalized_relay_envelope_hex: String,
-    /// CommitQC parent state root accompanying an offline relay proof request.
+    /// `CommitQC` parent state root accompanying an offline relay proof request.
     #[norito(default)]
     relay_parent_state_root: String,
-    /// CommitQC post state root accompanying an offline relay proof request.
+    /// `CommitQC` post state root accompanying an offline relay proof request.
     #[norito(default)]
     relay_post_state_root: String,
 }
@@ -945,7 +945,9 @@ fn duration_ms(duration: Duration) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{AxtHandleReplayKey, AxtProofEnvelope, LaneId};
+    use iroha_data_model::nexus::{
+        AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtProofEnvelope, LaneId,
+    };
     use iroha_primitives::Quantity;
     fn proof_request(batch_base64: impl Into<String>) -> ProofRequest {
         ProofRequest {
@@ -961,8 +963,8 @@ mod tests {
             policy_commitment: "44".repeat(32),
             verified_effect_type: LANE_RELAY_FASTPQ_EFFECT_TYPE.to_owned(),
             corridor: "CBUAE_TO_SBP".to_owned(),
-            verifier_id: "fastpq-prover".to_owned(),
-            verifier_version: "test".to_owned(),
+            verifier_id: "fastpq".to_owned(),
+            verifier_version: "v1".to_owned(),
             source_lane_id: 1,
             relay_block_height: 1,
             batch_base64: batch_base64.into(),
@@ -991,6 +993,7 @@ mod tests {
         AxtRemoteSpendClaimV1::new(
             AxtHandleReplayKey::from_parts(
                 DataSpaceId::new(12),
+                AxtHandleIssuerContextV1::default().asset_definition_incarnation,
                 [0xA5; 32],
                 7,
                 sub_nonce,
@@ -1055,8 +1058,10 @@ mod tests {
         for batch_base64 in ["", " \t\n"] {
             let err = build_batch_from_request(&proof_request(batch_base64))
                 .expect_err("descriptor-only requests must not synthesize a batch");
-            assert!(err.contains("requires an execution-captured batch_base64"));
-            assert!(err.contains("synthetic descriptor-only batches are forbidden"));
+            assert_eq!(
+                err,
+                "FASTPQ prove/verify requires an execution-captured batch_base64; synthetic descriptor-only batches are forbidden"
+            );
         }
     }
     #[test]
