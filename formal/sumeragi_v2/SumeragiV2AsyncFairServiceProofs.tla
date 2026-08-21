@@ -933,7 +933,7 @@ BY IsaM("blast")
        PersistObservePrepare, BeginLockCommit, PersistLockCommit,
        FormCommitQC, BeginDecision, PersistDecision, BeginTimeout,
        PersistTimeout, CompleteTimeoutSignature, ByzantineBroadcastTimeout,
-       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC, PersistInstallTC,
+       DeliverTimeout, DeliverTC, BeginInstallTC, PersistInstallTC,
        FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
        ResumeVote, ResumeTimeout, DropProposal, vars
 
@@ -2080,7 +2080,7 @@ PROOF
                BeginPrepare, PersistPrepare,
                BeginObservePrepare, PersistObservePrepare,
                BeginLockCommit, PersistLockCommit, FormCommitQC,
-               BeginDecision, PersistTimeout, FormTC, BeginInstallTC,
+               BeginDecision, PersistTimeout, BeginInstallTC,
                FetchCertifiedBody, CompleteProposalSignature,
                CompleteVoteSignature, FormPrepareQC,
                CompleteTimeoutSignature, PersistInstallTC,
@@ -2497,7 +2497,7 @@ PROOF
              BeginPrepare, PersistPrepare,
              BeginObservePrepare, PersistObservePrepare,
              BeginLockCommit, PersistLockCommit, FormCommitQC,
-             BeginDecision, BeginTimeout, PersistTimeout, FormTC,
+             BeginDecision, BeginTimeout, PersistTimeout,
              BeginInstallTC, FetchCertifiedBody,
              CompleteProposalSignature, CompleteVoteSignature,
              FormPrepareQC, CompleteTimeoutSignature,

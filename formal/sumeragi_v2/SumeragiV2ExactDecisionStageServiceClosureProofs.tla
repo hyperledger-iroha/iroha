@@ -3772,7 +3772,7 @@ BY IsaM("blast")
        BeginLockCommit, PersistLockCommit, FormCommitQC,
        BeginDecision, PersistDecision, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
-       DeliverTimeout, FormTC, DeliverTC,
+       DeliverTimeout, DeliverTC,
        BeginInstallTC, PersistInstallTC,
        FetchCertifiedBody, AcceptCertifiedResponseCapability,
        InstallCertifiedBodyEffect, ApplyDecision,

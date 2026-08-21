@@ -362,7 +362,11 @@ def test_global_mechanical_body_reconstruction_is_exact() -> None:
         checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
     )
     assert checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 == (
+<<<<<<< Updated upstream
         "dfedf4d3bef27c9c98991a8c38ad9bace40dd5617326bb4c2d266114f3b5f8ea"
+=======
+        "041757c1c1dba5792f3481443adc2a8276007ce9f1eb77ab47ec47c35405e92f"
+>>>>>>> Stashed changes
     )
 
 

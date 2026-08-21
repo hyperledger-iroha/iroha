@@ -47,6 +47,25 @@ fn pointer_type_ids_match_golden() {
     assert_eq!(P::from_u16(0x0013), None);
 }
 #[test]
+fn numeric_pointer_ids_are_exactly_the_v1_reset_layout() {
+    use ivm::{PointerType as P, SyscallPolicy, is_type_allowed_for_policy};
+    let expected = [
+        (0x0010, Some(P::Quantity)),
+        (0x0011, Some(P::Int)),
+        (0x0012, Some(P::Decimal)),
+        (0x0013, None),
+    ];
+    for (id, pointer_type) in expected {
+        assert_eq!(P::from_u16(id), pointer_type, "pointer ID 0x{id:04X}");
+        if let Some(pointer_type) = pointer_type {
+            assert!(is_type_allowed_for_policy(
+                SyscallPolicy::AbiV1,
+                pointer_type
+            ));
+        }
+    }
+}
+#[test]
 fn pointer_policy_allows_expected_types_for_v1() {
     use ivm::{PointerType as P, SyscallPolicy, is_type_allowed_for_policy};
     for ty in [

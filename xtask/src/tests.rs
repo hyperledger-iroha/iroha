@@ -3,11 +3,24 @@ use super::*;
 use norito::json::Value;
 #[test]
 fn norito_rpc_fixtures_accepts_only_the_canonical_output_root_option() {
+    assert!(
+        parse_command(
+            ["xtask", "norito-rpc-fixtures"]
+                .into_iter()
+                .map(String::from)
+        )
+        .is_err(),
+        "fixture generation must require a create-only output root"
+    );
+    let output_root = std::env::temp_dir()
+        .join("iroha-norito-stage-parser")
+        .to_string_lossy()
+        .into_owned();
     let args = [
         "xtask",
         "norito-rpc-fixtures",
         "--output-root",
-        "artifacts/norito-stage",
+        output_root.as_str(),
     ];
     assert!(matches!(
         parse_command(args.into_iter().map(String::from)).expect("canonical option parses"),
@@ -39,7 +52,16 @@ fn norito_rpc_fixtures_accepts_only_the_canonical_output_root_option() {
 }
 #[test]
 fn norito_rpc_fixtures_rejects_ambiguous_output_roots() {
-    for invalid in ["", ".", "..", "../stage", "stage/../escape", "/", "--all"] {
+    for invalid in [
+        "",
+        ".",
+        "..",
+        "artifacts/norito-stage",
+        "../stage",
+        "stage/../escape",
+        "/",
+        "--all",
+    ] {
         let args = ["xtask", "norito-rpc-fixtures", "--output-root", invalid];
         let error = match parse_command(args.into_iter().map(String::from)) {
             Ok(_) => panic!("ambiguous output root {invalid:?} must be rejected"),

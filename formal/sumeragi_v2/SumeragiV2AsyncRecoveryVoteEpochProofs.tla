@@ -158,8 +158,6 @@ CoreSerializedBusyOwnerCreationAction ==
   \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
        BeginDecision(node, qc)
   \/ \E node \in ValidatorIds: BeginTimeout(node)
-  \/ \E node \in ValidatorIds, roundView \in Views:
-       FormTC(node, roundView)
   \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
        BeginInstallTC(node, tc)
   \/ \E node \in ValidatorIds, proposal \in proposalIntents:
@@ -357,17 +355,6 @@ BY AddingReadySerializedBusyOwnerPreservesKernel, IsaT(60)
        AsyncBusyReadinessInvariant,
        SerializedBusyOwners, AllPendingRequests
 
-THEOREM CoreFormTCPreservesSerializedBusyKernel ==
-  \A node, roundView:
-    /\ StrongInductiveInvariant
-    /\ AsyncSerializedBusyKernelInvariant
-    /\ FormTC(node, roundView)
-    => AsyncSerializedBusyKernelInvariant'
-BY AddingReadySerializedBusyOwnerPreservesKernel, Isa
-   DEF FormTC, InstallTcWal,
-       AsyncBusyReadinessInvariant,
-       SerializedBusyOwners, AllPendingRequests
-
 THEOREM CoreBeginInstallTCPreservesSerializedBusyKernel ==
   \A node, tc:
     /\ StrongInductiveInvariant
@@ -425,7 +412,6 @@ BY CoreBeginLocalProposalPreservesSerializedBusyKernel,
    CoreFormCommitQCPreservesSerializedBusyKernel,
    CoreBeginDecisionPreservesSerializedBusyKernel,
    CoreBeginTimeoutPreservesSerializedBusyKernel,
-   CoreFormTCPreservesSerializedBusyKernel,
    CoreBeginInstallTCPreservesSerializedBusyKernel,
    CoreResumeProposalPreservesSerializedBusyKernel,
    CoreResumeVotePreservesSerializedBusyKernel,

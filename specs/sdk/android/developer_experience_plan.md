@@ -90,7 +90,9 @@ All guides must embed Norito snippets using canonical fixtures and link back to 
 ## 6. Release & Compliance Hooks
 
 - Maven/AAR promotion follows the AND6 checklist: reproducible build hash, SBOM (CycloneDX JSON), Sigstore attestations, and signed provenance manifest stored under `specs/release/provenance/android/`.
- - Publishing pipeline must fail if `scripts/check_android_fixtures.py` reports drift or if sample manifest hashes diverge from `artifacts/android_fixture_regen_state.json`.
+- Publishing pipeline must fail if `scripts/check_android_fixtures.py` reports
+   drift or if the Java consumer mirror diverges from the reviewed canonical
+   manifest and `norito-rpc-verify` result.
 - Update `status.md` and `android_support_playbook.md` whenever SLA tables, release cadence, or sample coverage change.
 - Compliance review requires attaching the SBOM, provenance bundle, and RACI for on-call support transitions.
 - Stage promotions must follow `specs/sdk/android/maven_staging_plan.md` so Release Engineering can cite the validation report emitted by `scripts/check_android_maven_repo.py` during governance reviews.

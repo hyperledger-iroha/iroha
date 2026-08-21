@@ -104,7 +104,7 @@ planning, matching the resource call-out in `roadmap.md`.
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| Schema/manifest drift between Rust and Android runs | Broken builder docs or stale hashes | Tie manifest version to [`norito_instruction_changes.md`](norito_instruction_changes.md), fail CI when discriminants differ, document fallback workflow in `scripts/android_fixture_regen.sh`. |
+| Schema/manifest drift between Rust and Android runs | Broken builder docs or stale hashes | Tie manifest version to [`norito_instruction_changes.md`](norito_instruction_changes.md), fail CI when discriminants differ, and use the canonical create-only owner publication workflow. |
 | CI runtime spikes due to Dokka | Longer Android pipeline waits | Run Dokka only when manifests change (hash compare), cache Gradle outputs, and document override env vars for emergency skips. |
 | Ownership gaps once automation lands | Docs fall behind | Runbook described in this scope will be linked from `status.md`, naming Docs/DevRel as DRI with Android Data Model TL as backup. |
 

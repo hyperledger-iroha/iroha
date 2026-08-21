@@ -56,11 +56,29 @@ NORITO_RPC_ALERT_DRILL_ID=nrpc-alert-20260411T181500Z-a1b2c3d4e5f6-7f9b2a83d5c1
 Copy the entire value (everything after the `=`) into the “Alert drill ID” column so the runbook
 records which alert bundle produced the evidence.
 
+### Fixture changes during a stage window
+
+There is one fixture owner. Render two complete publications at independent
+absent absolute external roots:
+
+```bash
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
+```
+
+Require identical sorted path sets, entry types, modes, completion manifests,
+and every file byte. Apply the reviewed identity-relative patch from either
+sealed publication, then run `cargo run --locked -p xtask --features dev-tools
+--bin xtask -- norito-rpc-verify`. Java, Python, and Swift are consumers and
+checkers only; do not invoke an SDK-local generator or archive input.
+
 ## Staging Canary Runs
 
 | Date (UTC) | Stage | Config digest | Allowlist hash | Smoke bundle | Grafana export | Alert drill ID | Notes |
 |------------|-------|---------------|----------------|--------------|----------------|----------------|-------|
-| 2026-04-11T18:00:00Z | staging-canary | recorded in `artifacts/norito_rpc/rotation_status.json` | recorded in `artifacts/norito_rpc/rotation_status.json` | workflow bundle from `.github/workflows/torii-mock-harness.yml` | `dashboards/grafana/torii_norito_rpc_observability.json` export | nrpc-alert-20251112T074326Z-39b361f58e5e-b9c4f7e37135 | Evidence captured via torii-mock-harness CI + `scripts/run_norito_rpc_fixtures.sh --auto-report`; replace with new hashes on the next canary window. |
+| 2026-04-11T18:00:00Z | staging-canary | recorded in `artifacts/norito_rpc/rotation_status.json` | recorded in `artifacts/norito_rpc/rotation_status.json` | workflow bundle from `.github/workflows/torii-mock-harness.yml` | `dashboards/grafana/torii_norito_rpc_observability.json` export | nrpc-alert-20251112T074326Z-39b361f58e5e-b9c4f7e37135 | Historical CI evidence; its compatibility report helper is retired. Replace these placeholders with direct hashes on the next canary and use the fixture-change procedure above if fixture bytes change. |
 
 ## Production Canary Runs
 

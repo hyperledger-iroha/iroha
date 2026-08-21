@@ -28,13 +28,12 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use norito::{
     NoritoSerialize,
-    codec::{Decode, Encode},
-    core::DecodeFromSlice,
+    codec::Encode,
     json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };
 use sha2::{Digest as ShaDigest, Sha256};
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt as _;
 use std::{
@@ -46,13 +45,14 @@ use std::{
     path::{Component, Path, PathBuf},
     time::Duration,
 };
-use tempfile::{NamedTempFile, tempdir};
+use tempfile::{TempDir, tempdir};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const CANONICAL_FIXTURE_DIRECTORY: &str = "fixtures/norito_rpc";
 const CANONICAL_PAYLOADS: &str = "fixtures/norito_rpc/transaction_payloads.json";
 const ALIAS_SETUP_FIXTURE_V1: &str = "fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json";
 const PAYLOADS_BASENAME: &str = "transaction_payloads.json";
 const CANONICAL_MANIFEST: &str = "fixtures/norito_rpc/transaction_fixtures.manifest.json";
+const PUBLICATION_SEAL_PENDING_SUFFIX: &str = ".norito-rpc-seal.pending";
 const SCHEMA_HASH_MANIFEST: &str = "fixtures/norito_rpc/schema_hashes.json";
 const SCHEMA_HASH_MANIFEST_BASENAME: &str = "schema_hashes.json";
 const MANIFEST_BASENAME: &str = "transaction_fixtures.manifest.json";
@@ -154,24 +154,11 @@ impl FixtureOptions {
         Self { output_root }
     }
     fn resolve_paths(self) -> Result<ResolvedFixtureOptions> {
-        let requested_root = self.output_root.unwrap_or_else(workspace_root);
-        reject_ambiguous_root(&requested_root)?;
-        let root_metadata = fs::symlink_metadata(&requested_root)
-            .with_context(|| format!("output root does not exist: {}", requested_root.display()))?;
-        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
-            bail!(
-                "output root must be an existing non-symlink directory: {}",
-                requested_root.display()
-            );
-        }
-        let output_root = requested_root
+        let source_root = workspace_root()
             .canonicalize()
-            .with_context(|| format!("failed to resolve {}", requested_root.display()))?;
-        if output_root.parent().is_none() {
-            bail!("filesystem root is not a valid fixture output root");
-        }
-        let fixtures = output_root.join(CANONICAL_PAYLOADS);
-        ensure_safe_owned_path(&output_root, &fixtures)?;
+            .context("failed to resolve the fixture source workspace")?;
+        let fixtures = source_root.join(CANONICAL_PAYLOADS);
+        ensure_safe_owned_path(&source_root, &fixtures)?;
         let fixture_metadata = fs::symlink_metadata(&fixtures)
             .with_context(|| format!("canonical fixtures JSON missing: {}", fixtures.display()))?;
         if fixture_metadata.file_type().is_symlink() || !fixture_metadata.is_file() {
@@ -180,15 +167,76 @@ impl FixtureOptions {
                 fixtures.display()
             ));
         }
+        let (output_root, create_only) = match self.output_root {
+            None => (source_root, false),
+            Some(requested_root) => {
+                reject_ambiguous_root(&requested_root)?;
+                if !requested_root.is_absolute() {
+                    bail!("fixture output root must be absolute and external");
+                }
+                if requested_root.parent().is_none() {
+                    bail!("filesystem root is not a valid fixture output root");
+                }
+                match fs::symlink_metadata(&requested_root) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("failed to inspect output root {}", requested_root.display())
+                        });
+                    }
+                    Ok(_) => {
+                        bail!(
+                            "create-only fixture output root already exists: {}",
+                            requested_root.display()
+                        );
+                    }
+                }
+                let parent = requested_root
+                    .parent()
+                    .expect("non-root output path has a parent");
+                reject_symlink_components(parent)?;
+                let parent_metadata = fs::symlink_metadata(parent).with_context(|| {
+                    format!(
+                        "create-only fixture output parent does not exist: {}",
+                        parent.display()
+                    )
+                })?;
+                if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+                    bail!(
+                        "fixture output parent must be a regular non-symlink directory: {}",
+                        parent.display()
+                    );
+                }
+                let canonical_parent = parent.canonicalize().with_context(|| {
+                    format!(
+                        "failed to resolve fixture output parent {}",
+                        parent.display()
+                    )
+                })?;
+                let name = requested_root
+                    .file_name()
+                    .ok_or_else(|| eyre!("fixture output root must have a final path component"))?;
+                let output_root = canonical_parent.join(name);
+                if output_root.starts_with(&source_root) {
+                    bail!(
+                        "fixture output root must be outside the source workspace: {}",
+                        output_root.display()
+                    );
+                }
+                (output_root, true)
+            }
+        };
         Ok(ResolvedFixtureOptions {
             output_root,
             fixtures_json: fixtures,
+            create_only,
         })
     }
 }
 struct ResolvedFixtureOptions {
     output_root: PathBuf,
     fixtures_json: PathBuf,
+    create_only: bool,
 }
 fn reject_ambiguous_root(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty()
@@ -198,6 +246,24 @@ fn reject_ambiguous_root(path: &Path) -> Result<()> {
             .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
     {
         bail!("fixture output root must be an unambiguous directory path");
+    }
+    Ok(())
+}
+fn reject_symlink_components(path: &Path) -> Result<()> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        if matches!(component, Component::Prefix(_) | Component::RootDir) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&current)
+            .with_context(|| format!("failed to inspect output ancestor {}", current.display()))?;
+        if metadata.file_type().is_symlink() {
+            bail!(
+                "fixture output path must not traverse a symlink: {}",
+                current.display()
+            );
+        }
     }
     Ok(())
 }
@@ -496,14 +562,13 @@ fn build_verification_report(
 ) -> Result<NoritoRpcVerificationReport> {
     let resolved = FixtureOptions::new(None).resolve_paths()?;
     let root = resolved.output_root.clone();
-    let rendered = tempdir().context("failed to create private fixture verification tree")?;
-    let expected = render_fixture_publication(
-        &resolved.fixtures_json,
-        alias_setup_fixture,
-        rendered.path(),
-    )?;
+    let source = capture_required_guarded_file(&resolved.fixtures_json)?;
+    let rendered = render_verified_publication_pair(&source.bytes, alias_setup_fixture)?;
+    verify_preimage(&resolved.fixtures_json, Some(&source))
+        .context("canonical fixture source changed during verification")?;
+    let expected = &rendered.manifest;
     compare_owned_publication(
-        rendered.path(),
+        rendered.root.path(),
         &root,
         &owned_publication_paths(&expected.fixtures)?,
     )?;
@@ -586,39 +651,69 @@ fn build_verification_report(
 /// # Errors
 ///
 /// Returns an error when the configured paths or fixture source are invalid,
-/// fixture rendering fails, or the guarded publication cannot be committed.
+/// fixture rendering fails, or create-only publication cannot be committed under
+/// the documented private-parent threat boundary.
 pub fn generate_fixtures(
     options: FixtureOptions,
     alias_setup_fixture: &AliasSetupFixtureBytes,
 ) -> Result<()> {
     let resolved = options.resolve_paths()?;
-    let rendered = tempdir().context("failed to create private fixture publication tree")?;
-    let generated = render_fixture_publication(
-        &resolved.fixtures_json,
-        alias_setup_fixture,
-        rendered.path(),
-    )?;
+    if !resolved.create_only {
+        bail!("fixture generation requires an explicit create-only --output-root");
+    }
+    let source = capture_required_guarded_file(&resolved.fixtures_json)?;
+    let rendered = render_verified_publication_pair(&source.bytes, alias_setup_fixture)?;
+    verify_preimage(&resolved.fixtures_json, Some(&source))
+        .context("canonical fixture source changed during deterministic rendering")?;
+    let generated = &rendered.manifest;
     let owned_paths = owned_publication_paths(&generated.fixtures)?;
-    let removals = preflight_publication(&resolved.output_root, &generated.fixtures, &owned_paths)?;
-    publish_owned_publication(
-        rendered.path(),
+    publish_create_only_publication(
+        &rendered.snapshot,
         &resolved.output_root,
         &owned_paths,
-        &removals,
         || {
-            compare_owned_publication(rendered.path(), &resolved.output_root, &owned_paths)?;
-            verify_all_blob_policies(&resolved.output_root, &generated.fixtures, true)
+            verify_preimage(&resolved.fixtures_json, Some(&source))
+                .context("canonical fixture source drifted before publication")?;
+            verify_all_blob_policies_without_seal(&resolved.output_root, &generated.fixtures, true)
         },
     )?;
     println!(
-        "norito-rpc fixtures regenerated: {} entries written to {}",
+        "norito-rpc fixtures regenerated: {} entries written create-only to {}",
         generated.fixtures.len(),
         resolved.output_root.join(CANONICAL_MANIFEST).display()
     );
     Ok(())
 }
+struct VerifiedPublication {
+    root: TempDir,
+    manifest: Manifest,
+    snapshot: PublicationSnapshot,
+}
+fn render_verified_publication_pair(
+    fixtures_json: &[u8],
+    alias_setup_fixture: &AliasSetupFixtureBytes,
+) -> Result<VerifiedPublication> {
+    let first = tempdir().context("failed to create first private fixture publication tree")?;
+    let second = tempdir().context("failed to create second private fixture publication tree")?;
+    let first_manifest =
+        render_fixture_publication(fixtures_json, alias_setup_fixture, first.path())?;
+    let second_manifest =
+        render_fixture_publication(fixtures_json, alias_setup_fixture, second.path())?;
+    let first_paths = owned_publication_paths(&first_manifest.fixtures)?;
+    let second_paths = owned_publication_paths(&second_manifest.fixtures)?;
+    normalize_rendered_modes(first.path(), &first_paths)?;
+    normalize_rendered_modes(second.path(), &second_paths)?;
+    let first_snapshot = PublicationSnapshot::capture(first.path(), &first_paths)?;
+    let second_snapshot = PublicationSnapshot::capture(second.path(), &second_paths)?;
+    first_snapshot.require_identical(&second_snapshot)?;
+    Ok(VerifiedPublication {
+        root: first,
+        manifest: first_manifest,
+        snapshot: first_snapshot,
+    })
+}
 fn render_fixture_publication(
-    fixtures_json: &Path,
+    fixtures_json: &[u8],
     alias_setup_fixture: &AliasSetupFixtureBytes,
     publication_root: &Path,
 ) -> Result<Manifest> {
@@ -654,11 +749,9 @@ fn render_fixture_publication(
     verify_all_blob_policies(publication_root, &manifest.fixtures, true)?;
     Ok(manifest)
 }
-fn generate_fixture_artifacts(fixtures_json: &Path, out_dir: &Path) -> Result<()> {
-    let fixtures_text = fs::read_to_string(fixtures_json)
-        .with_context(|| format!("failed to read {}", fixtures_json.display()))?;
+fn generate_fixture_artifacts(fixtures_json: &[u8], out_dir: &Path) -> Result<()> {
     let fixtures_value: Value =
-        json::from_str(&fixtures_text).context("invalid transaction_payloads fixtures JSON")?;
+        json::from_slice(fixtures_json).context("invalid transaction_payloads fixtures JSON")?;
     let raw_fixtures = parse_payload_fixtures(&fixtures_value)?;
     let keypair = signing_keypair()?;
     let mut fixtures = Vec::with_capacity(raw_fixtures.len());
@@ -796,6 +889,10 @@ struct WireInstructionPayload {
     payload_base64: String,
 }
 impl RawPayloadFixture {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "fixture construction keeps all descriptor-to-signed-payload invariants in one fail-closed path"
+    )]
     fn generate_fixture(&self, keypair: &KeyPair) -> Result<Fixture> {
         if self.network_id_hint != self.payload.network_id {
             bail!(
@@ -871,12 +968,24 @@ impl RawPayloadFixture {
                 actual_ttl_ms
             );
         }
-        let payload_bytes = payload_value.encode();
+        let payload_bare = payload_value.encode();
+        let payload_bytes = norito::encode_canonical(&payload_value).map_err(|err| {
+            eyre!(
+                "failed to frame Norito RPC payload fixture '{}': {err}",
+                self.name
+            )
+        })?;
         let payload_base64 = BASE64.encode(&payload_bytes);
-        let signed_bytes = signed.encode();
+        let signed_bytes = norito::encode_canonical(&signed).map_err(|err| {
+            eyre!(
+                "failed to frame signed Norito RPC fixture '{}': {err}",
+                self.name
+            )
+        })?;
         let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash_hex = blake2b256_hex(&payload_bytes);
         let signed_hash_hex = signed_transaction_entrypoint_hash_hex(&signed_bytes)?;
+        debug_assert_eq!(signed.payload().encode(), payload_bare);
         Ok(Fixture {
             name: self.name.clone(),
             payload_bytes,
@@ -1431,11 +1540,8 @@ fn build_payload_fixtures_json(
     Ok(Value::Array(out))
 }
 fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPayload>> {
-    let mut cursor = encoded;
-    let payload = TransactionPayload::decode(&mut cursor).context("decode TransactionPayload")?;
-    if !cursor.is_empty() {
-        bail!("payload contains trailing bytes");
-    }
+    let payload: TransactionPayload =
+        norito::decode_canonical(encoded).context("decode canonical framed TransactionPayload")?;
     let registry = iroha_data_model::instruction_registry::default();
     let mut out = Vec::new();
     for instruction in payload.instructions().explicit_instructions() {
@@ -1676,25 +1782,666 @@ fn owned_publication_paths(fixtures: &[FixtureEntry]) -> Result<Vec<PathBuf>> {
             }
         }
     }
-    paths.sort();
-    for pair in paths.windows(2) {
-        if pair[0] == pair[1] {
-            bail!("duplicate generated fixture output {}", pair[0].display());
+    let mut normalized = BTreeMap::new();
+    for path in paths {
+        let logical_path = normalize_publication_path(&path)?;
+        let identity = publication_path_identity(&logical_path);
+        if let Some((previous_logical, previous)) =
+            normalized.insert(identity.clone(), (logical_path.clone(), path))
+        {
+            bail!(
+                "duplicate generated fixture output identity `{identity}` from `{previous_logical}` ({}) and `{logical_path}`",
+                previous.display(),
+            );
         }
     }
-    Ok(paths)
+    Ok(normalized.into_values().map(|(_, path)| path).collect())
 }
-fn preflight_publication(
-    destination_root: &Path,
-    fixtures: &[FixtureEntry],
-    owned_paths: &[PathBuf],
-) -> Result<Vec<GuardedRemoval>> {
-    for relative in owned_paths {
-        ensure_safe_owned_path(destination_root, &destination_root.join(relative))?;
+fn normalize_publication_path(path: &Path) -> Result<String> {
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        bail!("generated fixture path must be a non-empty relative path");
     }
-    let previous_owned = load_previous_owned_blobs(destination_root)?;
-    plan_retired_publication(destination_root, fixtures, &previous_owned)
+    let mut normalized = String::new();
+    for component in path.components() {
+        let Component::Normal(segment) = component else {
+            bail!("generated fixture path is ambiguous: {}", path.display());
+        };
+        let segment = segment
+            .to_str()
+            .ok_or_else(|| eyre!("generated fixture path is not UTF-8: {}", path.display()))?;
+        if segment.is_empty()
+            || segment == "."
+            || segment == ".."
+            || !segment.is_ascii()
+            || segment
+                .bytes()
+                .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')))
+        {
+            bail!(
+                "generated fixture path contains a non-canonical segment: {}",
+                path.display()
+            );
+        }
+        if !normalized.is_empty() {
+            normalized.push('/');
+        }
+        normalized.push_str(segment);
+    }
+    if normalized.is_empty() {
+        bail!("generated fixture path must not normalize to empty");
+    }
+    Ok(normalized)
 }
+fn publication_path_identity(normalized_path: &str) -> String {
+    // Publication names are ASCII-only, so lower-casing fully covers both the
+    // case-insensitive filesystem alias class and the NFC-equivalent class.
+    normalized_path.to_ascii_lowercase()
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PublicationSnapshot {
+    root_mode: u32,
+    directories: Vec<PublicationDirectory>,
+    files: Vec<PublicationFile>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PublicationDirectory {
+    logical_path: String,
+    mode: u32,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PublicationFile {
+    logical_path: String,
+    relative_path: PathBuf,
+    mode: u32,
+    bytes: Vec<u8>,
+}
+impl PublicationSnapshot {
+    fn capture_complete_tree(root: &Path) -> Result<Self> {
+        let root_metadata = fs::symlink_metadata(root)
+            .with_context(|| format!("failed to inspect publication root {}", root.display()))?;
+        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+            bail!(
+                "publication root must be a regular non-symlink directory: {}",
+                root.display()
+            );
+        }
+        let mut directories = BTreeMap::new();
+        let mut files = BTreeMap::new();
+        collect_publication_tree(root, Path::new(""), &mut directories, &mut files)?;
+        if let Some(identity) = files
+            .keys()
+            .find(|identity| directories.contains_key(*identity))
+        {
+            bail!("publication identity `{identity}` is both a file and a directory");
+        }
+        Ok(Self {
+            root_mode: canonical_mode(&root_metadata),
+            directories: directories.into_values().collect(),
+            files: files.into_values().collect(),
+        })
+    }
+
+    fn without_file(&self, relative_path: &Path) -> Result<Self> {
+        let mut unsealed = self.clone();
+        let original_len = unsealed.files.len();
+        unsealed
+            .files
+            .retain(|file| file.relative_path != relative_path);
+        if original_len != unsealed.files.len() + 1 {
+            bail!(
+                "publication must contain exactly one commit file at {}",
+                relative_path.display()
+            );
+        }
+        Ok(unsealed)
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "snapshot capture validates one cohesive path, type, mode, link, and spelling invariant matrix"
+    )]
+    fn capture(root: &Path, expected_paths: &[PathBuf]) -> Result<Self> {
+        let root_metadata = fs::symlink_metadata(root)
+            .with_context(|| format!("failed to inspect publication root {}", root.display()))?;
+        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+            bail!(
+                "publication root must be a regular non-symlink directory: {}",
+                root.display()
+            );
+        }
+        let mut expected_files = BTreeMap::new();
+        let mut expected_directories = BTreeMap::new();
+        for relative in expected_paths {
+            let logical = normalize_publication_path(relative)?;
+            let identity = publication_path_identity(&logical);
+            if expected_files
+                .insert(identity.clone(), (logical.clone(), relative.clone()))
+                .is_some()
+            {
+                bail!("duplicate publication logical identity `{identity}`");
+            }
+            let mut parent = relative.parent();
+            while let Some(path) = parent {
+                if path.as_os_str().is_empty() {
+                    break;
+                }
+                let logical = normalize_publication_path(path)?;
+                let identity = publication_path_identity(&logical);
+                if let Some(previous) =
+                    expected_directories.insert(identity.clone(), logical.clone())
+                    && previous != logical
+                {
+                    bail!(
+                        "duplicate publication directory identity `{identity}` from `{previous}` and `{logical}`"
+                    );
+                }
+                parent = path.parent();
+            }
+        }
+        if let Some(identity) = expected_files
+            .keys()
+            .find(|identity| expected_directories.contains_key(*identity))
+        {
+            bail!("publication identity `{identity}` is both a file and a directory");
+        }
+        let mut actual_directories = BTreeMap::new();
+        let mut actual_files = BTreeMap::new();
+        collect_publication_tree(
+            root,
+            Path::new(""),
+            &mut actual_directories,
+            &mut actual_files,
+        )?;
+        if let Some(identity) = actual_files
+            .keys()
+            .find(|identity| actual_directories.contains_key(*identity))
+        {
+            bail!("publication identity `{identity}` is both a file and a directory");
+        }
+        let actual_file_paths = actual_files.keys().cloned().collect::<BTreeSet<_>>();
+        let expected_file_paths = expected_files.keys().cloned().collect::<BTreeSet<_>>();
+        if actual_file_paths != expected_file_paths {
+            let missing = expected_file_paths
+                .difference(&actual_file_paths)
+                .cloned()
+                .collect::<Vec<_>>();
+            let unexpected = actual_file_paths
+                .difference(&expected_file_paths)
+                .cloned()
+                .collect::<Vec<_>>();
+            bail!(
+                "publication file path set mismatch (missing={missing:?}, unexpected={unexpected:?})"
+            );
+        }
+        for (identity, (expected_logical, expected_relative)) in &expected_files {
+            let actual = actual_files
+                .get(identity)
+                .expect("equal publication file sets contain the expected identity");
+            if &actual.logical_path != expected_logical
+                || &actual.relative_path != expected_relative
+            {
+                bail!(
+                    "publication path spelling mismatch for identity `{identity}`: expected `{expected_logical}`, found `{}`",
+                    actual.logical_path
+                );
+            }
+        }
+        let actual_directory_paths = actual_directories.keys().cloned().collect::<BTreeSet<_>>();
+        let expected_directory_paths = expected_directories
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if actual_directory_paths != expected_directory_paths {
+            let missing = expected_directory_paths
+                .difference(&actual_directory_paths)
+                .cloned()
+                .collect::<Vec<_>>();
+            let unexpected = actual_directory_paths
+                .difference(&expected_directory_paths)
+                .cloned()
+                .collect::<Vec<_>>();
+            bail!(
+                "publication directory path set mismatch (missing={missing:?}, unexpected={unexpected:?})"
+            );
+        }
+        for (identity, expected_logical) in &expected_directories {
+            let actual = actual_directories
+                .get(identity)
+                .expect("equal publication directory sets contain the expected identity");
+            if &actual.logical_path != expected_logical {
+                bail!(
+                    "publication directory spelling mismatch for identity `{identity}`: expected `{expected_logical}`, found `{}`",
+                    actual.logical_path
+                );
+            }
+        }
+        Ok(Self {
+            root_mode: canonical_mode(&root_metadata),
+            directories: actual_directories.into_values().collect(),
+            files: actual_files.into_values().collect(),
+        })
+    }
+    fn require_identical(&self, other: &Self) -> Result<()> {
+        if self.root_mode != other.root_mode {
+            bail!("independent fixture renders have different root directory modes");
+        }
+        if self.directories != other.directories {
+            bail!("independent fixture renders have different directory paths or modes");
+        }
+        if self.files.len() != other.files.len() {
+            bail!(
+                "independent fixture renders have different file counts ({} != {})",
+                self.files.len(),
+                other.files.len()
+            );
+        }
+        for (first, second) in self.files.iter().zip(&other.files) {
+            if first.logical_path != second.logical_path
+                || first.relative_path != second.relative_path
+                || first.mode != second.mode
+            {
+                bail!(
+                    "independent fixture renders have different path or mode at `{}`",
+                    first.logical_path
+                );
+            }
+            if first.bytes != second.bytes {
+                bail!(
+                    "independent fixture renders differ byte-for-byte at `{}`",
+                    first.logical_path
+                );
+            }
+        }
+        Ok(())
+    }
+}
+fn collect_publication_tree(
+    root: &Path,
+    relative_directory: &Path,
+    directories: &mut BTreeMap<String, PublicationDirectory>,
+    files: &mut BTreeMap<String, PublicationFile>,
+) -> Result<()> {
+    let directory = root.join(relative_directory);
+    let mut entries = fs::read_dir(&directory)
+        .with_context(|| format!("failed to enumerate {}", directory.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let relative = relative_directory.join(entry.file_name());
+        let logical = normalize_publication_path(&relative)?;
+        let identity = publication_path_identity(&logical);
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("failed to inspect generated output {}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            bail!(
+                "generated publication contains a symlink: {}",
+                path.display()
+            );
+        }
+        if metadata.is_dir() {
+            let directory = PublicationDirectory {
+                logical_path: logical.clone(),
+                mode: canonical_mode(&metadata),
+            };
+            if directories.insert(identity.clone(), directory).is_some() {
+                bail!("duplicate publication directory identity `{identity}`");
+            }
+            collect_publication_tree(root, &relative, directories, files)?;
+        } else if metadata.is_file() {
+            let guarded_identity = file_identity(&metadata, &path)?;
+            let bytes = read_guarded_file(&path, guarded_identity)?;
+            let file = PublicationFile {
+                logical_path: logical.clone(),
+                relative_path: relative,
+                mode: canonical_mode(&metadata),
+                bytes,
+            };
+            if files.insert(identity.clone(), file).is_some() {
+                bail!("duplicate publication file identity `{identity}`");
+            }
+        } else {
+            bail!(
+                "generated publication contains a non-regular entry: {}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn canonical_mode(metadata: &fs::Metadata) -> u32 {
+    metadata.mode() & 0o777
+}
+#[cfg(windows)]
+fn canonical_mode(metadata: &fs::Metadata) -> u32 {
+    if metadata.permissions().readonly() {
+        0o444
+    } else {
+        0o644
+    }
+}
+#[cfg(not(any(unix, windows)))]
+fn canonical_mode(_metadata: &fs::Metadata) -> u32 {
+    0
+}
+fn normalize_rendered_modes(root: &Path, owned_paths: &[PathBuf]) -> Result<()> {
+    set_canonical_directory_mode(root)?;
+    let mut directories = BTreeSet::new();
+    for relative in owned_paths {
+        let path = root.join(relative);
+        set_canonical_file_mode(&path)?;
+        let mut parent = relative.parent();
+        while let Some(relative_parent) = parent {
+            if relative_parent.as_os_str().is_empty() {
+                break;
+            }
+            directories.insert(relative_parent.to_path_buf());
+            parent = relative_parent.parent();
+        }
+    }
+    for relative in directories {
+        set_canonical_directory_mode(&root.join(relative))?;
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn set_canonical_file_mode(path: &Path) -> Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o644))
+        .with_context(|| format!("failed to set canonical mode on {}", path.display()))
+}
+#[cfg(windows)]
+fn set_canonical_file_mode(path: &Path) -> Result<()> {
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(path, permissions)
+        .with_context(|| format!("failed to set canonical mode on {}", path.display()))
+}
+#[cfg(not(any(unix, windows)))]
+fn set_canonical_file_mode(path: &Path) -> Result<()> {
+    bail!("cannot prove canonical file mode for {}", path.display())
+}
+#[cfg(unix)]
+fn set_canonical_directory_mode(path: &Path) -> Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+        .with_context(|| format!("failed to set canonical mode on {}", path.display()))
+}
+#[cfg(windows)]
+fn set_canonical_directory_mode(path: &Path) -> Result<()> {
+    set_canonical_file_mode(path)
+}
+#[cfg(not(any(unix, windows)))]
+fn set_canonical_directory_mode(path: &Path) -> Result<()> {
+    bail!(
+        "cannot prove canonical directory mode for {}",
+        path.display()
+    )
+}
+#[expect(
+    clippy::too_many_lines,
+    reason = "publication keeps reservation, namespace identity, exact-tree validation, and the final seal commit in one auditable transaction"
+)]
+fn publish_create_only_publication<F>(
+    snapshot: &PublicationSnapshot,
+    destination_root: &Path,
+    owned_paths: &[PathBuf],
+    validate: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    // Stable `std` has no portable handle-relative create/link API. Release
+    // callers must therefore supply a private parent directory that no hostile
+    // same-UID process can rename or replace while lexical operations run. The
+    // identity checks below detect ordinary namespace drift; they do not claim
+    // to close an adversarial check/use race outside that documented boundary.
+    let parent = destination_root
+        .parent()
+        .ok_or_else(|| eyre!("create-only fixture output root has no parent"))?;
+    let parent_metadata = fs::symlink_metadata(parent)
+        .with_context(|| format!("failed to inspect output parent {}", parent.display()))?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        bail!(
+            "create-only fixture output parent must be a regular non-symlink directory: {}",
+            parent.display()
+        );
+    }
+    let parent_identity = directory_identity(&parent_metadata, parent)?;
+    let seal = snapshot
+        .files
+        .iter()
+        .find(|file| file.relative_path == Path::new(CANONICAL_MANIFEST))
+        .ok_or_else(|| eyre!("fixture publication is missing its canonical manifest seal"))?;
+    if snapshot
+        .files
+        .iter()
+        .filter(|file| file.relative_path == Path::new(CANONICAL_MANIFEST))
+        .count()
+        != 1
+    {
+        bail!("fixture publication must contain exactly one canonical manifest seal");
+    }
+    let snapshot_paths = snapshot
+        .files
+        .iter()
+        .map(|file| file.relative_path.clone())
+        .collect::<BTreeSet<_>>();
+    let owned_path_set = owned_paths.iter().cloned().collect::<BTreeSet<_>>();
+    if snapshot_paths != owned_path_set || snapshot_paths.len() != owned_paths.len() {
+        bail!("fixture publication snapshot does not match its owned path inventory");
+    }
+    let unsealed_snapshot = snapshot.without_file(Path::new(CANONICAL_MANIFEST))?;
+    require_directory_identity(parent, parent_identity)?;
+    fs::create_dir(destination_root).with_context(|| {
+        format!(
+            "create-only fixture output root already exists or cannot be reserved: {}",
+            destination_root.display()
+        )
+    })?;
+    let published = (|| {
+        require_directory_identity(parent, parent_identity)?;
+        set_canonical_directory_mode(destination_root)?;
+        let mut directory_identities = BTreeMap::new();
+        directory_identities.insert(
+            PathBuf::new(),
+            capture_directory_identity(destination_root)?,
+        );
+        sync_directory(parent)?;
+        for directory in &snapshot.directories {
+            let relative = PathBuf::from(
+                directory
+                    .logical_path
+                    .replace('/', std::path::MAIN_SEPARATOR_STR),
+            );
+            let path = destination_root.join(relative);
+            verify_publication_namespace(
+                parent,
+                parent_identity,
+                destination_root,
+                &directory_identities,
+            )?;
+            ensure_safe_owned_path(destination_root, &path)?;
+            fs::create_dir(&path)
+                .with_context(|| format!("failed to create output directory {}", path.display()))?;
+            set_canonical_directory_mode(&path)?;
+            if canonical_mode(&fs::symlink_metadata(&path)?) != directory.mode {
+                bail!(
+                    "published directory mode drifted at `{}`",
+                    directory.logical_path
+                );
+            }
+            let relative = path
+                .strip_prefix(destination_root)
+                .expect("published directory remains beneath its root")
+                .to_path_buf();
+            directory_identities.insert(relative, capture_directory_identity(&path)?);
+            sync_directory(
+                path.parent()
+                    .expect("published directory always has a parent"),
+            )?;
+        }
+        for file in snapshot
+            .files
+            .iter()
+            .filter(|file| file.relative_path != Path::new(CANONICAL_MANIFEST))
+        {
+            verify_publication_namespace(
+                parent,
+                parent_identity,
+                destination_root,
+                &directory_identities,
+            )?;
+            let path = destination_root.join(&file.relative_path);
+            ensure_safe_owned_path(destination_root, &path)?;
+            write_create_only_file(&path, &file.bytes)?;
+            sync_directory(path.parent().expect("published file always has a parent"))?;
+        }
+        verify_publication_namespace(
+            parent,
+            parent_identity,
+            destination_root,
+            &directory_identities,
+        )?;
+        let published_unsealed = PublicationSnapshot::capture_complete_tree(destination_root)?;
+        unsealed_snapshot.require_identical(&published_unsealed)?;
+        validate()?;
+        verify_publication_namespace(
+            parent,
+            parent_identity,
+            destination_root,
+            &directory_identities,
+        )?;
+        publish_manifest_seal(
+            seal,
+            parent,
+            parent_identity,
+            destination_root,
+            &directory_identities,
+        )?;
+        Ok(())
+    })();
+    published.with_context(|| {
+        format!(
+            "create-only fixture publication failed; the rejected reservation was left in place at {}",
+            destination_root.display()
+        )
+    })
+}
+
+fn write_create_only_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("failed to create output {}", path.display()))?;
+    output.write_all(bytes)?;
+    output.flush()?;
+    output.sync_all()?;
+    drop(output);
+    set_canonical_file_mode(path)?;
+    let actual = read_canonical_owned_file(path)?;
+    if actual != bytes {
+        bail!("published file bytes drifted at {}", path.display());
+    }
+    Ok(())
+}
+
+fn publish_manifest_seal(
+    seal: &PublicationFile,
+    parent: &Path,
+    parent_identity: DirectoryIdentity,
+    destination_root: &Path,
+    directory_identities: &BTreeMap<PathBuf, DirectoryIdentity>,
+) -> Result<()> {
+    let seal_path = destination_root.join(&seal.relative_path);
+    ensure_safe_owned_path(destination_root, &seal_path)?;
+    let root_name = destination_root
+        .file_name()
+        .ok_or_else(|| eyre!("fixture publication root has no final component"))?
+        .to_string_lossy();
+    let pending_path = parent.join(format!(".{root_name}{PUBLICATION_SEAL_PENDING_SUFFIX}"));
+    if pending_path == seal_path {
+        bail!("fixture publication seal staging path aliases its final path");
+    }
+    require_directory_identity(parent, parent_identity)?;
+    write_create_only_file(&pending_path, &seal.bytes)
+        .context("failed to stage the canonical manifest seal")?;
+    sync_directory(parent)?;
+    verify_publication_namespace(
+        parent,
+        parent_identity,
+        destination_root,
+        directory_identities,
+    )?;
+    fs::hard_link(&pending_path, &seal_path).with_context(|| {
+        format!(
+            "failed to publish the canonical manifest seal without clobbering {}",
+            seal_path.display()
+        )
+    })?;
+    sync_directory(
+        seal_path
+            .parent()
+            .expect("canonical manifest seal has a parent"),
+    )?;
+    verify_publication_namespace(
+        parent,
+        parent_identity,
+        destination_root,
+        directory_identities,
+    )?;
+    require_staged_manifest_link(&pending_path, &seal_path, &seal.bytes)?;
+    // Removing the staging name is the commit point: before this succeeds the
+    // final seal has two links and every verifier rejects it. Nothing fallible
+    // may run after this operation, or an error could expose a valid-looking
+    // seal for a publication that the caller was told had failed.
+    fs::remove_file(&pending_path).with_context(|| {
+        format!(
+            "failed to retire canonical manifest seal staging file {}",
+            pending_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn require_staged_manifest_link(pending_path: &Path, seal_path: &Path, bytes: &[u8]) -> Result<()> {
+    let pending_before = linked_file_identity(pending_path)?;
+    let seal_before = linked_file_identity(seal_path)?;
+    if pending_before != seal_before || pending_before.links != 2 {
+        bail!("canonical manifest seal is not the expected two-link staged file");
+    }
+    if pending_before.mode != 0o644 {
+        bail!("canonical manifest seal staging file does not use mode 0644");
+    }
+    let actual = fs::read(seal_path)
+        .with_context(|| format!("failed to read staged seal {}", seal_path.display()))?;
+    if actual != bytes {
+        bail!("canonical manifest seal bytes changed before commit");
+    }
+    let pending_after = linked_file_identity(pending_path)?;
+    let seal_after = linked_file_identity(seal_path)?;
+    if pending_after != pending_before || seal_after != seal_before {
+        bail!("canonical manifest seal identity changed before commit");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)
+        .with_context(|| format!("failed to open directory {} for sync", path.display()))?
+        .sync_all()
+        .with_context(|| format!("failed to sync directory {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<()> {
+    // Stable std does not expose a portable directory-sync handle. File bytes
+    // are synced before the seal is linked; namespace identities are still
+    // checked before and after each operation.
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileIdentity {
     len: u64,
@@ -1715,148 +2462,165 @@ struct FileIdentity {
     #[cfg(windows)]
     last_write_time: u64,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DirectoryIdentity {
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(windows)]
+    volume_serial_number: u32,
+    #[cfg(windows)]
+    file_index: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LinkedFileIdentity {
+    links: u64,
+    mode: u32,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(windows)]
+    volume_serial_number: u32,
+    #[cfg(windows)]
+    file_index: u64,
+}
 #[derive(Clone, Debug)]
 struct GuardedFile {
     identity: FileIdentity,
     bytes: Vec<u8>,
 }
-#[derive(Debug)]
-struct GuardedRemoval {
-    relative: PathBuf,
-    preimage: GuardedFile,
-}
-#[derive(Debug)]
-struct PublicationMutation {
-    relative: PathBuf,
-    preimage: Option<GuardedFile>,
-    postimage: Option<Vec<u8>>,
-}
-#[derive(Clone, Copy, Debug)]
-struct AppliedMutation {
-    index: usize,
-    post_identity: Option<FileIdentity>,
-}
-fn load_previous_owned_blobs(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
-    let manifest_path = root.join(CANONICAL_MANIFEST);
-    match fs::symlink_metadata(&manifest_path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
-        Err(error) => {
-            Err(error).with_context(|| format!("failed to inspect {}", manifest_path.display()))
-        }
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                bail!(
-                    "previous canonical manifest must be a regular non-symlink file: {}",
-                    manifest_path.display()
-                );
-            }
-            let manifest = Manifest::load(&manifest_path).with_context(|| {
-                format!(
-                    "failed to load previous manifest {}",
-                    manifest_path.display()
-                )
-            })?;
-            let canonical_dir = manifest_path
-                .parent()
-                .expect("canonical manifest has a parent directory");
-            manifest
-                .validate(Some(canonical_dir))
-                .context("previous canonical manifest failed validation")?;
-            manifest
-                .fixtures
-                .iter()
-                .map(|fixture| {
-                    validate_fixture_identity(&fixture.name, &fixture.encoded_file)?;
-                    let relative = PathBuf::from(&fixture.encoded_file);
-                    let bytes = BASE64.decode(fixture.payload_base64.as_bytes()).with_context(|| {
-                        format!(
-                            "failed to decode prior canonical blob {} from the validated manifest",
-                            relative.display()
-                        )
-                    })?;
-                    Ok((relative, bytes))
-                })
-                .collect()
-        }
+#[cfg(unix)]
+fn directory_identity(metadata: &fs::Metadata, path: &Path) -> Result<DirectoryIdentity> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "fixture publication namespace must be a regular non-symlink directory: {}",
+            path.display()
+        );
     }
+    Ok(DirectoryIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
 }
-fn plan_retired_publication(
+#[cfg(windows)]
+fn directory_identity(metadata: &fs::Metadata, path: &Path) -> Result<DirectoryIdentity> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "fixture publication namespace must be a regular non-symlink directory: {}",
+            path.display()
+        );
+    }
+    Ok(DirectoryIdentity {
+        volume_serial_number: metadata.volume_serial_number().ok_or_else(|| {
+            eyre!(
+                "missing volume identity for fixture publication directory {}",
+                path.display()
+            )
+        })?,
+        file_index: metadata.file_index().ok_or_else(|| {
+            eyre!(
+                "missing file identity for fixture publication directory {}",
+                path.display()
+            )
+        })?,
+    })
+}
+#[cfg(not(any(unix, windows)))]
+fn directory_identity(_metadata: &fs::Metadata, path: &Path) -> Result<DirectoryIdentity> {
+    bail!(
+        "fixture publication is unavailable because directory identity cannot be proven on this platform: {}",
+        path.display()
+    )
+}
+fn capture_directory_identity(path: &Path) -> Result<DirectoryIdentity> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect publication directory {}", path.display()))?;
+    directory_identity(&metadata, path)
+}
+fn require_directory_identity(path: &Path, expected: DirectoryIdentity) -> Result<()> {
+    let actual = capture_directory_identity(path)?;
+    if actual != expected {
+        bail!(
+            "fixture publication directory identity changed: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn linked_file_identity(path: &Path) -> Result<LinkedFileIdentity> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect staged fixture seal {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!(
+            "staged fixture seal must be a regular non-symlink file: {}",
+            path.display()
+        );
+    }
+    Ok(LinkedFileIdentity {
+        links: metadata.nlink(),
+        mode: canonical_mode(&metadata),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+#[cfg(windows)]
+fn linked_file_identity(path: &Path) -> Result<LinkedFileIdentity> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect staged fixture seal {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!(
+            "staged fixture seal must be a regular non-symlink file: {}",
+            path.display()
+        );
+    }
+    Ok(LinkedFileIdentity {
+        links: u64::from(metadata.number_of_links().ok_or_else(|| {
+            eyre!(
+                "missing link count for staged fixture seal {}",
+                path.display()
+            )
+        })?),
+        mode: canonical_mode(&metadata),
+        volume_serial_number: metadata.volume_serial_number().ok_or_else(|| {
+            eyre!(
+                "missing volume identity for staged fixture seal {}",
+                path.display()
+            )
+        })?,
+        file_index: metadata.file_index().ok_or_else(|| {
+            eyre!(
+                "missing file identity for staged fixture seal {}",
+                path.display()
+            )
+        })?,
+    })
+}
+#[cfg(not(any(unix, windows)))]
+fn linked_file_identity(path: &Path) -> Result<LinkedFileIdentity> {
+    bail!(
+        "cannot prove staged fixture seal identity on this platform: {}",
+        path.display()
+    )
+}
+fn verify_publication_namespace(
+    parent: &Path,
+    parent_identity: DirectoryIdentity,
     root: &Path,
-    fixtures: &[FixtureEntry],
-    previous_owned: &BTreeMap<PathBuf, Vec<u8>>,
-) -> Result<Vec<GuardedRemoval>> {
-    let expected: BTreeSet<PathBuf> = fixtures
-        .iter()
-        .map(|fixture| PathBuf::from(&fixture.encoded_file))
-        .collect();
-    let mut directories = vec![(
-        PathBuf::from(CANONICAL_FIXTURE_DIRECTORY),
-        LocalBlobPolicy::Canonical,
-        "canonical",
-    )];
-    directories.extend(SDK_FIXTURE_DIRECTORIES.iter().map(|sdk| {
-        (
-            PathBuf::from(sdk.relative_directory),
-            sdk.local_blobs,
-            sdk.label,
-        )
-    }));
-    let mut removals = Vec::new();
-    for (relative_directory, policy, label) in directories {
-        let directory = root.join(&relative_directory);
-        let actual = collect_norito_paths_if_present(&directory)?;
-        for relative in actual {
-            if blob_allowed_by_policy(&relative, &expected, policy) {
-                continue;
-            }
-            let Some(expected_bytes) = previous_owned.get(&relative) else {
-                bail!(
-                    "{label} fixture directory {} contains an unowned Norito blob: {}",
-                    directory.display(),
-                    relative.display()
-                );
-            };
-            let publication_relative = relative_directory.join(&relative);
-            let path = root.join(&publication_relative);
-            ensure_safe_owned_path(root, &path)?;
-            let metadata = fs::symlink_metadata(&path)
-                .with_context(|| format!("failed to inspect retired blob {}", path.display()))?;
-            let identity = file_identity(&metadata, &path)?;
-            let actual_bytes = read_guarded_file(&path, identity)?;
-            if actual_bytes != *expected_bytes {
-                bail!(
-                    "{label} fixture blob {} diverges from its prior canonical owner bytes",
-                    path.display()
-                );
-            }
-            removals.push(GuardedRemoval {
-                relative: publication_relative,
-                preimage: GuardedFile {
-                    identity,
-                    bytes: expected_bytes.clone(),
-                },
-            });
-        }
+    directories: &BTreeMap<PathBuf, DirectoryIdentity>,
+) -> Result<()> {
+    require_directory_identity(parent, parent_identity)?;
+    for (relative, identity) in directories {
+        let path = if relative.as_os_str().is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(relative)
+        };
+        require_directory_identity(&path, *identity)?;
     }
-    removals.sort_by(|left, right| left.relative.cmp(&right.relative));
-    Ok(removals)
-}
-fn blob_allowed_by_policy(
-    relative: &Path,
-    expected: &BTreeSet<PathBuf>,
-    policy: LocalBlobPolicy,
-) -> bool {
-    match policy {
-        LocalBlobPolicy::None => false,
-        LocalBlobPolicy::Canonical => expected.contains(relative),
-        LocalBlobPolicy::SwiftPrefixed => {
-            relative.parent() == Some(Path::new(""))
-                && relative
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with("swift_"))
-        }
-    }
+    Ok(())
 }
 #[cfg(unix)]
 fn file_identity(metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity> {
@@ -1973,6 +2737,14 @@ fn capture_optional_guarded_file(path: &Path) -> Result<Option<GuardedFile>> {
     let bytes = read_guarded_file(path, identity)?;
     Ok(Some(GuardedFile { identity, bytes }))
 }
+fn capture_required_guarded_file(path: &Path) -> Result<GuardedFile> {
+    capture_optional_guarded_file(path)?.ok_or_else(|| {
+        eyre!(
+            "canonical fixture source must be a regular non-symlink file: {}",
+            path.display()
+        )
+    })
+}
 fn verify_preimage(path: &Path, expected: Option<&GuardedFile>) -> Result<()> {
     match expected {
         Some(expected) => {
@@ -2006,343 +2778,23 @@ fn verify_preimage(path: &Path, expected: Option<&GuardedFile>) -> Result<()> {
     }
     Ok(())
 }
-fn guarded_remove_with_commit<F>(path: &Path, preimage: &GuardedFile, committed: F) -> Result<()>
-where
-    F: FnOnce(),
-{
-    verify_preimage(path, Some(preimage))?;
-    fs::remove_file(path)
-        .with_context(|| format!("failed to remove guarded fixture {}", path.display()))?;
-    committed();
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error)
-            .with_context(|| format!("failed to verify removal of fixture {}", path.display())),
-        Ok(_) => bail!(
-            "guarded fixture path reappeared while removing it: {}",
-            path.display()
-        ),
-    }
-}
-fn guarded_remove(path: &Path, preimage: &GuardedFile) -> Result<()> {
-    guarded_remove_with_commit(path, preimage, || {})
-}
-#[cfg(test)]
-fn remove_retired_publication(root: &Path, removals: &[GuardedRemoval]) -> Result<()> {
-    for removal in removals {
-        let path = root.join(&removal.relative);
-        ensure_safe_owned_path(root, &path)?;
-        guarded_remove(&path, &removal.preimage).with_context(|| {
-            format!(
-                "retired fixture preimage changed before removal: {}",
-                path.display()
-            )
-        })?;
-    }
-    Ok(())
-}
-fn publication_commit_rank(relative: &Path) -> u8 {
-    if relative == Path::new(CANONICAL_MANIFEST) {
-        return 2;
-    }
-    if relative.file_name() == Some(MANIFEST_BASENAME.as_ref())
-        && SDK_FIXTURE_DIRECTORIES
-            .iter()
-            .any(|sdk| relative.parent() == Some(Path::new(sdk.relative_directory)))
-    {
-        return 1;
-    }
-    0
-}
-fn prepare_publication_mutations(
-    rendered_root: &Path,
-    destination_root: &Path,
-    owned_paths: &[PathBuf],
-    removals: &[GuardedRemoval],
-) -> Result<Vec<PublicationMutation>> {
-    let mut planned = BTreeMap::<PathBuf, Option<Vec<u8>>>::new();
-    for relative in owned_paths {
-        let source = rendered_root.join(relative);
-        ensure_safe_owned_path(rendered_root, &source)?;
-        let source = capture_optional_guarded_file(&source)?
-            .ok_or_else(|| eyre!("missing rendered fixture output {}", source.display()))?;
-        if planned
-            .insert(relative.clone(), Some(source.bytes))
-            .is_some()
-        {
-            bail!("duplicate generated fixture output {}", relative.display());
-        }
-    }
-    let mut guarded_removals = BTreeMap::new();
-    for removal in removals {
-        if guarded_removals
-            .insert(removal.relative.clone(), removal)
-            .is_some()
-        {
-            bail!(
-                "duplicate retired fixture output {}",
-                removal.relative.display()
-            );
-        }
-        if planned.insert(removal.relative.clone(), None).is_some() {
-            bail!(
-                "fixture output is both generated and retired: {}",
-                removal.relative.display()
-            );
-        }
-    }
-    let mut mutations = Vec::with_capacity(planned.len());
-    for (relative, postimage) in planned {
-        let destination = destination_root.join(&relative);
-        ensure_safe_owned_path(destination_root, &destination)?;
-        let preimage = capture_optional_guarded_file(&destination)?;
-        if let Some(removal) = guarded_removals.get(&relative) {
-            let actual = preimage.as_ref().ok_or_else(|| {
-                eyre!(
-                    "retired fixture disappeared after planning: {}",
-                    destination.display()
-                )
-            })?;
-            if actual.identity != removal.preimage.identity
-                || actual.bytes != removal.preimage.bytes
-            {
-                bail!(
-                    "retired fixture preimage changed after planning: {}",
-                    destination.display()
-                );
-            }
-        }
-        if postimage
-            .as_ref()
-            .is_some_and(|bytes| preimage.as_ref().is_some_and(|old| old.bytes == *bytes))
-        {
-            continue;
-        }
-        mutations.push(PublicationMutation {
-            relative,
-            preimage,
-            postimage,
-        });
-    }
-    mutations.sort_by(|left, right| {
-        publication_commit_rank(&left.relative)
-            .cmp(&publication_commit_rank(&right.relative))
-            .then_with(|| left.relative.cmp(&right.relative))
-    });
-    Ok(mutations)
-}
-fn atomic_publish_bytes_with_commit<F>(
-    root: &Path,
-    path: &Path,
-    preimage: Option<&GuardedFile>,
-    bytes: &[u8],
-    committed: F,
-) -> Result<FileIdentity>
-where
-    F: FnOnce(FileIdentity),
-{
-    ensure_safe_owned_path(root, path)?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| eyre!("fixture output has no parent: {}", path.display()))?;
-    ensure_safe_owned_path(root, parent)?;
-    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
-    ensure_safe_owned_path(root, path)?;
-    let mut temporary = NamedTempFile::new_in(parent)
-        .with_context(|| format!("failed to stage {}", path.display()))?;
-    temporary.write_all(bytes)?;
-    temporary.flush()?;
-    temporary.as_file().sync_all()?;
-    verify_preimage(path, preimage)?;
-    ensure_safe_owned_path(root, path)?;
-    let published = temporary.persist(path).map_err(|error| {
-        eyre!(
-            "failed to atomically publish {}: {}",
-            path.display(),
-            error.error
-        )
-    })?;
-    let post_identity = file_identity(&published.metadata()?, path)?;
-    committed(post_identity);
-    let actual = read_guarded_file(path, post_identity)
-        .with_context(|| format!("published fixture identity changed: {}", path.display()))?;
-    if actual != bytes {
-        bail!("published fixture bytes changed: {}", path.display());
-    }
-    Ok(post_identity)
-}
-fn atomic_publish_bytes(
-    root: &Path,
-    path: &Path,
-    preimage: Option<&GuardedFile>,
-    bytes: &[u8],
-) -> Result<FileIdentity> {
-    atomic_publish_bytes_with_commit(root, path, preimage, bytes, |_| {})
-}
-fn apply_publication_mutation<F>(
-    root: &Path,
-    mutation: &PublicationMutation,
-    committed: F,
-) -> Result<()>
-where
-    F: FnOnce(Option<FileIdentity>),
-{
-    let path = root.join(&mutation.relative);
-    ensure_safe_owned_path(root, &path)?;
-    if let Some(bytes) = &mutation.postimage {
-        atomic_publish_bytes_with_commit(
-            root,
-            &path,
-            mutation.preimage.as_ref(),
-            bytes,
-            |identity| committed(Some(identity)),
-        )
-        .map(|_| ())
-    } else {
-        let preimage = mutation.preimage.as_ref().ok_or_else(|| {
-            eyre!(
-                "retired fixture has no guarded preimage: {}",
-                path.display()
-            )
-        })?;
-        guarded_remove_with_commit(&path, preimage, || committed(None))
-    }
-}
-fn rollback_publication_mutation(
-    root: &Path,
-    mutation: &PublicationMutation,
-    applied: AppliedMutation,
-) -> Result<()> {
-    let path = root.join(&mutation.relative);
-    ensure_safe_owned_path(root, &path)?;
-    match (&mutation.postimage, applied.post_identity) {
-        (Some(postimage), Some(post_identity)) => {
-            let published = GuardedFile {
-                identity: post_identity,
-                bytes: postimage.clone(),
-            };
-            match &mutation.preimage {
-                Some(preimage) => {
-                    atomic_publish_bytes(root, &path, Some(&published), &preimage.bytes)?;
-                }
-                None => guarded_remove(&path, &published)?,
-            }
-        }
-        (None, None) => {
-            let preimage = mutation.preimage.as_ref().ok_or_else(|| {
-                eyre!(
-                    "deleted fixture has no rollback preimage: {}",
-                    path.display()
-                )
-            })?;
-            verify_preimage(&path, None)?;
-            atomic_publish_bytes(root, &path, None, &preimage.bytes)?;
-        }
-        _ => bail!(
-            "fixture publication rollback state is inconsistent: {}",
-            path.display()
-        ),
-    }
-    Ok(())
-}
-fn rollback_publication_mutations(
-    root: &Path,
-    mutations: &[PublicationMutation],
-    applied: &[AppliedMutation],
-) -> Result<()> {
-    let mut failures = Vec::new();
-    for applied in applied.iter().rev().copied() {
-        if let Err(error) = rollback_publication_mutation(root, &mutations[applied.index], applied)
-        {
-            failures.push(format!(
-                "{}: {error}",
-                mutations[applied.index].relative.display()
-            ));
-        }
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        bail!(
-            "failed to roll back fixture publication mutations: {}",
-            failures.join("; ")
-        )
-    }
-}
-fn execute_publication_mutations<F>(
-    root: &Path,
-    mutations: &[PublicationMutation],
-    failure_after: Option<usize>,
-    validate: F,
-) -> Result<()>
-where
-    F: FnOnce() -> Result<()>,
-{
-    let mut applied = Vec::with_capacity(mutations.len());
-    let outcome = (|| {
-        for (index, mutation) in mutations.iter().enumerate() {
-            if failure_after == Some(applied.len()) {
-                bail!(
-                    "injected fixture publication failure after {} mutations",
-                    applied.len()
-                );
-            }
-            apply_publication_mutation(root, mutation, |post_identity| {
-                applied.push(AppliedMutation {
-                    index,
-                    post_identity,
-                });
-            })
-            .with_context(|| {
-                format!(
-                    "failed to apply fixture publication mutation {}",
-                    mutation.relative.display()
-                )
-            })?;
-        }
-        if failure_after == Some(applied.len()) {
-            bail!(
-                "injected fixture publication failure after {} mutations",
-                applied.len()
-            );
-        }
-        validate().context("fixture publication validation failed")
-    })();
-    match outcome {
-        Ok(()) => Ok(()),
-        Err(error) => match rollback_publication_mutations(root, mutations, &applied) {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(eyre!(
-                "fixture publication transaction failed: {error}; {rollback_error}"
-            )),
-        },
-    }
-}
-fn publish_owned_publication<F>(
-    rendered_root: &Path,
-    destination_root: &Path,
-    owned_paths: &[PathBuf],
-    removals: &[GuardedRemoval],
-    validate: F,
-) -> Result<()>
-where
-    F: FnOnce() -> Result<()>,
-{
-    let mutations =
-        prepare_publication_mutations(rendered_root, destination_root, owned_paths, removals)?;
-    execute_publication_mutations(destination_root, &mutations, None, validate)
-}
 fn compare_owned_publication(
     rendered_root: &Path,
     destination_root: &Path,
     owned_paths: &[PathBuf],
 ) -> Result<()> {
+    require_publication_seal(rendered_root).context("rendered fixture publication is unsealed")?;
+    require_publication_seal(destination_root)
+        .context("tracked fixture publication is unsealed")?;
     for relative in owned_paths {
-        let expected = fs::read(rendered_root.join(relative))?;
+        let rendered = rendered_root.join(relative);
+        ensure_safe_owned_path(rendered_root, &rendered)?;
+        let expected = read_canonical_owned_file(&rendered)?;
         let destination = destination_root.join(relative);
-        let actual = fs::read(&destination).with_context(|| {
+        ensure_safe_owned_path(destination_root, &destination)?;
+        let actual = read_canonical_owned_file(&destination).with_context(|| {
             format!(
-                "generated fixture output missing: {}",
+                "invalid generated fixture output: {}",
                 destination.display()
             )
         })?;
@@ -2355,7 +2807,45 @@ fn compare_owned_publication(
     }
     Ok(())
 }
+fn read_canonical_owned_file(path: &Path) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect owned fixture {}", path.display()))?;
+    let identity = file_identity(&metadata, path)?;
+    let mode = canonical_mode(&metadata);
+    if mode != 0o644 {
+        bail!(
+            "owned fixture must use canonical mode 0644 (found {mode:04o}): {}",
+            path.display()
+        );
+    }
+    read_guarded_file(path, identity)
+        .with_context(|| format!("failed to read owned fixture {}", path.display()))
+}
+fn require_publication_seal(root: &Path) -> Result<Manifest> {
+    let seal_path = root.join(CANONICAL_MANIFEST);
+    ensure_safe_owned_path(root, &seal_path)?;
+    let bytes = read_canonical_owned_file(&seal_path).with_context(|| {
+        format!(
+            "canonical manifest seal is missing: {}",
+            seal_path.display()
+        )
+    })?;
+    let manifest = Manifest::from_bytes(&bytes).context("invalid canonical manifest seal")?;
+    manifest
+        .validate(None)
+        .context("canonical manifest seal failed validation")?;
+    Ok(manifest)
+}
 fn verify_all_blob_policies(
+    publication_root: &Path,
+    fixtures: &[FixtureEntry],
+    require_canonical_set: bool,
+) -> Result<()> {
+    require_publication_seal(publication_root)
+        .context("fixture publication has no valid completion seal")?;
+    verify_all_blob_policies_without_seal(publication_root, fixtures, require_canonical_set)
+}
+fn verify_all_blob_policies_without_seal(
     publication_root: &Path,
     fixtures: &[FixtureEntry],
     require_canonical_set: bool,
@@ -2479,21 +2969,6 @@ fn collect_norito_paths(directory: &Path) -> Result<BTreeSet<PathBuf>> {
     }
     Ok(found)
 }
-fn collect_norito_paths_if_present(directory: &Path) -> Result<BTreeSet<PathBuf>> {
-    match fs::symlink_metadata(directory) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
-        Err(error) => {
-            Err(error).with_context(|| format!("failed to inspect {}", directory.display()))
-        }
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            bail!(
-                "fixture directory must be a non-symlink directory: {}",
-                directory.display()
-            )
-        }
-        Ok(_) => collect_norito_paths(directory),
-    }
-}
 fn manifest_digest(path: &Path, root: &Path) -> Result<ManifestDigestReport> {
     let digest = compute_file_digest(path)?;
     Ok(ManifestDigestReport {
@@ -2542,11 +3017,14 @@ struct Manifest {
     fixtures: Vec<FixtureEntry>,
 }
 impl Manifest {
-    fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
-        let value: Value = json::from_slice(&bytes)?;
+    fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let value: Value = json::from_slice(bytes)?;
         validate_manifest_shape(&value)?;
         Ok(json::from_value(value)?)
+    }
+    fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        Self::from_bytes(&bytes)
     }
     fn validate(&self, base_dir: Option<&Path>) -> Result<()> {
         let mut names = HashSet::with_capacity(self.fixtures.len());
@@ -2679,6 +3157,14 @@ impl FixtureEntry {
                 payload_bytes.len()
             );
         }
+        let payload: TransactionPayload =
+            norito::decode_canonical(&payload_bytes).with_context(|| {
+                format!(
+                    "fixture '{}' payload is not an exact canonical Norito frame",
+                    self.name
+                )
+            })?;
+        let payload_bare = payload.encode();
         let payload_hash = blake2b256_hex(&payload_bytes);
         if payload_hash != self.payload_hash {
             bail!(
@@ -2716,7 +3202,7 @@ impl FixtureEntry {
                 signed_hash
             );
         }
-        if signed.payload().encode() != payload_bytes {
+        if signed.payload().encode() != payload_bare {
             bail!(
                 "fixture '{}' signed payload differs from the canonical payload bytes",
                 self.name
@@ -2786,22 +3272,16 @@ fn blake2b256_hex(bytes: &[u8]) -> String {
     hex_encode(out)
 }
 fn signed_transaction_entrypoint_hash_hex(
-    canonical_bare_signed_transaction: &[u8],
+    canonical_framed_signed_transaction: &[u8],
 ) -> Result<String> {
-    let signed = decode_canonical_signed_transaction(canonical_bare_signed_transaction)?;
+    let signed = decode_canonical_signed_transaction(canonical_framed_signed_transaction)?;
     Ok(hex_encode(signed.hash_as_entrypoint().as_ref()))
 }
 fn decode_canonical_signed_transaction(
-    canonical_bare_signed_transaction: &[u8],
+    canonical_framed_signed_transaction: &[u8],
 ) -> Result<SignedTransaction> {
-    let (signed, used) = SignedTransaction::decode_from_slice(canonical_bare_signed_transaction)
-        .map_err(|err| eyre!("invalid canonical SignedTransaction bytes: {err}"))?;
-    if used != canonical_bare_signed_transaction.len()
-        || signed.encode() != canonical_bare_signed_transaction
-    {
-        bail!("SignedTransaction bytes are not exact canonical bare encoding");
-    }
-    Ok(signed)
+    norito::decode_canonical(canonical_framed_signed_transaction)
+        .map_err(|err| eyre!("invalid canonical framed SignedTransaction bytes: {err}"))
 }
 fn render_compact_hash_vector(fixtures: &[FixtureEntry]) -> Result<String> {
     let source = fixtures
@@ -2816,13 +3296,14 @@ fn render_compact_hash_vector(fixtures: &[FixtureEntry]) -> Result<String> {
     source
         .validate(None)
         .context("compact hash vector source fixture failed validation")?;
-    let bare = BASE64
+    let framed = BASE64
         .decode(&source.signed_base64)
         .context("compact hash vector signed bytes are not valid base64")?;
-    if BASE64.encode(&bare) != source.signed_base64 {
+    if BASE64.encode(&framed) != source.signed_base64 {
         bail!("compact hash vector signed bytes are not canonical base64");
     }
-    let signed = decode_canonical_signed_transaction(&bare)?;
+    let signed = decode_canonical_signed_transaction(&framed)?;
+    let bare = signed.encode();
     let payload = signed.payload().encode();
     let mut canonical = 0_u32.to_le_bytes().to_vec();
     norito::core::write_len_to_vec(&mut canonical, payload.len() as u64);
@@ -2849,9 +3330,6 @@ fn render_compact_hash_vector(fixtures: &[FixtureEntry]) -> Result<String> {
         bail!("compact hash vector does not match the manifest signed hash");
     }
     let payload_hash = blake2b256_hex(&payload);
-    if payload_hash != source.payload_hash {
-        bail!("compact hash vector payload does not match the manifest payload hash");
-    }
     let mut versioned = Vec::with_capacity(1 + bare.len());
     versioned.push(SIGNED_TRANSACTION_V1);
     versioned.extend_from_slice(&bare);
@@ -2896,7 +3374,6 @@ mod tests {
     use super::*;
     use iroha_data_model::asset::Mintable;
     use iroha_primitives::numeric::NumericSpec;
-    use norito::core::DecodeFromSlice;
     use std::fs;
     const TEST_NETWORK_ID: &str =
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
@@ -3001,6 +3478,18 @@ mod tests {
         Manifest {
             fixtures: vec![fixture("alpha"), fixture("beta"), fixture("gamma")],
         }
+    }
+    fn write_test_publication_seal(root: &Path) {
+        let seal = root.join(CANONICAL_MANIFEST);
+        fs::create_dir_all(seal.parent().expect("test seal parent"))
+            .expect("create test seal parent");
+        fs::write(seal, b"{\n  \"fixtures\": []\n}\n").expect("write test publication seal");
+    }
+    fn test_owned_publication_paths() -> Vec<PathBuf> {
+        vec![
+            PathBuf::from("fixture.json"),
+            PathBuf::from(CANONICAL_MANIFEST),
+        ]
     }
     fn fixture(name: &str) -> FixtureEntry {
         FixtureEntry {
@@ -3151,7 +3640,8 @@ mod tests {
         )
         .try_sign(keypair.private_key())
         .expect("sign fixture transaction");
-        let signed_bytes = signed.encode();
+        let signed_bytes =
+            norito::encode_canonical(&signed).expect("encode canonical signed transaction frame");
         let payload_bytes = signed.payload().encode();
         let mut entrypoint = 0_u32.to_le_bytes().to_vec();
         norito::core::write_len_to_vec(&mut entrypoint, payload_bytes.len() as u64);
@@ -3206,21 +3696,21 @@ mod tests {
             properties["canonical.prefix.hex"],
             format!("00000000{}", properties["compact.length.hex"])
         );
-        assert_eq!(properties["versioned.bytes"], "592");
+        assert_eq!(properties["versioned.bytes"], "619");
         assert_eq!(
             properties["versioned.sha256"],
-            "8c7bd16c4f5bbbbeb67aa0a0e3b2d82e4a2a0f08d2bdc7e48aff6ed8d806b255"
+            "f8a4e12f40d0d5d92d74a032a4b782b6b3361363a1a313161f2336b68006087f"
         );
-        assert_eq!(properties["bare.bytes"], "591");
-        assert_eq!(properties["compact.length.hex"], "bf03");
-        assert_eq!(properties["canonical.prefix.hex"], "00000000bf03");
+        assert_eq!(properties["bare.bytes"], "618");
+        assert_eq!(properties["compact.length.hex"], "da03");
+        assert_eq!(properties["canonical.prefix.hex"], "00000000da03");
         assert_eq!(
             properties["canonical.hash"],
-            "9e4fca2b657ecf1d9c206badf2b2b7511c1cfbc749a778ce792eb31a13ac9927"
+            "76ca8143ab4fc3697dd755576ceb33c82086af30d69d77b030f9817a8e9c2fc3"
         );
         assert_eq!(
             properties["payload.prehash"],
-            "ea55e9ccd91a2a4910245a7747b856af27b2262f4278b8c0efd3166603612d71"
+            "36b2c7537acc2c100743039539ed28612e5f34e1ecf6df2e2afb4ad55fcebe43"
         );
     }
     #[test]
@@ -3283,213 +3773,190 @@ mod tests {
         }
     }
     #[test]
-    fn retired_fixture_publication_prunes_only_previous_owner_blobs() {
-        let temp = tempdir().expect("fixture publication root");
-        let root = temp.path();
-        let canonical = PathBuf::from(CANONICAL_FIXTURE_DIRECTORY);
-        let java = PathBuf::from("java/iroha_android/src/test/resources");
-        let python = PathBuf::from("python/iroha_python/tests/fixtures");
-        let swift = PathBuf::from("IrohaSwift/Fixtures");
-        for directory in [&canonical, &java, &python, &swift] {
-            fs::create_dir_all(root.join(directory)).expect("create fixture directory");
-            for name in ["active.norito", "retired.norito"] {
-                fs::write(root.join(directory).join(name), name.as_bytes())
-                    .expect("write prior-owner blob");
-            }
-        }
-        fs::write(root.join(&swift).join("swift_owned.norito"), b"swift")
-            .expect("write Swift-owned blob");
-        let previous_owned = [
-            (PathBuf::from("active.norito"), b"active.norito".to_vec()),
-            (PathBuf::from("retired.norito"), b"retired.norito".to_vec()),
-        ]
-        .into_iter()
-        .collect();
-        let removals = plan_retired_publication(root, &[fixture("active")], &previous_owned)
-            .expect("plan guarded retirement");
-        assert_eq!(removals.len(), 6);
-        remove_retired_publication(root, &removals).expect("remove guarded retired blobs");
-        assert!(root.join(&canonical).join("active.norito").is_file());
-        assert!(root.join(&java).join("active.norito").is_file());
-        for directory in [&canonical, &java, &python, &swift] {
-            assert!(!root.join(directory).join("retired.norito").exists());
-        }
-        assert!(!root.join(&python).join("active.norito").exists());
-        assert!(!root.join(&swift).join("active.norito").exists());
-        assert!(root.join(&swift).join("swift_owned.norito").is_file());
-    }
-    #[test]
-    fn retired_fixture_publication_rejects_unknown_or_changed_blobs() {
-        let temp = tempdir().expect("fixture publication root");
-        let root = temp.path();
-        let canonical = root.join(CANONICAL_FIXTURE_DIRECTORY);
-        fs::create_dir_all(&canonical).expect("create canonical fixture directory");
-        fs::write(canonical.join("unknown.norito"), b"unknown").expect("write unknown blob");
-        let error = plan_retired_publication(root, &[], &BTreeMap::new())
-            .expect_err("unknown blobs must fail closed");
-        assert!(error.to_string().contains("unowned Norito blob"));
-        fs::remove_file(canonical.join("unknown.norito")).expect("remove unknown test blob");
-        let python = root.join("python/iroha_python/tests/fixtures");
-        fs::create_dir_all(&python).expect("create Python fixture directory");
-        fs::write(python.join("retired.norito"), b"diverged")
-            .expect("write divergent same-name mirror");
-        let previous_owned = [(PathBuf::from("retired.norito"), b"before".to_vec())]
-            .into_iter()
-            .collect();
-        let error = plan_retired_publication(root, &[], &previous_owned)
-            .expect_err("divergent same-name mirrors must fail closed");
+    fn fixture_output_root_must_be_absolute_and_outside_workspace() {
+        let relative_error =
+            match FixtureOptions::new(Some(PathBuf::from("norito-stage"))).resolve_paths() {
+                Ok(_) => panic!("relative publication root must fail closed"),
+                Err(error) => error,
+            };
         assert!(
-            error
-                .to_string()
-                .contains("diverges from its prior canonical owner bytes")
+            relative_error.to_string().contains("absolute and external"),
+            "unexpected relative-root error: {relative_error}"
         );
-        assert!(python.join("retired.norito").is_file());
-        fs::remove_file(python.join("retired.norito")).expect("remove divergent test blob");
-        fs::write(canonical.join("retired.norito"), b"before").expect("write retired blob");
-        let previous_owned = [(PathBuf::from("retired.norito"), b"before".to_vec())]
-            .into_iter()
-            .collect();
-        let removals =
-            plan_retired_publication(root, &[], &previous_owned).expect("plan guarded retirement");
-        fs::write(canonical.join("retired.norito"), b"after").expect("simulate concurrent drift");
-        let error = remove_retired_publication(root, &removals)
-            .expect_err("changed destructive preimage must fail closed");
-        assert!(error.to_string().contains("preimage changed"));
-        assert!(canonical.join("retired.norito").is_file());
-    }
-    #[test]
-    fn retired_fixture_publication_rejects_same_byte_replacement() {
-        let temp = tempdir().expect("fixture publication root");
-        let root = temp.path();
-        let canonical = root.join(CANONICAL_FIXTURE_DIRECTORY);
-        fs::create_dir_all(&canonical).expect("create canonical fixture directory");
-        let retired = canonical.join("retired.norito");
-        fs::write(&retired, b"same bytes").expect("write retired blob");
-        let previous_owned = [(PathBuf::from("retired.norito"), b"same bytes".to_vec())]
-            .into_iter()
-            .collect();
-        let removals =
-            plan_retired_publication(root, &[], &previous_owned).expect("plan guarded retirement");
-        let displaced = canonical.join("retired.preimage");
-        fs::rename(&retired, &displaced).expect("preserve original inode");
-        fs::write(&retired, b"same bytes").expect("write same-byte replacement");
-        let error = remove_retired_publication(root, &removals)
-            .expect_err("same-byte replacement must fail the identity guard");
-        assert!(error.to_string().contains("preimage changed"));
-        assert_eq!(
-            fs::read(&retired).expect("replacement remains present"),
-            b"same bytes"
-        );
-    }
-    #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the transaction test must assert rollback and retry across one ordered mutation set"
-    )]
-    fn publication_transaction_rolls_back_injected_failure_and_is_retry_safe() {
-        let rendered = tempdir().expect("rendered publication root");
-        let destination = tempdir().expect("destination publication root");
-        let canonical = PathBuf::from(CANONICAL_FIXTURE_DIRECTORY);
-        let alpha = canonical.join("alpha.norito");
-        let retired = canonical.join("retired.norito");
-        let manifest = PathBuf::from(CANONICAL_MANIFEST);
-        let sdk_manifest =
-            PathBuf::from(SDK_FIXTURE_DIRECTORIES[0].relative_directory).join(MANIFEST_BASENAME);
-        for root in [rendered.path(), destination.path()] {
-            fs::create_dir_all(root.join(&canonical)).expect("create canonical fixture directory");
-            fs::create_dir_all(root.join(sdk_manifest.parent().expect("SDK manifest parent")))
-                .expect("create SDK fixture directory");
-        }
-        fs::write(rendered.path().join(&alpha), b"new alpha").expect("write rendered alpha");
-        fs::write(rendered.path().join(&sdk_manifest), b"new SDK manifest")
-            .expect("write rendered SDK manifest");
-        fs::write(rendered.path().join(&manifest), b"new manifest")
-            .expect("write rendered manifest");
-        fs::write(destination.path().join(&alpha), b"old alpha").expect("write published alpha");
-        fs::write(destination.path().join(&retired), b"old retired")
-            .expect("write published retired fixture");
-        fs::write(destination.path().join(&sdk_manifest), b"old SDK manifest")
-            .expect("write published SDK manifest");
-        fs::write(destination.path().join(&manifest), b"old manifest")
-            .expect("write published manifest");
-        let removal = GuardedRemoval {
-            relative: retired.clone(),
-            preimage: capture_optional_guarded_file(&destination.path().join(&retired))
-                .expect("capture retired fixture")
-                .expect("retired fixture exists"),
+
+        let source_root = workspace_root()
+            .canonicalize()
+            .expect("canonical source workspace");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock follows Unix epoch")
+            .as_nanos();
+        let inside = source_root.join(format!(".norito-rpc-forbidden-{unique}"));
+        assert!(!inside.exists(), "test output path must begin absent");
+        let inside_error = match FixtureOptions::new(Some(inside)).resolve_paths() {
+            Ok(_) => panic!("in-workspace publication root must fail closed"),
+            Err(error) => error,
         };
-        let owned = vec![manifest.clone(), sdk_manifest.clone(), alpha.clone()];
-        let removals = vec![removal];
-        let mutations =
-            prepare_publication_mutations(rendered.path(), destination.path(), &owned, &removals)
-                .expect("prepare publication transaction");
+        assert!(
+            inside_error
+                .to_string()
+                .contains("outside the source workspace"),
+            "unexpected in-workspace error: {inside_error}"
+        );
+    }
+    #[test]
+    fn publication_path_policy_rejects_case_and_unicode_alias_classes() {
         assert_eq!(
-            mutations
-                .iter()
-                .map(|mutation| mutation.relative.as_path())
-                .collect::<Vec<_>>(),
-            vec![
-                alpha.as_path(),
-                retired.as_path(),
-                sdk_manifest.as_path(),
-                manifest.as_path(),
+            publication_path_identity(
+                &normalize_publication_path(Path::new("SDK/File.json")).unwrap()
+            ),
+            publication_path_identity(
+                &normalize_publication_path(Path::new("sdk/file.json")).unwrap()
+            ),
+        );
+        assert!(normalize_publication_path(Path::new("fixtures/cafe\u{301}.json")).is_err());
+        let root = tempdir().expect("publication root");
+        let error = PublicationSnapshot::capture(
+            root.path(),
+            &[
+                PathBuf::from("SDK/File.json"),
+                PathBuf::from("sdk/file.json"),
             ],
-            "ordinary mutations and SDK manifests precede the canonical manifest commit"
-        );
-        let error =
-            execute_publication_mutations(destination.path(), &mutations, Some(3), || Ok(()))
-                .expect_err("injected failure must abort publication");
+        )
+        .expect_err("case-equivalent publication identities must fail closed");
         assert!(
             error
                 .to_string()
-                .contains("injected fixture publication failure")
+                .contains("duplicate publication logical identity")
+        );
+        let error = PublicationSnapshot::capture(
+            root.path(),
+            &[PathBuf::from("SDK"), PathBuf::from("sdk/file.json")],
+        )
+        .expect_err("case-equivalent file/directory identities must fail closed");
+        assert!(error.to_string().contains("both a file and a directory"));
+    }
+    #[test]
+    fn create_only_publication_cannot_clobber_a_racing_directory() {
+        let rendered = tempdir().expect("rendered publication");
+        let owned = test_owned_publication_paths();
+        fs::write(rendered.path().join("fixture.json"), b"rendered").expect("write rendered file");
+        write_test_publication_seal(rendered.path());
+        normalize_rendered_modes(rendered.path(), &owned).expect("normalize rendered modes");
+        let snapshot = PublicationSnapshot::capture(rendered.path(), &owned)
+            .expect("capture rendered snapshot");
+        let parent = tempdir().expect("destination parent");
+        let destination = parent.path().join("publication");
+        fs::create_dir(&destination).expect("simulate racing directory reservation");
+        fs::write(destination.join("owner-marker"), b"not ours")
+            .expect("write competing owner marker");
+        let error = publish_create_only_publication(&snapshot, &destination, &owned, || Ok(()))
+            .expect_err("an existing racing directory must not be replaced");
+        assert!(
+            error
+                .to_string()
+                .contains("already exists or cannot be reserved")
         );
         assert_eq!(
-            fs::read(destination.path().join(&alpha)).expect("alpha restored"),
-            b"old alpha"
+            fs::read(destination.join("owner-marker")).expect("competing marker remains"),
+            b"not ours"
         );
-        assert_eq!(
-            fs::read(destination.path().join(&retired)).expect("retired fixture restored"),
-            b"old retired"
-        );
-        assert_eq!(
-            fs::read(destination.path().join(&sdk_manifest)).expect("SDK manifest restored"),
-            b"old SDK manifest"
-        );
-        assert_eq!(
-            fs::read(destination.path().join(&manifest)).expect("manifest preserved"),
-            b"old manifest"
-        );
-        let removal = GuardedRemoval {
-            relative: retired.clone(),
-            preimage: capture_optional_guarded_file(&destination.path().join(&retired))
-                .expect("recapture retired fixture")
-                .expect("restored retired fixture exists"),
-        };
-        let retry =
-            prepare_publication_mutations(rendered.path(), destination.path(), &owned, &[removal])
-                .expect("re-prepare publication after rollback");
-        execute_publication_mutations(destination.path(), &retry, None, || {
-            compare_owned_publication(rendered.path(), destination.path(), &owned)?;
-            if destination.path().join(&retired).exists() {
-                bail!("retired fixture remains after publication");
-            }
-            Ok(())
+        assert!(!destination.join("fixture.json").exists());
+    }
+    #[test]
+    fn create_only_publication_leaves_unsealed_residue_after_failed_validation() {
+        let rendered = tempdir().expect("rendered publication");
+        let owned = test_owned_publication_paths();
+        fs::write(rendered.path().join("fixture.json"), b"rendered").expect("write rendered file");
+        write_test_publication_seal(rendered.path());
+        normalize_rendered_modes(rendered.path(), &owned).expect("normalize rendered modes");
+        let snapshot = PublicationSnapshot::capture(rendered.path(), &owned)
+            .expect("capture rendered snapshot");
+        let parent = tempdir().expect("destination parent");
+        let destination = parent.path().join("publication");
+        let error = publish_create_only_publication(&snapshot, &destination, &owned, || {
+            bail!("injected pre-seal validation failure")
         })
-        .expect("retry publication succeeds");
-        assert_eq!(
-            fs::read(destination.path().join(&alpha)).expect("alpha published"),
-            b"new alpha"
+        .expect_err("validation failure must abort publication");
+        assert!(
+            error
+                .to_string()
+                .contains("rejected reservation was left in place")
         );
-        assert!(!destination.path().join(&retired).exists());
-        assert_eq!(
-            fs::read(destination.path().join(&sdk_manifest)).expect("SDK manifest published"),
-            b"new SDK manifest"
+        assert!(
+            destination.is_dir(),
+            "failure residue must remain reserved instead of risking deletion of a concurrent replacement"
         );
         assert_eq!(
-            fs::read(destination.path().join(&manifest)).expect("manifest published"),
-            b"new manifest"
+            fs::read(destination.join("fixture.json"))
+                .expect("rejected output remains inspectable"),
+            b"rendered"
         );
+        assert!(
+            !destination.join(CANONICAL_MANIFEST).exists(),
+            "failed pre-seal validation must not leave a completion seal"
+        );
+        let _ = require_publication_seal(&destination)
+            .expect_err("failed publication residue must remain unsealed");
+    }
+    #[test]
+    fn publication_without_final_manifest_seal_is_rejected() {
+        let publication = tempdir().expect("partial publication");
+        fs::create_dir_all(publication.path().join(CANONICAL_FIXTURE_DIRECTORY))
+            .expect("create partial publication directory");
+        fs::write(publication.path().join("fixture.json"), b"partial")
+            .expect("write partial fixture");
+        let error = require_publication_seal(publication.path())
+            .expect_err("a partial publication without its final seal must fail closed");
+        assert!(format!("{error:?}").contains("canonical manifest seal is missing"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn tracked_publication_rejects_wrong_modes_hard_links_and_symlinks() {
+        let rendered = tempdir().expect("rendered publication");
+        let tracked = tempdir().expect("tracked publication");
+        let owned = test_owned_publication_paths();
+        fs::write(rendered.path().join("fixture.json"), b"fixture")
+            .expect("write rendered fixture");
+        fs::write(tracked.path().join("fixture.json"), b"fixture").expect("write tracked fixture");
+        write_test_publication_seal(rendered.path());
+        write_test_publication_seal(tracked.path());
+        normalize_rendered_modes(rendered.path(), &owned).expect("normalize rendered modes");
+        normalize_rendered_modes(tracked.path(), &owned).expect("normalize tracked modes");
+        compare_owned_publication(rendered.path(), tracked.path(), &owned)
+            .expect("canonical tracked fixture");
+
+        fs::set_permissions(
+            tracked.path().join("fixture.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("set wrong tracked mode");
+        let error = compare_owned_publication(rendered.path(), tracked.path(), &owned)
+            .expect_err("wrong tracked mode must fail closed");
+        assert!(format!("{error:?}").contains("canonical mode 0644"));
+
+        set_canonical_file_mode(&tracked.path().join("fixture.json"))
+            .expect("restore canonical mode");
+        fs::hard_link(
+            tracked.path().join("fixture.json"),
+            tracked.path().join("fixture-hard-link.json"),
+        )
+        .expect("create tracked hard link");
+        let error = compare_owned_publication(rendered.path(), tracked.path(), &owned)
+            .expect_err("hard-linked tracked fixture must fail closed");
+        assert!(format!("{error:?}").contains("must not be hard-linked"));
+
+        fs::remove_file(tracked.path().join("fixture-hard-link.json"))
+            .expect("remove test hard link");
+        fs::remove_file(tracked.path().join("fixture.json")).expect("remove tracked fixture");
+        std::os::unix::fs::symlink(
+            rendered.path().join("fixture.json"),
+            tracked.path().join("fixture.json"),
+        )
+        .expect("create tracked symlink");
+        let error = compare_owned_publication(rendered.path(), tracked.path(), &owned)
+            .expect_err("symlinked tracked fixture must fail closed");
+        assert!(format!("{error:?}").contains("contains a symlink"));
     }
     #[test]
     fn manifest_validation_rejects_renamed_cloned_payloads() {
@@ -3644,9 +4111,19 @@ mod tests {
         let fixture = raw
             .generate_fixture(&keypair)
             .expect("generate checked signed fixture");
-        let (signed, used) = SignedTransaction::decode_from_slice(&fixture.signed_bytes)
-            .expect("decode checked signed fixture");
-        assert_eq!(used, fixture.signed_bytes.len());
+        assert!(fixture.payload_bytes.starts_with(b"NRT0"));
+        let payload: TransactionPayload = norito::decode_canonical(&fixture.payload_bytes)
+            .expect("decode checked payload fixture frame");
+        assert!(norito::decode_canonical::<TransactionPayload>(&payload.encode()).is_err());
+        assert_eq!(
+            fixture.summary.payload_hash_hex,
+            blake2b256_hex(&fixture.payload_bytes),
+            "payload_hash authenticates the published framed bytes"
+        );
+        let signed = decode_canonical_signed_transaction(&fixture.signed_bytes)
+            .expect("decode checked signed fixture frame");
+        assert!(fixture.signed_bytes.starts_with(b"NRT0"));
+        assert!(norito::decode_canonical::<SignedTransaction>(&signed.encode()).is_err());
         signed
             .verify_signature()
             .expect("checked fixture transaction signature verifies");

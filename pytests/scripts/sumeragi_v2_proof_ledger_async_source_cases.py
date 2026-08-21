@@ -210,6 +210,19 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             errors,
         )
 
+    retired_timeout_action = "Form" + "TC"
+    core_path.write_text(
+        canonical_core
+        + f"\n{retired_timeout_action}(node, roundView) == FALSE\n",
+        encoding="utf-8",
+    )
+    errors = module._progress_witness_source_fidelity_errors(formal_dir)
+    assert_new_contract_error(
+        errors,
+        "retired standalone timeout-certificate action identifier",
+    )
+    core_path.write_text(canonical_core, encoding="utf-8")
+
     core_mutations = (
         (
             "    /\\ decision.qc.context = context\n",
@@ -282,6 +295,24 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             "  ViewDomain = Nat \\/ value < MaxGeneration\n",
             "  TRUE\n",
             "GenerationCanIncrement must equal only",
+        ),
+        (
+            "FiniteGenerations",
+            " 0..MaxGeneration\n",
+            " 0..(MaxGeneration + 1)\n",
+            "FiniteGenerations must equal only",
+        ),
+        (
+            "FiniteGenerationCanIncrement",
+            " value < MaxGeneration\n",
+            " TRUE\n",
+            "FiniteGenerationCanIncrement must equal only",
+        ),
+        (
+            "FiniteModelConfiguration",
+            "  /\\ ViewDomain \\subseteq 0..MaxGeneration\n",
+            "  /\\ TRUE\n",
+            "FiniteModelConfiguration must equal the production configuration",
         ),
         (
             "TypeInvariant",
@@ -411,8 +442,8 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             "DecisionTimeoutFrontierVars must equal only",
         ),
         (
-            "      BY <1>1, <2>13, ResumeTimeoutPreservesDecisionTimeoutFrontier\n",
-            "      BY <1>1, <2>13, CrashPreservesDecisionTimeoutFrontier\n",
+            "      BY <1>1, <2>12, ResumeTimeoutPreservesDecisionTimeoutFrontier\n",
+            "      BY <1>1, <2>12, CrashPreservesDecisionTimeoutFrontier\n",
             "CoreNextPreservesDecisionTimeoutFrontier must retain the complete",
         ),
         (

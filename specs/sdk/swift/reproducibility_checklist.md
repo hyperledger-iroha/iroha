@@ -29,7 +29,7 @@ Create `artifacts/releases/<version>/swift/` and populate it with:
 | `IrohaSwift-tests.log` / `IrohaSwift-build.log` | Captured stdout/stderr from release `swift test` and `swift build` commands that use `Package.resolved` with automatic resolution disabled. |
 | `NoritoBridge.xcframework.zip` | Built via `make bridge-xcframework`; keep the unzipped directory for local debug but only archive the zip. |
 | `NoritoBridge.xcframework.zip.sha256` | `swift package compute-checksum dist/NoritoBridge.xcframework.zip > …/sha256`. |
-| `swift_fixture_state.json` | Copy of `artifacts/swift_fixture_regen_state.json` proving which canonical fixture snapshot shipped. |
+| `swift_fixture_state.json` | Both sealed owner-publication identities and the tracked-tree `norito-rpc-verify` result proving which canonical fixture snapshot shipped. |
 | `mobile_parity.json` / `mobile_ci.json` | Feeds produced by `make swift-ci` or pulled from CI; use them as the source of truth for dashboards. |
 | `swift_status.md` / `swift_status.json` | Output of `ci/swift_status_export.sh` (use env vars below to write into the release directory). |
 | `swift_status.prom` / `swift_status_state.json` | Prometheus textfile + persistent counter state emitted by the exporter (`SWIFT_STATUS_METRICS_PATH`, `SWIFT_STATUS_METRICS_STATE`). |
@@ -49,7 +49,8 @@ Document any deviations (e.g., simulator fallback, manual fixture slot) in a sho
 - One pre-created, canonical, non-symbolic, writable `CARGO_TARGET_DIR` outside
   the Iroha source tree. The root `Cargo.lock` is the only accepted lockfile.
 - Clean workspace (`git status` must be empty) checked out at the release tag.
-- Access to the Norito fixtures source (Android canonical directory or signed archive).
+- Access to the repository's reviewed canonical Norito fixture tree and an
+  absent absolute external path for a create-only owner publication.
 - Optional: Buildkite metadata access if you are mirroring CI smoke artefacts.
 
 Set helper variables for the session:
@@ -75,7 +76,7 @@ export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 | Step | Command(s) | Evidence |
 |------|-----------|----------|
 | 1. Sync release tag | `git fetch --tags`<br>`git checkout <tag>`<br>`git submodule update --init --recursive` | Record `git status --short` in release ticket to prove a clean tree. |
-| 2. Refresh fixtures & parity | `make swift-fixtures`<br>`make swift-fixtures-check` | Copy `artifacts/swift_fixture_regen_state.json` to `${SWIFT_RELEASE_DIR}/swift_fixture_state.json`. Note any fallback cadence env vars you set. |
+| 2. Refresh fixtures & parity | Run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root <absent-absolute-external-root>` at two independent roots; require identical exact path sets, entry types, modes, completion manifests, and every file byte before applying the reviewed identity-relative tracked patch; then run `norito-rpc-verify` and `make swift-fixtures-check` | Record both sealed publication identities and the tracked-tree verification output in `${SWIFT_RELEASE_DIR}/swift_fixture_state.json`. Note any fallback cadence env vars you set. |
 | 3. Run Swift tests | `swift test --package-path IrohaSwift --configuration release --disable-automatic-resolution 2>&1 | tee ${SWIFT_RELEASE_DIR}/IrohaSwift-tests.log` | Log must show `Test Suite 'All tests' passed` and must consume the reviewed `Package.resolved`. |
 | 4. Build release bits | `swift build --package-path IrohaSwift --configuration release --disable-automatic-resolution 2>&1 | tee ${SWIFT_RELEASE_DIR}/IrohaSwift-build.log` | Confirms the reviewed resolution builds deterministically before packaging. |
 | 5. Build NoritoBridge | `make bridge-xcframework` with the exact environment above (wraps `scripts/build_norito_xcframework.sh`) | Copy `dist/NoritoBridge.xcframework.zip` into the release dir and capture `swift package compute-checksum dist/NoritoBridge.xcframework.zip > ${SWIFT_RELEASE_DIR}/NoritoBridge.xcframework.zip.sha256`. |
@@ -89,10 +90,9 @@ export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 
 ### Notes
 
-- `make swift-fixtures` respects the cadence metadata recorded in
-  `artifacts/swift_fixture_regen_state.json`. When consuming a signed archive set
-  `SWIFT_FIXTURE_ARCHIVE=/path/to/archive.tar.gz` so the provenance hash is included in
-  the state file.
+- The owner command is create-only and rejects an existing output root. Use the
+  two-root procedure above before recording both identities in the state file.
+  SDK-specific archives are not fixture-generation inputs.
 - `make bridge-xcframework` invokes the sole archive owner. It authenticates an
   immutable snapshot while holding the shared output lock, recomputes source/tool
   provenance, authenticates Mach-O architectures and native exports, sorts every

@@ -718,17 +718,10 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ),
     (
         "SumeragiV2TimeoutViewProgressProofs",
-        "AsyncSpecAlwaysExcludesRetiredFormTcCandidates",
-    ): (
-        "\\A initialContext: AsyncSpecAt(initialContext) "
-        "=> []TimeoutRetiredFormTcCandidateAbsent"
-    ),
-    (
-        "SumeragiV2TimeoutViewProgressProofs",
-        "AsyncSpecProvidesTimeoutTcFormationReducerKernel",
+        "AsyncSpecProvidesTimeoutAtomicCertificateFormationKernel",
     ): (
         "\\A initialContext: "
-        "TimeoutTcFormationReducerKernelProperty( "
+        "TimeoutAtomicCertificateFormationKernelProperty( "
         "AsyncSpecAt(initialContext))"
     ),
     (
@@ -1235,10 +1228,6 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ TargetPersistDecisionCommand(target, command) "
         "/\\ ExecutePersistDecision(command) => NodeHasDecision(target)'"
     ),
-    (
-        "SumeragiV2TimeoutViewProgressProofs",
-        "RetiredStandaloneFormTcActionIsDisabled",
-    ): "\\A node, roundView: ~FormTC(node, roundView)",
     (
         "SumeragiV2LockedBodyReproposalProgressProofs",
         "RetainedLockRankedCandidateBindsFrozenTargetLeaderEpisode",

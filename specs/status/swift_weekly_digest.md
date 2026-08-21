@@ -53,7 +53,11 @@ python3 scripts/swift_status_export.py \
 
 ## Highlights
 
-- Fixture regen cadence remains on schedule: no diffs since the Apr 24 rotation, so the next `scripts/swift_fixture_regen.sh` fallback window (Apr 27) stays optional unless telemetry overrides expand beyond the single Connect queue probe.
+- Historical Apr 24 parity remained green. The former Apr 27 SDK-local fallback
+  window is superseded: any future refresh uses the canonical owner at two
+  independent absent absolute external roots, applies only the reviewed
+  identity-relative publication, and finishes with `norito-rpc-verify`; Swift
+  only consumes and checks its mirror.
 - StrongBox smoke runs recovered to 95 % success after the Metal warm-up patch; monitoring continues on `ci/xcframework-smoke:strongbox` to ensure the MTTR trend (7.5 h) keeps dropping ahead of the AND8 pilot freeze.
 - IOS3 Connect workshop closed (2026-05-20); decisions/fixtures captured under `specs/sdk/swift/readiness/archive/2026-05/connect/` with notes in `workshop-notes.md` and CI coverage via `ConnectFixtureLoaderTests`. Issues IOS3-CONNECT-001–004 now carry the outcomes + evidence links.
 - Connect AsyncStream/Combine facades remain shipped: `ConnectSession.eventStream`/`eventsPublisher` and `balanceStream`/`balancePublisher` feed `ConnectEvent`/`ConnectBalanceSnapshot` values into SwiftUI + telemetry, with queue diagnostics and NDJSON exports exercised by the new fixture bundle.

@@ -37,6 +37,15 @@ Views == ViewDomain
 Generations == IF ViewDomain = Nat THEN Nat ELSE 0..MaxGeneration
 GenerationCanIncrement(value) ==
   ViewDomain = Nat \/ value < MaxGeneration
+
+(***************************************************************************
+Finite TLC runs substitute the bounded operators below as one projection.
+This keeps the production proof surface unbounded while ensuring that TLC
+never compares an enumerable finite set with the built-in infinite Nat set.
+***************************************************************************)
+FiniteGenerations == 0..MaxGeneration
+
+FiniteGenerationCanIncrement(value) == value < MaxGeneration
 Phases == {"Prepare", "Commit"}
 NoRank == -1
 Ranks == {NoRank} \cup Views
@@ -696,20 +705,6 @@ HistoricalLockedPrepareSource(node, qc) ==
 
 HistoricalLockedPrepareForCommit(node, qc) == FALSE
 
-\* Compatibility aliases for proof modules whose theorem names predate the
-\* source-neutral recovery vocabulary. Recovery remains available, while the
-\* fresh historical-Commit authorization predicate is unconditionally false.
-HistoricalTcLockedPrepareSource(node, qc) ==
-  HistoricalLockedPrepareSource(node, qc)
-
-HistoricalTcLockedPrepareForCommit(node, qc) ==
-  HistoricalLockedPrepareForCommit(node, qc)
-
-\* Current proof modules use the source-neutral name; retain the older
-\* historical spelling only as a compatibility alias.
-LockedPrepareRecoverySource(node, qc) ==
-  HistoricalLockedPrepareSource(node, qc)
-
 (***************************************************************************
 The certified-body wire protocol accepts either the local durable Commit
 Decision or the current durable locked PrepareQC. A locked Prepare has one of
@@ -955,6 +950,32 @@ ModelConfiguration ==
   \* both domains; this is a type correspondence, not a liveness budget.
   /\ \/ ViewDomain = Nat
      \/ ViewDomain \subseteq 0..MaxGeneration
+  /\ EpochLength \in Nat \ {0}
+  /\ MaxEpoch >= ExpectedEpoch(MaxHeight)
+  /\ Len(LeaderStarts) = MaxHeight + 1
+  /\ Len(LaneHashes) = MaxHeight + 1
+  /\ Len(DaHashes) = MaxHeight + 1
+  /\ \A index \in 1..Len(LeaderStarts):
+       LeaderStarts[index] \in 0..(N - 1)
+  /\ ProtocolVersionValue = 4
+  /\ ValidSubjects \subseteq Subjects
+  /\ ValidSubjects # {}
+  /\ Responsive \subseteq Honest
+  /\ \A epoch \in Epochs:
+       /\ DualQuorum(epoch, Responsive \cap VotingRoster(epoch))
+       /\ ExactCertificateQuorum(
+            epoch,
+            CanonicalCertificateSigners(
+              epoch, Responsive \cap VotingRoster(epoch)))
+
+FiniteModelConfiguration ==
+  /\ QuorumConfiguration
+  /\ MaxHeight \in Nat
+  /\ ViewDomain \subseteq Nat
+  /\ 0 \in ViewDomain
+  /\ \A roundView \in ViewDomain: 0..roundView \subseteq ViewDomain
+  /\ MaxGeneration \in Nat
+  /\ ViewDomain \subseteq 0..MaxGeneration
   /\ EpochLength \in Nat \ {0}
   /\ MaxEpoch >= ExpectedEpoch(MaxHeight)
   /\ Len(LeaderStarts) = MaxHeight + 1
@@ -2020,11 +2041,6 @@ DeliverTimeout(envelope) ==
                     pendingTimeout, pendingDecision,
                     signProposals, signVotes, signTimeouts, proposalNetwork,
                     voteNetwork, qcNetwork, tcNetwork, decisions, applied>>
-
-\* Proof-layer compatibility tombstone for the retired standalone TC reducer
-\* action.  Receipt turns form a TC atomically in CompleteTimeoutSignature or
-\* DeliverTimeout; this predicate is always disabled and is not part of Next.
-FormTC(node, roundView) == FALSE
 
 DeliverTC(envelope) ==
   LET received == TcAt(envelope.recipient, envelope.tc)

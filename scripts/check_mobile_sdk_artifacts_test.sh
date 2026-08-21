@@ -554,9 +554,50 @@ bridge_dir = root / "crates/connect_norito_bridge"
     + "\n",
     encoding="utf-8",
 )
+lifecycle_symbols = {
+    "connect_norito_kagemusha_recursive_spend_init_v4",
+    "connect_norito_kagemusha_recursive_spend_append_v4",
+    "connect_norito_kagemusha_recursive_spend_verify_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_v4",
+}
 rust_lines = [
     "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;",
-    *(f'pub unsafe extern "C" fn {symbol}() {{}}' for symbol in c_symbols),
+    *(
+        f'pub unsafe extern "C" fn {symbol}() {{}}'
+        for symbol in c_symbols
+        if symbol not in lifecycle_symbols
+    ),
+    r'''macro_rules! kagemusha_recursive_spend_lifecycle_exports {
+    (
+        resolver = $resolver:path;
+        verify_precheck = $verify_precheck:literal;
+        init $(#[$init_attribute:meta])* => $init_name:ident, $init_worker:literal;
+        append $(#[$append_attribute:meta])* => $append_name:ident, $append_worker:literal;
+        verify $(#[$verify_attribute:meta])* => $verify_name:ident, $verify_worker:literal;
+        redeem $(#[$redeem_attribute:meta])* => $redeem_name:ident, $redeem_worker:literal;
+    ) => {
+        $(#[$init_attribute])*
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $init_name() {}
+        $(#[$append_attribute])*
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $append_name() {}
+        $(#[$verify_attribute])*
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $verify_name() {}
+        $(#[$redeem_attribute])*
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $redeem_name() {}
+    };
+}
+kagemusha_recursive_spend_lifecycle_exports! {
+    resolver = require_kagemusha_recursive_spend_artifact_binding_v4;
+    verify_precheck = true;
+    init => connect_norito_kagemusha_recursive_spend_init_v4, "krv4-init";
+    append => connect_norito_kagemusha_recursive_spend_append_v4, "krv4-append";
+    verify => connect_norito_kagemusha_recursive_spend_verify_v4, "krv4-verify";
+    redeem => connect_norito_kagemusha_recursive_spend_redeem_v4, "krv4-redeem";
+}''',
 ]
 for namespace in (
     "org_hyperledger_iroha_sdk_offline",
@@ -927,8 +968,17 @@ feature = "kagemusha-candidate-evidence-lab"
 marker = "KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
 marker_symbol = "CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
 symbols = shell_array("KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS")
+jni_symbols = shell_array("KAGEMUSHA_CANDIDATE_LAB_JNI_SYMBOLS")
+generated_lifecycle = {
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4",
+}
 declarations = []
 for symbol in symbols:
+    if symbol in generated_lifecycle:
+        continue
     declarations.extend(
         [
             f'#[cfg(feature = "{feature}")]',
@@ -939,6 +989,16 @@ for symbol in symbols:
     )
 declarations.extend(
     [
+        f'#[cfg(feature = "{feature}")]',
+        "kagemusha_recursive_spend_lifecycle_exports! {",
+        "    resolver = require_kagemusha_candidate_evidence_lab_artifact_binding_v4;",
+        "    verify_precheck = false;",
+        "    init => connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4, \"krv4-lab-init\";",
+        "    append => connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4, \"krv4-lab-app\";",
+        "    verify => connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4, \"krv4-lab-ver\";",
+        "    redeem => connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4, \"krv4-lab-red\";",
+        "}",
+        "",
         f'#[cfg(feature = "{feature}")]',
         "pub const KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_MARKER_V2: &str =",
         f'    "{marker}";',
@@ -959,11 +1019,49 @@ declarations.extend(
         '        target_os = "windows"',
         "    )",
         "))]",
-        "#[allow(clippy::missing_safety_doc)]",
-        "#[unsafe(no_mangle)]",
-        'pub unsafe extern "system" fn '
-        "Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_"
-        "KagemushaCandidateLabNative_nativeBridgeAbiVersion() {}",
+        "#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]",
+        "mod kagemusha_candidate_lab_jni {",
+        "    macro_rules! candidate_lab_jni_export {",
+        "        ($name:ident() -> $return_type:ty $body:block) => {",
+        "            #[unsafe(no_mangle)]",
+        '            pub unsafe extern "system" fn $name() -> $return_type $body',
+        "        };",
+        "    }",
+        "    macro_rules! candidate_lab_jni_forwarders {",
+        "        ($($name:ident() -> $return_type:ty => $delegate:path;)*) => {$(",
+        "            #[unsafe(no_mangle)]",
+        '            pub unsafe extern "system" fn $name() -> $return_type { $delegate() }',
+        "        )*};",
+        "    }",
+    ]
+)
+for name in jni_symbols[:2]:
+    declarations.extend(
+        [
+            "    candidate_lab_jni_export! {",
+            f"        {name}() -> () {{}}",
+            "    }",
+        ]
+    )
+declarations.append("    candidate_lab_jni_forwarders! {")
+declarations.extend(
+    f"        {name}() -> () => candidate_lab_delegate;"
+    for name in jni_symbols[2:]
+)
+declarations.extend(
+    [
+        "    }",
+        "}",
+        "#[cfg(all(",
+        f'    feature = "{feature}",',
+        "    any(",
+        '        target_os = "android",',
+        '        target_os = "linux",',
+        '        target_os = "macos",',
+        '        target_os = "windows"',
+        "    )",
+        "))]",
+        "pub use kagemusha_candidate_lab_jni::*;",
         "",
     ]
 )
@@ -1545,10 +1643,135 @@ const TOPUP_SHIELD_CIRCUIT_ID: &str = "topup-shield-v3";
 RUST
 run_expect_pass "$sentinel_only_source"
 
+balanced_lexical_noise="$TMP_DIR/balanced-lexical-noise"
+make_fixture "$balanced_lexical_noise"
+cat >>"$balanced_lexical_noise/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
+const MACRO_DECOY: &str = r###"
+kagemusha_recursive_spend_lifecycle_exports! {
+    verify => connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4,
+}
+candidate_lab_jni_export! {
+    Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeRogueV4() {}
+}
+} { /* not Rust structure */
+"###;
+/* outer { /* nested } */ still comment } */
+const CODE_BRACES: (char, char, u8, u8) = ('{', '}', b'{', b'}');
+RUST
+run_expect_pass "$balanced_lexical_noise"
+
+current_macro_generated_source="$TMP_DIR/current-macro-generated-source"
+make_fixture "$current_macro_generated_source"
+cp "$SCRIPT_DIR/../crates/connect_norito_bridge/src/lib.rs" \
+  "$current_macro_generated_source/crates/connect_norito_bridge/src/lib.rs"
+cp "$SCRIPT_DIR/../crates/connect_norito_bridge/Cargo.toml" \
+  "$current_macro_generated_source/crates/connect_norito_bridge/Cargo.toml"
+cp "$SCRIPT_DIR/../crates/connect_norito_bridge/include/connect_norito_bridge.h" \
+  "$current_macro_generated_source/crates/connect_norito_bridge/include/connect_norito_bridge.h"
+mkdir -p "$current_macro_generated_source/crates/iroha_data_model/src/privacy"
+cp "$SCRIPT_DIR/../crates/iroha_data_model/src/privacy/protocol.rs" \
+  "$current_macro_generated_source/crates/iroha_data_model/src/privacy/protocol.rs"
+"$TEST_PYTHON_BINARY" -I -S -B - "$current_macro_generated_source" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import sys
+
+root = Path(sys.argv[1])
+header = root / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+header_bytes = header.read_bytes()
+xcframework = root / "dist/NoritoBridge.xcframework"
+for slice_name in (
+    "ios-arm64",
+    "ios-arm64_x86_64-simulator",
+    "macos-arm64_x86_64",
+):
+    (xcframework / slice_name / "Headers/connect_norito_bridge.h").write_bytes(
+        header_bytes
+    )
+manifest_path = xcframework / "NoritoBridge.artifacts.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+manifest["bridge_header_sha256"] = hashlib.sha256(header_bytes).hexdigest()
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+PY
+run_expect_pass "$current_macro_generated_source" --apple-only
+
 feature_gated_candidate_lab_source="$TMP_DIR/feature-gated-candidate-lab-source"
 make_fixture "$feature_gated_candidate_lab_source"
 append_candidate_lab_source "$feature_gated_candidate_lab_source"
 run_expect_pass "$feature_gated_candidate_lab_source"
+
+missing_generated_production_lifecycle="$TMP_DIR/missing-generated-production-lifecycle"
+make_fixture "$missing_generated_production_lifecycle"
+"$TEST_PYTHON_BINARY" -I -S -B - "$missing_generated_production_lifecycle" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
+text = source.read_text(encoding="utf-8")
+line = '    verify => connect_norito_kagemusha_recursive_spend_verify_v4, "krv4-verify";\n'
+if text.count(line) != 1:
+    raise SystemExit("missing exact production lifecycle fixture")
+source.write_text(text.replace(line, "", 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$missing_generated_production_lifecycle" \
+  "Kagemusha lifecycle invocation is not exact"
+
+dual_generated_direct_lifecycle="$TMP_DIR/dual-generated-direct-lifecycle"
+make_fixture "$dual_generated_direct_lifecycle"
+cat >>"$dual_generated_direct_lifecycle/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v4() {}
+RUST
+run_expect_fail \
+  "$dual_generated_direct_lifecycle" \
+  "Kagemusha shipping C export source identities are not single-occurrence"
+
+unguarded_generated_candidate_lifecycle="$TMP_DIR/unguarded-generated-candidate-lifecycle"
+cp -R "$feature_gated_candidate_lab_source" "$unguarded_generated_candidate_lifecycle"
+"$TEST_PYTHON_BINARY" -I -S -B - "$unguarded_generated_candidate_lifecycle" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
+text = source.read_text(encoding="utf-8")
+old = (
+    '#[cfg(feature = "kagemusha-candidate-evidence-lab")]\n'
+    "kagemusha_recursive_spend_lifecycle_exports! {\n"
+    "    resolver = require_kagemusha_candidate_evidence_lab_artifact_binding_v4;"
+)
+replacement = old.split("\n", 1)[1]
+if text.count(old) != 1:
+    raise SystemExit("missing exact candidate lifecycle guard fixture")
+source.write_text(text.replace(old, replacement, 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$unguarded_generated_candidate_lifecycle" \
+  "candidate-lab lifecycle invocation lacks its exact feature guard"
+
+drifted_lifecycle_generator="$TMP_DIR/drifted-lifecycle-generator"
+make_fixture "$drifted_lifecycle_generator"
+"$TEST_PYTHON_BINARY" -I -S -B - "$drifted_lifecycle_generator" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
+text = source.read_text(encoding="utf-8")
+old = '''        $(#[$verify_attribute])*
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $verify_name() {}
+'''
+replacement = '''        $(#[$verify_attribute])*
+        pub unsafe extern "C" fn $verify_name() {}
+'''
+if text.count(old) != 1:
+    raise SystemExit("missing exact generated verify export fixture")
+source.write_text(text.replace(old, replacement, 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$drifted_lifecycle_generator" \
+  "Kagemusha lifecycle generator has a non-canonical no-mangle verify export"
 
 candidate_lab_source_without_export="$TMP_DIR/candidate-lab-source-without-export"
 make_fixture "$candidate_lab_source_without_export"
@@ -1801,14 +2024,96 @@ guard = '''#[cfg(all(
         target_os = "windows"
     )
 ))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+mod kagemusha_candidate_lab_jni {
 '''
 if text.count(guard) != 1:
     raise SystemExit("missing exact candidate-lab JNI guard fixture")
-source.write_text(text.replace(guard, "", 1), encoding="utf-8")
+replacement = '''#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+mod kagemusha_candidate_lab_jni {
+'''
+source.write_text(text.replace(guard, replacement, 1), encoding="utf-8")
 PY
 run_expect_fail \
   "$unguarded_candidate_lab_jni" \
-  "candidate-lab JNI export lacks its exact conjunctive feature guard"
+  "candidate-lab JNI module lacks its exact conjunctive feature guard"
+
+missing_candidate_lab_jni="$TMP_DIR/missing-candidate-lab-jni"
+cp -R "$feature_gated_candidate_lab_source" "$missing_candidate_lab_jni"
+"$TEST_PYTHON_BINARY" -I -S -B - "$missing_candidate_lab_jni" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
+text = source.read_text(encoding="utf-8")
+line = (
+    "        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_"
+    "KagemushaCandidateLabNative_nativeRedeemV4() -> () => candidate_lab_delegate;\n"
+)
+if text.count(line) != 1:
+    raise SystemExit("missing exact forwarded JNI fixture")
+source.write_text(text.replace(line, "", 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$missing_candidate_lab_jni" \
+  "candidate-lab forwarded JNI invocation inventory is not exact"
+
+rogue_candidate_lab_jni="$TMP_DIR/rogue-candidate-lab-jni"
+cp -R "$feature_gated_candidate_lab_source" "$rogue_candidate_lab_jni"
+"$TEST_PYTHON_BINARY" -I -S -B - "$rogue_candidate_lab_jni" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
+text = source.read_text(encoding="utf-8")
+name = (
+    "Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_"
+    "KagemushaCandidateLabNative_nativeRedeemV4"
+)
+rogue = name.replace("nativeRedeemV4", "nativeRogueV4")
+if text.count(name) != 1:
+    raise SystemExit("missing exact JNI identity fixture")
+source.write_text(text.replace(name, rogue, 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$rogue_candidate_lab_jni" \
+  "candidate-lab forwarded JNI invocation inventory is not exact"
+
+escaped_candidate_lab_jni="$TMP_DIR/escaped-candidate-lab-jni"
+cp -R "$feature_gated_candidate_lab_source" "$escaped_candidate_lab_jni"
+cat >>"$escaped_candidate_lab_jni/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
+fn escaped_candidate_lab_jni_identity() {
+    Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBridgeAbiVersion();
+}
+RUST
+run_expect_fail \
+  "$escaped_candidate_lab_jni" \
+  "candidate-lab JNI identity appears outside its canonical macro invocation"
+
+drifted_candidate_lab_jni_generator="$TMP_DIR/drifted-candidate-lab-jni-generator"
+cp -R "$feature_gated_candidate_lab_source" "$drifted_candidate_lab_jni_generator"
+"$TEST_PYTHON_BINARY" -I -S -B - "$drifted_candidate_lab_jni_generator" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
+text = source.read_text(encoding="utf-8")
+old = '''    macro_rules! candidate_lab_jni_forwarders {
+        ($($name:ident() -> $return_type:ty => $delegate:path;)*) => {$(
+            #[unsafe(no_mangle)]
+            pub unsafe extern "system" fn $name() -> $return_type { $delegate() }
+'''
+replacement = '''    macro_rules! candidate_lab_jni_forwarders {
+        ($($name:ident() -> $return_type:ty => $delegate:path;)*) => {$(
+            pub unsafe extern "system" fn $name() -> $return_type { $delegate() }
+'''
+if text.count(old) != 1:
+    raise SystemExit("missing exact candidate JNI generator fixture")
+source.write_text(text.replace(old, replacement, 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$drifted_candidate_lab_jni_generator" \
+  "candidate-lab JNI generator candidate_lab_jni_forwarders does not emit one exact no-mangle export"
 
 retired_header_surface="$TMP_DIR/retired-header-surface"
 make_fixture "$retired_header_surface"

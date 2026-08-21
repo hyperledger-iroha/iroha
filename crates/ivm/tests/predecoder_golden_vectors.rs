@@ -32,6 +32,7 @@ fn build_wide_code() -> Vec<u8> {
 }
 #[test]
 fn decode_stream_matches_expected_words_and_lengths() {
+    let _lease = crate::predecode_test_support::exclusive();
     let code = build_wide_code();
     let decoded = IvmCache::decode_stream(&code).expect("decode ok");
     assert_eq!(decoded.len(), 6);
@@ -50,6 +51,7 @@ fn decode_stream_matches_expected_words_and_lengths() {
 }
 #[test]
 fn decode_stream_preserves_indexed_literal_and_compact_transfer_words() {
+    let _lease = crate::predecode_test_support::exclusive();
     let expected = [
         encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 12, 0x3456),
         encoding::wide::encode_literal(instruction::wide::memory::LDI64, 13, 0xabcd),
@@ -70,6 +72,7 @@ fn decode_stream_preserves_indexed_literal_and_compact_transfer_words() {
 /// Decoding should ignore metadata fields that are orthogonal to the byte stream.
 #[test]
 fn decode_artifact_invariant_across_metadata_fields() {
+    let _lease = crate::predecode_test_support::exclusive();
     let code = build_wide_code();
     // Baseline header
     let base = ProgramMetadata {
@@ -120,6 +123,7 @@ fn decode_artifact_invariant_across_metadata_fields() {
 }
 #[test]
 fn decode_artifact_rejects_legacy_or_unknown_minor_version() {
+    let _lease = crate::predecode_test_support::exclusive();
     let code = build_wide_code();
     let base = ProgramMetadata {
         version_major: 1,

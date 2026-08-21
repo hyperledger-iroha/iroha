@@ -1,6 +1,7 @@
 //! Ensure pre-decode enforces a hard per-entry instruction cap.
 #[test]
 fn predecode_max_ops_cap() {
+    let _lease = crate::predecode_test_support::exclusive();
     // Set a very low cap to trigger the guard quickly.
     let baseline = ivm::ivm_cache::cache_limits();
     let _guard = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {

@@ -1329,6 +1329,35 @@ counterexample regression, not deductive discharge.
 
 ### Evidence and release gate
 
+#### Formal-only replay V1
+
+The first-release replay corridor has one mode, `formal-only`, and one receipt
+schema, `iroha-sumeragi-v2-replay-receipt-v1`. Its source-derived event graph is
+`standalone_sany -> raw_tlc -> normalizer`; no reducer or integration receipt
+mode is retained. The canonical two-file TLAPM projection is consumed directly
+as sealed regular files, without runtime compatibility symlinks.
+
+There is no separate timeout-certificate formation action or compatibility
+tombstone. Certificate formation is atomic with the local receipt-admitting
+turn.
+
+The final-source run on 2026-08-21 passed with SANY 0, raw TLC 12, normalizer
+0, wrapper 0, exactly 101 tool states and 100 normalized actions, empty
+separate stderr, and byte equality with the tracked TSV. Its receipt SHA-256 is
+`c57126bcd5578358c93fc70cad2d1f2c411a10b7c6d85d936d72628cfd430239`;
+the raw TLC SHA-256 is
+`2f7f2ad7e7f779b84b7f27335ed63ce9ac25a47c57e03ad589179dc473e01df6`;
+and the normalized SHA-256 is
+`32b3a409c731cb7c9619d1f8d6ee74e8b6bce666766dae557c04de7b3394b748`.
+The independent receipt checker exited 0.
+
+The existing project verifier does not sign the canonical receipt and its
+execution artifacts. The receipt is therefore `unsigned-diagnostic`,
+release-required checking exits 2, and no formal registry or proof status is
+promoted from it. The complete proof-ledger checker has zero reset-scoped
+errors but still exits 1 on nine unchanged `fc09b635` inventory/hash debts
+outside this reset.
+
 The operator-facing conditional guarantee, liveness snapshot, watchdog
 classifications, and executable PR/release commands are documented in
 [`../../source/sumeragi_v2_liveness.md`](../../source/sumeragi_v2_liveness.md).
@@ -1807,10 +1836,10 @@ run, the complete clean source-sealed PR corridor, the source-bound chaos run,
 and aggregate receipt publication remain pending.
 
 The formal mutation gate also runs one source-sealed post-Decision model with
-nine configurations. The repaired trace completes with status 0. Eight
-single-seam mutants—one for each of `BeginTimeout`, `ResumeTimeout`, `FormTC`,
-and `BeginInstallTC`, two receive-pool admission branches, and two
-causal-successor branches—must fail at their named invariant with status 12.
+ten configurations. The repaired trace completes with status 0. Nine
+single-seam mutants cover `BeginTimeout`, `ResumeTimeout`, the atomic local
+receipt turn, `BeginInstallTC`, two receive-pool admission branches, and three
+causal-successor branches; each must fail at its named invariant with status 12.
 This finite matrix binds the executable model to the reducer/source-fidelity
 contract. The separate strict action induction discharges the post-Decision
 timeout frontier. The independently checked durable Decision module discharges
@@ -2098,16 +2127,13 @@ accepts a bare tick, whereas the productive claim rejects it until a concrete
 deadline, evidence, rank, or decision repair exists. These bounded checks do
 not discharge the productive release obligation.
 
-The model-trace replayer drives the exact production reducer API. For the
-preceding proposal-origin source, the isolated source-shared harness passed
-118/118 reducer/WAL/refinement tests, all 8 model-trace replay tests, and all 11
-named fast-network simulations. The current harness inventories 137 runnable
-reducer tests and requires a fresh source-sealed run. A 2026-07-21 100,000-height chaos run completed
-the permissioned and NPoS 50,000-height prefixes, 400,000 validator
-finalizations, and zero failures in 91.29 seconds. These are unsealed
-implementation results, not deductive evidence. The checked-in pinned Verus
-receipt predates the proposal-origin changes and was not rerun for this source;
-it must not be cited as discharge of the changed obligations.
+The final-source replay above is formal-only. Earlier reducer-harness,
+fast-network, chaos, and integration results are not current replay evidence
+and are not promoted here. The checked-in pinned Verus receipt predates the
+changed source and was not rerun; it must not be cited as discharge of the
+changed obligations. A reducer or integration result requires a separately
+executed, source-bound corridor rather than a compatibility branch in the V1
+receipt.
 
 ### Trusted computing boundary
 

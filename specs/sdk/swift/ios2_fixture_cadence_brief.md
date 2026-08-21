@@ -52,8 +52,8 @@ rotate fixtures or report on parity health.
 
 | Mode | Trigger | Owner(s) | Required actions | Evidence & metrics |
 |------|---------|----------|------------------|--------------------|
-| Scheduled slot | Wednesday 17:00 UTC slot reached; no pending incident | Alternating operators (odd weeks Android Foundations TL, even weeks Swift Lead) | Run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures`, `python3 scripts/check_swift_fixtures.py`, and `make swift-ci`. | Owner-command diff is complete; `swift_parity_success_total` increments; dashboards remain green. |
-| Event-driven regen | Governance-approved Norito change or urgent ABI fix (outside scheduled slot) | Change author (Rust maintainer) + Swift Lead | Run the same locked owner command, then the Swift descriptor check and `make swift-ci`. Post intent/result in `#sdk-parity`. | Evidence records trigger=`event`; `swift_parity_regen_hours_since_success` resets; `swift_parity_outstanding_diffs` drops to zero. |
+| Scheduled slot | Wednesday 17:00 UTC slot reached; no pending incident | Alternating operators (odd weeks Android Foundations TL, even weeks Swift Lead) | Run the two-root owner procedure below, `python3 scripts/check_swift_fixtures.py`, and `make swift-ci`. | Owner-command diff is complete; `swift_parity_success_total` increments; dashboards remain green. |
+| Event-driven regen | Governance-approved Norito change or urgent ABI fix (outside scheduled slot) | Change author (Rust maintainer) + Swift Lead | Run the same two-root owner procedure, then the Swift descriptor check and `make swift-ci`. Post intent/result in `#sdk-parity`. | Evidence records trigger=`event`; `swift_parity_regen_hours_since_success` resets; `swift_parity_outstanding_diffs` drops to zero. |
 | Governance fallback | Governance vote slips past 7 days or scheduled slot collides with change freeze | Swift Lead (primary) + Release Eng (backup) | Follow the manual fallback procedure below; run the unchanged locked owner command and record `fallback-mon-thu-utc` in cadence evidence. | `swift_parity_failure_total` remains unchanged and dashboards annotate the fallback window without altering fixture bytes. |
 | Reproducible replay | An earlier canonical revision must be reproduced | Norito tooling maintainer + Swift Lead | Check out the authenticated revision, use its lockfile, and run the same locked owner command. Do not import an SDK archive or regenerate from a mirror. | Canonical and mirror hashes match the authenticated revision; reproducibility checklist (`specs/sdk/swift/reproducibility_checklist.md`) records the revision. |
 
@@ -70,10 +70,19 @@ governance that the automated rotation is paused.
    schedule, not the fixture algorithm:
 
    ```bash
-   cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
    python3 scripts/check_swift_fixtures.py
    make swift-ci
    ```
+
+   Both external output roots must be absent. Before any tracked update,
+   require identical exact path sets, entry types, modes, completion manifests,
+   and every file byte, then apply the reviewed identity-relative patch from
+   either sealed root before running the verifier and consumer checks.
 
    Record `fallback-mon-thu-utc`, the operator, and the ticket in the cadence
    evidence so dashboards and `scripts/swift_status_export.py` flag the slot.

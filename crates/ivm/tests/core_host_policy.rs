@@ -1139,11 +1139,16 @@ fn core_host_enforces_fixture_snapshot_fields() {
         norito::decode_from_bytes(axt_golden::AXT_POLICY).expect("decode snapshot");
     let model_handle: model::AssetHandle =
         norito::decode_from_bytes(axt_golden::AXT_HANDLE).expect("decode handle");
-    let base_handle = convert_handle(&model_handle);
     let policy_entry = snapshot
         .entries
         .first()
         .expect("snapshot contains policy entry");
+    // The handle and policy vectors are independently canonical serialization
+    // fixtures, not a pre-authorized pair. Bind the positive policy case to the
+    // snapshot's active counters before exercising field-specific rejection.
+    let mut base_handle = convert_handle(&model_handle);
+    base_handle.handle_era = policy_entry.policy.active_handle_era;
+    base_handle.sub_nonce = policy_entry.policy.next_handle_counter;
     let mut base_intent = fixture_intent(
         descriptor
             .dsids

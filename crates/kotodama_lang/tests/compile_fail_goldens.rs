@@ -120,6 +120,7 @@ fn trigger_metadata_contract(value: &str) -> String {
     format!(
         r#"
         seiyaku TriggerMetadata {{
+            const string dynamic = "{{}}";
             kotoage fn run() authorize("RunTrigger") {{}}
             trigger wake -> run {{
                 on time pre_commit;

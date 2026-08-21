@@ -5358,7 +5358,8 @@ mod tests {
             ("ledger::trigger::create", "ledger::trigger::register"),
             ("ledger::trigger::remove", "ledger::trigger::unregister"),
         ] {
-            let text = format!("fn main(Json value) {{ {retired}(value); }}");
+            let text =
+                format!("module RetiredTrigger {{ fn main(Json value) {{ {retired}(value); }} }}");
             let source = SourceFile::new(SourceId(7), "retired-trigger.ko", &text);
             let bundle = parse_source(&source, FrontendBudget::v1())
                 .expect_err("retired trigger alias must fail closed");

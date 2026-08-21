@@ -274,10 +274,10 @@ THEOREM DecisionNodeExcludesLockedPrepareRecoveryAuthority ==
   \A node, decisionQc, prepareQc:
     /\ [node |-> node, qc |-> decisionQc] \in decisions
     /\ decisionQc.context = context
-    /\ LockedPrepareRecoverySource(node, prepareQc)
+    /\ HistoricalLockedPrepareSource(node, prepareQc)
     => FALSE
 BY Isa
-   DEF LockedPrepareRecoverySource, NoDecisionForNode
+   DEF HistoricalLockedPrepareSource, NoDecisionForNode
 
 THEOREM ExactDecisionCertifiedRequestBindsHashAndArchiveRoute ==
   \A node, qc, request:
@@ -434,7 +434,7 @@ BY ExpandENABLED, IsaT(300)
        ExecuteDecisionFetch, ExecuteApply,
        CertifiedRecoveryFetchFrontier, DecisionFetchFrontier,
        DecisionCertifiedBodyRecoveryAuthority,
-       CertifiedBodyRecoveryAuthority, LockedPrepareRecoverySource,
+       CertifiedBodyRecoveryAuthority, HistoricalLockedPrepareSource,
        FetchCertifiedBody, AcceptCertifiedResponseCapability,
        InstallCertifiedBodyEffect,
        StoreBody, ValidateDecidedBody, ApplyDecision,
@@ -630,7 +630,7 @@ BY DecisionRecoveryCertificateHasRemoteBodySource,
        CertifiedRequestOutbox, CertifiedRecoveryFetchFrontier,
        DecisionFetchFrontier,
        DecisionCertifiedBodyRecoveryAuthority,
-       CertifiedBodyRecoveryAuthority, LockedPrepareRecoverySource,
+       CertifiedBodyRecoveryAuthority, HistoricalLockedPrepareSource,
        CommandMatches, AsyncAuxVars, vars
 
 THEOREM ExactDecisionFetchHeldBodySchedulesValidation ==
@@ -678,7 +678,7 @@ BY DecisionNodeExcludesLockedPrepareRecoveryAuthority, IsaT(240)
        FetchCertifiedBody, AcceptCertifiedResponseCapability,
        InstallCertifiedBodyEffect, CertifiedBodyRecoveryAuthority,
        DecisionCertifiedBodyRecoveryAuthority,
-       LockedPrepareRecoverySource, CommandMatches,
+       HistoricalLockedPrepareSource, CommandMatches,
        CommandSuccessors, CausalCandidate, AsyncCandidateFrom,
        AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
        AsyncCandidateSuccessorSemanticPhase,
@@ -1012,7 +1012,7 @@ BY DecisionNodeExcludesLockedPrepareRecoveryAuthority,
        AsyncCertifiedResponseAuthProjection,
        CertifiedRecoveryFetchFrontier,
        DecisionCertifiedBodyRecoveryAuthority,
-       CertifiedBodyRecoveryAuthority, LockedPrepareRecoverySource,
+       CertifiedBodyRecoveryAuthority, HistoricalLockedPrepareSource,
        CertifiedResponseCandidate, AsyncCandidate,
        AsyncCandidateWithIdentity,
        EnqueueCandidate, CandidateScheduled,

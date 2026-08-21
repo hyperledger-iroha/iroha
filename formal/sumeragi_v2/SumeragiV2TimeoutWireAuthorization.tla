@@ -55,8 +55,6 @@ TimeoutWireTimeoutStableStep ==
        highestPrepare \in PrepareQcOptionSet:
        ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
   \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
-  \/ \E node \in ValidatorIds, roundView \in Views:
-       FormTC(node, roundView)
   \/ \E envelope \in tcNetwork: DeliverTC(envelope)
   \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
        BeginInstallTC(node, tc)
@@ -164,7 +162,7 @@ THEOREM TimeoutStableSuppliesCoreAuthorizationFrame ==
 BY IsaT(60)
    DEF TimeoutViewFrontierTimeoutStableStep, CoreAuthorizationFrame,
        BeginTimeout, PersistTimeout, CompleteTimeoutSignature,
-       ByzantineBroadcastTimeout, DeliverTimeout, FormTC, DeliverTC,
+       ByzantineBroadcastTimeout, DeliverTimeout, DeliverTC,
        BeginInstallTC
 
 THEOREM RecoveryStableSuppliesCoreAuthorizationFrame ==
@@ -398,7 +396,7 @@ THEOREM TimeoutStableStepLeavesTimeoutWireSets ==
 BY IsaT(60)
    DEF TimeoutWireTimeoutStableStep,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
-       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC
+       DeliverTimeout, DeliverTC, BeginInstallTC
 
 THEOREM FrontierStableStepLeavesTimeoutWireSets ==
   TimeoutWireFrontierStableStep

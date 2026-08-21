@@ -66,7 +66,7 @@ Before distributing artefacts outside engineering:
 1. **Lint/type/tests:** Run `make python-checks` (wraps `ruff`, `mypy`, `pytest`,
    and fixture parity). Archive the console output for the release bundle.
 2. **Fixture parity:** `scripts/check_python_fixtures.py --json-out artifacts/python/fixture_status.json`.
-   Keep the rotation metadata (`scripts/python_fixture_regen.sh`) alongside the JSON.
+   Keep the sealed create-only owner-publication identity alongside the JSON.
 3. **Release smoke:** Execute `make python-release-smoke`, which delegates to
    `python/iroha_python/scripts/release_smoke.sh`. Preserve the console
    transcript and use `PYTHON_RELEASE_SMOKE_KEEP_DIST=1` when the protected

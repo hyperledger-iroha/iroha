@@ -97,8 +97,6 @@ TimeoutViewFrontierTimeoutStableStep ==
        highestPrepare \in PrepareQcOptionSet:
        ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
   \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
-  \/ \E node \in ValidatorIds, roundView \in Views:
-       FormTC(node, roundView)
   \/ \E envelope \in tcNetwork: DeliverTC(envelope)
   \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
        BeginInstallTC(node, tc)
@@ -514,7 +512,7 @@ THEOREM TimeoutStableStepLeavesTimeoutViewFrontier ==
 BY IsaT(60)
    DEF TimeoutViewFrontierTimeoutStableStep,
        BeginTimeout, PersistTimeout, CompleteTimeoutSignature,
-       ByzantineBroadcastTimeout, DeliverTimeout, FormTC, DeliverTC,
+       ByzantineBroadcastTimeout, DeliverTimeout, DeliverTC,
        BeginInstallTC
 
 THEOREM RecoveryStableStepLeavesTimeoutViewFrontier ==

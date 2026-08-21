@@ -10,6 +10,7 @@ fn simple_prog(nops: usize) -> Vec<u8> {
 }
 #[test]
 fn predecode_counters_increase_via_vm_run() {
+    let _lease = crate::predecode_test_support::exclusive();
     let prog = simple_prog(32);
     // First run on fresh VM
     let mut vm1 = IVM::new(1000);

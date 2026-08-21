@@ -1435,10 +1435,10 @@ bounded TLC mutation evidence neither proves the unbounded runtime nor promotes
 a deductive proof-ledger obligation.
 
 A separate source-sealed post-Decision timeout/TC matrix contains one model
-and nine configurations. The repaired deterministic trace completes with TLC
-status 0; eight single-seam mutants cover `BeginTimeout`, `ResumeTimeout`,
-`FormTC`, `BeginInstallTC`, both receive-pool branches, and both
-causal-successor branches, returning status 12 at their exact named
+and ten configurations. The repaired deterministic trace completes with TLC
+status 0; nine single-seam mutants cover `BeginTimeout`, `ResumeTimeout`, the
+atomic local receipt turn, `BeginInstallTC`, both receive-pool branches, and
+all three causal-successor branches, returning status 12 at their exact named
 invariants. The source proof exposes `DecisionTimeoutFrontierInvariant` and
 exact node/generation-bound `DecisionRecoveryAuthority`. The full Core action
 induction, including crash and `ResumeTimeout`, brackets every Core-stuttering

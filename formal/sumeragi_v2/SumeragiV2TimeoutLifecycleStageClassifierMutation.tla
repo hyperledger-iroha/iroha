@@ -23,7 +23,7 @@ ClassifierModes == {"CurrentKind", "CausalOriginPhase"}
 
 TimeoutLifecycleKinds ==
   {"BeginTimeout", "PersistTimeout", "SignTimeout",
-   "DeliverTimeout", "FormTC", "DeliverTC",
+   "DeliverTimeout", "DeliverTC",
    "BeginInstallTC", "PersistInstallTC"}
 
 ProposalSuccessorKinds == {"AssembleBody", "FetchBody", "SignVote"}

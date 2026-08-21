@@ -6408,10 +6408,6 @@ BY Isa
        ExecutePersistDecision, CommandMatches,
        PersistDecision, NodeHasDecision
 
-THEOREM RetiredStandaloneFormTcActionIsDisabled ==
-  \A node, roundView: ~FormTC(node, roundView)
-BY DEF FormTC
-
 (***************************************************************************
 Monotone timeout-rank substrate.
 
@@ -6992,25 +6988,24 @@ BY Isa, PTL
        TimeoutCertificateInstallOwner,
        TcFrontier
 
-TimeoutTcFormationReducerKernelProperty(specification) ==
+TimeoutAtomicCertificateFormationKernelProperty(specification) ==
   specification
     => \A target \in AsyncCurrentResponsiveVoters,
           roundView \in Views:
-         TimeoutFormTcCandidateOwned(target, roundView)
-           ~> (TimeoutDirectGoal(target, roundView)
-                \/ TcFrontier(target, roundView))
+         TimeoutReceiptQuorumInstallAuthority(target, roundView)
+           ~> TimeoutDirectGoal(target, roundView)
 
 THEOREM TimeoutTcPhysicalKernelsDischargeFormationFrontier ==
   \A specification:
     /\ TimeoutTcPhysicalKernelProperties(specification)
-    /\ TimeoutTcFormationReducerKernelProperty(specification)
+    /\ TimeoutAtomicCertificateFormationKernelProperty(specification)
     => (specification
           => \A target \in AsyncCurrentResponsiveVoters,
                 roundView \in Views:
                TimeoutCertificateFormationFrontier(target, roundView)
                  ~> TimeoutDirectGoal(target, roundView))
 BY TimeoutTcPhysicalKernelsDischargeFrontier, PTL
-   DEF TimeoutTcFormationReducerKernelProperty,
+   DEF TimeoutAtomicCertificateFormationKernelProperty,
        TimeoutCertificateFormationFrontier,
        TimeoutDirectGoal
 
@@ -7364,7 +7359,7 @@ BY TimeoutDecisionDirectPhysicalKernelsDischargeDelivery,
 
 TimeoutCertificateDecisionPhysicalKernelProperties(specification) ==
   /\ TimeoutTcPhysicalKernelProperties(specification)
-  /\ TimeoutTcFormationReducerKernelProperty(specification)
+  /\ TimeoutAtomicCertificateFormationKernelProperty(specification)
   /\ TimeoutDecisionDirectPhysicalKernelProperties(specification)
   /\ TimeoutDecisionOriginKernelProperties(specification)
 
@@ -7386,10 +7381,9 @@ BY TimeoutTcPhysicalKernelsDischargeFrontier,
 \* and already-fair owner origin are all source-derived.  Consequently the
 \* derived priority-ticket property is consumed below as a theorem of
 \* AsyncLiveSpecAt, not retained as a residual premise.  AsyncLiveSpecAt is
-\* exactly AsyncSpecAt and carries no install-generation assumption.  In particular,
-\* `FormTC` is disabled, so the formation kernel must project the concrete
-\* pending-install authority produced by the receipt reducer; it may not count
-\* a synthetic `FormTC` occurrence as progress.  The applied-authority origin
+\* exactly AsyncSpecAt and carries no install-generation assumption.  The
+\* atomic formation kernel projects the concrete pending-install authority
+\* produced by the receipt reducer.  The applied-authority origin
 \* kernel and the separately split request/response kernels retain
 \* `(target, source, qc)` throughout discovery.  The remaining transport
 \* kernels retain one immutable wire item through retained control, packet,
@@ -10607,75 +10601,31 @@ BY AsyncSpecProvidesTimeoutRetainedPacketIngressKernels
    DEF AsyncLiveSpecAt
 
 (***************************************************************************
-Retired standalone TC formation.
+Atomic timeout-certificate formation.
 
-Receipt processing forms and schedules the exact install authority
-atomically.  `FormTC` is a compatibility tombstone and no transition may
-schedule a `FormTC` candidate.  The formation leaf is therefore discharged
-by reachable absence, not by treating the disabled action as progress.
+Each successful local or delivered timeout-vote receipt creates the exact
+InstallTC WAL authority in the same reducer turn.  The formation kernel is
+therefore the concrete pending-install owner already covered by the imported
+certificate WAL liveness kernel; there is no intermediate scheduler action.
 ***************************************************************************)
 
-TimeoutRetiredFormTcCandidateAbsent ==
-  \A candidate \in AsyncCandidateSet:
-    candidate.kind = "FormTC" => ~CandidateScheduled(candidate)
-
-THEOREM AsyncInitEstablishesRetiredFormTcCandidateAbsence ==
+THEOREM AsyncSpecProvidesTimeoutAtomicCertificateFormationKernel ==
   \A initialContext:
-    AsyncInitAt(initialContext)
-      => TimeoutRetiredFormTcCandidateAbsent
-BY IsaT(300)
-   DEF TimeoutRetiredFormTcCandidateAbsent,
-       CandidateScheduled, CandidateScheduledIn,
-       AsyncInitAt, AsyncBaseInitAt, InitAt
-
-THEOREM AsyncBracketPreservesRetiredFormTcCandidateAbsence ==
-  /\ AsyncStrongTypeInvariant
-  /\ AsyncProgressOwnershipInvariant
-  /\ TimeoutRetiredFormTcCandidateAbsent
-  /\ [AsyncNext]_AsyncAllVars
-  => TimeoutRetiredFormTcCandidateAbsent'
-BY RetiredStandaloneFormTcActionIsDisabled,
-   CommandSuccessorInventoryIsClosed, IsaT(3600)
-   DEF TimeoutRetiredFormTcCandidateAbsent,
-       CandidateScheduled, CandidateScheduledAfter,
-       CommandSuccessors, CausalCandidate,
-       CausalCandidateWithEvidence,
-       AppendCausalSuccessors, FreshCommandSuccessors,
-       EnqueueCandidate, DeliveryCandidate,
-       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
-       AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunHistoricalServer, RunNodeWork, LocalAdmissionStep,
-       SelectedLocalAdmissionAdvance, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
-       DeferredDrainStep, AsyncAllVars
-
-THEOREM AsyncSpecAlwaysExcludesRetiredFormTcCandidates ==
-  \A initialContext:
-    AsyncSpecAt(initialContext)
-      => []TimeoutRetiredFormTcCandidateAbsent
-BY AsyncInitEstablishesRetiredFormTcCandidateAbsence,
-   AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysProgressOwnershipInvariant,
-   AsyncBracketPreservesRetiredFormTcCandidateAbsence,
-   PTL
-   DEF AsyncSpecAt
-
-THEOREM AsyncSpecProvidesTimeoutTcFormationReducerKernel ==
-  \A initialContext:
-    TimeoutTcFormationReducerKernelProperty(
+    TimeoutAtomicCertificateFormationKernelProperty(
       AsyncSpecAt(initialContext))
-BY AsyncSpecAlwaysExcludesRetiredFormTcCandidates,
-   RetiredStandaloneFormTcActionIsDisabled,
-   PTL, Isa
-   DEF TimeoutTcFormationReducerKernelProperty,
-       TimeoutRetiredFormTcCandidateAbsent,
-       TimeoutFormTcCandidateOwned
+BY AsyncSpecProvidesTimeoutImportedCertificateReducerWalKernels,
+   PTL, IsaT(300)
+   DEF TimeoutImportedCertificateReducerWalKernelProperties,
+       TimeoutAtomicCertificateFormationKernelProperty,
+       TimeoutReceiptQuorumInstallAuthority,
+       TimeoutTcInstallWalKernelProperty,
+       TimeoutTcInstallWalOwner
 
-THEOREM AsyncLiveProvidesTimeoutTcFormationReducerKernel ==
+THEOREM AsyncLiveProvidesTimeoutAtomicCertificateFormationKernel ==
   \A initialContext:
-    TimeoutTcFormationReducerKernelProperty(
+    TimeoutAtomicCertificateFormationKernelProperty(
       AsyncLiveSpecAt(initialContext))
-BY AsyncSpecProvidesTimeoutTcFormationReducerKernel
+BY AsyncSpecProvidesTimeoutAtomicCertificateFormationKernel
    DEF AsyncLiveSpecAt
 
 (***************************************************************************
@@ -10746,8 +10696,8 @@ BY AsyncSpecProvidesTimeoutDecisionOriginKernels
 Unconditional direct timeout residual.
 
 Each conjunct below is provided independently: retained/packet/ingress,
-exact delivery candidates, imported certificate reducer/WAL tails, retired
-formation absence, and exact Decision-origin propagation.  No aggregate
+exact delivery candidates, imported certificate reducer/WAL tails, atomic
+formation ownership, and exact Decision-origin propagation.  No aggregate
 timeout theorem appears in the dependency list.
 ***************************************************************************)
 
@@ -10758,7 +10708,7 @@ THEOREM AsyncSpecProvidesDirectTimeoutViewClosureResidual ==
 BY AsyncSpecProvidesTimeoutRetainedPacketIngressKernels,
    AsyncSpecProvidesTimeoutExactDeliveryCandidateKernels,
    AsyncSpecProvidesTimeoutImportedCertificateReducerWalKernels,
-   AsyncSpecProvidesTimeoutTcFormationReducerKernel,
+   AsyncSpecProvidesTimeoutAtomicCertificateFormationKernel,
    AsyncSpecProvidesTimeoutDecisionOriginKernels
    DEF DirectTimeoutViewClosureResidualProperty,
        TimeoutVoteDeliveryPhysicalKernelProperties,

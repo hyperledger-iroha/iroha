@@ -1793,11 +1793,17 @@ Regenerate the canonical outputs and every SDK mirror before updating tests or
 dashboards:
 
 ```bash
-cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
 ```
 
-`scripts/swift_fixture_regen.sh` and `make swift-fixtures` are convenience wrappers
-around the same xtask owner. Verify the owner and Swift descriptor mirror with:
+Both external output roots are create-only and must not already exist. Before
+any tracked update, require identical exact path sets, entry types, modes,
+completion manifests, and every file byte. Apply the reviewed identity-relative
+patch from either sealed root, then verify the tracked owner and Swift
+descriptor mirror with:
 
 ```bash
 cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
@@ -2181,8 +2187,15 @@ pairs, including the compact `ChainId` and `TransactionSignature` wrappers.
 - Sync the Norito fixtures used for Swift parity/dashboards:
 
   ```bash
-  make swift-fixtures
+  cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+    norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+  cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+    norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
   ```
+
+  Compare the exact path sets, entry types, modes, completion manifests, and
+  every file byte before applying the reviewed identity-relative tracked patch;
+  then run `norito-rpc-verify` and `make swift-fixtures-check`.
 
 ## Documentation & Integration Guides
 

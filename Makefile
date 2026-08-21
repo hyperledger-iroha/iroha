@@ -6,12 +6,12 @@
 .PHONY: check-fastpq-row-usage check-fastpq-rollout check-nexus-lanes check-nexus-cross-dataspace check-sns-annex
 .PHONY: bridge-xcframework bridge-checksum
 .PHONY: docs-syscalls
-.PHONY: android-fixtures android-fixtures-check
+.PHONY: android-fixtures-check
 .PHONY: android-tests android-lint android-transport-guard android-publish-snapshot kotlin-reflection-guard
-.PHONY: swift-fixtures swift-fixtures-check swift-ci swift-status
+.PHONY: swift-fixtures-check swift-ci swift-status
 .PHONY: python-checks
 .PHONY: python-release-smoke
-.PHONY: python-fixtures python-fixtures-check
+.PHONY: python-fixtures-check
 .PHONY: build
 .PHONY: kotodama-goldens kotodama-goldens-check
 
@@ -107,7 +107,8 @@ check-proc-macro-ui:
 	@bash ci/check_proc_macro_ui.sh
 
 kotodama-goldens:
-	@python3 scripts/regenerate_kotodama_goldens.py --write
+	@python3 scripts/regenerate_kotodama_goldens.py --write \
+		--output-root "$${IROHA_KOTODAMA_V1_ARTIFACT_STAGE:?set an absent absolute private external publication root}"
 
 kotodama-goldens-check:
 	@python3 scripts/regenerate_kotodama_goldens.py --check
@@ -253,10 +254,6 @@ swift-dashboards:
 	@python3 -m jsonschema --output pretty specs/references/ios_metrics.schema.json --instance "$(SWIFT_CI_FEED)"
 	@./scripts/render_swift_dashboards.sh "$(SWIFT_PARITY_FEED)" "$(SWIFT_CI_FEED)" "$(SWIFT_PIPELINE_METADATA_FEED)"
 
-swift-fixtures:
-	@bash scripts/swift_fixture_regen.sh
-	@$(MAKE) swift-fixtures-check
-
 swift-fixtures-check:
 	@python3 scripts/check_swift_fixtures.py
 
@@ -268,10 +265,6 @@ swift-status:
 swift-docs-lint:
 	@python3 scripts/swift_doc_lint.py
 
-python-fixtures:
-	@bash scripts/python_fixture_regen.sh
-	@$(MAKE) python-fixtures-check
-
 python-fixtures-check:
 	@python3 scripts/check_python_fixtures.py
 
@@ -280,10 +273,6 @@ python-checks:
 
 python-release-smoke:
 	@bash python/iroha_python/scripts/release_smoke.sh
-
-android-fixtures:
-	@bash scripts/android_fixture_regen.sh
-	@$(MAKE) android-fixtures-check
 
 android-fixtures-check:
 	@bash ci/check_android_fixtures.sh

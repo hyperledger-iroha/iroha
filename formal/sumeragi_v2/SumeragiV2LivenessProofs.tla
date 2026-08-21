@@ -1009,7 +1009,7 @@ any higher local Prepare origin or known PrepareQC.
 ***************************************************************************)
 HistoricalLockedCommitRecoveryProgress ==
   \A node \in AsyncCurrentResponsiveVoters, qc \in prepareQCs:
-    (/\ HistoricalTcLockedPrepareForCommit(node, qc)
+    (/\ HistoricalLockedPrepareForCommit(node, qc)
      /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
      /\ BodyValidatedBy(validatedBodies, node, context, qc.view,
                         generation[node], qc.subject))

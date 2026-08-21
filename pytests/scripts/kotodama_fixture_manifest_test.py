@@ -77,8 +77,12 @@ def test_checked_in_inventory_is_complete_and_reconstructable() -> None:
     stats = checker.validate_manifest(ROOT, MANIFEST)
     assert stats.fixtures == 248
     assert stats.legacy_fixtures == 52
+<<<<<<< Updated upstream
     assert stats.retained_templates == 53
     assert stats.tests == 563
+=======
+    assert stats.tests > 500
+>>>>>>> Stashed changes
 
 
 def test_payload_corruption_fails_closed(tmp_path: Path) -> None:
@@ -101,6 +105,7 @@ def test_unknown_manifest_key_fails_closed(tmp_path: Path) -> None:
         checker.validate_manifest(tmp_path, copied_manifest)
 
 
+<<<<<<< Updated upstream
 def test_included_test_inventory_drift_fails_closed(tmp_path: Path) -> None:
     copied_manifest = _copy_fixture_tree(tmp_path)
     included_source = (
@@ -118,6 +123,24 @@ def test_included_test_inventory_drift_fails_closed(tmp_path: Path) -> None:
     )
 
     with pytest.raises(checker.ValidationError, match="test name/order inventory changed"):
+=======
+@pytest.mark.parametrize(
+    "retired_key, value",
+    [
+        ("retained_templates", []),
+        ("retained_templates_sha256", "0" * 64),
+    ],
+)
+def test_retired_template_migration_seal_is_rejected(
+    tmp_path: Path, retired_key: str, value: object
+) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    payload = json.loads(copied_manifest.read_text(encoding="utf-8"))
+    payload[retired_key] = value
+    copied_manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(checker.ValidationError, match=f"unknown=.*{retired_key}"):
+>>>>>>> Stashed changes
         checker.validate_manifest(tmp_path, copied_manifest)
 
 

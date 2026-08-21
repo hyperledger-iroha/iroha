@@ -321,6 +321,7 @@ pub fn analyze_prepared_static_state_accesses(
             &mut result,
         );
         if contract.has_indirect_control_flow(pc) && !is_protected_contract_return(op) {
+<<<<<<< Updated upstream
             // An indirect edge has no authenticated target in the prepared
             // control-flow graph. Treat the proof as incomplete even when the
             // visible instruction itself is not a durable-state syscall:
@@ -328,6 +329,19 @@ pub fn analyze_prepared_static_state_accesses(
             // access while the scheduler accepts an exact access set. The
             // sole exception is the canonical contract return enforced by
             // `IVM::load_prepared`'s protected return stack.
+=======
+            // A general indirect edge has no authenticated target in the
+            // prepared control-flow graph. Treat the proof as incomplete even
+            // when the visible instruction itself is not a durable-state
+            // syscall: otherwise a JR/JALR target could hide an unaccounted
+            // state access while the scheduler accepts an exact access set.
+            //
+            // Prepared contracts are always executed with strict return
+            // integrity. Under that runtime policy the one canonical return
+            // encoding below can only target the protected call stack (or the
+            // validated outer-return sentinel), so it is a terminal edge rather
+            // than an unauthenticated computed jump.
+>>>>>>> Stashed changes
             result.complete = false;
         }
         let successors = contract.control_flow_successors(pc)?;

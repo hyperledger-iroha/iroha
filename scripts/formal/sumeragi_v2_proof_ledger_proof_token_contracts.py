@@ -655,12 +655,14 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ),
     (
         "SumeragiV2TimeoutViewProgressProofs",
-        "AsyncSpecProvidesTimeoutTcFormationReducerKernel",
+        "AsyncSpecProvidesTimeoutAtomicCertificateFormationKernel",
     ): (
-        "AsyncSpecAlwaysExcludesRetiredFormTcCandidates",
-        "RetiredStandaloneFormTcActionIsDisabled",
-        "TimeoutTcFormationReducerKernelProperty",
-        "TimeoutRetiredFormTcCandidateAbsent",
+        "AsyncSpecProvidesTimeoutImportedCertificateReducerWalKernels",
+        "TimeoutImportedCertificateReducerWalKernelProperties",
+        "TimeoutAtomicCertificateFormationKernelProperty",
+        "TimeoutReceiptQuorumInstallAuthority",
+        "TimeoutTcInstallWalKernelProperty",
+        "TimeoutTcInstallWalOwner",
     ),
     (
         "SumeragiV2TimeoutViewProgressProofs",
@@ -687,7 +689,7 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "AsyncSpecProvidesTimeoutRetainedPacketIngressKernels",
         "AsyncSpecProvidesTimeoutExactDeliveryCandidateKernels",
         "AsyncSpecProvidesTimeoutImportedCertificateReducerWalKernels",
-        "AsyncSpecProvidesTimeoutTcFormationReducerKernel",
+        "AsyncSpecProvidesTimeoutAtomicCertificateFormationKernel",
         "AsyncSpecProvidesTimeoutDecisionOriginKernels",
     ),
     (
@@ -1108,10 +1110,6 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "PersistDecision",
         "NodeHasDecision",
     ),
-    (
-        "SumeragiV2TimeoutViewProgressProofs",
-        "RetiredStandaloneFormTcActionIsDisabled",
-    ): ("FormTC",),
     (
         "SumeragiV2LockedBodyReproposalProgressProofs",
         "RetainedLockRankedCandidateBindsFrozenTargetLeaderEpisode",

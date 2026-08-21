@@ -146,6 +146,8 @@ fn parse_accepts_generic_minor_zero_without_cntr() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.version_minor = 0;
     });
+    let current_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    assert_eq!(&bytes[17..49], current_abi_hash.as_slice());
     let parsed = ProgramMetadata::parse(&bytes).expect("parse generic header");
     assert_eq!(parsed.metadata.version_major, 1);
     assert_eq!(parsed.metadata.version_minor, 0);
@@ -153,10 +155,15 @@ fn parse_accepts_generic_minor_zero_without_cntr() {
     assert_eq!(parsed.code_offset, parsed.header_len);
 }
 #[test]
-fn parse_rejects_stale_authenticated_header_abi_hash() {
-    let mut bytes = ProgramMetadata::default().encode();
+fn parse_rejects_pre_reset_pointer_layout_abi_hash_at_supported_minor_zero() {
+    // This was the ABI descriptor authenticated by the pre-reset 1.0 executor
+    // whose pointer table assigned Amount=0x0010 and Quantity=0x0013.
+    const PRE_RESET_ABI_HASH_HEX: &str =
+        "98679112b5a065a4dc962c5cfe128d0c545ed948f915ea8804767d369e4ef64f";
+    let mut bytes = ProgramMetadata::default_for(1, 0, 1).encode();
     let expected = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    bytes[17] ^= 0x80;
+    let pre_reset = hex::decode(PRE_RESET_ABI_HASH_HEX).expect("valid pre-reset ABI hash vector");
+    bytes[17..49].copy_from_slice(&pre_reset);
     let actual: [u8; 32] = bytes[17..49].try_into().expect("fixed ABI hash field");
     assert!(matches!(
         ProgramMetadata::parse(&bytes),

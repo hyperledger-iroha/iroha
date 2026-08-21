@@ -324,21 +324,15 @@ PROOF
                              request.vote.highSubject)
                         /\ PersistTimeout(request)
         BY <3>16 DEF Next
-      <3>17. CASE command.kind = "FormTC"
-                   /\ FormTC(command.node, command.view)
-        <4>1. /\ command.node \in ValidatorIds
-               /\ command.view \in Views
-          BY <2>1 DEF AsyncCandidateTyped
-        <4> QED BY <3>17, <4>1 DEF Next
-      <3>18. CASE command.kind = "BeginInstallTC"
+      <3>17. CASE command.kind = "BeginInstallTC"
                    /\ \E tc \in ReceivedTcValues:
                         /\ command.node = command.node
                         /\ command.view = tc.view
                         /\ BeginInstallTC(command.node, tc)
         <4>1. command.node \in ValidatorIds
           BY <2>1 DEF AsyncCandidateTyped
-        <4> QED BY <3>18, <4>1 DEF Next
-      <3>19. CASE command.kind = "FetchCertifiedBody"
+        <4> QED BY <3>17, <4>1 DEF Next
+      <3>18. CASE command.kind = "FetchCertifiedBody"
                    /\ command.item.kind = "CertifiedResponse"
                    /\ command.item.envelope.recipient = command.node
                    /\ command.item.envelope.view = command.view
@@ -352,7 +346,7 @@ PROOF
         <4>2. BodyRecord(
                  command.node, context, command.view, command.subject)
                  \in BodyRecordSet
-          BY <3>19, Isa
+          BY <3>18, Isa
              DEF AcceptCertifiedResponseCapability,
                  InstallCertifiedBodyEffect
         <4>3. command.subject \in Subjects
@@ -361,11 +355,11 @@ PROOF
                     subject \in Subjects:
                  AcceptCertifiedResponseCapability(
                    node, roundView, subject)
-          BY <3>19, <4>1, <4>3
+          BY <3>18, <4>1, <4>3
         <4> QED BY <4>4 DEF Next
       <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
                    <3>7, <3>8, <3>9, <3>10, <3>11, <3>12, <3>13,
-                   <3>14, <3>15, <3>16, <3>17, <3>18, <3>19
+                   <3>14, <3>15, <3>16, <3>17, <3>18
            DEF RegularCoreCommand
     <2> QED BY <2>1
   <1> QED BY <1>1

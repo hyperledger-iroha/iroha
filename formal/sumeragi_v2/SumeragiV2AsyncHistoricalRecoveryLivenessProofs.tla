@@ -1051,7 +1051,7 @@ BY IsaT(240)
        ValidateBody, ValidateDecidedBody, ValidateLockedBody, RejectBody,
        BeginPrepare, PersistPrepare, BeginObservePrepare,
        PersistObservePrepare, BeginLockCommit, PersistLockCommit,
-       FormCommitQC, BeginDecision, PersistTimeout, FormTC,
+       FormCommitQC, BeginDecision, PersistTimeout,
        BeginInstallTC, FetchCertifiedBody,
        AcceptCertifiedResponseCapability, InstallCertifiedBodyEffect,
        ExecuteDecisionFetch, ExecuteSignProposal, ExecuteSignVote,

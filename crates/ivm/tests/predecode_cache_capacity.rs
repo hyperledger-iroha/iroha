@@ -4,6 +4,7 @@ fn code32(word: u32) -> Vec<u8> {
 }
 #[test]
 fn global_capacity_eviction_and_runtime_resize() {
+    let _lease = crate::predecode_test_support::exclusive();
     // Install a small global cache even when earlier grouped tests have already
     // initialized it, then restore the previous runtime limits on exit.
     let previous = ivm_cache::cache_limits();

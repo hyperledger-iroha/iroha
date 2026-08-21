@@ -34,9 +34,8 @@ release candidates cannot merge when fixture drift or regen SLA breaches occur.
    metadata blob (job duration, per-test durations, Buildkite URL) that gets
    injected back into the summary and recorded under
    `artifacts/android/parity/<timestamp>/pipeline_metadata.json`.
-2. **Regen state:** `scripts/android_fixture_regen.sh` continues to track
-   `generated_at`, `rotation_owner`, and cadence labels in
-   `artifacts/android_fixture_regen_state.json`.
+2. **Regen state:** release evidence tracks the create-only owner-publication
+   identity, `generated_at`, `rotation_owner`, and cadence labels.
 3. **CI signals:** `ci/run_android_tests.sh` plus
    `ci/check_android_fixtures.sh` run on Buildkite. The Buildkite job now
    writes the parity summary to `artifacts/android/parity/<timestamp>/summary.json`,

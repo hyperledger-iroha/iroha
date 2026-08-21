@@ -27,16 +27,23 @@ notes.
 
 ## Rotation & Ownership
 
-| Stream | Owner | Cadence | Evidence |
-|--------|-------|---------|----------|
-| Swift | Swift Lead | 48 h regen window; weekly fallback on governance slip | `scripts/swift_fixture_regen.sh` + provenance emitted to `artifacts/swift_fixture_provenance.json`; parity gate `ci/check_swift_fixtures.sh` |
-| Android | Android Foundations TL | 48 h regen window; mirrors Swift schedule | Regen + parity diffs recorded in `status.md`; run via workspace automation |
-| Python | Python Maintainer | 48 h regen window | Regen script + fixture diff gate under `python/` harness; results echoed to `status.md` |
-| JS | JS Lead | 48 h regen window | Regen helper wired into Torii mock harness CI; evidence stored with JS release artefacts |
+The SDK council assigns one rotation owner for the shared fixture set. The
+owner runs the sole generator twice, each time with an independent absent
+absolute output root:
 
-Rotation owners must coordinate via the SDK council calendar and publish a
-diff-friendly summary in `status.md` when a regeneration completes or when a
-fallback/override is invoked.
+```bash
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-absent-root
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-absent-root
+```
+
+The path sets, modes, manifests, and bytes must match before either sealed tree
+is reviewed as a mechanical patch to the identical tracked paths. After that
+reviewed update, record the result of
+`cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify --json-out <report-path>`.
+Swift, Android, Python, and JavaScript only consume and check their tracked
+mirrors; they have no regeneration or archive-extraction entry points.
 
 ## Enforcement
 

@@ -1030,30 +1030,25 @@ fi
 
 SIM_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-sim-universal.a"
 MAC_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-macos-universal.a"
-if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
-  cp "$LIB_SIM_ARM" "$SIM_UNI"
-  cp "$LIB_MAC_ARM" "$MAC_UNI"
-else
-  echo "[+] Creating simulator universal static library" >&2
-  env -i \
-    HOME="$USER_HOME_DIR" \
-    PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
-    TMPDIR="$MOBILE_TMPDIR" \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8 \
-    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
-    "$LIPO_BINARY" -create -output "$SIM_UNI" "$LIB_SIM_ARM" "$LIB_SIM_X64"
+echo "[+] Creating simulator universal static library" >&2
+env -i \
+  HOME="$USER_HOME_DIR" \
+  PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
+  TMPDIR="$MOBILE_TMPDIR" \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+  "$LIPO_BINARY" -create -output "$SIM_UNI" "$LIB_SIM_ARM" "$LIB_SIM_X64"
 
-  echo "[+] Creating macOS universal static library" >&2
-  env -i \
-    HOME="$USER_HOME_DIR" \
-    PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
-    TMPDIR="$MOBILE_TMPDIR" \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8 \
-    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
-    "$LIPO_BINARY" -create -output "$MAC_UNI" "$LIB_MAC_ARM" "$LIB_MAC_X64"
-fi
+echo "[+] Creating macOS universal static library" >&2
+env -i \
+  HOME="$USER_HOME_DIR" \
+  PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
+  TMPDIR="$MOBILE_TMPDIR" \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+  "$LIPO_BINARY" -create -output "$MAC_UNI" "$LIB_MAC_ARM" "$LIB_MAC_X64"
 
 echo "[+] Staging XCFramework slices" >&2
 HEADERS_DEV="$STAGE_DIR/device-headers"
@@ -1108,9 +1103,6 @@ assert_bridge_source_seal "XCFramework packaging"
 echo "[+] XCFramework staged: $PUBLISH_XCFRAMEWORK" >&2
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   touch "$PUBLISH_XCFRAMEWORK/.privacy-production-enabled"
-fi
-if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
-  touch "$PUBLISH_XCFRAMEWORK/.test-only-prebuilt-slices"
 fi
 
 IOS_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64/${STATIC_LIB_NAME}"
@@ -1170,18 +1162,13 @@ fi
 SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
 PRIVACY_PRODUCTION_JSON=false
 CARGO_FEATURES_JSON='[]'
-TEST_ONLY_MANIFEST_FIELD=""
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
   CARGO_FEATURES_JSON='["privacy-production-enabled"]'
 fi
-if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
-  TEST_ONLY_MANIFEST_FIELD='  "test_only_prebuilt_slices": true,'
-fi
 
 cat > "$PUBLISH_MANIFEST" <<EOF
 {
-${TEST_ONLY_MANIFEST_FIELD}
   "version": "$BRIDGE_VERSION",
   "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
@@ -1549,8 +1536,7 @@ env -i \
 
 run_isolated_python - \
   "$PUBLISH_XCFRAMEWORK" "$PUBLISH_MANIFEST" \
-  "$PUBLISH_MANIFEST_LINK" "$CANONICAL_MANIFEST_RELATIVE_TARGET" \
-  "$TEST_ONLY_PREBUILT_SLICES" <<'PY'
+  "$PUBLISH_MANIFEST_LINK" "$CANONICAL_MANIFEST_RELATIVE_TARGET" <<'PY'
 import hashlib
 import json
 import os
@@ -1573,7 +1559,6 @@ xcframework = Path(sys.argv[1])
 manifest_path = Path(sys.argv[2])
 manifest_link = Path(sys.argv[3])
 manifest_link_target = sys.argv[4]
-test_only_prebuilt_slices = sys.argv[5] == "1"
 expected_slices = {
     "ios-arm64": {
         "architectures": ["arm64"],
@@ -1690,11 +1675,7 @@ if manifest.get("privacy_production_enabled") is True:
 elif manifest.get("privacy_production_enabled") is not False:
     raise SystemExit("staged NoritoBridge manifest has a non-boolean privacy mode")
 test_only_marker = xcframework / ".test-only-prebuilt-slices"
-if test_only_prebuilt_slices:
-    if manifest.get("test_only_prebuilt_slices") is not True:
-        raise SystemExit("test-only staged NoritoBridge is missing its manifest marker")
-    expected_top_level.add(test_only_marker.name)
-elif "test_only_prebuilt_slices" in manifest or test_only_marker.exists():
+if "test_only_prebuilt_slices" in manifest or test_only_marker.exists():
     raise SystemExit("release staged NoritoBridge contains test-only prebuilt slices")
 if {entry.name for entry in xcframework.iterdir()} != expected_top_level:
     raise SystemExit("staged NoritoBridge has unexpected top-level artifacts")
@@ -1743,35 +1724,7 @@ run_isolated_python \
 
 assert_bridge_source_seal "staged artifact validation"
 
-if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
-  TEST_CHECKER_MARKER="${NORITO_BRIDGE_CHECKER_MARKER:-}"
-  TEST_CHECKER_EXIT="${NORITO_BRIDGE_CHECKER_EXIT:-0}"
-  if [[ "$TEST_CHECKER_MARKER" != /* \
-    || ! -d "${TEST_CHECKER_MARKER%/*}" \
-    || -e "$TEST_CHECKER_MARKER" \
-    || -L "$TEST_CHECKER_MARKER" ]]; then
-    echo "[-] fallback pytest checker marker must be a new absolute file" >&2
-    exit 1
-  fi
-  case "$TEST_CHECKER_MARKER" in
-    "$ROOT_DIR/"*)
-      echo "[-] fallback pytest checker marker must be outside the repository" >&2
-      exit 1
-      ;;
-  esac
-  if [[ ! "$TEST_CHECKER_EXIT" =~ ^(0|[1-9][0-9]{0,2})$ \
-    || "$TEST_CHECKER_EXIT" -gt 125 ]]; then
-    echo "[-] NORITO_BRIDGE_CHECKER_EXIT must be a canonical value from 0 through 125" >&2
-    exit 1
-  fi
-  if ! (set -o noclobber; printf '%s\n' "$PUBLISH_ROOT" >"$TEST_CHECKER_MARKER"); then
-    echo "[-] fallback pytest checker marker could not be created exclusively" >&2
-    exit 1
-  fi
-  if [[ "$TEST_CHECKER_EXIT" != "0" ]]; then
-    exit "$TEST_CHECKER_EXIT"
-  fi
-elif [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
   MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
     MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
     MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \

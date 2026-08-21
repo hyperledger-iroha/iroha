@@ -303,8 +303,6 @@ DurableDecisionFrontierStutteringStep ==
        highestPrepare \in PrepareQcOptionSet:
        ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
   \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
-  \/ \E node \in ValidatorIds, roundView \in Views:
-       FormTC(node, roundView)
   \/ \E envelope \in tcNetwork: DeliverTC(envelope)
   \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
        BeginInstallTC(node, tc)
@@ -343,7 +341,7 @@ BY IsaT(120)
        BeginObservePrepare, PersistObservePrepare, BeginLockCommit,
        PersistLockCommit, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
-       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
+       DeliverTimeout, DeliverTC, BeginInstallTC,
        PersistInstallTC, FetchCertifiedBody,
        AcceptCertifiedResponseCapability, InstallCertifiedBodyEffect,
        ApplyDecision, Restart,

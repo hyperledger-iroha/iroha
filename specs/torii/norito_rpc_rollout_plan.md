@@ -60,7 +60,7 @@ NRPC-2B exits when dashboards show live data in staging, alert runbooks exist, a
 | **P0 — Lab validation** | Config knobs merged with defaults; dual-transport CI passing; ingress cookbook updated. | `cargo test -p iroha_torii -- norito_ingress` and `python/iroha_python/scripts/run_norito_rpc_smoke.sh:1`. |
 | **P1 — Staging canary** | Norito enabled for internal tokens; Grafana dashboard populated; alerts quiet for 72h. | Manual canary report archived in `specs/torii/norito_rpc_stage_reports.md`. |
 | **P2 — Production canary** | `transport.norito_rpc.stage=canary`; allowlist tokens cover at least two operators; rollback rehearsed. | Deploy playbook recorded in `specs/runbooks/torii_norito_rpc_canary.md`. |
-| **P3 — GA** | Stage flag flipped to `ga`; JSON + Norito parity fixtures green; ops sign-off logged. | Run `cargo xtask norito-rpc-verify` for canonical fixture/schema/compact-hash/SDK-mirror parity, then run the separate live Torii JSON/Norito transport integration gate. |
+| **P3 — GA** | Stage flag flipped to `ga`; JSON + Norito parity fixtures green; ops sign-off logged. | Run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify` for canonical fixture/schema/compact-hash/SDK-mirror parity, then run the separate live Torii JSON/Norito transport integration gate. |
 
 Detailed operator steps for P2 live in
 [`specs/runbooks/torii_norito_rpc_canary.md`](../runbooks/torii_norito_rpc_canary.md),

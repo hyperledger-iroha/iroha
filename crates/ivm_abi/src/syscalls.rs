@@ -195,11 +195,6 @@ pub const SYSCALL_JSON_SET_I64: u32 = 0x82;
 ///
 /// Args: r10 = &Json object, r11 = &Name key, r12 = &AccountId Ret: r10 = host-owned &Json
 pub const SYSCALL_JSON_SET_ACCOUNT_ID: u32 = 0x83;
-/// Permanently retired pre-release decimal-i64 path helper number.
-///
-/// V1 adaptive numeric map keys use [`SYSCALL_BUILD_PATH_KEY_NORITO`] with a
-/// canonical nominal pointer envelope. This number must never be reassigned.
-pub const RETIRED_SYSCALL_BUILD_PATH_MAP_KEY: u32 = 0x54;
 /// Encode a 64-bit signed integer in ASCII decimal and return a host-owned `&NoritoBytes` TLV.
 ///
 /// Args: r10 = value (i64 as u64) Ret: r10 = &NoritoBytes (ASCII decimal)
@@ -281,12 +276,6 @@ pub const SYSCALL_ACTIVATE_CONTRACT_INSTANCE: u32 = 0x47;
 /// Ret: r10 = public `&Int` containing the complete 48-byte compressed point.
 pub const SYSCALL_PRIVATE_NUMERIC_VALCOM: u32 = 0xF8;
 pub const SYSCALL_GET_ACCOUNT_BALANCE: u32 = 0xF9;
-/// Retired invocation-local scalar nullifier helper.
-///
-/// This number is deliberately absent from ABI V1 and deployable artifacts
-/// must receive `UnknownSyscall`. The constant remains only so legacy raw-host
-/// tests can prove fail-closed policy enforcement.
-pub const SYSCALL_USE_NULLIFIER: u32 = 0xFB;
 pub const SYSCALL_VERIFY_SIGNATURE: u32 = 0xFC;
 /// Retrieve one bounded typed private numeric input in ZK mode.
 ///
@@ -3527,15 +3516,18 @@ mod tests {
             assert_eq!(registered_syscall_access(number), Some(SyscallAccess::None));
             assert!(syscall_name(number).is_some());
         }
-        for retired in core::iter::once(RETIRED_SYSCALL_BUILD_PATH_MAP_KEY)
+        for unassigned in core::iter::once(0x54)
             .chain([0x65, 0x68])
             .chain(0x69..=0x76)
             .chain(0xD2..=0xDE)
             .chain(0x01_0040..=0x01_004D)
         {
-            assert!(!is_syscall_allowed(policy, retired), "retired {retired:#x}");
-            assert_eq!(registered_syscall_access(retired), None);
-            assert_eq!(syscall_name(retired), None);
+            assert!(
+                !is_syscall_allowed(policy, unassigned),
+                "unassigned {unassigned:#x}"
+            );
+            assert_eq!(registered_syscall_access(unassigned), None);
+            assert_eq!(syscall_name(unassigned), None);
         }
     }
     fn descriptor_hash(surface: &AbiSurface) -> [u8; 32] {

@@ -244,7 +244,7 @@ interface/effect signature summarization, typed/effect HIR, transport-IR
 lowering, SSA construction, SSA optimization, de-SSA, final code generation,
 and end-to-end compilation. The historical `kotodama_phase_semantic` identity
 retains its exact `resolved.type_effect()` workload for real base comparison;
-the distinct signature-only work uses the new candidate identity
+the distinct signature-only work uses the dedicated identity
 `kotodama_phase_interface_summary`. Later phases use Criterion batched setup,
 so cloning or reconstructing their trusted input is not charged to the phase
 under test. The same suite measures cold execution and warm prepared execution
@@ -256,42 +256,43 @@ invocation.
 
 The canonical golden pipeline also applies deterministic artifact gates before
 publishing anything. Every compiler-generated instruction region must contain
-strictly less than 1% unresolved relocation NOPs. The six padding-heavy range,
-bounded-map, ternary, general-control-flow, tuple-return, and checked-in map
-artifacts named by `scripts/kotodama_v1_size_baseline.json` are the normative
-V1 code-size corpus. Each must be at least 50% smaller than its audited
-pre-reset code region. The baseline binds both the audited source revision and
-the corpus identity, so changing the membership requires a new explicit audit
-rather than silently weakening the gate. These checks run for both `--check`
+strictly less than 1% unresolved relocation NOPs. It renders the complete owner
+set into two independent temporary roots, validates every artifact and runtime
+manifest in both, and requires identical sorted paths, modes, bytes, and owner
+manifests before either `--check` or `--write` may continue. Performance
+acceptance compares the untouched current release baseline and the final
+candidate on the same quiet runner; it does not retain a pre-reset revision or
+predicted size table as release evidence. These checks run for both `--check`
 and `--write`:
 
 ```console
 make kotodama-goldens-check
 ```
 
+`--write` requires an absent absolute output root outside the source workspace;
+there is no in-place write mode. The pipeline does not reserve that final name
+until both renders and their tests pass. Publication is bound to held
+parent/root directory descriptors, includes the exact directory and file modes
+in the owner manifest, and creates that manifest last as the completion seal. A
+root without the seal is failed create-only residue and is never accepted or
+overwritten. Generate two independent sealed roots, require identical exact
+paths, types, modes, owner manifests, and bytes, then refresh tracked artifacts
+only as a reviewed identity-relative patch and rerun `--check`.
+
 An authenticated second build in the same pipeline must report every source as
 `fresh` and preserve every generated file's modification time, proving that a
 no-op graph performs zero compilation and zero rewrites.
 
-Capture the pre-reset comparison workloads and candidate on the same controlled
-runner. Use one shared `CARGO_TARGET_DIR`, but separate base and candidate
-checkouts. Each checkout must run its own revision-native benchmark source; do
-not copy the candidate harness into the base checkout to invent old samples for
-candidate-only identities:
+Capture the untouched current baseline and final candidate on the same quiet,
+controlled runner. Use one shared `CARGO_TARGET_DIR`, but separate baseline and
+candidate checkouts. Each checkout runs its own revision-native benchmark
+source; the candidate harness is never copied into the baseline checkout.
 
-The source-evidenced comparison revision is
-`a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab`. Merge
-`2ca45d754d0a993009dc45fc33d4e1976b39d087`, which introduced this reset
-performance policy, names its selected comparison parent and has that revision
-as its second parent. Its native sources contain exactly the 33 comparable
-identities and none of the 13 candidate-only identities. The revision does not
-contain `Cargo.lock`, however, so the commands below are a release procedure,
-not completed evidence, until its independently archived original lock and
-toolchain provenance are recovered. Never synthesize that provenance from the
-candidate lock or harness. `PREDECESSOR_CARGO_LOCK_SHA256` therefore remains
-deliberately unset in `scripts/check_kotodama_perf.py`; the checker fails before
-reading or comparing medians until that authenticated historical digest is
-recovered and reviewed.
+The source-evidenced comparison revision is the reset anchor
+`fc09b635df385d0488067f09baaa92a8d16fa124`. Its native sources contain all 46
+required workload identities. Its original `Cargo.lock` is present and pinned
+by SHA-256
+`0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222`.
 
 ```console
 # In the base checkout:
@@ -310,14 +311,14 @@ cargo bench --locked -p iroha_core --bench queries -- \
   typed_core_query_ --save-baseline candidate
 python3 scripts/check_kotodama_perf.py \
   --criterion-dir "$CARGO_TARGET_DIR/criterion" \
-  --predecessor-root /path/to/base/checkout \
+  --baseline-root /path/to/base/checkout \
   --threshold 0.05
 ```
 
 The checker fails closed on missing/malformed samples or benchmark coverage
 changes. It extracts and whitespace-normalizes the actual Criterion timed
-closure for every one of the 33 comparable identities, binds each closure to
-the audited predecessor SHA-256 inventory, and requires exact base/candidate
+closure for all 46 identities, binds each closure to
+the audited baseline SHA-256 inventory, and requires exact base/candidate
 body equality. Shared rounded-Quantity and typed-query loops also bind each
 name to its mode or family declaration. The typed-query contract separately
 requires exact base/candidate equality for the full-entity `QueryResponse`
@@ -325,42 +326,26 @@ generator and its encoded-byte measurement, so inflating the raw comparator
 cannot make the projection-size assertion pass. Its threshold cannot be
 loosened above 5%; a stable release runner may set a tighter threshold with
 `--threshold`.
-Before any comparison it also requires `--predecessor-root` to resolve to the
+Before any comparison it also requires `--baseline-root` to resolve to the
 exact selected Git commit, rejects tracked-source drift, and hashes a regular,
 non-symlink `Cargo.lock` against the independently authenticated policy digest.
 There is no portable `--baseline` or candidate `--write-baseline` path: timing
-samples are runner-local, and a candidate sample is never predecessor evidence.
+samples are runner-local, and a candidate sample is never baseline evidence.
 
-The `.github/workflows/kotodama_perf.yml` definition checks out the selected
-predecessor and candidate and is configured to measure both on one runner with
-Criterion's named baseline. Its provenance corridor currently fails
-intentionally: clean checkouts lack the required original lockfiles, and the
-authenticated original predecessor lock digest is unavailable. It becomes
-eligible to produce release evidence only after that provenance is recovered,
-reviewed, and pinned. Timing baselines are deliberately runner-local; they are
-not portable across CPU models or loaded hosts. The policy requires every
-pre-reset comparable workload on the base and the complete V1 workload
-inventory on the candidate; it never manufactures a candidate self-baseline.
+The `.github/workflows/kotodama_perf.yml` definition checks out the pinned
+baseline and candidate and measures both on one runner with Criterion's named
+baseline. Timing samples are deliberately runner-local; they are not portable
+across CPU models or loaded hosts. The policy requires every workload in both
+source sets and rejects missing, duplicated, renamed, or source-drifted
+identities. It never manufactures a candidate self-baseline.
 
-The seven direct exact-decimal identities (`add`, `sub`, `mul`, exact division,
-and floor, ceil, and nearest-even rounded division) and the five isolated
-runtime-phase identities (prepare/validate/predecode, argument decode, prepared
-load, dirty reset, and prepared execution), plus the signature-only interface
-summary, did not exist in the selected comparison revision. These 13 identities
-are therefore mandatory candidate evidence but are deliberately absent from
-`REGRESSION_BENCHMARKS`. Source-policy drift and a missing sample for any one of
-them fail closed. The revision inventory also rejects a missing or duplicated
-identity in either source set, or any candidate-only identity found in the
-selected base. They may enter the 5% comparison set only after an independently
-captured predecessor contains the same benchmark identity and workload; the
-candidate run itself is never accepted as that predecessor.
-
-Comparable parse, semantic, lowering, code-generation, numeric, query, and
-runtime identities receive the five-percent regression ceiling. Before timing
+Parse, semantic, lowering, code-generation, List, Quantity, Decimal,
+runtime-phase, query, and runtime identities all receive the five-percent
+regression ceiling. Before timing
 each typed-query family, the benchmark asserts one host query, one decode, and a
 projection payload smaller than the raw entity `QueryResponse`; the timed
 iterations reset and black-box those counters. The List comprehension runtime
 has a separate zero-slowdown gate against its manual-loop baseline; the general
 five-percent allowance cannot loosen that parity requirement. Missing required
-base samples, candidate samples, coverage, or authenticated predecessor
+base samples, candidate samples, coverage, or authenticated baseline
 provenance fail closed.

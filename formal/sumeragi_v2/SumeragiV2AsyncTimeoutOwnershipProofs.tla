@@ -256,17 +256,9 @@ TcFrontierOutcome(recipient, minimumView) ==
 
 DecisionPropagationOutcome(target) == NodeHasDecision(target)
 
-TimeoutFormTcCandidateOwned(target, roundView) ==
-  \E candidate \in AsyncCandidateSet:
-    /\ candidate.node = target
-    /\ candidate.height = context.height
-    /\ candidate.view = roundView
-    /\ candidate.kind = "FormTC"
-    /\ CandidateScheduled(candidate)
-
 TimeoutCertificateFormationFrontier(target, roundView) ==
   \/ TimeoutViewGoal(target, roundView)
-  \/ TimeoutFormTcCandidateOwned(target, roundView)
+  \/ TimeoutReceiptQuorumInstallAuthority(target, roundView)
   \/ TcFrontier(target, roundView)
 
 TimeoutViewOwnershipInvariant ==

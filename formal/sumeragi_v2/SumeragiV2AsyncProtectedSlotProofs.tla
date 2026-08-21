@@ -1280,8 +1280,7 @@ PROOF
                      <3>7, SMT
     <2>4. CASE command.kind \in
                  {"BeginTimeout", "PersistTimeout", "DeliverTimeout",
-                  "FormTC", "DeliverTC", "BeginInstallTC",
-                  "PersistInstallTC"}
+                  "DeliverTC", "BeginInstallTC", "PersistInstallTC"}
       <3>1. CASE command.kind = "BeginTimeout"
         BY <3>1, CausalCandidateHasProgressCommitSource,
            SingletonSequenceHasProgressCommitSources
@@ -1295,20 +1294,16 @@ PROOF
            EmptySequenceHasProgressCommitSources,
            SingletonSequenceHasProgressCommitSources, Isa
            DEF CommandSuccessors
-      <3>4. CASE command.kind = "FormTC"
+      <3>4. CASE command.kind = "DeliverTC"
         BY <3>4, CausalCandidateHasProgressCommitSource,
-           SingletonSequenceHasProgressCommitSources
-           DEF CommandSuccessors
-      <3>5. CASE command.kind = "DeliverTC"
-        BY <3>5, CausalCandidateHasProgressCommitSource,
            EmptySequenceHasProgressCommitSources,
            SingletonSequenceHasProgressCommitSources, Isa
            DEF CommandSuccessors
-      <3>6. CASE command.kind = "BeginInstallTC"
-        BY <3>6, CausalCandidateHasProgressCommitSource,
+      <3>5. CASE command.kind = "BeginInstallTC"
+        BY <3>5, CausalCandidateHasProgressCommitSource,
            SingletonSequenceHasProgressCommitSources
            DEF CommandSuccessors
-      <3>7. CASE command.kind = "PersistInstallTC"
+      <3>6. CASE command.kind = "PersistInstallTC"
         <4>1. ProgressCommitSource(InstallProposalSuccessor(command))
           BY DEF InstallProposalSuccessor, ProgressCommitSource,
                  AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
@@ -1330,35 +1325,35 @@ PROOF
                  AsyncCandidate
         <4>3. CASE /\ InstallResultingLockedPrepareQCs(command) = {}
                      /\ InstallCommitSignRequests(command) = {}
-          BY <3>7, <4>1, <4>3,
+          BY <3>6, <4>1, <4>3,
              SingletonSequenceHasProgressCommitSources
              DEF CommandSuccessors, InstallCommandSuccessors,
                  InstallLockedFetchSuccessors,
                  InstallCommitSignSuccessors
         <4>4. CASE /\ InstallResultingLockedPrepareQCs(command) = {}
                      /\ InstallCommitSignRequests(command) # {}
-          BY <3>7, <4>1, <4>2, <4>4,
+          BY <3>6, <4>1, <4>2, <4>4,
              PairSequenceHasProgressCommitSources
              DEF CommandSuccessors, InstallCommandSuccessors,
                  InstallLockedFetchSuccessors,
                  InstallCommitSignSuccessors
         <4>5. CASE /\ InstallResultingLockedPrepareQCs(command) # {}
                      /\ InstallCommitSignRequests(command) = {}
-          BY <3>7, <4>1, <4>2a, <4>5,
+          BY <3>6, <4>1, <4>2a, <4>5,
              PairSequenceHasProgressCommitSources
              DEF CommandSuccessors, InstallCommandSuccessors,
                  InstallLockedFetchSuccessors,
                  InstallCommitSignSuccessors
         <4>6. CASE /\ InstallResultingLockedPrepareQCs(command) # {}
                      /\ InstallCommitSignRequests(command) # {}
-          BY <3>7, <4>1, <4>2, <4>2a, <4>6,
+          BY <3>6, <4>1, <4>2, <4>2a, <4>6,
              TripleSequenceHasProgressCommitSources
              DEF CommandSuccessors, InstallCommandSuccessors,
                  InstallLockedFetchSuccessors,
                  InstallCommitSignSuccessors
         <4> QED BY <4>3, <4>4, <4>5, <4>6
       <3> QED BY <2>4, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
-                     <3>7, SMT
+                     SMT
     <2>5. CASE command.kind \notin
                  {"AssembleBody", "BeginProposal", "PersistProposal",
                   "DeliverProposal", "DeliverChunk", "FetchBody",
@@ -1368,7 +1363,7 @@ PROOF
                   "PersistObservePrepare", "BeginLockCommit",
                   "PersistLockCommit", "FormCommitQC", "BeginDecision",
                   "PersistDecision", "BeginTimeout", "PersistTimeout",
-                  "DeliverTimeout", "FormTC", "DeliverTC",
+                  "DeliverTimeout", "DeliverTC",
                   "BeginInstallTC", "PersistInstallTC"}
       BY <2>5, EmptySequenceHasProgressCommitSources
          DEF CommandSuccessors
@@ -2634,7 +2629,7 @@ BY IsaM("blast")
        PersistObservePrepare, BeginLockCommit, FormCommitQC, BeginDecision,
        PersistDecision, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
-       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
+       DeliverTimeout, DeliverTC, BeginInstallTC,
        FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
        ResumeVote, ResumeTimeout, DropProposal
 

@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.tx.norito
 
 import java.nio.file.Files
+import java.security.MessageDigest
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
@@ -60,11 +61,23 @@ class TransactionFixtureParityTest {
             )
 
             val encoded = adapter.encodeTransaction(payload)
-            assertEquals(
+            val payloadFrame = AndroidFixtureSupport.decodeCanonicalBase64(
                 fixture.payloadBase64,
-                Base64.getEncoder().encodeToString(encoded),
+                "${fixture.name}.payload_base64",
+            )
+            val framedPayload = decodeCanonicalFrame(
+                "${fixture.name}.payload",
+                payloadFrame,
+                TRANSACTION_PAYLOAD_TYPE,
+            )
+            assertContentEquals(
+                framedPayload,
+                encoded,
                 "${fixture.name}: encoded payload mismatch",
             )
+            assertFailsWith<IllegalArgumentException> {
+                NoritoHeader.decode(encoded, null)
+            }
 
             val decoded = adapter.decodeTransaction(encoded)
             assertEquals(payload, decoded, "${fixture.name}: Kotlin payload round-trip mismatch")
@@ -117,14 +130,30 @@ class TransactionFixtureParityTest {
         for (fixture in manifestFixtures) {
             val encodedPath = AndroidFixtureSupport.resolveSharedResource(fixture.encodedFile)
             val encodedBytes = Files.readAllBytes(encodedPath)
-            val payloadBytes = AndroidFixtureSupport.decodeCanonicalBase64(
+            val payloadFrameBytes = AndroidFixtureSupport.decodeCanonicalBase64(
                 fixture.payloadBase64,
                 "${fixture.name}.payload_base64",
             )
-            val signedBytes = AndroidFixtureSupport.decodeCanonicalBase64(
+            val signedFrameBytes = AndroidFixtureSupport.decodeCanonicalBase64(
                 fixture.signedBase64,
                 "${fixture.name}.signed_base64",
             )
+            val payloadBytes = decodeCanonicalFrame(
+                "${fixture.name}.payload",
+                payloadFrameBytes,
+                TRANSACTION_PAYLOAD_TYPE,
+            )
+            val signedBytes = decodeCanonicalFrame(
+                "${fixture.name}.signed",
+                signedFrameBytes,
+                SIGNED_TRANSACTION_TYPE,
+            )
+            assertFailsWith<IllegalArgumentException> {
+                NoritoHeader.decode(payloadBytes, null)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                NoritoHeader.decode(signedBytes, null)
+            }
 
             assertEquals(
                 fixture.encodedLen,
@@ -138,11 +167,11 @@ class TransactionFixtureParityTest {
             )
             assertEquals(
                 fixture.signedLen,
-                signedBytes.size.toLong(),
+                signedFrameBytes.size.toLong(),
                 "${fixture.name}: signed_len mismatch",
             )
             assertEquals(
-                hex(IrohaHash.prehash(payloadBytes)),
+                hex(IrohaHash.prehash(payloadFrameBytes)),
                 fixture.payloadHash,
                 "${fixture.name}: payload_hash mismatch",
             )
@@ -177,6 +206,11 @@ class TransactionFixtureParityTest {
                 fixture.nonce,
                 payload.nonce,
                 "${fixture.name}: nonce mismatch",
+            )
+            assertContentEquals(
+                payloadFrameBytes,
+                encodedBytes,
+                "${fixture.name}: encoded file must retain its mandatory Norito header",
             )
             assertContentEquals(
                 payloadBytes,
@@ -880,6 +914,31 @@ class TransactionFixtureParityTest {
     private fun canonicalDecoder(payload: ByteArray): NoritoDecoder =
         NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
 
+    private fun decodeCanonicalFrame(
+        name: String,
+        frame: ByteArray,
+        typeName: String,
+    ): ByteArray {
+        val decoded = NoritoHeader.decode(frame, schemaHash(typeName))
+        require(decoded.header.compression == NoritoHeader.COMPRESSION_NONE) {
+            "$name: compressed fixture frames are not canonical"
+        }
+        require(decoded.header.flags == NoritoHeader.COMPACT_LEN) {
+            "$name: fixture frame does not use the exact canonical flags"
+        }
+        require(frame.size == NoritoHeader.HEADER_LENGTH + decoded.header.payloadLength) {
+            "$name: fixture frame does not use the exact zero-padding layout"
+        }
+        decoded.header.validateChecksum(decoded.payload)
+        return decoded.payload
+    }
+
+    private fun schemaHash(typeName: String): ByteArray {
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update("norito:v1:type-name\u0000".toByteArray(Charsets.UTF_8))
+        return digest.digest(typeName.toByteArray(Charsets.UTF_8)).copyOf(16)
+    }
+
     private fun normalizeAuthority(authority: String?): String? {
         val trimmed = authority?.trim() ?: return null
         if (trimmed.isEmpty()) return trimmed
@@ -908,6 +967,10 @@ class TransactionFixtureParityTest {
         private const val TEST_NETWORK_ID =
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
         private const val SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1"
+        private const val TRANSACTION_PAYLOAD_TYPE =
+            "iroha_data_model::transaction::signed::model::TransactionPayload"
+        private const val SIGNED_TRANSACTION_TYPE =
+            "iroha_data_model::transaction::signed::model::SignedTransaction"
         private const val VERSION_BYTE: Byte = 0x01
         private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
     }

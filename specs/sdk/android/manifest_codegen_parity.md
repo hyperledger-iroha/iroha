@@ -27,11 +27,16 @@ builders can stay aligned with the Rust data model.
 - `target-codex/android_codegen/instruction_examples/` carries one Norito JSON
   example per discriminant. The file names mirror the Rust type paths, which
   lets CI diff fixture drift deterministically.
-- `cargo run -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures` is the sole owner of
-  signed fixture publication. It writes the canonical corpus to
-  `fixtures/norito_rpc/`, publishes the generated Java resource mirror, and
-  publishes descriptor-only mirrors for Python and Swift. Android resources are
-  outputs of that run, never canonical inputs.
+- `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root <absent-absolute-external-root>` is the sole owner of
+  canonical fixture publication. Each invocation writes one complete create-only
+  publication beneath that external root without touching tracked files. Run
+  it at two independent absent roots and, before any tracked update, require
+  identical exact path sets, entry types, modes, completion manifests, and
+  every file byte. Apply the reviewed identity-relative patch from either
+  sealed root, then run `norito-rpc-verify` and the Android fixture checker.
+  The publication contains the canonical corpus, the generated Java resource
+  mirror, and descriptor-only Python and Swift mirrors; Android resources are
+  outputs, never canonical inputs.
 
 ## 2. Instruction Coverage Snapshot
 

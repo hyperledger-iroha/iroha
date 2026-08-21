@@ -9,8 +9,16 @@ repository must stay in lockstep. `fixtures/norito_rpc/` is the sole fixture
 source. The owner command publishes that corpus and its managed mirrors together:
 
 ```bash
-cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
 ```
+
+Both external roots must be absent. Before any tracked update, require identical
+exact path sets, entry types, modes, completion manifests, and every file byte.
+Apply the reviewed identity-relative patch from either sealed root, then run
+`norito-rpc-verify` and the consumer checks.
 
 Python and Swift receive descriptor-only mirrors. Java receives a generated
 descriptor-and-blob mirror. None of those SDK directories is an input or an
@@ -66,14 +74,18 @@ The authoritative inputs and outputs live under `fixtures/norito_rpc/`.
 regenerates `transaction_fixtures.manifest.json`, `schema_hashes.json`, the
 compact-hash vector, and every owned `.norito` payload.
 
-1. Regenerate the complete publication:
+1. Regenerate two complete publications:
    ```bash
-   cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
    ```
-   `scripts/android_fixture_regen.sh`, `scripts/python_fixture_regen.sh`, and
-   `scripts/swift_fixture_regen.sh` delegate to this exact owner; they do not
-   define alternate modes.
-2. Validate canonical and mirror parity:
+   Both external roots are create-only and must not already exist. Require
+   identical exact path sets, entry types, modes, completion manifests, and
+   every file byte before applying the reviewed identity-relative tracked patch.
+   There are no SDK-specific regeneration delegates or alternate modes.
+2. Validate the reviewed canonical and mirror parity:
    ```bash
    cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
    scripts/check_norito_bindings_sync.sh
@@ -87,8 +99,7 @@ compact-hash vector, and every owned `.norito` payload.
 `transaction_payloads.json` and `transaction_fixtures.manifest.json` from the
 canonical directory. Canonical `.norito` blobs are deliberately absent.
 
-1. Run the canonical owner command; `scripts/python_fixture_regen.sh` is only a
-   convenience delegate.
+1. Run the canonical owner command with a new `--output-root`.
 2. Re-run descriptor parity checks:
    ```bash
    python3 scripts/check_python_fixtures.py
@@ -109,8 +120,7 @@ canonical directory. Canonical `.norito` blobs are deliberately absent.
 payload descriptor and manifest there while preserving Swift-owned fixtures;
 canonical `.norito` blobs must not be copied into this directory.
 
-1. Run the canonical owner command; `scripts/swift_fixture_regen.sh` delegates
-   to it without archive or compatibility modes.
+1. Run the canonical owner command with a new `--output-root`.
 2. Verify the descriptor mirror:
    ```bash
    python3 scripts/check_swift_fixtures.py
@@ -145,8 +155,7 @@ there. Never use this directory as a regeneration input.
 Before merging a Norito change that impacts SDK bindings:
 
 1. ✅ Run `scripts/check_norito_bindings_sync.sh` and ensure it passes locally.
-2. ✅ Run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures` once
-   and review the canonical, Java, Python, and Swift outputs together.
+2. ✅ Run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication`, then repeat with a second absent root. Require identical exact path sets, entry types, modes, completion manifests, and every file byte before applying the reviewed identity-relative patch to the canonical, Java, Python, and Swift tracked paths.
 3. ✅ Verify the Python and Swift descriptor-only mirrors, the Java generated
    mirror, and the canonical Norito RPC publication; run the SDK test suites.
 4. ✅ Rebuild/test `java/norito_java` (and `java/iroha_android` when applicable)

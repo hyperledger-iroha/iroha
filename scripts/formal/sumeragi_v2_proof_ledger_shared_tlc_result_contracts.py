@@ -10,28 +10,36 @@ def _shared_tlc_result_contract_source_fidelity_errors(
     }
     expected_callers = set(SHARED_TLC_RESULT_CONTRACT_CALLERS)
     expected_specialized_callers = {
-        "scripts/formal/check_sumeragi_v2_replay_trace.sh",
         "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
         "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh",
         "scripts/formal/run_sumeragi_v2_tlc.sh",
     }
     specialized_callers = set(SHARED_TLC_RESULT_SPECIALIZED_CALLERS)
     if (
+<<<<<<< Updated upstream
         len(SHARED_TLC_RESULT_CONTRACT_CALLERS) != 34
         or len(expected_callers) != 34
     ):
         errors.append(
             "shared TLC result-contract caller inventory must contain "
             "exactly thirty-four unique callers"
+=======
+        len(SHARED_TLC_RESULT_CONTRACT_CALLERS) != 32
+        or len(expected_callers) != 32
+    ):
+        errors.append(
+            "shared TLC result-contract caller inventory must contain "
+            "exactly thirty-two unique direct TLC callers"
+>>>>>>> Stashed changes
         )
     if (
-        len(SHARED_TLC_RESULT_SPECIALIZED_CALLERS) != 4
+        len(SHARED_TLC_RESULT_SPECIALIZED_CALLERS) != 3
         or specialized_callers != expected_specialized_callers
         or not specialized_callers <= expected_callers
     ):
         errors.append(
             "shared TLC result-contract specialized complement must equal "
-            "the replay, item-carrier, liveness-ownership, and aggregate runners"
+            "the item-carrier, liveness-ownership, and aggregate runners"
         )
 
     observed_callers: set[str] = set()
@@ -41,12 +49,7 @@ def _shared_tlc_result_contract_source_fidelity_errors(
             f"{formal_scripts_dir}: shared TLC caller census directory is missing"
         )
     else:
-        census_paths = list(
-            formal_scripts_dir.glob("run_sumeragi_v2_*.sh")
-        )
-        census_paths.append(
-            formal_scripts_dir / "check_sumeragi_v2_replay_trace.sh"
-        )
+        census_paths = list(formal_scripts_dir.glob("run_sumeragi_v2_*.sh"))
         for path in census_paths:
             if not path.is_file():
                 continue
@@ -74,7 +77,11 @@ def _shared_tlc_result_contract_source_fidelity_errors(
     if digest_paths != expected_paths:
         errors.append(
             "shared TLC result-contract digest inventory must equal the "
+<<<<<<< Updated upstream
             f"helper and exact thirty-four callers; "
+=======
+            f"helper and exact thirty-two direct TLC callers; "
+>>>>>>> Stashed changes
             f"missing={sorted(expected_paths - digest_paths)}, "
             f"extra={sorted(digest_paths - expected_paths)}"
         )
@@ -161,7 +168,7 @@ def _shared_tlc_result_contract_source_fidelity_errors(
         ):
             errors.append(
                 f"{relative}: shared TLC primary-diagnostic assertion site "
-                "must be absent exactly for the four specialized callers"
+                "must be absent exactly for the three specialized callers"
             )
 
     sources: dict[str, str] = {}
@@ -235,6 +242,14 @@ def _shared_tlc_result_contract_source_fidelity_errors(
             "Temporal properties were violated[.]$)'",
             "exact primary-diagnostic pattern",
         ),
+        (
+            "readonly SUMERAGI_V2_REPLAY_TOOL_MESSAGE_COUNT=113",
+            "exact replay tool-message count",
+        ),
+        (
+            "readonly SUMERAGI_V2_REPLAY_TOOL_STATE_COUNT=101",
+            "exact replay state-message count",
+        ),
     )
     for token, description in exact_helper_constants:
         if helper_source.count(token) != 1:
@@ -250,6 +265,7 @@ def _shared_tlc_result_contract_source_fidelity_errors(
         "sumeragi_v2_tlc_assert_terminal() {",
         "sumeragi_v2_tlc_assert_exact_line() {",
         "sumeragi_v2_tlc_assert_fixed_success() {",
+        "sumeragi_v2_tlc_assert_replay_tool_result() {",
     )
     helper_offsets = [helper_source.find(header) for header in helper_headers]
     if (
@@ -404,6 +420,61 @@ def _shared_tlc_result_contract_source_fidelity_errors(
                 f"fixed-success helper must retain exactly one {description}"
             )
 
+    replay_result_section = helper_sections[
+        "sumeragi_v2_tlc_assert_replay_tool_result() {"
+    ]
+    for token, description in (
+        (
+            'sumeragi_v2_tlc_assert_regular_log "$label" "$stdout_log"',
+            "regular stdout assertion",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_regular_log "$label-stderr" "$stderr_log"',
+            "regular stderr assertion",
+        ),
+        (
+            '[[ ! -s "$stderr_log" ]] || {',
+            "empty separate-stderr guard",
+        ),
+        (
+            '[[ "$actual_status" -eq 12 ]] || {',
+            "exact status-12 guard",
+        ),
+        (
+            "LC_ALL=C tr -d '\\11\\12\\40-\\176' <\"$stdout_log\"",
+            "ASCII/control-byte rejection",
+        ),
+        (
+            "grep -Ec '^@!@!@STARTMSG [0-9]+:[0-9]+ @!@!@$' \"$stdout_log\"",
+            "tool-message start census",
+        ),
+        (
+            "grep -Ec '^@!@!@ENDMSG [0-9]+ @!@!@$' \"$stdout_log\"",
+            "tool-message end census",
+        ),
+        (
+            "grep -Fxc '@!@!@STARTMSG 2217:4 @!@!@' \"$stdout_log\"",
+            "state-message start census",
+        ),
+        (
+            "grep -Fxc '@!@!@ENDMSG 2217 @!@!@' \"$stdout_log\"",
+            "state-message end census",
+        ),
+        (
+            '"$start_count" == "$SUMERAGI_V2_REPLAY_TOOL_MESSAGE_COUNT"',
+            "exact tool-message count comparison",
+        ),
+        (
+            '"$state_start_count" == "$SUMERAGI_V2_REPLAY_TOOL_STATE_COUNT"',
+            "exact replay-state count comparison",
+        ),
+    ):
+        if replay_result_section.count(token) != 1:
+            errors.append(
+                f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC replay "
+                f"helper must retain exactly one {description}"
+            )
+
     exact_source_invocation = (
         'source "${REPO_ROOT}/scripts/formal/'
         'sumeragi_v2_tlc_result_contract.sh"'
@@ -411,14 +482,9 @@ def _shared_tlc_result_contract_source_fidelity_errors(
     liveness = (
         "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh"
     )
-    replay = "scripts/formal/check_sumeragi_v2_replay_trace.sh"
     liveness_source_invocation = 'source "$TLC_RESULT_CONTRACT"'
     repo_root_assignment = (
         'readonly REPO_ROOT="$(cd -- "$(dirname -- '
-        '"${BASH_SOURCE[0]}")/../.." && pwd)"'
-    )
-    replay_repo_root_assignment = (
-        'REPO_ROOT="$(cd -- "$(dirname -- '
         '"${BASH_SOURCE[0]}")/../.." && pwd)"'
     )
     aggregate = "scripts/formal/run_sumeragi_v2_tlc.sh"
@@ -439,11 +505,7 @@ def _shared_tlc_result_contract_source_fidelity_errors(
             if relative == liveness
             else exact_source_invocation
         )
-        root_assignment = (
-            replay_repo_root_assignment
-            if relative == replay
-            else repo_root_assignment
-        )
+        root_assignment = repo_root_assignment
         source_offset = caller_source.find(source_invocation)
         repo_root_offset = caller_source.find(root_assignment)
         contract_call_matches = list(
@@ -480,17 +542,6 @@ def _shared_tlc_result_contract_source_fidelity_errors(
             errors.append(
                 f"{path}: shared TLC result contract must be sourced exactly "
                 "once after REPO_ROOT and before Java/TLC validation"
-            )
-        if (
-            relative == replay
-            and caller_source.count(
-                f"{replay_repo_root_assignment}\nreadonly REPO_ROOT"
-            )
-            != 1
-        ):
-            errors.append(
-                f"{path}: replay TLC runner must freeze REPO_ROOT before "
-                "sourcing the shared result contract"
             )
         if relative == liveness:
             for token, description in (
@@ -586,39 +637,6 @@ def _shared_tlc_result_contract_source_fidelity_errors(
                 errors.append(
                     f"{path}: non-specialized TLC mutation runner must "
                     "require exactly one primary failure diagnostic"
-                )
-
-    replay_source = sources.get(replay)
-    if replay_source is not None:
-        for token, description in (
-            (
-                'if [[ "$tlc_status" -ne 12 || ! -s "$tlc_log" ]]; then',
-                "status-12 nonempty witness guard",
-            ),
-            (
-                'sumeragi_v2_tlc_assert_regular_log '
-                '"replay-decision-witness" "$tlc_log"',
-                "fresh regular witness-log assertion",
-            ),
-            (
-                'if ! python3 "$NORMALIZER" "$tlc_log" --seed "$SEED" '
-                '>"$normalized_trace"; then',
-                "strict trace normalizer invocation",
-            ),
-            (
-                'if ! cmp -s "$EXPECTED" "$normalized_trace"; then',
-                "checked-in trace comparison",
-            ),
-            (
-                'bash "$REPO_ROOT/scripts/formal/'
-                'run_sumeragi_v2_harness.sh" --model-replay',
-                "production reducer replay",
-            ),
-        ):
-            if replay_source.count(token) != 1:
-                errors.append(
-                    f"{repo_root / replay}: specialized replay TLC runner "
-                    f"must retain exactly one {description}"
                 )
 
     item_carrier = (

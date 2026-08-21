@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iroha.tech/schemas/sumeragi-v2-replay-receipt-v1.schema.json",
+  "title": "Iroha Sumeragi V2 Replay Receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "evidence_class",
+    "mode",
+    "runner",
+    "invocation",
+    "source_identity",
+    "tool_identity",
+    "events",
+    "result",
+    "signing",
+    "artifact_inventory",
+    "publication"
+  ],
+  "properties": {
+    "schema": {"const": "iroha-sumeragi-v2-replay-receipt-v1"},
+    "schema_version": {"const": 1},
+    "evidence_class": {"const": "diagnostic"},
+    "mode": {"const": "formal-only"},
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "event_graph"],
+      "properties": {
+        "path": {"const": "scripts/formal/collect_sumeragi_v2_replay_receipt.py"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "event_graph": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["nodes", "edges"],
+          "properties": {
+            "nodes": {
+              "type": "array",
+              "minItems": 3,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            },
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["from", "to"],
+                "properties": {
+                  "from": {"type": "string", "minLength": 1},
+                  "to": {"type": "string", "minLength": 1}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "invocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "cwd", "environment", "timeout_seconds", "runtime_root"],
+      "properties": {
+        "argv": {"$ref": "#/$defs/argv"},
+        "cwd": {"$ref": "#/$defs/absolute_path"},
+        "environment": {"$ref": "#/$defs/environment"},
+        "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 86400},
+        "runtime_root": {"$ref": "#/$defs/absolute_path"}
+      }
+    },
+    "source_identity": {"$ref": "#/$defs/file_manifest"},
+    "tool_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tla2tools_version",
+        "tlapm_commit",
+        "files",
+        "manifest_sha256"
+      ],
+      "properties": {
+        "tla2tools_version": {"const": "1.7.4"},
+        "tlapm_commit": {"const": "3ab43c7ff31db4ced850619d4746fa4c841a7681"},
+        "files": {
+          "type": "array",
+          "minItems": 5,
+          "items": {"$ref": "#/$defs/file"}
+        },
+        "manifest_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "events": {
+      "type": "array",
+      "minItems": 3,
+      "items": {"$ref": "#/$defs/event"}
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepted",
+        "sany_status",
+        "tlc_status",
+        "normalizer_status",
+        "tool_states",
+        "actions",
+        "separate_stderr_empty",
+        "normalized_fixture",
+        "normalized_sha256",
+        "normalized_matches_fixture"
+      ],
+      "properties": {
+        "accepted": {"const": true},
+        "sany_status": {"const": 0},
+        "tlc_status": {"const": 12},
+        "normalizer_status": {"const": 0},
+        "tool_states": {"const": 101},
+        "actions": {"const": 100},
+        "separate_stderr_empty": {"const": true},
+        "normalized_fixture": {
+          "const": "crates/iroha_sumeragi_core/tests/fixtures/tlc_replay_witness.tsv"
+        },
+        "normalized_sha256": {"$ref": "#/$defs/sha256"},
+        "normalized_matches_fixture": {"const": true}
+      }
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "provider", "release_evidence", "attestation"],
+      "properties": {
+        "status": {"const": "unsigned-diagnostic"},
+        "provider": {"type": "null"},
+        "release_evidence": {"const": false},
+        "attestation": {"type": "null"}
+      }
+    },
+    "artifact_inventory": {
+      "type": "array",
+      "minItems": 6,
+      "items": {"$ref": "#/$defs/file"}
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "create_only",
+        "unexpected_files_allowed",
+        "symlinks_allowed",
+        "hard_links_allowed",
+        "partial"
+      ],
+      "properties": {
+        "create_only": {"const": true},
+        "unexpected_files_allowed": {"const": false},
+        "symlinks_allowed": {"const": false},
+        "hard_links_allowed": {"const": false},
+        "partial": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "object_id": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "absolute_path": {"type": "string", "pattern": "^/"},
+    "argv": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"}
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["LANG", "LC_ALL", "TMPDIR", "TZ"],
+      "properties": {
+        "LANG": {"const": "C"},
+        "LC_ALL": {"const": "C"},
+        "TMPDIR": {"$ref": "#/$defs/absolute_path"},
+        "TZ": {"const": "UTC"}
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes", "mode", "nlink"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 4095},
+        "nlink": {"type": "integer", "minimum": 1}
+      }
+    },
+    "file_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "files", "manifest_sha256"],
+      "properties": {
+        "root": {"$ref": "#/$defs/absolute_path"},
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/file"}
+        },
+        "manifest_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "argv",
+        "cwd",
+        "environment",
+        "descriptors",
+        "status",
+        "timeout",
+        "cleanup",
+        "duration_monotonic_ns",
+        "outputs"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "argv": {"$ref": "#/$defs/argv"},
+        "cwd": {"$ref": "#/$defs/absolute_path"},
+        "environment": {"$ref": "#/$defs/environment"},
+        "descriptors": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stdin", "stdout", "stderr", "close_fds", "new_session"],
+          "properties": {
+            "stdin": {"$ref": "#/$defs/input_descriptor"},
+            "stdout": {"$ref": "#/$defs/output_descriptor"},
+            "stderr": {"$ref": "#/$defs/output_descriptor"},
+            "close_fds": {"const": true},
+            "new_session": {"const": true}
+          }
+        },
+        "status": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["actual", "expected", "matched"],
+          "properties": {
+            "actual": {"type": "integer"},
+            "expected": {"type": "integer"},
+            "matched": {"const": true}
+          }
+        },
+        "timeout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["seconds", "occurred", "grace_seconds", "sigterm_sent", "sigkill_sent"],
+          "properties": {
+            "seconds": {"type": "number", "minimum": 1, "maximum": 86400},
+            "occurred": {"const": false},
+            "grace_seconds": {"const": 2.0},
+            "sigterm_sent": {"const": false},
+            "sigkill_sent": {"const": false}
+          }
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "process_group",
+            "scope",
+            "post_exit_group_members_observed",
+            "process_group_quiescent"
+          ],
+          "properties": {
+            "process_group": {"type": "integer", "minimum": 1},
+            "scope": {"const": "new-session-process-group"},
+            "post_exit_group_members_observed": {"const": false},
+            "process_group_quiescent": {"const": true}
+          }
+        },
+        "duration_monotonic_ns": {"type": "integer", "minimum": 0},
+        "outputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stdout", "stderr"],
+          "properties": {
+            "stdout": {"$ref": "#/$defs/file"},
+            "stderr": {"$ref": "#/$defs/file"}
+          }
+        }
+      }
+    },
+    "input_descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fd", "kind", "path"],
+      "properties": {
+        "fd": {"const": 0},
+        "kind": {"const": "null"},
+        "path": {"const": "/dev/null"}
+      }
+    },
+    "output_descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fd", "kind", "artifact"],
+      "properties": {
+        "fd": {"enum": [1, 2]},
+        "kind": {"const": "create-only-regular-file"},
+        "artifact": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

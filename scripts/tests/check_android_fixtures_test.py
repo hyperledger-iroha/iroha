@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import struct
 import sys
 from typing import Optional
 from pathlib import Path
@@ -34,6 +35,37 @@ def _signed_transaction(payload: bytes, signature: bytes) -> bytes:
     return _field(signature) + _field(payload) + _field(b"\x00")
 
 
+def _crc64_xz(data: bytes) -> int:
+    crc = 0xFFFF_FFFF_FFFF_FFFF
+    for value in data:
+        crc ^= value
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xC96C_5795_D787_0F42 if crc & 1 else crc >> 1
+    return crc ^ 0xFFFF_FFFF_FFFF_FFFF
+
+
+def _canonical_frame(payload: bytes, schema: bytes) -> bytes:
+    return b"".join(
+        (
+            b"NRT0\x00\x00",
+            schema,
+            b"\x00",
+            struct.pack("<Q", len(payload)),
+            struct.pack("<Q", _crc64_xz(payload)),
+            b"\x02",
+            payload,
+        )
+    )
+
+
+def _payload_frame(payload: bytes) -> bytes:
+    return _canonical_frame(payload, MODULE.TRANSACTION_PAYLOAD_SCHEMA)
+
+
+def _signed_frame(signed: bytes) -> bytes:
+    return _canonical_frame(signed, MODULE.SIGNED_TRANSACTION_SCHEMA)
+
+
 def _transaction_payload(
     suffix: bytes = b"", network_id: str = TEST_NETWORK_ID
 ) -> bytes:
@@ -49,15 +81,18 @@ def _write_payloads(path: Path, entries: list[dict]) -> Path:
         payload_base64 = entry.get("payload_base64")
         name = entry.get("name")
         if isinstance(payload_base64, str) and isinstance(name, str):
-            payload_bytes = base64.b64decode(payload_base64, validate=True)
-            signed_bytes = _signed_transaction(
-                payload_bytes, f"{name}-signed".encode()
+            payload_bare = base64.b64decode(payload_base64, validate=True)
+            payload_bytes = _payload_frame(payload_bare)
+            signed_bare = _signed_transaction(
+                payload_bare, f"{name}-signed".encode()
             )
+            signed_bytes = _signed_frame(signed_bare)
+            entry["payload_base64"] = base64.b64encode(payload_bytes).decode()
             entry.setdefault("payload_hash", MODULE.iroha_hash(payload_bytes))
             entry.setdefault("signed_base64", base64.b64encode(signed_bytes).decode())
             entry.setdefault(
                 "signed_hash",
-                MODULE.signed_transaction_entrypoint_hash(signed_bytes),
+                MODULE.signed_transaction_entrypoint_hash(signed_bare),
             )
         entry.setdefault(
             "payload",
@@ -111,18 +146,20 @@ def _fixture_entry(
     time_to_live_ms: int,
     nonce: Optional[int],
 ) -> dict:
-    signed = _signed_transaction(payload, signed)
-    payload_b64 = base64.b64encode(payload).decode()
-    signed_b64 = base64.b64encode(signed).decode()
+    signed_bare = _signed_transaction(payload, signed)
+    payload_frame = _payload_frame(payload)
+    signed_frame = _signed_frame(signed_bare)
+    payload_b64 = base64.b64encode(payload_frame).decode()
+    signed_b64 = base64.b64encode(signed_frame).decode()
     return {
         "name": name,
         "encoded_file": encoded_file,
         "payload_base64": payload_b64,
-        "payload_hash": MODULE.iroha_hash(payload),  # type: ignore[attr-defined]
-        "encoded_len": len(payload),
+        "payload_hash": MODULE.iroha_hash(payload_frame),  # type: ignore[attr-defined]
+        "encoded_len": len(payload_frame),
         "signed_base64": signed_b64,
-        "signed_hash": MODULE.signed_transaction_entrypoint_hash(signed),  # type: ignore[attr-defined]
-        "signed_len": len(signed),
+        "signed_hash": MODULE.signed_transaction_entrypoint_hash(signed_bare),  # type: ignore[attr-defined]
+        "signed_len": len(signed_frame),
         "creation_time_ms": creation_time_ms,
         "network_id": network_id,
         "authority": authority,
@@ -677,7 +714,7 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
 
     payload_bytes = _transaction_payload(b"alpha-payload")
     signed_bytes = b"alpha-signed"
-    (resources / "alpha.norito").write_bytes(payload_bytes)
+    (resources / "alpha.norito").write_bytes(_payload_frame(payload_bytes))
 
     creation_time_ms = 1_735_000_000_123
     network_id = TEST_NETWORK_ID
@@ -760,13 +797,68 @@ def test_signed_hash_uses_compact_external_entrypoint_domain() -> None:
         MODULE.signed_transaction_entrypoint_hash(signed + _field(b"\x00"))
 
 
+def test_signed_envelope_must_embed_exact_declared_payload(tmp_path: Path) -> None:
+    name = "payload-binding"
+    payloads_path = _write_payloads(
+        tmp_path / "transaction_payloads.json", [_payload_entry(name)]
+    )
+    payload_document = json.loads(payloads_path.read_text(encoding="utf-8"))
+    declared_frame = base64.b64decode(
+        payload_document[0]["payload_base64"], validate=True
+    )
+    declared_payload = MODULE.decode_canonical_norito_frame(
+        declared_frame,
+        "declared payload",
+        expected_schema=MODULE.TRANSACTION_PAYLOAD_SCHEMA,
+    )
+    alternate_payload = _transaction_payload(b"different-same-network-payload")
+    assert alternate_payload != declared_payload
+    alternate_signed = _signed_transaction(alternate_payload, b"replacement-signature")
+    payload_document[0]["signed_base64"] = base64.b64encode(
+        _signed_frame(alternate_signed)
+    ).decode()
+    payload_document[0]["signed_hash"] = MODULE.signed_transaction_entrypoint_hash(
+        alternate_signed
+    )
+    payloads_path.write_text(json.dumps(payload_document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="signed payload does not match payload_base64"):
+        MODULE.load_payload_fixtures(payloads_path)
+
+    manifest_entry = _fixture_entry(
+        name,
+        f"{name}.norito",
+        declared_payload,
+        b"declared-signature",
+        1,
+        TEST_NETWORK_ID,
+        "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+        100_000,
+        None,
+    )
+    manifest_entry["signed_base64"] = base64.b64encode(
+        _signed_frame(alternate_signed)
+    ).decode()
+    manifest_entry["signed_hash"] = MODULE.signed_transaction_entrypoint_hash(
+        alternate_signed
+    )
+    manifest_entry["signed_len"] = len(
+        base64.b64decode(manifest_entry["signed_base64"], validate=True)
+    )
+
+    errors = MODULE.compare(tmp_path, {"fixtures": [manifest_entry]}, {})
+    assert (
+        f"manifest signed payload does not match payload_base64 for {name}" in errors
+    )
+
+
 def test_errors_propagate_into_summary(tmp_path: Path) -> None:
     resources = tmp_path / "resources"
     resources.mkdir()
 
     payload_bytes = _transaction_payload(b"bravo")
     signed_bytes = b"bravo-signed"
-    (resources / "bravo.norito").write_bytes(payload_bytes)
+    (resources / "bravo.norito").write_bytes(_payload_frame(payload_bytes))
 
     creation_time_ms = 1_735_000_000_222
     network_id = TEST_NETWORK_ID
@@ -831,7 +923,7 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
 
     payload_bytes = _transaction_payload(b"charlie-payload")
     signed_bytes = b"charlie-signed"
-    (resources / "charlie.norito").write_bytes(payload_bytes)
+    (resources / "charlie.norito").write_bytes(_payload_frame(payload_bytes))
 
     network_id = TEST_NETWORK_ID
     authority = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
@@ -886,7 +978,7 @@ def test_network_id_mismatch_triggers_error(tmp_path: Path) -> None:
 
     payload_bytes = _transaction_payload(b"delta-payload")
     signed_bytes = b"delta-signed"
-    (resources / "delta.norito").write_bytes(payload_bytes)
+    (resources / "delta.norito").write_bytes(_payload_frame(payload_bytes))
 
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
@@ -939,7 +1031,7 @@ def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
 
     payload_bytes = _transaction_payload(b"golf-payload")
     signed_bytes = b"golf-signed"
-    (resources / "golf.norito").write_bytes(payload_bytes)
+    (resources / "golf.norito").write_bytes(_payload_frame(payload_bytes))
 
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
@@ -992,7 +1084,7 @@ def test_time_to_live_mismatch_triggers_error(tmp_path: Path) -> None:
 
     payload_bytes = _transaction_payload(b"hotel-payload")
     signed_bytes = b"hotel-signed"
-    (resources / "hotel.norito").write_bytes(payload_bytes)
+    (resources / "hotel.norito").write_bytes(_payload_frame(payload_bytes))
 
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
@@ -1045,7 +1137,7 @@ def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
 
     payload_bytes = _transaction_payload(b"india-payload")
     signed_bytes = b"india-signed"
-    (resources / "india.norito").write_bytes(payload_bytes)
+    (resources / "india.norito").write_bytes(_payload_frame(payload_bytes))
 
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
@@ -1098,7 +1190,7 @@ def test_missing_nonce_field_fails(tmp_path: Path) -> None:
 
     payload_bytes = _transaction_payload(b"echo-payload")
     signed_bytes = b"echo-signed"
-    (resources / "echo.norito").write_bytes(payload_bytes)
+    (resources / "echo.norito").write_bytes(_payload_frame(payload_bytes))
 
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
@@ -1150,7 +1242,7 @@ def test_missing_time_to_live_field_fails(tmp_path: Path) -> None:
 
     payload_bytes = _transaction_payload(b"foxtrot-payload")
     signed_bytes = b"foxtrot-signed"
-    (resources / "foxtrot.norito").write_bytes(payload_bytes)
+    (resources / "foxtrot.norito").write_bytes(_payload_frame(payload_bytes))
 
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",

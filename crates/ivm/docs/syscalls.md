@@ -174,10 +174,6 @@ Lifecycle / Utility
     schedule and ceiling, and circuit and verifier-key versions.
 - 0xFE COMMIT_OUTPUT — Args: none → Return: `u64=0` — Gas: G_commit
 
-The retired `0xFB USE_NULLIFIER` number is not in ABI V1. Deployable bytecode
-that contains it is rejected as `UnknownSyscall`; its invocation-local `u64`
-set was neither full-width nor durable across transactions.
-
 For the SM4 calls, the host appends the authentication tag to the ciphertext output; callers supply the same layout when invoking the corresponding `OPEN` syscall. `SM4_GCM_*` always uses a 16-byte tag and 12-byte nonce. `SM4_CCM_*` accepts nonce lengths between 7 and 13 bytes and tag sizes {4,6,8,10,12,14,16}; pass the desired tag length in `r14` (use `0` to select 16). Passing `0` in `r12` denotes an empty AAD. Gas charges a fixed SM4 base plus AAD bytes and plaintext/ciphertext bytes inspected, including validation-failure paths after pointer decoding.
 
 Kotodama intrinsics

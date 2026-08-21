@@ -12,6 +12,7 @@ fn simple_prog(nops: usize) -> Vec<u8> {
 }
 #[test]
 fn global_cache_hits_increase_on_repeat() {
+    let _lease = crate::predecode_test_support::exclusive();
     let prog = simple_prog(64);
     let parsed = ivm::ProgramMetadata::parse(&prog).unwrap();
     let meta = parsed.metadata;

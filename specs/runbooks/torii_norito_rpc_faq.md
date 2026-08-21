@@ -51,7 +51,7 @@ front door for on-call handoffs; detailed procedures still live in
 | Dashboard | `dashboards/grafana/torii_norito_rpc_observability.json` | Tracks request rate, error codes, payload sizes, decode failures, and adoption %. |
 | Alerts | `dashboards/alerts/torii_norito_rpc_rules.yml` | `NoritoRpcErrorBudget`, `NoritoRpcDecodeFailures`, and `NoritoRpcFallbackSpike` gates. |
 | Chaos script | `scripts/telemetry/test_torii_norito_rpc_alerts.sh` | Fails CI when alert expressions drift. Run it after every config change. |
-| Smoke tests | `python/iroha_python/scripts/run_norito_rpc_smoke.sh`, `cargo xtask norito-rpc-verify` | Include their logs in the evidence bundle for each promotion. |
+| Smoke tests | `python/iroha_python/scripts/run_norito_rpc_smoke.sh`, `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify --json-out <report-path>` | Include their logs and verification JSON in the evidence bundle for each promotion. |
 
 Dashboards must be exported and attached to the release ticket (`make
 docs-portal-dashboards` in CI) so that on-call engineers can replay the metrics
@@ -62,8 +62,9 @@ without access to production Grafana.
 **How do I allow a new SDK during canary?**  
 Add the service account/token to `torii.transport.norito_rpc.allowed_clients`,
 reload Torii, and record the change in `specs/torii/norito_rpc_tracker.md`
-under NRPC-2R. The SDK owner must also capture a fixture run via
-`scripts/run_norito_rpc_fixtures.sh --sdk <label>`.
+under NRPC-2R. The SDK owner must also capture a fixture report via
+`cargo run --locked -p xtask --features dev-tools --bin xtask --
+norito-rpc-verify --json-out <report-path>`.
 
 **What happens if Norito decoding fails mid-rollout?**  
 Leave `stage=canary`, keep `enabled=true`, and triage the failures via

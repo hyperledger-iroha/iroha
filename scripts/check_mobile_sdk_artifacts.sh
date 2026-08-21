@@ -440,6 +440,36 @@ KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_candidate_lab_apple_restart_phase_v1
 )
 
+# Exact private JNI surface of the non-shipping candidate-evidence module.
+# These identities must be generated only inside the canonical feature-gated
+# Rust module and must never appear in a production mobile archive.
+KAGEMUSHA_CANDIDATE_LAB_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProductionCapabilityObservedV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactBeginV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactWriteV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactFinalizeV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactCancelV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactSetInstallV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactSetIsInstalledV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeAcceptedIdentityV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactSetUninstallV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeValidateBranchV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildInitRequestV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildAppendRequestV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildDuplicateInputAppendRequestV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildVerifyRequestV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildRedeemRequestV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeAppendV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectInitResultV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectSplitResultV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectVerifyResultV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectRedeemResultV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeInitV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeVerifyV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeRedeemV4
+)
+
 # The first mobile release is one exact ABI-22/V4 contract. Keep the complete
 # Kagemusha C export allow-list here so Apple archives, Android shared objects,
 # checked-out Rust, and the checked-in header are all compared against the same
@@ -938,7 +968,8 @@ check_bridge_source_contract() {
         "$CANDIDATE_LAB_FEATURE" "$CANDIDATE_LAB_MARKER" \
         "$CANDIDATE_LAB_HEADER_MARKER" \
         --shipping "${KAGEMUSHA_C_SYMBOLS[@]}" \
-        --lab "${KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS[@]}" <<'PY'
+        --lab "${KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS[@]}" \
+        --lab-jni "${KAGEMUSHA_CANDIDATE_LAB_JNI_SYMBOLS[@]}" <<'PY'
 from collections import Counter
 import re
 import sys
@@ -953,8 +984,11 @@ marker = sys.argv[6]
 marker_symbol = sys.argv[7]
 shipping_separator = sys.argv.index("--shipping")
 lab_separator = sys.argv.index("--lab")
+lab_jni_separator = sys.argv.index("--lab-jni")
 expected = set(sys.argv[shipping_separator + 1:lab_separator])
-expected_lab = set(sys.argv[lab_separator + 1:])
+expected_lab = set(sys.argv[lab_separator + 1:lab_jni_separator])
+expected_lab_jni_order = sys.argv[lab_jni_separator + 1:]
+expected_lab_jni = set(expected_lab_jni_order)
 text = open(path, "r", encoding="utf-8").read()
 try:
     header_text = open(header_path, "r", encoding="utf-8").read()
@@ -1040,18 +1074,99 @@ def rust_code_mask(source):
             hide(cursor, end)
             cursor = end
             continue
+        character_quote = None
+        if source[cursor] == "'":
+            character_quote = cursor
+        elif (
+            source[cursor] == "b"
+            and cursor + 1 < len(source)
+            and source[cursor + 1] == "'"
+            and (cursor == 0 or not (source[cursor - 1].isalnum() or source[cursor - 1] == "_"))
+        ):
+            character_quote = cursor + 1
+        if character_quote is not None:
+            content = character_quote + 1
+            literal_end = None
+            if content < len(source) and source[content] == "\\":
+                end = min(len(source), content + 2)
+                while end < len(source) and source[end] != "\n":
+                    if source[end] == "\\":
+                        end = min(len(source), end + 2)
+                    elif source[end] == "'":
+                        literal_end = end + 1
+                        break
+                    else:
+                        end += 1
+            elif content + 1 < len(source) and source[content + 1] == "'":
+                literal_end = content + 2
+            if literal_end is not None:
+                hide(cursor, literal_end)
+                cursor = literal_end
+                continue
+            # A Rust lifetime or label is not a character literal.
+            cursor += 1
+            continue
         cursor += 1
     return mask
 
 
 code_mask = rust_code_mask(text)
+masked_text = "".join(
+    character if code_mask[index] else ("\n" if character == "\n" else " ")
+    for index, character in enumerate(text)
+)
 
 
-def code_matches(pattern):
-    return [match for match in pattern.finditer(text) if code_mask[match.start()]]
+def code_matches(pattern, *, start=0, end=None):
+    boundary = len(text) if end is None else end
+    return [
+        match for match in pattern.finditer(text, start, boundary)
+        if code_mask[match.start()]
+    ]
+
+
+def matching_code_brace(opening):
+    """Return the matching code brace, ignoring masked Rust lexical content."""
+
+    if opening >= len(text) or text[opening] != "{" or not code_mask[opening]:
+        return None
+    depth = 0
+    for cursor in range(opening, len(text)):
+        if not code_mask[cursor]:
+            continue
+        if text[cursor] == "{":
+            depth += 1
+        elif text[cursor] == "}":
+            depth -= 1
+            if depth == 0:
+                return cursor
+    return None
+
+
+def braced_regions(pattern, *, start=0, end=None):
+    """Find code patterns ending in `{` and return their balanced regions."""
+
+    regions = []
+    for match in code_matches(pattern, start=start, end=end):
+        opening = match.end() - 1
+        closing = matching_code_brace(opening)
+        if closing is None or (end is not None and closing >= end):
+            regions.append((match, opening, None))
+        else:
+            regions.append((match, opening, closing))
+    return regions
+
+
+def immediate_attributes(position):
+    match = re.search(r"(?ms)((?:#\[[^\]]+\]\s*)+)\Z", text[:position])
+    if match is None or not code_mask[match.start()]:
+        return ""
+    return re.sub(r"\s+", "", match.group(1))
 
 
 errors = []
+if len(expected_lab_jni_order) != 24 or len(expected_lab_jni) != 24:
+    errors.append("candidate-lab JNI allow-list must contain exactly 24 unique identities")
 abi_aliases = code_matches(re.compile(
     r"(?m)^const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = "
     r"([^;\n]+);$",
@@ -1075,22 +1190,293 @@ lab_function_pattern = re.compile(
     r'[A-Za-z0-9_]+)\s*\(',
 )
 jni_pattern = re.compile(
-    r'(?m)^pub\s+unsafe\s+extern\s+"system"\s+fn\s+'
+    r'\bpub\s+unsafe\s+extern\s+"system"\s+fn\s+'
     r'(Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_[A-Za-z0-9_]+)\s*\('
 )
 marker_symbol_pattern = re.compile(rf'\b{re.escape(marker_symbol)}\b')
-
-all_export_counts = Counter(match.group(1) for match in code_matches(export_pattern))
-lab_function_counts = Counter(
+direct_export_counts = Counter(match.group(1) for match in code_matches(export_pattern))
+direct_lab_function_counts = Counter(
     match.group(1) for match in code_matches(lab_function_pattern)
 )
-lab_export_counts = Counter(
-    name for name, count in all_export_counts.items()
+direct_lab_export_counts = Counter(
+    name for name, count in direct_export_counts.items()
     for _ in range(count) if "_candidate_lab_" in name
 )
-jni_matches = code_matches(jni_pattern)
-jni_counts = Counter(match.group(1) for match in jni_matches)
 marker_occurrences = code_matches(marker_symbol_pattern)
+
+production_lifecycle = {
+    "init": "connect_norito_kagemusha_recursive_spend_init_v4",
+    "append": "connect_norito_kagemusha_recursive_spend_append_v4",
+    "verify": "connect_norito_kagemusha_recursive_spend_verify_v4",
+    "redeem": "connect_norito_kagemusha_recursive_spend_redeem_v4",
+}
+lab_lifecycle = {
+    "init": "connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4",
+    "append": "connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4",
+    "verify": "connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4",
+    "redeem": "connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4",
+}
+generated_production_counts = Counter()
+generated_lab_counts = Counter()
+
+generator_pattern = re.compile(
+    r"(?m)^macro_rules![ \t]+kagemusha_recursive_spend_lifecycle_exports[ \t]*\{"
+)
+generator_regions = braced_regions(generator_pattern)
+if len(generator_regions) != 1 or generator_regions[0][2] is None:
+    errors.append("Kagemusha lifecycle export generator is not one balanced definition")
+else:
+    _, generator_open, generator_close = generator_regions[0]
+    generator_start = generator_open + 1
+    generator_end = generator_close
+    for slot in ("init", "append", "verify", "redeem"):
+        signature = re.compile(
+            rf"{slot}\s+\$\(#\[\${slot}_attribute:meta\]\)\*\s*=>\s*"
+            rf"\${slot}_name:ident\s*,\s*\${slot}_worker:literal\s*;"
+        )
+        expansion = re.compile(
+            rf"\$\(#\[\${slot}_attribute\]\)\*\s*"
+            r'#\[unsafe\(no_mangle\)\]\s*pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+            rf"\${slot}_name\s*\("
+        )
+        if len(code_matches(signature, start=generator_start, end=generator_end)) != 1:
+            errors.append(f"Kagemusha lifecycle generator has a non-canonical {slot} input")
+        if len(code_matches(expansion, start=generator_start, end=generator_end)) != 1:
+            errors.append(
+                f"Kagemusha lifecycle generator has a non-canonical no-mangle {slot} export"
+            )
+    generated_declarations = code_matches(
+        re.compile(r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+\$[A-Za-z0-9_]+\s*\('),
+        start=generator_start,
+        end=generator_end,
+    )
+    if len(generated_declarations) != 4:
+        errors.append("Kagemusha lifecycle generator must emit exactly four C exports")
+
+lifecycle_call_pattern = re.compile(
+    r"(?m)^kagemusha_recursive_spend_lifecycle_exports![ \t]*\{"
+)
+lifecycle_calls = braced_regions(lifecycle_call_pattern)
+lifecycle_call_kinds = Counter()
+exact_lab_attribute = re.sub(
+    r"\s+", "", f'#[cfg(feature = "{feature}")]'
+)
+for call_match, call_open, call_close in lifecycle_calls:
+    if call_close is None:
+        errors.append("Kagemusha lifecycle invocation is not balanced")
+        continue
+    call_body = masked_text[call_open + 1:call_close]
+    resolvers = re.findall(
+        r"(?m)^\s*resolver\s*=\s*([A-Za-z_][A-Za-z0-9_:]*)\s*;",
+        call_body,
+    )
+    prechecks = re.findall(
+        r"(?m)^\s*verify_precheck\s*=\s*(true|false)\s*;",
+        call_body,
+    )
+    slots = re.findall(
+        r"(?ms)^\s*(init|append|verify|redeem)\b(?:(?!=>).)*?=>\s*"
+        r"(connect_norito_kagemusha_[A-Za-z0-9_]+)\s*,",
+        call_body,
+    )
+    slot_map = dict(slots)
+    canonical_slots = len(slots) == 4 and len(slot_map) == 4
+    attributes = immediate_attributes(call_match.start())
+    if (
+        resolvers == ["require_kagemusha_recursive_spend_artifact_binding_v4"]
+        and prechecks == ["true"]
+        and canonical_slots
+        and slot_map == production_lifecycle
+    ):
+        lifecycle_call_kinds["production"] += 1
+        if attributes:
+            errors.append("production Kagemusha lifecycle invocation must be unguarded")
+        generated_production_counts.update(slot_map.values())
+    elif (
+        resolvers == ["require_kagemusha_candidate_evidence_lab_artifact_binding_v4"]
+        and prechecks == ["false"]
+        and canonical_slots
+        and slot_map == lab_lifecycle
+    ):
+        lifecycle_call_kinds["lab"] += 1
+        if attributes != exact_lab_attribute:
+            errors.append(
+                "candidate-lab lifecycle invocation lacks its exact feature guard"
+            )
+        generated_lab_counts.update(slot_map.values())
+    else:
+        errors.append("Kagemusha lifecycle invocation is not exact")
+
+if lifecycle_call_kinds["production"] != 1:
+    errors.append("production Kagemusha lifecycle invocation is not exactly one")
+if lifecycle_call_kinds["lab"] > 1:
+    errors.append("candidate-lab Kagemusha lifecycle invocation is duplicated")
+
+all_export_counts = direct_export_counts + generated_production_counts + generated_lab_counts
+lab_function_counts = direct_lab_function_counts + generated_lab_counts
+lab_export_counts = direct_lab_export_counts + generated_lab_counts
+
+exact_jni_cfg = (
+    rf'(?ms)^#\[cfg\(all\(\s*feature\s*=\s*"{re.escape(feature)}"\s*,'
+    r'\s*any\(\s*target_os\s*=\s*"android"\s*,'
+    r'\s*target_os\s*=\s*"linux"\s*,'
+    r'\s*target_os\s*=\s*"macos"\s*,'
+    r'\s*target_os\s*=\s*"windows"\s*\)\s*\)\)\][ \t]*\n'
+)
+candidate_jni_identity_pattern = re.compile(
+    r'\b(Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_'
+    r'KagemushaCandidateLabNative_native[A-Za-z0-9_]+)\s*\('
+)
+direct_jni_counts = Counter(
+    match.group(1) for match in code_matches(jni_pattern)
+)
+all_candidate_jni_identity_matches = code_matches(candidate_jni_identity_pattern)
+all_candidate_jni_identity_counts = Counter(
+    match.group(1) for match in all_candidate_jni_identity_matches
+)
+jni_contract_errors = []
+jni_counts = Counter()
+
+candidate_jni_module_pattern = re.compile(
+    r'(?m)^mod[ \t]+kagemusha_candidate_lab_jni[ \t]*\{'
+)
+candidate_jni_modules = braced_regions(candidate_jni_module_pattern)
+exact_candidate_jni_module_pattern = re.compile(
+    exact_jni_cfg
+    + r'#\[allow\(clippy::missing_safety_doc,[ \t]*clippy::too_many_arguments\)\][ \t]*\n'
+    + r'mod[ \t]+kagemusha_candidate_lab_jni[ \t]*\{'
+)
+exact_candidate_jni_modules = braced_regions(exact_candidate_jni_module_pattern)
+generic_reexports = code_matches(re.compile(
+    r'\bpub\s+use\s+kagemusha_candidate_lab_jni::\*\s*;'
+))
+exact_reexports = code_matches(re.compile(
+    exact_jni_cfg + r'pub\s+use\s+kagemusha_candidate_lab_jni::\*\s*;'
+))
+
+module_bounds = None
+if len(candidate_jni_modules) == 1 and candidate_jni_modules[0][2] is not None:
+    _, module_open, module_close = candidate_jni_modules[0]
+    module_bounds = (module_open + 1, module_close)
+else:
+    jni_contract_errors.append(
+        "candidate-lab JNI module is not one balanced definition"
+    )
+if (
+    len(exact_candidate_jni_modules) != 1
+    or exact_candidate_jni_modules[0][2] is None
+    or module_bounds is None
+    or exact_candidate_jni_modules[0][1] + 1 != module_bounds[0]
+    or exact_candidate_jni_modules[0][2] != module_bounds[1]
+):
+    jni_contract_errors.append(
+        "candidate-lab JNI module lacks its exact conjunctive feature guard"
+    )
+if len(generic_reexports) != 1 or len(exact_reexports) != 1:
+    jni_contract_errors.append(
+        "candidate-lab JNI re-export lacks its exact conjunctive feature guard"
+    )
+
+if module_bounds is not None:
+    module_start, module_end = module_bounds
+    macro_specs = (
+        ("candidate_lab_jni_export", 1),
+        ("candidate_lab_jni_forwarders", 1),
+    )
+    for macro_name, expected_declarations in macro_specs:
+        definitions = braced_regions(
+            re.compile(rf'\bmacro_rules![ \t]+{macro_name}[ \t]*\{{'),
+            start=module_start,
+            end=module_end,
+        )
+        if len(definitions) != 1 or definitions[0][2] is None:
+            jni_contract_errors.append(
+                f"candidate-lab JNI generator {macro_name} is not one balanced definition"
+            )
+            continue
+        _, definition_open, definition_close = definitions[0]
+        generated = code_matches(
+            re.compile(
+                r'#\[unsafe\(no_mangle\)\]\s*pub\s+unsafe\s+extern\s+"system"\s+'
+                r'fn\s+\$name\s*\('
+            ),
+            start=definition_open + 1,
+            end=definition_close,
+        )
+        declarations = code_matches(
+            re.compile(
+                r'pub\s+(?:unsafe\s+)?extern\s+"system"\s+fn\s+'
+                r'\$[A-Za-z0-9_]+\s*\('
+            ),
+            start=definition_open + 1,
+            end=definition_close,
+        )
+        if len(generated) != expected_declarations or len(declarations) != expected_declarations:
+            jni_contract_errors.append(
+                f"candidate-lab JNI generator {macro_name} does not emit one exact no-mangle export"
+            )
+
+    bespoke_calls = braced_regions(
+        re.compile(r'\bcandidate_lab_jni_export![ \t]*\{'),
+        start=module_start,
+        end=module_end,
+    )
+    forwarder_calls = braced_regions(
+        re.compile(r'\bcandidate_lab_jni_forwarders![ \t]*\{'),
+        start=module_start,
+        end=module_end,
+    )
+    bespoke_names = []
+    for _, call_open, call_close in bespoke_calls:
+        if call_close is None:
+            continue
+        names = code_matches(
+            candidate_jni_identity_pattern,
+            start=call_open + 1,
+            end=call_close,
+        )
+        if len(names) == 1:
+            bespoke_names.append(names[0].group(1))
+    forwarder_names = []
+    if len(forwarder_calls) == 1 and forwarder_calls[0][2] is not None:
+        _, call_open, call_close = forwarder_calls[0]
+        forwarder_names = [
+            match.group(1)
+            for match in code_matches(
+                candidate_jni_identity_pattern,
+                start=call_open + 1,
+                end=call_close,
+            )
+        ]
+    if len(bespoke_calls) != 2 or bespoke_names != expected_lab_jni_order[:2]:
+        jni_contract_errors.append(
+            "candidate-lab bespoke JNI invocation inventory is not exact"
+        )
+    if len(forwarder_calls) != 1 or forwarder_names != expected_lab_jni_order[2:]:
+        jni_contract_errors.append(
+            "candidate-lab forwarded JNI invocation inventory is not exact"
+        )
+    jni_counts.update(bespoke_names)
+    jni_counts.update(forwarder_names)
+
+if direct_jni_counts:
+    jni_contract_errors.append(
+        "candidate-lab JNI exports must use only the canonical guarded generators"
+    )
+if jni_counts != Counter({name: 1 for name in expected_lab_jni}):
+    missing_jni = sorted(expected_lab_jni - set(jni_counts))
+    unexpected_jni = sorted(set(jni_counts) - expected_lab_jni)
+    duplicate_jni = sorted(name for name, count in jni_counts.items() if count != 1)
+    jni_contract_errors.append(
+        "candidate-lab JNI inventory is not exact "
+        f"(missing={missing_jni}, unexpected={unexpected_jni}, "
+        f"non_single_occurrence={duplicate_jni})"
+    )
+if all_candidate_jni_identity_counts != jni_counts:
+    jni_contract_errors.append(
+        "candidate-lab JNI identity appears outside its canonical macro invocation"
+    )
+
 cargo = None
 cargo_error = None
 try:
@@ -1104,11 +1490,18 @@ lab_present = bool(
     lab_function_counts
     or lab_export_counts
     or jni_counts
+    or direct_jni_counts
+    or all_candidate_jni_identity_counts
+    or candidate_jni_modules
+    or generic_reexports
     or marker_occurrences
     or cargo_declares_lab
 )
 
 if lab_present:
+    if lifecycle_call_kinds["lab"] != 1:
+        errors.append("candidate-lab Kagemusha lifecycle invocation is not exactly one")
+    errors.extend(jni_contract_errors)
     for label, counts in (
         ("Rust function", lab_function_counts),
         ("Rust/C export", lab_export_counts),
@@ -1124,7 +1517,7 @@ if lab_present:
                 f"non_single_occurrence={duplicates})"
             )
 
-    for name in sorted(expected_lab):
+    for name in sorted(expected_lab - set(generated_lab_counts)):
         declaration = re.compile(
             rf'(?m)^#\[cfg\(feature = "{re.escape(feature)}"\)\][ \t]*\n'
             rf'#\[unsafe\(no_mangle\)\][ \t]*\n'
@@ -1158,32 +1551,6 @@ if lab_present:
         errors.append(
             "candidate-lab Rust link marker is not one exact guarded no-mangle static"
         )
-
-    if not jni_counts:
-        errors.append("candidate-lab JNI export surface is missing")
-    exact_jni_cfg = (
-        rf'(?ms)^#\[cfg\(all\(\s*feature\s*=\s*"{re.escape(feature)}"\s*,'
-        r'\s*any\(\s*target_os\s*=\s*"android"\s*,'
-        r'\s*target_os\s*=\s*"linux"\s*,'
-        r'\s*target_os\s*=\s*"macos"\s*,'
-        r'\s*target_os\s*=\s*"windows"\s*\)\s*\)\)\][ \t]*\n'
-    )
-    for name, count in sorted(jni_counts.items()):
-        if count != 1:
-            errors.append(
-                f"candidate-lab JNI export occurs {count} times instead of once: {name}"
-            )
-            continue
-        declaration = re.compile(
-            exact_jni_cfg
-            + r'(?:#\[(?!cfg\(|unsafe\(no_mangle\))[^\n]+\][ \t]*\n)*'
-            + r'#\[unsafe\(no_mangle\)\][ \t]*\n'
-            + rf'pub\s+unsafe\s+extern\s+"system"\s+fn\s+{re.escape(name)}\s*\('
-        )
-        if len(code_matches(declaration)) != 1:
-            errors.append(
-                f"candidate-lab JNI export lacks its exact conjunctive feature guard: {name}"
-            )
 
     if cargo_error is not None:
         errors.append(
@@ -1220,7 +1587,17 @@ if lab_present:
 
 # Candidate-evidence exports are excluded from the shipping ABI only after all
 # checks above authenticate the complete lab-only source contract.
-actual = set(all_export_counts) - set(lab_export_counts)
+shipping_export_counts = Counter(
+    {
+        name: count
+        for name, count in all_export_counts.items()
+        if "_candidate_lab_" not in name
+    }
+)
+actual = set(shipping_export_counts)
+non_single_shipping = sorted(
+    name for name, count in shipping_export_counts.items() if count != 1
+)
 if (
     len(abi_aliases) != 1
     or abi_aliases[0].group(1).strip() != "PRIVACY_BRIDGE_ABI_VERSION_V1"
@@ -1233,6 +1610,11 @@ if (
     )
 missing = sorted(expected - actual)
 retired_or_extra = sorted(actual - expected)
+if non_single_shipping:
+    errors.append(
+        "Kagemusha shipping C export source identities are not single-occurrence: "
+        + ", ".join(non_single_shipping)
+    )
 if missing:
     errors.append("missing Kagemusha C exports: " + ", ".join(missing))
 if retired_or_extra:

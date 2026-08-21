@@ -146,10 +146,11 @@ pub const V1_DYNAMIC_ACCESS_REQUIRES_DECLARED_STATE_MAP: bool = true;
 pub const V1_DYNAMIC_ACCESS_SCHEDULER_AUTHORITATIVE: bool = false;
 /// Retired pre-release numeric type spellings that remain reserved in V1.
 ///
-/// Keeping these names unavailable to source-unit identities and declared types prevents
-/// authenticated metadata from reinterpreting a known retired type spelling. Except for exact
-/// spellings in `V1_FORBIDDEN_SOURCE_IDENTIFIERS`, they remain ordinary names in value and function
-/// namespaces, including entrypoints.
+/// Keeping these names unavailable to source-unit identities and declared
+/// types prevents authenticated metadata from reinterpreting a known retired
+/// type spelling. Except for exact spellings in
+/// `V1_FORBIDDEN_SOURCE_IDENTIFIERS`, they remain ordinary names in value and
+/// function namespaces, including entrypoints.
 pub const V1_RETIRED_NUMERIC_TYPE_NAMES: &[&str] = &[
     "i8",
     "i16",

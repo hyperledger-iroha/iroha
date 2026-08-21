@@ -96,8 +96,12 @@ before partner pilots).
   (`ci/xcframework-smoke:<lane>:device_tag`) so incidents can be tied back to the exact
   simulator or StrongBox device without parsing destination strings. Coordinate follow-up
   with the Swift parity triage runbook and dashboard schema guide when incidents arise.
-- Android Norito fixture rotations run via `make android-fixtures`
-  (`scripts/android_fixture_regen.sh`) before parity checks. CI lanes invoking the
-  helper must follow up with `make android-fixtures-check` (`ci/check_android_fixtures.sh`)
-  so regenerated manifests and `.norito` blobs are validated before commit.
+- Android Norito fixture rotations use the workspace owner command
+  `cargo run --locked -p xtask --features dev-tools --bin xtask --
+  norito-rpc-fixtures --output-root <absent-absolute-external-root>` with two independent
+  absent absolute external roots. Before any tracked update, require identical exact path sets,
+  entry types, modes, completion manifests, and every file byte. Apply the
+  reviewed identity-relative patch from either sealed root, then run
+  `norito-rpc-verify` and `make android-fixtures-check`
+  (`ci/check_android_fixtures.sh`) before commit.
 - Desktop JVMs running the Android tests should add BouncyCastle (`org.bouncycastle:bcprov`) when native Ed25519 support is missing; the harness stubs the provider but attaching the jar keeps local runs aligned with CI.

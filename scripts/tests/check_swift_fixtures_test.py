@@ -6,6 +6,7 @@ import base64
 import copy
 import importlib.util
 import json
+import struct
 import sys
 from pathlib import Path
 
@@ -48,6 +49,29 @@ def signed_envelope(name: str, payload: bytes) -> bytes:
     )
 
 
+def crc64_xz(data: bytes) -> int:
+    crc = 0xFFFF_FFFF_FFFF_FFFF
+    for value in data:
+        crc ^= value
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xC96C_5795_D787_0F42 if crc & 1 else crc >> 1
+    return crc ^ 0xFFFF_FFFF_FFFF_FFFF
+
+
+def canonical_frame(payload: bytes, schema: bytes) -> bytes:
+    return b"".join(
+        (
+            b"NRT0\x00\x00",
+            schema,
+            b"\x00",
+            struct.pack("<Q", len(payload)),
+            struct.pack("<Q", crc64_xz(payload)),
+            b"\x02",
+            payload,
+        )
+    )
+
+
 def payload_body(name: str, *, shared: bool) -> dict:
     kind, action = (
         ("Test", "Test")
@@ -82,21 +106,31 @@ def payload_body(name: str, *, shared: bool) -> dict:
     }
 
 
-def manifest_entry(name: str, body: dict, payload: bytes) -> dict:
-    signed = signed_envelope(name, payload)
+def manifest_entry(name: str, body: dict, payload: bytes, *, shared: bool = False) -> dict:
+    signed_bare = signed_envelope(name, payload)
+    payload_bytes = (
+        canonical_frame(payload, MODULE.TRANSACTION_PAYLOAD_SCHEMA)
+        if shared
+        else payload
+    )
+    signed_bytes = (
+        canonical_frame(signed_bare, MODULE.SIGNED_TRANSACTION_SCHEMA)
+        if shared
+        else signed_bare
+    )
     return {
         "authority": body["authority"],
         "creation_time_ms": body["creation_time_ms"],
         "encoded_file": f"{name}.norito",
-        "encoded_len": len(payload),
+        "encoded_len": len(payload_bytes),
         "name": name,
         "network_id": body["network_id"],
         "nonce": body["nonce"],
-        "payload_base64": base64.b64encode(payload).decode("ascii"),
-        "payload_hash": MODULE.iroha_hash(payload),
-        "signed_base64": base64.b64encode(signed).decode("ascii"),
-        "signed_hash": MODULE.signed_transaction_entrypoint_hash(signed),
-        "signed_len": len(signed),
+        "payload_base64": base64.b64encode(payload_bytes).decode("ascii"),
+        "payload_hash": MODULE.iroha_hash(payload_bytes),
+        "signed_base64": base64.b64encode(signed_bytes).decode("ascii"),
+        "signed_hash": MODULE.signed_transaction_entrypoint_hash(signed_bare),
+        "signed_len": len(signed_bytes),
         "time_to_live_ms": body["time_to_live_ms"],
     }
 
@@ -108,7 +142,9 @@ def populate_valid_corpus(tmp_path: Path) -> tuple[Path, Path, dict, dict]:
     shared_name = "shared_fixture"
     shared_body = payload_body(shared_name, shared=True)
     shared_bytes = b"shared-payload"
-    shared_manifest_entry = manifest_entry(shared_name, shared_body, shared_bytes)
+    shared_manifest_entry = manifest_entry(
+        shared_name, shared_body, shared_bytes, shared=True
+    )
     shared_payload_entry = {
         "name": shared_name,
         **{
@@ -137,7 +173,11 @@ def populate_valid_corpus(tmp_path: Path) -> tuple[Path, Path, dict, dict]:
     for root in (source, target):
         dump(root, "transaction_payloads.json", shared_payloads)
         dump(root, "transaction_fixtures.manifest.json", shared_manifest)
-    write(source, shared_manifest_entry["encoded_file"], shared_bytes)
+    write(
+        source,
+        shared_manifest_entry["encoded_file"],
+        canonical_frame(shared_bytes, MODULE.TRANSACTION_PAYLOAD_SCHEMA),
+    )
 
     swift_payloads = []
     swift_entries = []

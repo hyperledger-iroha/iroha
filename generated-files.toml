@@ -485,73 +485,78 @@ check = "python3 scripts/gen_syscall_doc.py --check"
 name = "norito-rpc-fixtures"
 kind = "file"
 outputs = [
+  "IrohaSwift/Fixtures/transaction_fixtures.manifest.json",
+  "IrohaSwift/Fixtures/transaction_payloads.json",
   "fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json",
-  "fixtures/norito_rpc/typed_fee_payment_gas_limit.norito",
-  "fixtures/norito_rpc/register_asset_definition.norito",
-  "fixtures/norito_rpc/transfer_asset.norito",
-  "fixtures/norito_rpc/transfer_domain.norito",
-  "fixtures/norito_rpc/transfer_asset_definition.norito",
-  "fixtures/norito_rpc/transfer_nft_demo.norito",
-  "fixtures/norito_rpc/mint_asset.norito",
+  "fixtures/norito_rpc/asset_metadata_parity.norito",
   "fixtures/norito_rpc/burn_asset.norito",
+  "fixtures/norito_rpc/executor_upgrade_demo.norito",
   "fixtures/norito_rpc/grant_revoke_permission.norito",
   "fixtures/norito_rpc/grant_revoke_role.norito",
   "fixtures/norito_rpc/grant_revoke_role_permission.norito",
-  "fixtures/norito_rpc/asset_metadata_parity.norito",
-  "fixtures/norito_rpc/set_parameter_next_mode.norito",
-  "fixtures/norito_rpc/executor_upgrade_demo.norito",
-  "fixtures/norito_rpc/register_peer_with_pop_demo.norito",
-  "fixtures/norito_rpc/unregister_peer_demo.norito",
-  "fixtures/norito_rpc/register_role_demo.norito",
+  "fixtures/norito_rpc/iroha_compact_hash_vector.properties",
+  "fixtures/norito_rpc/mint_asset.norito",
+  "fixtures/norito_rpc/mixed_executable_batch.norito",
+  "fixtures/norito_rpc/register_asset_definition.norito",
   "fixtures/norito_rpc/register_nft_demo.norito",
-  "fixtures/norito_rpc/trigger_repetitions_demo.norito",
-  "fixtures/norito_rpc/register_time_trigger_demo.norito",
-  "fixtures/norito_rpc/register_precommit_trigger_demo.norito",
+  "fixtures/norito_rpc/register_peer_with_pop_demo.norito",
   "fixtures/norito_rpc/register_pipeline_trigger_demo.norito",
+  "fixtures/norito_rpc/register_precommit_trigger_demo.norito",
+  "fixtures/norito_rpc/register_role_demo.norito",
+  "fixtures/norito_rpc/register_time_trigger_demo.norito",
   "fixtures/norito_rpc/repo_initiate_tri_party.norito",
   "fixtures/norito_rpc/repo_reverse_unwind.norito",
+  "fixtures/norito_rpc/schema_hashes.json",
+  "fixtures/norito_rpc/set_parameter_next_mode.norito",
   "fixtures/norito_rpc/settlement_dvp_atomic.norito",
   "fixtures/norito_rpc/settlement_pvp_net.norito",
-  "fixtures/norito_rpc/mixed_executable_batch.norito",
-  "fixtures/norito_rpc/iroha_compact_hash_vector.properties",
-  "fixtures/norito_rpc/schema_hashes.json",
-  "fixtures/norito_rpc/transaction_payloads.json",
   "fixtures/norito_rpc/transaction_fixtures.manifest.json",
-  "java/iroha_android/src/test/resources/typed_fee_payment_gas_limit.norito",
-  "java/iroha_android/src/test/resources/register_asset_definition.norito",
-  "java/iroha_android/src/test/resources/transfer_asset.norito",
-  "java/iroha_android/src/test/resources/transfer_domain.norito",
-  "java/iroha_android/src/test/resources/transfer_asset_definition.norito",
-  "java/iroha_android/src/test/resources/transfer_nft_demo.norito",
-  "java/iroha_android/src/test/resources/mint_asset.norito",
+  "fixtures/norito_rpc/transaction_payloads.json",
+  "fixtures/norito_rpc/transfer_asset.norito",
+  "fixtures/norito_rpc/transfer_asset_definition.norito",
+  "fixtures/norito_rpc/transfer_domain.norito",
+  "fixtures/norito_rpc/transfer_nft_demo.norito",
+  "fixtures/norito_rpc/trigger_repetitions_demo.norito",
+  "fixtures/norito_rpc/typed_fee_payment_gas_limit.norito",
+  "fixtures/norito_rpc/unregister_peer_demo.norito",
+  "java/iroha_android/src/test/resources/asset_metadata_parity.norito",
   "java/iroha_android/src/test/resources/burn_asset.norito",
+  "java/iroha_android/src/test/resources/executor_upgrade_demo.norito",
   "java/iroha_android/src/test/resources/grant_revoke_permission.norito",
   "java/iroha_android/src/test/resources/grant_revoke_role.norito",
   "java/iroha_android/src/test/resources/grant_revoke_role_permission.norito",
-  "java/iroha_android/src/test/resources/asset_metadata_parity.norito",
-  "java/iroha_android/src/test/resources/set_parameter_next_mode.norito",
-  "java/iroha_android/src/test/resources/executor_upgrade_demo.norito",
-  "java/iroha_android/src/test/resources/register_peer_with_pop_demo.norito",
-  "java/iroha_android/src/test/resources/unregister_peer_demo.norito",
-  "java/iroha_android/src/test/resources/register_role_demo.norito",
+  "java/iroha_android/src/test/resources/mint_asset.norito",
+  "java/iroha_android/src/test/resources/mixed_executable_batch.norito",
+  "java/iroha_android/src/test/resources/register_asset_definition.norito",
   "java/iroha_android/src/test/resources/register_nft_demo.norito",
-  "java/iroha_android/src/test/resources/trigger_repetitions_demo.norito",
-  "java/iroha_android/src/test/resources/register_time_trigger_demo.norito",
-  "java/iroha_android/src/test/resources/register_precommit_trigger_demo.norito",
+  "java/iroha_android/src/test/resources/register_peer_with_pop_demo.norito",
   "java/iroha_android/src/test/resources/register_pipeline_trigger_demo.norito",
+  "java/iroha_android/src/test/resources/register_precommit_trigger_demo.norito",
+  "java/iroha_android/src/test/resources/register_role_demo.norito",
+  "java/iroha_android/src/test/resources/register_time_trigger_demo.norito",
   "java/iroha_android/src/test/resources/repo_initiate_tri_party.norito",
   "java/iroha_android/src/test/resources/repo_reverse_unwind.norito",
+  "java/iroha_android/src/test/resources/set_parameter_next_mode.norito",
   "java/iroha_android/src/test/resources/settlement_dvp_atomic.norito",
   "java/iroha_android/src/test/resources/settlement_pvp_net.norito",
-  "java/iroha_android/src/test/resources/mixed_executable_batch.norito",
-  "java/iroha_android/src/test/resources/transaction_payloads.json",
   "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
-  "python/iroha_python/tests/fixtures/transaction_payloads.json",
+  "java/iroha_android/src/test/resources/transaction_payloads.json",
+  "java/iroha_android/src/test/resources/transfer_asset.norito",
+  "java/iroha_android/src/test/resources/transfer_asset_definition.norito",
+  "java/iroha_android/src/test/resources/transfer_domain.norito",
+  "java/iroha_android/src/test/resources/transfer_nft_demo.norito",
+  "java/iroha_android/src/test/resources/trigger_repetitions_demo.norito",
+  "java/iroha_android/src/test/resources/typed_fee_payment_gas_limit.norito",
+  "java/iroha_android/src/test/resources/unregister_peer_demo.norito",
   "python/iroha_python/tests/fixtures/transaction_fixtures.manifest.json",
-  "IrohaSwift/Fixtures/transaction_payloads.json",
-  "IrohaSwift/Fixtures/transaction_fixtures.manifest.json",
+  "python/iroha_python/tests/fixtures/transaction_payloads.json",
 ]
-generator = "cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures"
+# The owner writes one immutable, absent external root per invocation. Create
+# two independent roots and require identical exact path sets, entry types,
+# modes, completion manifests, and every file byte before refreshing tracked
+# outputs as an identity-relative reviewed patch from either sealed tree; then
+# run `norito-rpc-verify`.
+generator = "cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root \"${IROHA_NORITO_RPC_FIXTURE_STAGE:?set an absent absolute private external publication root}\""
 generator_sources = [
   "crates/iroha/Cargo.toml",
   "crates/iroha/src/client.rs",
@@ -721,7 +726,7 @@ inputs = [
   "mochi/mochi-core/src/**/*.rs",
   "rust-toolchain.toml",
 ]
-check = "CARGO_TARGET_DIR=\"${IROHA_MOCHI_REPLAY_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" env -u IROHA_MOCHI_REPLAY_FIXTURE_STAGE cargo test --locked --offline -p mochi-integration --lib torii_replay_fixture_owner -- --ignored"
+check = "cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify"
 
 [[generated]]
 name = "kotodama-v1-artifacts-and-manifests"
@@ -769,9 +774,13 @@ outputs = [
   "crates/kotodama_lang/src/samples/threshold_escrow.to",
   "crates/kotodama_lang/src/samples/tuple_return_demo.to",
   "crates/kotodama_lang/src/samples/zk_vote_ballot.to",
+  "demo/authority_probe.manifest.json",
   "demo/authority_probe.to",
+  "demo/irohaswap.manifest.json",
   "demo/irohaswap.to",
+  "demo/ivm_smoke.manifest.json",
   "demo/ivm_smoke.to",
+  "demo/prediction_market.manifest.json",
   "demo/prediction_market.to",
   "demo/transfer.to",
   "examples/hello/hello.to",
@@ -783,12 +792,11 @@ outputs = [
   "integration_tests/fixtures/ivm/query_assets_and_save_cursor.to",
   "integration_tests/fixtures/ivm/smart_contract_can_filter_queries.to",
   "integration_tests/fixtures/ivm/threshold_escrow.to",
-  "demo/authority_probe.manifest.json",
-  "demo/irohaswap.manifest.json",
-  "demo/ivm_smoke.manifest.json",
-  "demo/prediction_market.manifest.json",
 ]
-generator = "python3 scripts/regenerate_kotodama_goldens.py --write --koto target/debug/koto --iroha target/debug/iroha"
+# The owner writes only an immutable absent root outside the workspace. Refresh
+# tracked artifacts as a reviewed identity-relative patch from one of two
+# byte-identical sealed roots, then run the read-only check below.
+generator = "python3 scripts/regenerate_kotodama_goldens.py --write --output-root \"${IROHA_KOTODAMA_V1_ARTIFACT_STAGE:?set an absent absolute private external publication root}\" --koto target/debug/koto --iroha target/debug/iroha"
 generator_sources = [
   "scripts/regenerate_kotodama_goldens.py",
 ]
@@ -802,7 +810,6 @@ inputs = [
   "crates/kotodama_lang/src/**/*.rs",
   "crates/norito/src/**/*.rs",
   "scripts/ivm_artifacts.tsv",
-  "scripts/kotodama_v1_size_baseline.json",
 ]
 check = "python3 scripts/regenerate_kotodama_goldens.py --check --koto target/debug/koto --iroha target/debug/iroha"
 

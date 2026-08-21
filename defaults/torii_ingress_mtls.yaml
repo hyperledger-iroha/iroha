@@ -139,7 +139,7 @@ rotation_schedule:
     - "netops@sora.org"
   announcement_runbook: "specs/torii/norito_rpc_sync_notes.md"
   verification_steps:
-    - "Run scripts/run_norito_rpc_fixtures.sh --summary before swapping CA"
+    - "Run cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify --json-out <report-path> before swapping CA"
     - "Capture Grafana dashboard snapshots (norito_rpc_ingress.json panels 3–6)"
     - "Record promtool output for address_ingest_rules and norito_rpc_rules"
   fallback_plan:

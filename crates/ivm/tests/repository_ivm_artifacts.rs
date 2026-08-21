@@ -7,6 +7,9 @@ use std::{
 };
 const INVENTORY: &str = include_str!("../../../scripts/ivm_artifacts.tsv");
 const EXPECTED_ARTIFACTS: usize = 59;
+const EXPECTED_DEPLOYABLE_CONTRACTS: usize = 56;
+const EXPECTED_PREDECODER_FIXTURES: usize = 2;
+const EXPECTED_GENERIC_EXECUTORS: usize = 1;
 #[derive(Debug)]
 struct Artifact<'a> {
     owner: &'a str,
@@ -109,6 +112,30 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
         declared,
         "tracked IVM artifacts and scripts/ivm_artifacts.tsv must match exactly"
     );
+    assert_eq!(
+        inventory
+            .iter()
+            .filter(|artifact| matches!(artifact.owner, "kotodama-standard" | "kotodama-zk"))
+            .count(),
+        EXPECTED_DEPLOYABLE_CONTRACTS,
+        "deployable contract disposition changed"
+    );
+    assert_eq!(
+        inventory
+            .iter()
+            .filter(|artifact| artifact.owner == "predecoder")
+            .count(),
+        EXPECTED_PREDECODER_FIXTURES,
+        "predecoder fixture disposition changed"
+    );
+    assert_eq!(
+        inventory
+            .iter()
+            .filter(|artifact| artifact.owner == "default")
+            .count(),
+        EXPECTED_GENERIC_EXECUTORS,
+        "generic executor disposition changed"
+    );
     let expected_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     let compiler = ivm::KotodamaCompiler::new();
     let zk_compiler =
@@ -140,6 +167,70 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
         ivm::IVM::new(parsed.metadata.max_cycles.max(1))
             .load_program(&bytes)
             .unwrap_or_else(|error| panic!("{} does not load: {error}", path.display()));
+        match artifact.owner {
+            "kotodama-standard" | "kotodama-zk" => {
+                assert_eq!(
+                    (parsed.metadata.version_major, parsed.metadata.version_minor),
+                    (1, 1),
+                    "{} must use the deployable contract version",
+                    path.display()
+                );
+                assert!(
+                    parsed.contract_interface.is_some(),
+                    "{} must embed its CNTR interface",
+                    path.display()
+                );
+                ivm::verify_contract_artifact(&bytes).unwrap_or_else(|error| {
+                    panic!(
+                        "{} does not pass contract admission: {error}",
+                        path.display()
+                    )
+                });
+            }
+            "predecoder" => {
+                assert_eq!(
+                    (parsed.metadata.version_major, parsed.metadata.version_minor),
+                    (1, 1),
+                    "{} must exercise the V1 predecoder header",
+                    path.display()
+                );
+                assert!(
+                    parsed.contract_interface.is_none() && parsed.literal_section.is_none(),
+                    "{} must remain a raw non-contract predecoder fixture",
+                    path.display()
+                );
+                ivm::IvmCache::decode_artifact(&bytes).unwrap_or_else(|error| {
+                    panic!(
+                        "{} does not pass predecoder admission: {error}",
+                        path.display()
+                    )
+                });
+                assert!(
+                    ivm::verify_contract_artifact(&bytes).is_err(),
+                    "{} must not enter deployable contract admission",
+                    path.display()
+                );
+            }
+            "default" => {
+                assert_eq!(
+                    (parsed.metadata.version_major, parsed.metadata.version_minor),
+                    (1, 0),
+                    "{} is a generic executor, not a deployable contract",
+                    path.display()
+                );
+                assert!(
+                    parsed.contract_interface.is_none() && parsed.literal_section.is_some(),
+                    "{} must remain a generic executor with authenticated literals",
+                    path.display()
+                );
+                assert!(
+                    ivm::verify_contract_artifact(&bytes).is_err(),
+                    "{} must not enter deployable contract admission",
+                    path.display()
+                );
+            }
+            _ => unreachable!("inventory parser rejects unknown owners"),
+        }
         let rebuilt = match artifact.owner {
             "kotodama-standard" | "kotodama-zk" => {
                 let source = safe_relative_path(artifact.source_or_tag, "ko");

@@ -1628,7 +1628,7 @@ BY IsaT(60)
        ExecuteDecisionFetchReady, CertifiedRecoveryFetchFrontier,
        DecisionFetchFrontier, LockedPrepareFetchFrontier,
        DecisionQcValues, DecisionCertifiedBodyRecoveryAuthority,
-       LockedPrepareRecoverySource, HistoricalLockedPrepareSource,
+       HistoricalLockedPrepareSource,
        HistoricalLockedPrepareRecoveryProvenance,
        InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
        NoDecisionForNode, vars
@@ -1892,7 +1892,7 @@ BY IsaT(120)
        CertifiedRecoveryFetchFrontier,
        DecisionFetchFrontier, LockedPrepareFetchFrontier,
        DecisionQcValues, DecisionCertifiedBodyRecoveryAuthority,
-       LockedPrepareRecoverySource, HistoricalLockedPrepareSource,
+       HistoricalLockedPrepareSource,
        HistoricalLockedPrepareRecoveryProvenance,
        InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
        NoDecisionForNode, HeldChunksFor, BodyHeldBy,
@@ -5170,8 +5170,6 @@ ExactLeaderStaticSemanticRank(candidate, rank) ==
      \/ /\ candidate.kind = "DeliverTimeout"
         /\ candidate.item.kind = "TimeoutVote"
         /\ rank = ViewChangeSemanticRank(5)
-     \/ /\ candidate.kind = "FormTC"
-        /\ rank = ViewChangeSemanticRank(4)
      \/ /\ candidate.kind = "DeliverTC"
         /\ candidate.item.kind = "TimeoutCertificate"
         /\ rank = ViewChangeSemanticRank(4)

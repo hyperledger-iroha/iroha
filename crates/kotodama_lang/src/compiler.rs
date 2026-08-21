@@ -5517,7 +5517,7 @@ fn main() {{
                 r#"
 seiyaku CompilerFixture {{
 
-fn main() {{
+kotoage fn main() authorize("CompilerFixture") {{
   let _ballot = ledger::governance::build_submit_ballot(
     election_id: "{selector}",
     ciphertext: b"00",
@@ -7641,7 +7641,7 @@ kotoage fn main() authorize("AssetAdmin") {{
     fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         let code_hash = iroha_crypto::Hash::new(b"kotodama lifecycle access hints");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &sample_account_id(),

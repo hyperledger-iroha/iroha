@@ -3738,7 +3738,7 @@ def test_tla2tools_and_replay_share_the_same_pin() -> None:
     scripts = [
         ROOT_DIR / "scripts" / "formal" / "install_sumeragi_v2_tla2tools.sh",
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh",
-        ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_replay_trace.sh",
+        ROOT_DIR / "scripts" / "formal" / "collect_sumeragi_v2_replay_receipt.py",
     ]
     sources = [path.read_text(encoding="utf-8") for path in scripts]
 
@@ -3749,34 +3749,33 @@ def test_tla2tools_and_replay_share_the_same_pin() -> None:
         for source in sources
     )
     # `-noGenerateSpecTE` was introduced after the immutable v1.7.4 release.
-    # Keep both TLC entry points executable with the toolchain pinned above.
+    # Keep both TLC entry points executable with the toolchain pinned above;
+    # the shell wrapper delegates and does not duplicate tool identity data.
     assert all("-noGenerateSpecTE" not in source for source in sources[1:])
 
 def test_tlc_entrypoints_use_the_pinned_tlapm_function_library() -> None:
-    scripts = [
-        ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh",
-        ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_replay_trace.sh",
-    ]
-    sources = [path.read_text(encoding="utf-8") for path in scripts]
+    direct_source = (
+        ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    ).read_text(encoding="utf-8")
+    collector_source = (
+        ROOT_DIR / "scripts" / "formal" / "collect_sumeragi_v2_replay_receipt.py"
+    ).read_text(encoding="utf-8")
 
-    assert all(
-        "3ab43c7ff31db4ced850619d4746fa4c841a7681" in source
-        for source in sources
-    )
+    assert "3ab43c7ff31db4ced850619d4746fa4c841a7681" in collector_source
     for expected_hash in (
         "b54ff63b7c76c327525c17c188d5f9f5e53d92f3fd701f5e2ba54f0f54391063",
         "aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b8b471790086da",
     ):
-        assert all(expected_hash in source for source in sources)
-    assert all("standard-library checksum mismatch" in source for source in sources)
-    assert all('"-DTLA-Library=${tlapm_compat_dir}"' in source for source in sources)
-    assert all(
-        'ln -s "${TLAPM_STDLIB}/Functions.tla"' in source
-        and 'ln -s "${TLAPM_STDLIB}/Folds.tla"' in source
-        for source in sources
-    )
-    assert all('readonly TLC_MAX_SET_SIZE="1000000"' in source for source in sources)
-    assert all('-maxSetSize "$TLC_MAX_SET_SIZE"' in source for source in sources)
+        assert expected_hash in collector_source
+    assert '"-DTLA-Library=${tlapm_compat_dir}"' in direct_source
+    assert 'ln -s "${TLAPM_STDLIB}/Functions.tla"' in direct_source
+    assert 'ln -s "${TLAPM_STDLIB}/Folds.tla"' in direct_source
+    assert 'readonly TLC_MAX_SET_SIZE="1000000"' in direct_source
+    assert '-maxSetSize "$TLC_MAX_SET_SIZE"' in direct_source
+    assert "TLAPM_MODULES = {" in collector_source
+    assert "_validate_projection(args.tlapm_projection)" in collector_source
+    assert "stat.S_IMODE(metadata.st_mode) & 0o222" in collector_source
+    assert "symlink" in collector_source
 
 def test_tlapm_corridor_uses_one_pinned_identity() -> None:
     commit = "3ab43c7ff31db4ced850619d4746fa4c841a7681"
@@ -3793,7 +3792,8 @@ def test_tlapm_corridor_uses_one_pinned_identity() -> None:
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlaps.sh",
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh",
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh",
-        ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_replay_trace.sh",
+        ROOT_DIR / "scripts" / "formal" / "collect_sumeragi_v2_replay_receipt.py",
+        ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_replay_receipt.py",
         ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_proof_ledger.py",
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh",
         ROOT_DIR / ".github" / "workflows" / "nightly_sumeragi_formal.yml",
@@ -3994,24 +3994,6 @@ def test_readiness_gate_source_seal_rejects_ci_matrix_drift(
     ("relative", "old", "new", "semantic_error"),
     (
         (
-            Path("crates/iroha_sumeragi_core/tests/model_trace_replay.rs"),
-            "if action == ModelAction::DeliverQc {",
-            "if false {",
-            None,
-        ),
-        (
-            Path("scripts/formal/run_sumeragi_v2_harness.sh"),
-            "if ((${#listed_unit_tests[@]} != 140)); then",
-            "if false; then",
-            None,
-        ),
-        (
-            Path("crates/iroha_sumeragi_core/tests/model_trace_replay.rs"),
-            "assert_eq!(steps.len(), 100);",
-            "assert_eq!(steps.len(), 99);",
-            "the exact 100-action assertion",
-        ),
-        (
             Path(
                 "crates/iroha_sumeragi_core/tests/fixtures/tlc_replay_witness.tsv"
             ),
@@ -4033,10 +4015,40 @@ def test_readiness_gate_source_seal_rejects_ci_matrix_drift(
         ),
         (
             Path("scripts/formal/check_sumeragi_v2_replay_trace.sh"),
-            'sumeragi_v2_tlc_assert_regular_log '
-            '"replay-decision-witness" "$tlc_log"\n',
+            "sumeragi_v2_tlc_assert_replay_tool_result \\\n",
             "",
-            "fresh regular witness-log assertion",
+            "the exact process-level replay result check",
+        ),
+        (
+            Path("scripts/formal/check_sumeragi_v2_replay_trace.sh"),
+            'if ! "$RESOLVED_PYTHON" -B -I -S "$CHECKER" '
+            '"${checker_args[@]}" \\\n',
+            "",
+            "the independent receipt-checker invocation",
+        ),
+        (
+            Path("scripts/formal/collect_sumeragi_v2_replay_receipt.py"),
+            "start_new_session=True,\n",
+            "start_new_session=False,\n",
+            "the new-session process-group boundary",
+        ),
+        (
+            Path("scripts/formal/collect_sumeragi_v2_replay_receipt.py"),
+            'raise CollectionError("normalized replay TSV differs byte-for-byte from the fixture")\n',
+            'raise CollectionError("normalized replay differs")\n',
+            "the byte-exact normalized fixture gate",
+        ),
+        (
+            Path("scripts/formal/check_sumeragi_v2_replay_receipt.py"),
+            'if receipt["mode"] != "formal-only":\n',
+            'if receipt["mode"] not in {"formal-only", "integrated"}:\n',
+            "the formal-only mode gate",
+        ),
+        (
+            Path("scripts/formal/sumeragi_v2_replay_receipt_v1.schema.json"),
+            '"mode": {"const": "formal-only"}',
+            '"mode": {"enum": ["formal-only", "integrated"]}',
+            "receipt schema mode must be the exact V1 constant",
         ),
     ),
 )

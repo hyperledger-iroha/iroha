@@ -20,7 +20,7 @@ Rust CLI, Swift, JS, and Android SDKs without bespoke scripts.
 
 Each run must be logged in the adoption tracker
 (`specs/torii/norito_rpc_tracker.md`) with the artefact directory produced
-by the script below. Swap duties via the #nrpc-fixtures Slack thread if you
+by the commands below. Swap duties via the #nrpc-fixtures Slack thread if you
 cannot make your slot.
 
 ## Execution Steps
@@ -30,25 +30,21 @@ cannot make your slot.
    - Pull the latest fixtures: `git pull origin master`.
    - Confirm `fixtures/norito_rpc/transaction_fixtures.manifest.json` and
      `fixtures/norito_rpc/schema_hashes.json` exist.
-2. **Run the wrapper**
+2. **Run the canonical verifier**
    ```bash
-   ./scripts/run_norito_rpc_fixtures.sh \
-     --sdk swift \
-     --rotation "$(date -u +'%Y-%V')" \
-     --note "weekly cadence" \
-     --allow-online \
-     --auto-report
+   mkdir -p artifacts/norito_rpc
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-verify \
+     --json-out artifacts/norito_rpc/<stamp>-<sdk>-norito-rpc-xtask.json
    ```
-   - `--sdk` identifies the participating SDK (`rust-cli`, `swift`, `js`,
-     `android`).
-   - `--rotation` is the calendar week or bespoke milestone label.
-   - `--note` captures extra context (e.g., Torii PR numbers).
-   - Omit `--allow-online` only when CI is running with a populated Cargo cache.
-   - `--auto-report` keeps `artifacts/norito_rpc/rotation_status.{json,md}` fresh with a 7‑day staleness gate.
+   Replace `<stamp>` and `<sdk>` with the UTC run stamp and participating SDK
+   label (`rust-cli`, `swift`, `js`, or `android`). Capture the command's console
+   output next to the JSON report and record the rotation label and ticket in
+   the tracker.
 3. **Inspect exit status**
-   - Success writes
-     `artifacts/norito_rpc/<timestamp>-<sdk>-norito-rpc.*`.
-   - Failures still produce logs; notify the next engineer and Torii Platform.
+   - Success writes the requested report and prints the verified fixture count.
+   - On failure, preserve the captured log and notify the next engineer and
+     Torii Platform.
 4. **Review the xtask report**
    - Check `<timestamp>-<sdk>-norito-rpc-xtask.json` for:
      - `schema_hashes` stability.
@@ -70,49 +66,32 @@ Every cadence run must archive the following under
 `artifacts/norito_rpc/<stamp>-<sdk>-*/`:
 
 - Console log (`*.log`).
-- High-level summary (`*.json`).
-- `cargo xtask norito-rpc-verify --json-out` payload (`*-xtask.json`).
-- Git commit metadata recorded by the script (included in summaries).
+- `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify --json-out <report-path>` payload (`*-xtask.json`).
+- Git commit metadata recorded alongside the report.
 
 These files feed `NRPC-4` adoption evidence and the AND4 readiness gate.
 
 ## Reporting & Evidence Automation
 
-Use `scripts/norito_rpc_fixture_report.py` to aggregate the JSON summaries and
-highlight stale cadence slots before the NRPC tracker review. The helper scans
-`artifacts/norito_rpc/` for `*-norito-rpc.json` files, computes per-SDK freshness,
-and emits both JSON (for governance attachments) and Markdown (for meeting
-notes). Example:
-
-```bash
-python3 scripts/norito_rpc_fixture_report.py \
-  --root artifacts/norito_rpc \
-  --output artifacts/norito_rpc/rotation_status.json \
-  --markdown artifacts/norito_rpc/rotation_status.md \
-  --max-age-days 7
-```
-
-Attach `rotation_status.{json,md}` to the tracker and `status.md` updates so the
-NRPC-4F1 cadence automation has deterministic metadata.
-
-To keep these artefacts fresh automatically, pass `--auto-report` to
-`scripts/run_norito_rpc_fixtures.sh` (default paths +
-`--report-max-age-days 7`), or supply
-`--report-json artifacts/norito_rpc/rotation_status.json --report-markdown artifacts/norito_rpc/rotation_status.md --report-max-age-days 7`
-explicitly when customising paths. The wrapper calls the report helper after
-each run so the aggregated files stay current without additional manual steps.
+Attach each cadence run's canonical `*-xtask.json` verification report,
+console log, and Git identity directly to the tracker. There is no summary or
+SDK-local regeneration compatibility entry point in V1.
 
 ## FAQ
 
 - **Why twice per week?** Torii schema changes cluster around the Tuesday merge
   window, with Friday runs catching regressions before weekend builds.
-- **Can I regenerate fixtures manually?** Only via the script; it enforces
-  metadata consistency and writes the JSON summaries required by the roadmap.
+- **Can I regenerate fixtures manually?** Only with
+  `norito-rpc-fixtures --output-root <absent-absolute-external-root>`. Generate two
+  independent sealed roots, require identical exact path sets, entry types,
+  modes, completion manifests, and every file byte, and apply the reviewed
+  identity-relative tracked patch before running
+  `norito-rpc-verify`.
 - **Do Android/Swift runs differ?** No. Even mobile SDKs consume the same
   Norito fixtures; the SDK label is purely informational.
 - **Where do I reference results?**
   - `specs/torii/norito_rpc_tracker.md` (human-readable log)
-  - `artifacts/norito_rpc/<stamp>-<sdk>-norito-rpc.json` (machine-readable summary)
+  - `artifacts/norito_rpc/<stamp>-<sdk>-norito-rpc-xtask.json` (machine-readable report)
   - `roadmap.md` (status bullets)
 
 Keep this document in sync when cadence changes or new SDKs join the rotation.

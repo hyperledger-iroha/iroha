@@ -89,6 +89,10 @@ seiyaku ContractStateProbe {
     require(Initialized == 1, ProbeError::NotInitialized);
     probe_readback = StoredValue;
   }
+
+  view fn readback() -> int {
+    return probe_readback;
+  }
 }
 "#;
     ivm::KotodamaCompiler::new()
@@ -437,7 +441,7 @@ fn signed_consensus_handshake(
         .collect::<Vec<_>>();
     if handshakes.len() != 1 {
         return Err(eyre!(
-            "typed-query genesis must contain exactly one signed consensus handshake; found {}",
+            "genesis must contain exactly one signed consensus handshake; found {}",
             handshakes.len()
         ));
     }
@@ -882,6 +886,30 @@ async fn contract_state_json_value(
         .get("value_json")
         .cloned()
         .ok_or_else(|| eyre!("contract state `{path}` was not decoded: {payload:?}"))
+}
+
+async fn contract_view_json_value(
+    client: iroha::client::Client,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    entrypoint: &str,
+) -> Result<norito::json::Value> {
+    let contract_address = contract_address.clone();
+    let entrypoint = entrypoint.to_owned();
+    let response = tokio::task::spawn_blocking(move || {
+        client.post_contract_view_json(
+            &iroha_test_samples::ALICE_ID,
+            Some(&contract_address),
+            None,
+            &entrypoint,
+            None,
+            1_000_000,
+        )
+    })
+    .await??;
+    response
+        .get("result")
+        .cloned()
+        .ok_or_else(|| eyre!("contract view response is missing result: {response:?}"))
 }
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
@@ -1633,16 +1661,50 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     Ok(())
 }
 #[tokio::test]
-async fn contract_state_survives_across_calls_in_sora_profile_network() -> Result<()> {
+async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<()> {
     let register_permission: Permission = CanRegisterSmartContractCode.into();
     let enact_permission: Permission = CanEnactGovernance.into();
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_block_cadence(Duration::from_secs(4))
+        // Leave one full signed cadence between full-mesh admission and the
+        // first genesis QC wave on shared runners. This matches the existing
+        // four-validator multi-QC integration envelope.
+        .with_block_cadence(Duration::from_secs(8))
         .with_npos_consensus()
         .with_config_layer(|layer| {
+<<<<<<< Updated upstream
             layer.write(["nexus", "lane_count"], 1i64);
+=======
+            layer
+                .write(["nexus", "enabled"], true)
+                .write(["nexus", "lane_count"], 1i64)
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    1_073_741_824_i64,
+                )
+                // This gate exercises consensus and mandatory DA/RBC, not
+                // SoraNet admission-puzzle cost. Keep PoW enabled at the
+                // production difficulty while bounding full-mesh startup work.
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                );
+>>>>>>> Stashed changes
         })
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
@@ -1652,15 +1714,31 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
             enact_permission,
             iroha_test_samples::ALICE_ID.clone(),
         ));
-    let context = stringify!(contract_state_survives_across_calls_in_sora_profile_network);
+    let context = stringify!(contract_v1_executes_and_survives_four_peer_da_rbc_restart);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
     assert_eq!(network.peers().len(), 4, "test requires four voting peers");
+    let handshake = signed_consensus_handshake(&network)?;
+    handshake
+        .validate()
+        .map_err(|error| eyre!("invalid signed consensus handshake: {error}"))?;
+    assert_eq!(
+        handshake.mode,
+        SumeragiConsensusMode::Npos,
+        "contract V1 restart gate requires the Sora NPoS profile"
+    );
+    assert_eq!(
+        handshake.sumeragi_v2.da_layout,
+        SumeragiV2GenesisContextParameters::recommended().da_layout,
+        "contract V1 restart gate requires the signed mandatory DA layout"
+    );
     let client = network.client();
     let http = integration_tests::http::client();
     network.ensure_blocks(1).await?;
+    let rbc_baseline =
+        wait_for_cross_peer_rbc_diagnostics(&network, Duration::from_secs(120), None, None).await?;
     let code_bytes = contract_state_probe_artifact();
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         "contract_state_probe",
@@ -1668,12 +1746,29 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         "universal",
     )
     .expect("contract alias");
-    let (_, code_hash_hex, _, _) = tokio::task::spawn_blocking({
+    let (contract_address, code_hash_hex, _, deployment_tx_hash) = tokio::task::spawn_blocking({
         let client = client.clone();
         move || deploy_contract_locally_signed(&client, &code_bytes, contract_alias)
     })
     .await
     .expect("locally signed contract deployment task")?;
+    let deployment_height = wait_for_tx_applied(
+        &http,
+        &client.torii_url,
+        &hex::encode(deployment_tx_hash.as_ref()),
+        Duration::from_secs(60),
+        "contract V1 deployment",
+    )
+    .await?;
+    network.ensure_blocks(deployment_height).await?;
+    let deployment_hash = Hash::from(deployment_tx_hash);
+    let deployment_rbc = wait_for_cross_peer_rbc_diagnostics(
+        &network,
+        Duration::from_secs(120),
+        Some(&rbc_baseline),
+        Some((deployment_height, &deployment_hash)),
+    )
+    .await?;
     let pk = iroha_data_model::prelude::ExposedPrivateKey(
         iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
     );
@@ -1891,31 +1986,83 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
     } else {
         wait_for_approved_txs(&client, verify_baseline, Duration::from_secs(30), "verify").await?;
     }
-    let mut state_url = client.torii_url.join("/v1/contracts/state")?;
-    state_url
-        .query_pairs_mut()
-        .append_pair("path", "probe_readback");
-    let state_resp = http
-        .get(state_url)
-        .header("Accept", "application/json")
-        .send()
+    let expected_result = norito::json::Value::from("7".to_owned());
+    for (index, peer) in network.peers().iter().enumerate() {
+        let decoded =
+            contract_view_json_value(peer.client(), &contract_address, "readback").await?;
+        assert_eq!(
+            decoded, expected_result,
+            "peer {index} decoded a non-canonical contract V1 result"
+        );
+        let stored = contract_state_json_value(
+            &http,
+            &peer.client().torii_url,
+            &contract_address,
+            "probe_readback",
+        )
         .await?;
-    if !state_resp.status().is_success() {
-        let status = state_resp.status();
-        let body = state_resp.text().await.unwrap_or_default();
-        return Err(eyre!("state query returned {status}: {body}"));
+        assert_eq!(
+            stored, expected_result,
+            "peer {index} read a divergent contract V1 state value"
+        );
     }
-    let state_payload: norito::json::Value = norito::json::from_str(&state_resp.text().await?)?;
-    let found = state_payload
-        .get("entries")
-        .and_then(norito::json::Value::as_array)
-        .and_then(|entries| entries.first())
-        .and_then(|entry| entry.get("found"))
-        .and_then(norito::json::Value::as_bool)
-        .unwrap_or(false);
+
+    wait_for_cross_peer_rbc_diagnostics(
+        &network,
+        Duration::from_secs(120),
+        Some(&deployment_rbc),
+        None,
+    )
+    .await?;
+    let restart_index = network.peers().len() - 1;
+    let restart_peer = network.peers()[restart_index].clone();
+    let config_layers = network.config_layers().collect::<Vec<_>>();
+    let recovery_height = network
+        .peers()
+        .iter()
+        .take(restart_index)
+        .map(|peer| peer.client().get_status().map(|status| status.blocks))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max()
+        .ok_or_else(|| eyre!("contract V1 restart gate has no healthy peer height"))?;
     assert!(
-        found,
-        "probe_readback should be persisted: {state_payload:?}"
+        restart_peer.shutdown_if_started().await,
+        "selected contract V1 peer was not running before restart"
+    );
+    tokio::time::timeout(
+        network.peer_startup_timeout(),
+        restart_peer.start_checked(config_layers.iter(), None),
+    )
+    .await
+    .map_err(|_| eyre!("contract V1 peer restart exceeded the startup timeout"))??;
+    tokio::time::timeout(
+        network.sync_timeout(),
+        restart_peer.once_block(recovery_height),
+    )
+    .await
+    .map_err(|_| {
+        eyre!(
+            "restarted contract V1 peer did not recover height {recovery_height} within {:?}",
+            network.sync_timeout()
+        )
+    })?;
+    let restarted_result =
+        contract_view_json_value(restart_peer.client(), &contract_address, "readback").await?;
+    assert_eq!(
+        restarted_result, expected_result,
+        "restarted peer decoded a different contract V1 result"
+    );
+    let restarted_state = contract_state_json_value(
+        &http,
+        &restart_peer.client().torii_url,
+        &contract_address,
+        "probe_readback",
+    )
+    .await?;
+    assert_eq!(
+        restarted_state, expected_result,
+        "restarted peer did not recover the contract V1 state value"
     );
     Ok(())
 }

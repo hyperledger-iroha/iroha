@@ -13,6 +13,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from norito_fixture_frame import (
+    SIGNED_TRANSACTION_SCHEMA,
+    TRANSACTION_PAYLOAD_SCHEMA,
+    decode_canonical_norito_frame,
+)
+
 DEFAULT_SOURCE = Path("fixtures/norito_rpc")
 DEFAULT_TARGET = Path("IrohaSwift/Fixtures")
 DEFAULT_STATE = Path("artifacts/swift_fixture_regen_state.json")
@@ -531,6 +541,16 @@ def load_payload_records(path: Path, *, shared: bool) -> Dict[str, PayloadRecord
             signed_bytes = decode_canonical_base64(
                 entry["signed_base64"], f"{context}.signed_base64"
             )
+            payload_bare = decode_canonical_norito_frame(
+                payload_bytes,
+                f"{context}.payload_base64",
+                expected_schema=TRANSACTION_PAYLOAD_SCHEMA,
+            )
+            signed_bare = decode_canonical_norito_frame(
+                signed_bytes,
+                f"{context}.signed_base64",
+                expected_schema=SIGNED_TRANSACTION_SCHEMA,
+            )
             payload_hash = require_lower_hex(
                 entry["payload_hash"], 64, f"{context}.payload_hash"
             )
@@ -539,9 +559,9 @@ def load_payload_records(path: Path, *, shared: bool) -> Dict[str, PayloadRecord
             )
             if iroha_hash(payload_bytes) != payload_hash:
                 raise ValueError(f"{context}.payload_hash does not match payload bytes")
-            if signed_transaction_payload(signed_bytes) != payload_bytes:
+            if signed_transaction_payload(signed_bare) != payload_bare:
                 raise ValueError(f"{context}.signed_base64 does not contain payload bytes")
-            if signed_transaction_entrypoint_hash(signed_bytes) != signed_hash:
+            if signed_transaction_entrypoint_hash(signed_bare) != signed_hash:
                 raise ValueError(f"{context}.signed_hash does not match signed bytes")
             body = PayloadRecord(
                 name=name,
@@ -659,9 +679,22 @@ def load_manifest_records(path: Path, *, swift: bool) -> Dict[str, ManifestRecor
             raise ValueError(f"{context}.signed_len does not match signed_base64")
         if iroha_hash(payload_bytes) != payload_hash:
             raise ValueError(f"{context}.payload_hash does not match payload bytes")
-        if signed_transaction_payload(signed_bytes) != payload_bytes:
+        payload_codec_bytes = payload_bytes
+        signed_codec_bytes = signed_bytes
+        if not swift:
+            payload_codec_bytes = decode_canonical_norito_frame(
+                payload_bytes,
+                f"{context}.payload_base64",
+                expected_schema=TRANSACTION_PAYLOAD_SCHEMA,
+            )
+            signed_codec_bytes = decode_canonical_norito_frame(
+                signed_bytes,
+                f"{context}.signed_base64",
+                expected_schema=SIGNED_TRANSACTION_SCHEMA,
+            )
+        if signed_transaction_payload(signed_codec_bytes) != payload_codec_bytes:
             raise ValueError(f"{context}.signed_base64 does not contain payload bytes")
-        if signed_transaction_entrypoint_hash(signed_bytes) != signed_hash:
+        if signed_transaction_entrypoint_hash(signed_codec_bytes) != signed_hash:
             raise ValueError(f"{context}.signed_hash does not match signed bytes")
         for identity, seen, label in (
             (payload_hash, payload_hashes, "payload_hash"),

@@ -46,20 +46,15 @@ mod tests {
         );
     }
     #[test]
-    fn fixture_generation_errors_are_forwarded() {
+    fn fixture_generation_preserves_create_only_output_root_errors() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let output_root = temp_dir.path().join("output");
         fs::create_dir(&output_root).expect("create output root");
-        let missing = output_root.join("fixtures/norito_rpc/transaction_payloads.json");
         let options = FixtureOptions::new(Some(output_root));
-        let error = generate_fixtures(options).expect_err("missing source fixture must fail");
+        let error = generate_fixtures(options).expect_err("existing output root must fail");
         assert!(
-            error.to_string().contains("fixtures JSON missing"),
+            error.to_string().contains("already exists"),
             "unexpected delegated error: {error}"
-        );
-        assert!(
-            error.to_string().contains(&missing.display().to_string()),
-            "delegated error should retain the missing path: {error}"
         );
     }
     #[test]

@@ -1,40 +1,48 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
 REPLAY_TRACE_SOURCE_SHA256 = {
+    "Cargo.lock": (
+        "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+    ),
     "formal/sumeragi_v2/SumeragiV2TraceWitness.tla": (
         "c8d716f4dfdfd92618fc68967348b04260904d2afd581682a5a1be48386c3328"
     ),
     "crates/iroha_sumeragi_core/tests/fixtures/tlc_replay_witness.cfg": (
-        "36c2822579c247c95384e0a337fd287a4bc35e56c7860a3c93043f6d3b9b2d14"
+        "7b6456cd6f91dd399babf2414d637e730c94e02e218734057ffd1be88bda5546"
     ),
     "crates/iroha_sumeragi_core/tests/fixtures/tlc_replay_witness.tsv": (
         "32b3a409c731cb7c9619d1f8d6ee74e8b6bce666766dae557c04de7b3394b748"
     ),
     "scripts/normalize_sumeragi_v2_tlc_trace.py": (
-        "e21f876507ce5152a8e64a07cfcff235bc9709d294800f77130e819deccd3537"
+        "1297889b3c732e85610f640eb0c960ab3910d3c7060e105fc3610cc91001f96e"
     ),
     "scripts/formal/check_sumeragi_v2_replay_trace.sh": (
-        "3e00fb93a6bd95b2d6c4818c97384160fe40de5aef5b6486e76bb0e241abc01e"
+        "a27cbaabe654dac48230eafae9a7bfa5cb38fe6926e954a6fe1dcbd9ba3bd659"
     ),
-    "crates/iroha_sumeragi_core/tests/model_trace_replay.rs": (
-        "efa8a4c8549dcb10367b3352069cb78742f53fff5f763dcb424464954b98247b"
+    "scripts/formal/collect_sumeragi_v2_replay_receipt.py": (
+        "374644faf49271b454d6323eb40a3c8b205bd6f0a14af3874e948a2be7e46788"
     ),
+<<<<<<< Updated upstream
     "scripts/formal/run_sumeragi_v2_harness.sh": (
         "e400734ca5d3a9079f5ac5b01cca06921b3811ea6ea8fa93e3e5d128984280b8"
+=======
+    "scripts/formal/check_sumeragi_v2_replay_receipt.py": (
+        "94f2e2080d3a83349c7df002785ba245f42aea175212d91f2d8c06725ce18f83"
+    ),
+    "scripts/formal/sumeragi_v2_replay_receipt_v1.schema.json": (
+        "a2855ca8a62f5e223fd8b2a5824b36b126ec1cfd565cee8f9bafe190387f369f"
+    ),
+    "scripts/formal/sumeragi_v2_replay_receipt_test.py": (
+        "e6b2b153185783abd3227f45432b5b1e473f7847ed5ee27664fac9dadc23e4a8"
+    ),
+    "scripts/formal/sumeragi_v2_tlc_result_contract.sh": (
+        "f74b5f668830daf9f434fb8ad3234cac13ffafd44a3e8341841d616a27ec03ea"
+    ),
+    "scripts/formal/resolve_java.sh": (
+        "ba15e07db976919babff8970495479fb4c9d37dbee703b1590ca45946b87eb1e"
+>>>>>>> Stashed changes
     ),
 }
-
-
-REPLAY_MODEL_TESTS = (
-    "tlc_liveness_witness_replays_against_the_production_reducer",
-    "identical_commit_envelope_stutters_before_lock_and_is_admitted_after_persistence",
-    "malformed_and_unsafe_normalized_traces_fail_closed",
-    "crash_replay_rejects_stale_completion_and_resumes_exact_intent",
-    "unsafe_certificate_and_vote_equivocation_do_not_decide",
-    "invalid_body_never_authorizes_prepare_or_decision",
-    "overlapping_timeout_groups_are_rejected_transactionally",
-    "timeout_equivocation_with_different_full_high_qcs_is_reported",
-)
 
 
 _DEFERRED_QC_OWNERSHIP_RUST_ITEM_SHA256 = {
@@ -177,6 +185,19 @@ def _replay_trace_source_fidelity_errors(
         ("INVARIANT DecisionAgreement\n", "the agreement invariant"),
         ("INVARIANT NoDecision\n", "the intentional decision violation"),
         ("  N = 4\n", "the four-validator geometry"),
+        (
+            "  Generations <- FiniteGenerations\n",
+            "the bounded generation carrier override",
+        ),
+        (
+            "  GenerationCanIncrement <- FiniteGenerationCanIncrement\n",
+            "the bounded generation increment override",
+        ),
+        (
+            "  ModelConfiguration <- FiniteModelConfiguration\n",
+            "the bounded model-configuration override",
+        ),
+        ("  MaxGeneration = 4\n", "the view-width generation ceiling"),
     ):
         require_once(config_relative, fragment, description)
 
@@ -252,67 +273,44 @@ def _replay_trace_source_fidelity_errors(
                     "must remain importable by the supported Python 3.9 runtime"
                 )
 
-    model_relative = "crates/iroha_sumeragi_core/tests/model_trace_replay.rs"
-    for fragment, description in (
-        (
-            'const TRACE: &str = include_str!("fixtures/tlc_replay_witness.tsv");\n',
-            "the checked-in fixture inclusion",
-        ),
-        (
-            "fn tlc_liveness_witness_replays_against_the_production_reducer() {\n",
-            "the production replay entry test",
-        ),
-        (
-            'let steps = parse_trace(TRACE).expect("checked-in source-aligned '
-            'trace is valid");\n',
-            "the checked-in trace parser",
-        ),
-        ("assert_eq!(steps.len(), 100);\n", "the exact 100-action assertion"),
-    ):
-        require_once(model_relative, fragment, description)
-
     replay_relative = "scripts/formal/check_sumeragi_v2_replay_trace.sh"
     replay_fragments = (
         (
-            'readonly EXPECTED="${FIXTURE_DIR}/tlc_replay_witness.tsv"\n',
-            "the expected fixture path",
+            'readonly COLLECTOR="${REPO_ROOT}/scripts/formal/'
+            'collect_sumeragi_v2_replay_receipt.py"\n',
+            "the canonical collector path",
         ),
         (
-            'readonly CONFIG="${FIXTURE_DIR}/tlc_replay_witness.cfg"\n',
-            "the witness configuration path",
+            'readonly CHECKER="${REPO_ROOT}/scripts/formal/'
+            'check_sumeragi_v2_replay_receipt.py"\n',
+            "the independent receipt-checker path",
         ),
         (
-            'readonly NORMALIZER="${REPO_ROOT}/scripts/'
-            'normalize_sumeragi_v2_tlc_trace.py"\n',
-            "the normalizer path",
-        ),
-        (
-            'source "${REPO_ROOT}/scripts/formal/'
+            'readonly RESULT_CONTRACT="${REPO_ROOT}/scripts/formal/'
             'sumeragi_v2_tlc_result_contract.sh"\n',
+            "the shared result-contract path",
+        ),
+        (
+            'if ! "$RESOLVED_PYTHON" -B -I -S "$COLLECTOR" '
+            '"${collector_args[@]}" \\\n',
+            "the collector invocation",
+        ),
+        (
+            'source "$RESULT_CONTRACT"\n',
             "the shared TLC result-contract import",
         ),
         (
-            'if [[ "$tlc_status" -ne 12 || ! -s "$tlc_log" ]]; then\n',
-            "the intentional TLC violation-status check",
+            "sumeragi_v2_tlc_assert_replay_tool_result \\\n",
+            "the exact process-level replay result check",
         ),
         (
-            'sumeragi_v2_tlc_assert_regular_log '
-            '"replay-decision-witness" "$tlc_log"\n',
-            "the fresh regular witness-log assertion",
+            'if ! "$RESOLVED_PYTHON" -B -I -S "$CHECKER" '
+            '"${checker_args[@]}" \\\n',
+            "the independent receipt-checker invocation",
         ),
         (
-            'python3 "$NORMALIZER" "$tlc_log" --seed "$SEED" '
-            '>"$normalized_trace"',
-            "the pinned-seed normalizer invocation",
-        ),
-        (
-            'if ! cmp -s "$EXPECTED" "$normalized_trace"; then\n',
-            "the exact normalized-fixture comparison",
-        ),
-        (
-            'bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" '
-            "--model-replay\n",
-            "the production replay dispatcher",
+            "wrapper_complete=1\n",
+            "the verified-only cleanup authorization",
         ),
     )
     for fragment, description in replay_fragments:
@@ -320,14 +318,13 @@ def _replay_trace_source_fidelity_errors(
     replay_source = sources.get(replay_relative)
     if replay_source is not None:
         ordered_fragments = (
+            replay_fragments[0][0],
+            replay_fragments[1][0],
+            replay_fragments[2][0],
             replay_fragments[3][0],
-            "tlc2.TLC",
-            "tlc_status=$?",
             replay_fragments[4][0],
             replay_fragments[5][0],
             replay_fragments[6][0],
-            replay_fragments[7][0],
-            replay_fragments[8][0],
         )
         positions = [replay_source.find(fragment) for fragment in ordered_fragments]
         if any(position < 0 for position in positions) or positions != sorted(
@@ -335,51 +332,102 @@ def _replay_trace_source_fidelity_errors(
         ):
             errors.append(
                 f"{repo_root / replay_relative}: replay gate must order the "
-                "shared result contract, TLC, status and regular-log "
-                "validation, normalization, exact comparison, and production "
-                "dispatch"
+                "collector, shared process-level result check, independent "
+                "receipt check, and verified-only cleanup"
             )
-
-    harness_relative = "scripts/formal/run_sumeragi_v2_harness.sh"
-    harness_source = sources.get(harness_relative)
-    if harness_source is not None:
-        inventory = re.search(
-            r"(?ms)^    required_replay_tests=\(\n(?P<body>.*?)^    \)\n",
-            harness_source,
-        )
-        if inventory is None:
-            errors.append(
-                f"{repo_root / harness_relative}: replay harness must declare "
-                "the exact eight-test inventory"
-            )
-        else:
-            observed_tests = tuple(
-                line.strip()
-                for line in inventory.group("body").splitlines()
-                if line.strip()
-            )
-            if observed_tests != REPLAY_MODEL_TESTS:
-                errors.append(
-                    f"{repo_root / harness_relative}: replay harness must declare "
-                    "the exact eight-test inventory in canonical order"
-                )
-        harness_fragments = (
-            "--model-replay)",
-            "model_replay_test_list=",
-            'if ((${#listed_replay_tests[@]} != '
-            '${#required_replay_tests[@]})); then',
-            "replay_ignored_test_list=",
-            "if ((${#listed_ignored_replay_tests[@]} != 0)); then",
-            "--test model_trace_replay -- --test-threads=1",
-        )
-        positions = [harness_source.find(fragment) for fragment in harness_fragments]
-        if any(position < 0 for position in positions) or positions != sorted(
-            positions
+        for forbidden, description in (
+            ("tlc2.TLC", "direct TLC launch"),
+            ("run_sumeragi_v2_harness.sh", "unexecuted reducer dispatch"),
+            ("--integrated", "retired integrated mode"),
+            ("--require-release", "unsupported release-evidence mode"),
+            ("ln -s", "runtime compatibility symlink"),
+            ("rm -rf", "unbound recursive cleanup"),
         ):
-            errors.append(
-                f"{repo_root / harness_relative}: replay harness must inventory "
-                "exactly eight runnable tests before executing the suite"
-            )
+            if forbidden in replay_source:
+                errors.append(
+                    f"{repo_root / replay_relative}: final V1 wrapper must not "
+                    f"contain {description}"
+                )
+
+    collector_relative = "scripts/formal/collect_sumeragi_v2_replay_receipt.py"
+    for fragment, description in (
+        ('EVENT_TEMPLATES = {\n    "formal-only": (\n', "the sole formal-only event graph"),
+        ('("standalone_sany", ()),\n', "the standalone SANY event"),
+        ('("raw_tlc", ("standalone_sany",)),\n', "the raw TLC dependency"),
+        ('("normalizer", ("raw_tlc",)),\n', "the normalizer dependency"),
+        ("start_new_session=True,\n", "the new-session process-group boundary"),
+        ("status = process.wait(timeout=timeout_seconds)\n", "the bounded process wait"),
+        ("term_sent, kill_sent = _terminate_group(process.pid, process)\n", "the timeout process-group cleanup"),
+        ('if _read_event_output(events_directory, event, "stderr"):\n', "the empty separate-stderr gate"),
+        ('raise CollectionError("normalized replay TSV differs byte-for-byte from the fixture")\n', "the byte-exact normalized fixture gate"),
+        ('"status": "unsigned-diagnostic",\n', "the non-release signing status"),
+        ('"release_evidence": False,\n', "the non-release evidence marker"),
+        ('"schema_version": 1,\n', "the sole V1 schema version"),
+        ('"unexpected_files_allowed": False,\n', "the closed artifact inventory"),
+    ):
+        require_once(collector_relative, fragment, description)
+    collector_source = sources.get(collector_relative)
+    if collector_source is not None:
+        for forbidden, description in (
+            ('"integrated"', "retired integrated mode"),
+            ('"release"', "nominal release mode"),
+            ("run_sumeragi_v2_harness.sh", "unexecuted reducer dispatch"),
+        ):
+            if forbidden in collector_source:
+                errors.append(
+                    f"{repo_root / collector_relative}: final V1 collector must "
+                    f"not contain {description}"
+                )
+
+    checker_relative = "scripts/formal/check_sumeragi_v2_replay_receipt.py"
+    for fragment, description in (
+        ('if receipt["mode"] != "formal-only":\n', "the formal-only mode gate"),
+        ('if receipt["evidence_class"] != "diagnostic":\n', "the diagnostic evidence gate"),
+        ('expected_graph = _source_event_graph(collector, receipt["mode"])\n', "the source-derived event graph"),
+        ('if observed_directories != {".", "events"}:\n', "the exact directory inventory"),
+        ('if observed_files != expected_files:\n', "the exact file inventory"),
+        ('if receipt["signing"] != expected:\n', "the exact signing record"),
+        ('if require_release:\n', "the release-evidence fail-closed branch"),
+        ('"diagnostic data is not release evidence"\n', "the release rejection diagnostic"),
+        ('if result != expected_result:\n', "the exact final result contract"),
+    ):
+        require_once(checker_relative, fragment, description)
+
+    schema_relative = "scripts/formal/sumeragi_v2_replay_receipt_v1.schema.json"
+    schema_source = sources.get(schema_relative)
+    if schema_source is not None:
+        try:
+            schema = json.loads(schema_source)
+        except json.JSONDecodeError:
+            errors.append(f"{repo_root / schema_relative}: receipt schema must be JSON")
+        else:
+            properties = schema.get("properties", {})
+            exact_constants = {
+                "schema_version": 1,
+                "evidence_class": "diagnostic",
+                "mode": "formal-only",
+            }
+            for field, expected in exact_constants.items():
+                if properties.get(field) != {"const": expected}:
+                    errors.append(
+                        f"{repo_root / schema_relative}: receipt schema {field} "
+                        f"must be the exact V1 constant {expected!r}"
+                    )
+            result_properties = properties.get("result", {}).get("properties", {})
+            for field, expected in (
+                ("sany_status", 0),
+                ("tlc_status", 12),
+                ("normalizer_status", 0),
+                ("tool_states", 101),
+                ("actions", 100),
+                ("separate_stderr_empty", True),
+                ("normalized_matches_fixture", True),
+            ):
+                if result_properties.get(field) != {"const": expected}:
+                    errors.append(
+                        f"{repo_root / schema_relative}: receipt result {field} "
+                        f"must be the exact V1 constant {expected!r}"
+                    )
 
     return errors
 
@@ -420,10 +468,10 @@ def _exact_tla_call_statement_tokens(
 
 _SAME_ROUND_STRICT_TLA_SOURCE_SHA256 = {
     "SumeragiV2InductiveProofs.tla": (
-        "e641c31e18446f5ac7b5b9e0e432c15f7c97b428682807041b59c1d92e1f475e"
+        "4b7901bcc00d72b997f7ff08050a3730ca6f372ea70a03d21f175aeea7d4a0a8"
     ),
     "SumeragiV2Proofs.tla": (
-        "8bab200abaa84098646b781e185811fd59573842adc56c36454901dfe9212048"
+        "5089eb6e4f98c97f12b0eb13152ec52e2d9134c09da8df78ecfaf1f168739b16"
     ),
 }
 
@@ -3436,7 +3484,7 @@ _EXACT_CERTIFICATE_THEOREM_SHA256: dict[tuple[str, str], str] = {
 
 _EXACT_CERTIFICATE_PROOF_FILE_SHA256 = {
     "SumeragiV2InductiveProofs.tla": (
-        "e641c31e18446f5ac7b5b9e0e432c15f7c97b428682807041b59c1d92e1f475e"
+        "4b7901bcc00d72b997f7ff08050a3730ca6f372ea70a03d21f175aeea7d4a0a8"
     ),
 }
 

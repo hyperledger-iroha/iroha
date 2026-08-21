@@ -27,7 +27,7 @@ RetirementModes == {"AtomicAllCarriers", "RetainDeferredCarrier"}
 
 TimeoutLifecycleKinds ==
   {"BeginTimeout", "PersistTimeout", "SignTimeout",
-   "DeliverTimeout", "FormTC", "DeliverTC",
+   "DeliverTimeout", "DeliverTC",
    "BeginInstallTC", "PersistInstallTC"}
 
 InstalledView == 1

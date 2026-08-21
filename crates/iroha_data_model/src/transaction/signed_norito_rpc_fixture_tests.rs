@@ -6,10 +6,7 @@ mod norito_rpc_fixture_tests {
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use iroha_crypto::Hash;
-    use norito::{
-        core::DecodeFromSlice,
-        json::{self, Value},
-    };
+    use norito::json::{self, Value};
     use std::{collections::BTreeSet, fs, path::PathBuf};
     fn manifest_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -225,17 +222,27 @@ mod norito_rpc_fixture_tests {
                 signed_len,
                 "{name}: signed_len mismatch"
             );
+            let payload: TransactionPayload = norito::decode_canonical(&payload_bytes)
+                .unwrap_or_else(|err| {
+                    panic!("{name}: canonical payload frame decode failed: {err}")
+                });
+            let canonical_payload_bare = norito::codec::encode_adaptive(&payload);
+            assert!(
+                norito::decode_canonical::<TransactionPayload>(&canonical_payload_bare).is_err(),
+                "{name}: bare payload bytes must not be accepted as an archive"
+            );
             let computed_payload_hash = Hash::new(&payload_bytes).to_string();
             assert_eq!(
                 computed_payload_hash, payload_hash,
                 "{name}: payload_hash mismatch"
             );
-            let (signed_tx, used) = SignedTransaction::decode_from_slice(&signed_bytes)
-                .unwrap_or_else(|err| panic!("{name}: signed transaction decode failed: {err}"));
-            assert_eq!(
-                used,
-                signed_bytes.len(),
-                "{name}: signed transaction has trailing bytes"
+            let signed_tx: SignedTransaction = norito::decode_canonical(&signed_bytes)
+                .unwrap_or_else(|err| {
+                    panic!("{name}: canonical signed frame decode failed: {err}")
+                });
+            assert!(
+                norito::decode_canonical::<SignedTransaction>(&signed_tx.encode()).is_err(),
+                "{name}: bare signed bytes must not be accepted as an archive"
             );
             assert_eq!(
                 signed_tx.hash_as_entrypoint().to_string(),
@@ -272,7 +279,7 @@ mod norito_rpc_fixture_tests {
                 "{name}: nonce mismatch"
             );
             let signed_payload_bytes = norito::codec::encode_adaptive(signed_tx.payload());
-            if signed_payload_bytes != payload_bytes {
+            if signed_payload_bytes != canonical_payload_bare {
                 fn first_diff(left: &[u8], right: &[u8]) -> Option<(usize, u8, u8)> {
                     let shared_len = left.len().min(right.len());
                     for idx in 0..shared_len {
@@ -282,24 +289,8 @@ mod norito_rpc_fixture_tests {
                     }
                     None
                 }
-                let payload_from_fixture: TransactionPayload = {
-                    let _guard = norito::core::PayloadCtxGuard::enter(&payload_bytes);
-                    let mut cursor = std::io::Cursor::new(&payload_bytes);
-                    let decoded: TransactionPayload = norito::codec::Decode::decode(&mut cursor)
-                        .unwrap_or_else(|err| {
-                            panic!("{name}: decode payload fixture bytes (bare): {err}")
-                        });
-                    let used =
-                        usize::try_from(cursor.position()).expect("cursor.position fits usize");
-                    assert_eq!(
-                        used,
-                        payload_bytes.len(),
-                        "{name}: payload fixture contains trailing bytes"
-                    );
-                    decoded
-                };
-                let payload_equal = &payload_from_fixture == signed_tx.payload();
-                let diff = first_diff(&signed_payload_bytes, &payload_bytes);
+                let payload_equal = &payload == signed_tx.payload();
+                let diff = first_diff(&signed_payload_bytes, &canonical_payload_bare);
                 let mut has_invalid_instruction = false;
                 let mut register_role_stats: Option<(usize, usize)> = None;
                 let mut instruction_count: Option<usize> = None;
@@ -339,10 +330,11 @@ mod norito_rpc_fixture_tests {
                 panic!(
                     "{name}: payload bytes mismatch after decode+re-encode (len encoded={}, len fixture={}, first_diff={diff:?}, payload_equal={payload_equal}, has_invalid_instruction={has_invalid_instruction}, register_role_stats={register_role_stats:?}, instruction_count={instruction_count:?}, instruction_types={instruction_types:?})",
                     signed_payload_bytes.len(),
-                    payload_bytes.len(),
+                    canonical_payload_bare.len(),
                 );
             }
-            let signed_reencoded = norito::codec::encode_adaptive(&signed_tx);
+            let signed_reencoded = norito::encode_canonical(&signed_tx)
+                .unwrap_or_else(|err| panic!("{name}: signed frame re-encode failed: {err}"));
             assert_eq!(
                 signed_reencoded, signed_bytes,
                 "{name}: signed bytes mismatch after re-encode"

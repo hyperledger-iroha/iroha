@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { blake2b256 } from "../src/blake2b.js";
+import { validateNoritoFrame } from "../src/norito.js";
 import { parseStrictLosslessIntegerJson } from "../src/numericV1.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -77,6 +79,42 @@ const canonicalManifest = loadJsonRelative(
 const sourcePayloadFixtures = loadJsonRelative(
   "fixtures/norito_rpc/transaction_payloads.json",
 );
+const schemaHashes = loadJsonRelative("fixtures/norito_rpc/schema_hashes.json");
+const transactionPayloadType =
+  "iroha_data_model::transaction::signed::model::TransactionPayload";
+const signedTransactionType =
+  "iroha_data_model::transaction::signed::model::SignedTransaction";
+
+function deriveNoritoSchemaHash(typeName) {
+  return createHash("sha256")
+    .update(Buffer.from("norito:v1:type-name\0", "utf8"))
+    .update(Buffer.from(typeName, "utf8"))
+    .digest()
+    .subarray(0, 16);
+}
+
+const transactionPayloadSchemaHash = deriveNoritoSchemaHash(
+  transactionPayloadType,
+);
+const signedTransactionSchemaHash = deriveNoritoSchemaHash(
+  signedTransactionType,
+);
+
+function assertFixtureSchemaManifest(document) {
+  for (const [alias, typeName, expectedHash] of [
+    ["TransactionPayload", transactionPayloadType, transactionPayloadSchemaHash],
+    ["SignedTransaction", signedTransactionType, signedTransactionSchemaHash],
+  ]) {
+    const matches = document.entries.filter((entry) => entry.alias === alias);
+    assert.equal(matches.length, 1, `${alias}: schema manifest identity count`);
+    assert.equal(matches[0].type_name, typeName, `${alias}: schema type name`);
+    assert.equal(
+      matches[0].schema_hash,
+      `0x${expectedHash.toString("hex")}`,
+      `${alias}: independently derived schema hash`,
+    );
+  }
+}
 const fixtureNetworkId =
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 const networkIdPattern = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u;
@@ -541,6 +579,52 @@ function externalTransactionEntrypointHashHex(canonicalPayload) {
   );
 }
 
+function decodeCompactLength(bytes, start, context) {
+  let offset = start;
+  let value = 0n;
+  let shift = 0n;
+  while (offset < bytes.length && shift <= 63n) {
+    const byte = bytes[offset];
+    offset += 1;
+    value |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      const canonical = compactLength(value);
+      if (!bytes.subarray(start, offset).equals(canonical)) {
+        throw new Error(`${context} uses a non-canonical compact field length`);
+      }
+      if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(`${context} field length exceeds JavaScript's safe range`);
+      }
+      return { length: Number(value), offset };
+    }
+    shift += 7n;
+  }
+  throw new Error(`${context} has a truncated or overflowing compact field length`);
+}
+
+function readSignedField(bytes, start, context) {
+  const decoded = decodeCompactLength(bytes, start, context);
+  const end = decoded.offset + decoded.length;
+  if (end > bytes.length) {
+    throw new Error(`${context} is truncated`);
+  }
+  return { bytes: bytes.subarray(decoded.offset, end), offset: end };
+}
+
+function signedTransactionPayload(bytes, context) {
+  const signature = readSignedField(bytes, 0, `${context}.signature`);
+  const payload = readSignedField(bytes, signature.offset, `${context}.payload`);
+  const multisig = readSignedField(
+    bytes,
+    payload.offset,
+    `${context}.multisig_signatures`,
+  );
+  if (multisig.offset !== bytes.length) {
+    throw new Error(`${context} has trailing or legacy envelope fields`);
+  }
+  return payload.bytes;
+}
+
 function makeSourceFixture(name = "alpha") {
   const common = {
     authority: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
@@ -976,6 +1060,13 @@ test("fixture base64 hashes match manifest", () => {
       fixture.payload_base64,
       `${fixture.name}.payload_base64`,
     );
+    const payloadFrame = validateNoritoFrame(payloadBytes, {
+      context: `${fixture.name}.payload_base64`,
+      expectedSchemaHash: transactionPayloadSchemaHash,
+      requireNonEmptyPayload: true,
+      expectedPaddingLength: 0,
+    });
+    assert.equal(payloadFrame.flags, 0x02, `${fixture.name}: payload flags mismatch`);
     assert.equal(
       payloadBytes.length,
       fixture.encoded_len,
@@ -991,22 +1082,63 @@ test("fixture base64 hashes match manifest", () => {
       fixture.signed_base64,
       `${fixture.name}.signed_base64`,
     );
+    const signedFrame = validateNoritoFrame(signedBytes, {
+      context: `${fixture.name}.signed_base64`,
+      expectedSchemaHash: signedTransactionSchemaHash,
+      requireNonEmptyPayload: true,
+      expectedPaddingLength: 0,
+    });
+    assert.equal(signedFrame.flags, 0x02, `${fixture.name}: signed flags mismatch`);
     assert.equal(
       signedBytes.length,
       fixture.signed_len,
       `${fixture.name}: signed length mismatch`,
     );
     assert.equal(
-      externalTransactionEntrypointHashHex(payloadBytes),
+      externalTransactionEntrypointHashHex(
+        signedTransactionPayload(signedFrame.payload, `${fixture.name}.signed`),
+      ),
       fixture.signed_hash,
       `${fixture.name}: signed hash mismatch`,
+    );
+    assert.deepEqual(
+      signedTransactionPayload(signedFrame.payload, `${fixture.name}.signed`),
+      payloadFrame.payload,
+      `${fixture.name}: signed transaction payload mismatch`,
     );
     assert.notEqual(
       irohaHashHex(signedBytes),
       fixture.signed_hash,
       `${fixture.name}: raw signed bytes must not alias compact External hash`,
     );
+    assert.throws(
+      () => validateNoritoFrame(payloadFrame.payload, { context: "bare payload" }),
+      /(?:shorter than|not an NRT0 frame)/u,
+      `${fixture.name}: bare payload bytes must be rejected`,
+    );
+    assert.throws(
+      () => validateNoritoFrame(signedFrame.payload, { context: "bare signed" }),
+      /(?:shorter than|not an NRT0 frame)/u,
+      `${fixture.name}: bare signed bytes must be rejected`,
+    );
   }
+});
+
+test("fixture frame schemas are independently derived from canonical type names", () => {
+  assertFixtureSchemaManifest(schemaHashes);
+
+  const tampered = {
+    ...schemaHashes,
+    entries: schemaHashes.entries.map((entry) =>
+      entry.alias === "TransactionPayload"
+        ? { ...entry, schema_hash: "0x00000000000000000000000000000000" }
+        : entry,
+    ),
+  };
+  assert.throws(
+    () => assertFixtureSchemaManifest(tampered),
+    /independently derived schema hash/u,
+  );
 });
 
 test("source payload metadata matches canonical manifest metadata", () => {

@@ -53,9 +53,14 @@ Validation rules:
 | Norito RPC control | `/rpc/capabilities`, `/rpc/ping` | `NoritoRpcPing` | `NoritoRpcPong` | Lightweight control plane for health checks; optional but recommended by SDKs. |
 
 All DTO hashes are catalogued under `fixtures/norito_rpc/schema_hashes.json`
-(`type_name`, `alias`, and the 16-byte `schema_hash` hex), regenerated via
-`cargo xtask norito-rpc-fixtures`, and verified across SDK copies with
-`cargo xtask norito-rpc-verify`.
+(`type_name`, `alias`, and the 16-byte `schema_hash` hex). Render two complete
+publications at independent absent absolute external roots with `cargo run --locked -p
+xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root
+<absent-absolute-external-root>`. Before any tracked update, require identical exact path sets,
+entry types, modes, completion manifests, and every file byte. Apply the
+reviewed identity-relative patch from either sealed root, then verify the
+tracked owner and SDK copies with `cargo run --locked -p xtask --features
+dev-tools --bin xtask -- norito-rpc-verify`.
 
 ### 4. Error Semantics
 
@@ -118,7 +123,7 @@ Clients must surface both HTTP status and `X-Iroha-Error-Code` to the caller. SD
 - Meeting artifact: notes recorded in `specs/torii/norito_rpc_sync_notes.md` (June entry) plus a sign-off checklist stored in `specs/torii/norito_rpc_tracker.md` (new row NRPC-2R).
 
 ### 10. Fixture & Compliance Requirements
-- All schema hashes, request/response fixtures, and regression tests live under `fixtures/norito_rpc/`. Running `cargo xtask norito-rpc-fixtures` regenerates the catalogue and updates the manifest consumed by SDK CI, and `cargo xtask norito-rpc-verify` ensures the Android/Python/Swift copies remain bit-for-bit identical.  
+- All schema hashes, request/response fixtures, and regression tests live under `fixtures/norito_rpc/`. Run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root <absent-absolute-external-root>` twice with independent absent absolute external roots. Before any tracked update, require identical exact path sets, entry types, modes, completion manifests, and every file byte. Apply the reviewed identity-relative patch from either sealed root, then run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify` to ensure the Android/Python/Swift copies remain bit-for-bit identical.
 - QA team maintains the dual-transport smoke script (`python/iroha_python/scripts/run_norito_rpc_smoke.sh`) which must pass before releases flip `transport.norito_rpc.stage` to `canary`.  
 - Operator docs (`specs/runbooks/torii_norito_rpc_canary.md`) must link back to this spec to ensure ingress teams use the correct headers and error codes.
 

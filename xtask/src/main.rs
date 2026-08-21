@@ -8198,8 +8198,11 @@ where
                     }
                 }
             }
+            let output_root = output_root.ok_or(
+                "norito-rpc-fixtures requires --output-root <absent-absolute-external-directory>",
+            )?;
             Ok(CommandKind::NoritoRpcFixtures {
-                options: NoritoRpcFixtureOptions::new(output_root),
+                options: NoritoRpcFixtureOptions::new(Some(output_root)),
             })
         }
         "norito-rpc-verify" => {
@@ -14314,6 +14317,7 @@ fn normalize_norito_rpc_output_root(value: &str) -> Result<PathBuf, Box<dyn Erro
     let requested = Path::new(value);
     if value.is_empty()
         || value.starts_with('-')
+        || !requested.is_absolute()
         || requested == Path::new(".")
         || requested.components().any(|component| {
             matches!(
@@ -14322,13 +14326,14 @@ fn normalize_norito_rpc_output_root(value: &str) -> Result<PathBuf, Box<dyn Erro
             )
         })
     {
-        return Err("--output-root requires an unambiguous directory path".into());
+        return Err(
+            "--output-root requires an absolute unambiguous external directory path".into(),
+        );
     }
-    let normalized = normalize_path(requested)?;
-    if normalized.parent().is_none() {
+    if requested.parent().is_none() {
         return Err("--output-root must not be the filesystem root".into());
     }
-    Ok(normalized)
+    Ok(requested.to_path_buf())
 }
 fn openapi_paths_alias(left: &Path, right: &Path) -> bool {
     openapi_path_identity(left) == openapi_path_identity(right)
@@ -14465,7 +14470,7 @@ fn parse_rollout_artifact_spec(spec: &str) -> Result<(String, String), Box<dyn E
     let path = path.ok_or("missing `path=` in --artifact spec")?;
     Ok((kind, path))
 }
-const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC transaction fixtures, the typed V1 alias-setup fixture, and Android/Python/Swift mirrors under the selected output root.";
+const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC transaction fixtures, the typed V1 alias-setup fixture, and Android/Python/Swift mirrors in one absent absolute create-only root outside the workspace.";
 const NORITO_RPC_VERIFY_USAGE_DESCRIPTION: &str = "    Re-render and compare canonical Norito-RPC transaction and alias-setup fixture bytes, schema hashes, the compact hash vector, and Android/Python/Swift mirrors; optionally emit a JSON verification report.";
 fn print_usage() {
     eprintln!("xtask usage:");
@@ -14858,7 +14863,7 @@ fn print_usage() {
     eprintln!(
         "    Print the SNNet-17B constant-rate presets (core/home) and optional tick→bandwidth tables so relay operators and SDK tooling can apply consistent lane budgets."
     );
-    eprintln!("  cargo xtask norito-rpc-fixtures [--output-root <dir>]");
+    eprintln!("  cargo xtask norito-rpc-fixtures --output-root <absent-absolute-external-dir>");
     eprintln!("{NORITO_RPC_FIXTURES_USAGE_DESCRIPTION}");
     eprintln!("  cargo xtask norito-rpc-verify [--json-out <path|->]");
     eprintln!("{NORITO_RPC_VERIFY_USAGE_DESCRIPTION}");

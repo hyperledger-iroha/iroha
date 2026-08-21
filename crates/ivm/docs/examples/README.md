@@ -46,8 +46,18 @@ verify every tracked source and checked-in `.to` golden with:
 make kotodama-goldens-check
 ```
 
-Use `make kotodama-goldens` to prevalidate and atomically publish all mapped
-artifacts. The authoritative alias/output inventory is
+To render a sealed create-only publication, select an absent absolute root
+outside the workspace and run:
+
+```
+IROHA_KOTODAMA_V1_ARTIFACT_STAGE=/absolute/external/first-publication \
+  make kotodama-goldens
+```
+
+Repeat with a second absent root and require identical path sets, types, modes,
+owner manifests, and file bytes. Refresh tracked artifacts only as a reviewed
+identity-relative patch from either sealed root, then rerun
+`make kotodama-goldens-check`. The authoritative alias/output inventory is
 `scripts/ivm_artifacts.tsv`; the workflow deliberately never accepts or
 persists deployment signing material.
 

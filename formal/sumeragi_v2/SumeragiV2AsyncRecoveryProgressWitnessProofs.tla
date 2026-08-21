@@ -253,7 +253,7 @@ BY IsaM("blast")
        PersistObservePrepare, BeginLockCommit, FormCommitQC,
        BeginDecision, PersistDecision, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
-       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
+       DeliverTimeout, DeliverTC, BeginInstallTC,
        FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
        ResumeVote, ResumeTimeout, DropProposal
 
@@ -532,7 +532,7 @@ BY IsaM("blast")
        BeginPrepare,
        PersistPrepare, BeginObservePrepare, PersistObservePrepare,
        BeginLockCommit, PersistLockCommit, FormCommitQC, BeginDecision,
-       PersistTimeout, FormTC, BeginInstallTC, FetchCertifiedBody, vars
+       PersistTimeout, BeginInstallTC, FetchCertifiedBody, vars
 
 THEOREM ExecutePersistInstallHasCommitSourceTransition ==
   \A command:
@@ -1378,10 +1378,10 @@ PROOF
 
 (***************************************************************************
 Decision is a terminal frontier for timeout control at the current height.
-The three reducer constructors below are structurally disabled once the node
+The two reducer constructors below are structurally disabled once the node
 has a durable Decision.  Authenticated timeout traffic may still be consumed,
-but it cannot repopulate the volatile timeout/TC pools from which FormTC or
-BeginInstallTC could be scheduled.  The state invariant also excludes latent
+but its atomic receipt turn cannot create an InstallTC WAL authority and
+BeginInstallTC cannot be scheduled.  The state invariant also excludes latent
 pending timeout writes, pending TC installs, and timeout-signature owners.  Its
 pending-Decision conjunct is the historical strengthening required to prove
 that PersistDecision cannot expose such an owner after installing Decision.
@@ -1420,7 +1420,6 @@ PostDecisionTimeoutControlExcluded ==
   \A node:
     ~NoDecisionForNode(node)
       => /\ ~BeginTimeout(node)
-         /\ \A roundView: ~FormTC(node, roundView)
          /\ \A tc: ~BeginInstallTC(node, tc)
 
 PostDecisionTimeoutTrafficConsumeOnly ==
@@ -1454,8 +1453,7 @@ PostDecisionTimeoutExclusionProperty(specification) ==
 THEOREM PostDecisionTimeoutControlGuardsAreStructural ==
   PostDecisionTimeoutControlExcluded
 BY Isa
-   DEF PostDecisionTimeoutControlExcluded, BeginTimeout, FormTC,
-       BeginInstallTC
+   DEF PostDecisionTimeoutControlExcluded, BeginTimeout, BeginInstallTC
 
 THEOREM AsyncInitEstablishesDecisionTimeoutFrontier ==
   \A initialContext:
@@ -1680,20 +1678,6 @@ BY SMTT(120), IsaT(120)
        PendingDecisionExcludesTimeoutWork,
        NoDecisionForNode, RequestNodeSet, DeliverTimeout
 
-THEOREM FormTcPreservesDecisionTimeoutFrontier ==
-  \A node, roundView:
-    /\ DecisionTimeoutFrontierInvariant
-    /\ FormTC(node, roundView)
-    => DecisionTimeoutFrontierInvariant'
-BY SMTT(120), IsaT(120)
-   DEF DecisionTimeoutFrontierInvariant,
-       PendingTimeoutExcludesDecision,
-       PendingInstallExcludesDecision,
-       TimeoutSigningExcludesDecision,
-       PendingDecisionExcludesTimeoutWork,
-       NoDecisionForNode, RequestNodeSet, NodeIdle, PendingNodes,
-       SigningNodes, FormTC, InstallTcWal
-
 THEOREM BeginInstallTcPreservesDecisionTimeoutFrontier ==
   \A node, tc:
     /\ DecisionTimeoutFrontierInvariant
@@ -1779,22 +1763,19 @@ PROOF
          CompleteTimeoutSignaturePreservesDecisionTimeoutFrontier
     <2>8. CASE \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
       BY <1>1, <2>8, DeliverTimeoutPreservesDecisionTimeoutFrontier
-    <2>9. CASE \E node \in ValidatorIds, roundView \in Views:
-                    FormTC(node, roundView)
-      BY <1>1, <2>9, FormTcPreservesDecisionTimeoutFrontier
-    <2>10. CASE \E node \in ValidatorIds, tc \in ReceivedTcValues:
+    <2>9. CASE \E node \in ValidatorIds, tc \in ReceivedTcValues:
                     BeginInstallTC(node, tc)
-      BY <1>1, <2>10, BeginInstallTcPreservesDecisionTimeoutFrontier
-    <2>11. CASE \E request \in pendingInstallTC:
+      BY <1>1, <2>9, BeginInstallTcPreservesDecisionTimeoutFrontier
+    <2>10. CASE \E request \in pendingInstallTC:
                      PersistInstallTC(request)
-      BY <1>1, <2>11, PersistInstallTcPreservesDecisionTimeoutFrontier
-    <2>12. CASE \E node \in ValidatorIds: Crash(node)
-      BY <1>1, <2>12, CrashPreservesDecisionTimeoutFrontier
-    <2>13. CASE \E node \in ValidatorIds, vote \in timeoutIntents:
+      BY <1>1, <2>10, PersistInstallTcPreservesDecisionTimeoutFrontier
+    <2>11. CASE \E node \in ValidatorIds: Crash(node)
+      BY <1>1, <2>11, CrashPreservesDecisionTimeoutFrontier
+    <2>12. CASE \E node \in ValidatorIds, vote \in timeoutIntents:
                      ResumeTimeout(node, vote)
-      BY <1>1, <2>13, ResumeTimeoutPreservesDecisionTimeoutFrontier
+      BY <1>1, <2>12, ResumeTimeoutPreservesDecisionTimeoutFrontier
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
-                <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>13
+                <2>7, <2>8, <2>9, <2>10, <2>11, <2>12
          DEF Next, DecisionTimeoutFrontierStutteringStep
   <1> QED BY <1>1
 

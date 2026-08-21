@@ -7692,18 +7692,6 @@ def test_shared_tlc_result_contract_rejects_multiple_primary_diagnostics(
     ("relative", "old", "new", "expected_error"),
     (
         (
-            "scripts/formal/check_sumeragi_v2_replay_trace.sh",
-            'if [[ "$tlc_status" -ne 12 || ! -s "$tlc_log" ]]; then',
-            'if [[ "$tlc_status" -ne 0 || ! -s "$tlc_log" ]]; then',
-            "status-12 nonempty witness guard",
-        ),
-        (
-            "scripts/formal/check_sumeragi_v2_replay_trace.sh",
-            'if ! cmp -s "$EXPECTED" "$normalized_trace"; then',
-            'if [[ -s "$normalized_trace" ]]; then',
-            "checked-in trace comparison",
-        ),
-        (
             "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
             '[[ "$diagnostic_count" -eq 0 ]] || {',
             '[[ "$diagnostic_count" -ge 0 ]] || {',
@@ -11159,10 +11147,17 @@ def test_shared_tlc_result_contract_is_complete_and_source_sealed(
     module = load_checker()
     repo_root = copy_shared_tlc_result_contract_fixture(tmp_path, module)
 
+<<<<<<< Updated upstream
     assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 34
     assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 34
     assert len(module.SHARED_TLC_RESULT_SPECIALIZED_CALLERS) == 4
     assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 34
+=======
+    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 32
+    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 32
+    assert len(module.SHARED_TLC_RESULT_SPECIALIZED_CALLERS) == 3
+    assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 33
+>>>>>>> Stashed changes
     assert set(module.SHARED_TLC_RESULT_BRANCH_PROFILES) == set(
         module.SHARED_TLC_RESULT_CONTRACT_CALLERS
     )
@@ -11277,6 +11272,21 @@ def test_shared_tlc_result_contract_rejects_helper_deletion(
             '    "$SUMERAGI_V2_TLC_FINISHED_PATTERN" "$log" || {',
             "terminal footer position guard",
         ),
+        (
+            '[[ ! -s "$stderr_log" ]] || {',
+            '[[ -f "$stderr_log" ]] || {',
+            "empty separate-stderr guard",
+        ),
+        (
+            '[[ "$actual_status" -eq 12 ]] || {',
+            '[[ "$actual_status" -eq 0 ]] || {',
+            "exact status-12 guard",
+        ),
+        (
+            "LC_ALL=C tr -d '\\11\\12\\40-\\176' <\"$stdout_log\"",
+            "LC_ALL=C tr -d '\\11\\12' <\"$stdout_log\"",
+            "ASCII/control-byte rejection",
+        ),
     ),
 )
 def test_shared_tlc_result_contract_rejects_semantic_weakening(
@@ -11306,7 +11316,6 @@ def test_shared_tlc_result_contract_rejects_semantic_weakening(
 @pytest.mark.parametrize(
     "relative",
     (
-        "scripts/formal/check_sumeragi_v2_replay_trace.sh",
         "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
         "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh",
         "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh",
@@ -30169,6 +30178,31 @@ def test_direct_timeout_residual_rejects_kernel_weakening(kernel: str) -> None:
     ), errors
 
 
+def test_timeout_atomic_certificate_formation_rejects_weakening() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2TimeoutViewProgressProofs"
+    symbol = "TimeoutAtomicCertificateFormationKernelProperty"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_operator(
+        source,
+        symbol,
+        "TimeoutReceiptQuorumInstallAuthority(target, roundView)",
+        "TRUE",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error and "must equal only" in error for error in errors
+    ), errors
+
+
 def test_direct_timeout_residual_rejects_derived_armed_wal_group() -> None:
     module = load_checker()
     ledger = module.load_ledger()
@@ -30313,7 +30347,7 @@ def test_timeout_direct_provider_dependency_mutation_is_rejected() -> None:
     mutated = mutate_tla_theorem(
         source,
         symbol,
-        "   AsyncSpecProvidesTimeoutTcFormationReducerKernel,\n",
+        "   AsyncSpecProvidesTimeoutAtomicCertificateFormationKernel,\n",
         "",
     )
 
@@ -30324,7 +30358,7 @@ def test_timeout_direct_provider_dependency_mutation_is_rejected() -> None:
 
     assert any(
         symbol in error
-        and "AsyncSpecProvidesTimeoutTcFormationReducerKernel" in error
+        and "AsyncSpecProvidesTimeoutAtomicCertificateFormationKernel" in error
         for error in errors
     ), errors
 

@@ -22,6 +22,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 #[test]
 fn fixture_decoded_json_matches_decoder() {
+    let _lease = crate::predecode_test_support::exclusive();
     let root = fixtures_root();
     if !root.exists() {
         // Generate on demand with a coarse lock to avoid parallel races.
@@ -94,6 +95,7 @@ fn fixture_decoded_json_matches_decoder() {
 }
 #[test]
 fn fixture_artifacts_conform_to_index() {
+    let _lease = crate::predecode_test_support::exclusive();
     let root = fixtures_root();
     if !root.exists() {
         let parent = root.parent().expect("has parent dir");

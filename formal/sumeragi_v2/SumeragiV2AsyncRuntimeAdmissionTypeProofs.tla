@@ -150,7 +150,7 @@ PROOF
                BeginPrepare,
                PersistPrepare, BeginObservePrepare, PersistObservePrepare,
                BeginLockCommit, PersistLockCommit, FormCommitQC,
-               BeginDecision, PersistTimeout, FormTC, BeginInstallTC,
+               BeginDecision, PersistTimeout, BeginInstallTC,
                FetchCertifiedBody, AsyncAuxVars
       <3> QED BY <1>1, <3>1, HistoricalRecoveryFramePreservesType
     <2>2. CASE ExecuteDecisionFetch(command)

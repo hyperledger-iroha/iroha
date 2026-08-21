@@ -21,9 +21,14 @@ and exposes a CLI for CI pipelines.
 ## Usage
 
 ```bash
-# Regenerate and verify the sole canonical fixture corpus.
-cargo run -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
-cargo run -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
+# Render two independent copies of the sole canonical fixture corpus.
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
+# Require identical exact path sets, entry types, modes, completion manifests,
+# and every file byte, apply the reviewed identity-relative patch, then verify.
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
 
 # Run the "submit" scenario with telemetry enabled (recommended)
 cargo run -p xtask --features dev-tools --bin torii-mock-harness -- \

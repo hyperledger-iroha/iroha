@@ -14,6 +14,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, TextIO, Union
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from norito_fixture_frame import (
+    SIGNED_TRANSACTION_SCHEMA,
+    TRANSACTION_PAYLOAD_SCHEMA,
+    decode_canonical_norito_frame,
+)
+
 DEFAULT_RESOURCES_DIR = Path("java/iroha_android/src/test/resources")
 DEFAULT_FIXTURES_PATH = DEFAULT_RESOURCES_DIR / "transaction_payloads.json"
 DEFAULT_MANIFEST_PATH = DEFAULT_RESOURCES_DIR / "transaction_fixtures.manifest.json"
@@ -478,11 +488,16 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
                 f"fixture entry {name} in {path} missing payload_base64 string"
             )
         payload_bytes = decode_base64(payload_base64, f"{name} payload")
+        payload_bare = decode_canonical_norito_frame(
+            payload_bytes,
+            f"{name} payload",
+            expected_schema=TRANSACTION_PAYLOAD_SCHEMA,
+        )
         network_id = validate_network_id(
             entry.get("network_id"), f"fixture entry {name} in {path}"
         )
         require_transaction_network_id(
-            payload_bytes, network_id, f"fixture entry {name} payload in {path}"
+            payload_bare, network_id, f"fixture entry {name} payload in {path}"
         )
         if payload_bytes in seen_payloads:
             raise ValueError(f"duplicate fixture payload bytes for {name!r} in {path}")
@@ -499,10 +514,20 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
         if payload_hash != iroha_hash(payload_bytes):
             raise ValueError(f"fixture entry {name} in {path} payload_hash mismatch")
         signed_bytes = decode_base64(signed_base64, f"{name} signed payload")
-        if signed_hash != signed_transaction_entrypoint_hash(signed_bytes):
+        signed_bare = decode_canonical_norito_frame(
+            signed_bytes,
+            f"{name} signed payload",
+            expected_schema=SIGNED_TRANSACTION_SCHEMA,
+        )
+        if signed_hash != signed_transaction_entrypoint_hash(signed_bare):
             raise ValueError(f"fixture entry {name} in {path} signed_hash mismatch")
+        embedded_payload = signed_transaction_payload(signed_bare)
+        if embedded_payload != payload_bare:
+            raise ValueError(
+                f"fixture entry {name} in {path} signed payload does not match payload_base64"
+            )
         require_transaction_network_id(
-            signed_transaction_payload(signed_bytes),
+            embedded_payload,
             network_id,
             f"fixture entry {name} signed payload in {path}",
         )
@@ -684,8 +709,17 @@ def compare(
             seen_payload_hashes.add(payload_hash)
         payload_identity = decode_base64(payload_base64, f"{name} payload")
         try:
+            payload_bare = decode_canonical_norito_frame(
+                payload_identity,
+                f"manifest fixture {name} payload",
+                expected_schema=TRANSACTION_PAYLOAD_SCHEMA,
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            payload_bare = b""
+        try:
             require_transaction_network_id(
-                payload_identity, network_id, f"manifest fixture {name} payload"
+                payload_bare, network_id, f"manifest fixture {name} payload"
             )
         except ValueError as exc:
             errors.append(str(exc))
@@ -699,8 +733,22 @@ def compare(
             seen_signed_hashes.add(signed_hash)
         signed_identity = decode_base64(signed_base64, f"{name} signed")
         try:
+            signed_bare = decode_canonical_norito_frame(
+                signed_identity,
+                f"manifest fixture {name} signed",
+                expected_schema=SIGNED_TRANSACTION_SCHEMA,
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            signed_bare = b""
+        try:
+            embedded_payload = signed_transaction_payload(signed_bare)
+            if embedded_payload != payload_bare:
+                errors.append(
+                    f"manifest signed payload does not match payload_base64 for {name}"
+                )
             require_transaction_network_id(
-                signed_transaction_payload(signed_identity),
+                embedded_payload,
                 network_id,
                 f"manifest fixture {name} signed payload",
             )
@@ -782,11 +830,12 @@ def compare(
             errors.append(
                 f"signed transaction length mismatch for {name}: manifest={signed_len} actual={len(signed_bytes)}"
             )
-        signed_digest = signed_transaction_entrypoint_hash(signed_bytes)
-        if signed_digest != signed_hash:
-            errors.append(
-                f"signed transaction hash mismatch for {name}: manifest={signed_hash} actual={signed_digest}"
-            )
+        if signed_bare:
+            signed_digest = signed_transaction_entrypoint_hash(signed_bare)
+            if signed_digest != signed_hash:
+                errors.append(
+                    f"signed transaction hash mismatch for {name}: manifest={signed_hash} actual={signed_digest}"
+                )
 
     extra_payloads = sorted(set(payload_map) - seen_names)
     for name in extra_payloads:
@@ -834,7 +883,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--state",
         type=Path,
         default=DEFAULT_STATE_PATH,
-        help=f"Path to the cadence state file recorded by scripts/android_fixture_regen.sh (default: {DEFAULT_STATE_PATH})",
+        help=f"Path to the Android fixture cadence state file (default: {DEFAULT_STATE_PATH})",
     )
     parser.add_argument(
         "--pipeline-metadata",

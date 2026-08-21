@@ -97,8 +97,6 @@ ExactLeaderViewChangeRank(candidate, rank) ==
   \/ /\ candidate.kind = "DeliverTimeout"
         /\ candidate.item.kind = "TimeoutVote"
         /\ rank = ViewChangeSemanticRank(5)
-  \/ /\ candidate.kind = "FormTC"
-        /\ rank = ViewChangeSemanticRank(4)
   \/ /\ candidate.kind = "DeliverTC"
         /\ candidate.item.kind = "TimeoutCertificate"
         /\ rank = ViewChangeSemanticRank(4)

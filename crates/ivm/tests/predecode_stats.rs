@@ -2,6 +2,7 @@
 use ivm::ivm_cache::{IvmCache, global_stats};
 #[test]
 fn predecode_stats_track_success_and_failure() {
+    let _lease = crate::predecode_test_support::exclusive();
     let before = global_stats();
     let mut halt = Vec::new();
     halt.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());

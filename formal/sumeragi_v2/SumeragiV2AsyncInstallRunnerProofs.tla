@@ -4173,7 +4173,7 @@ BY IsaM("blast")
        PersistPrepare,
        BeginObservePrepare, PersistObservePrepare,
        BeginLockCommit, PersistLockCommit, FormCommitQC,
-       BeginDecision, PersistTimeout, FormTC, BeginInstallTC,
+       BeginDecision, PersistTimeout, BeginInstallTC,
        AcceptCertifiedResponseCapability, InstallCertifiedBodyEffect
 
 THEOREM ExecuteApplyLeavesContext ==

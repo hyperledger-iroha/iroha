@@ -896,7 +896,7 @@ Use this checklist when the Norito transport fails SLOs or generates alerts:
 **Mitigation options**
 
 - **Misbehaving clients:** Gate them via `torii.preauth_scheme_limits.norito_rpc` until parity is restored; the config lives under `client_api` in `iroha_config`.
-- **Decode or schema mismatches:** Ensure Torii and SDKs run the same fixture bundle by checking `fixtures/norito_rpc/schema_hashes.json` (the DTO→hash table); regenerate the canonical corpus and managed mirrors with `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures` if hashes diverge.
+- **Decode or schema mismatches:** Ensure Torii and SDKs run the same fixture bundle by checking `fixtures/norito_rpc/schema_hashes.json` (the DTO→hash table). If hashes diverge, run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root <absent-absolute-external-root>` at two independent absent absolute external roots. Before any tracked update, require identical exact path sets, entry types, modes, completion manifests, and every file byte; apply the reviewed identity-relative patch from either sealed root, then run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify`.
 - **Ingress/proxy issues:** Fix header forwarding or MTU settings, then rerun `python/iroha_python/scripts/run_norito_rpc_smoke.sh`.
 - **Full brownout / rollback:** If service impact persists, flip `torii.transport.norito_rpc.stage` to `canary` or `disabled` (per `specs/torii/norito_rpc_rollout_plan.md`), reload Torii, and ensure `/rpc/capabilities` reports the downgraded stage so SDKs fall back to JSON without guessing. Record the change in the canary runbook (`specs/runbooks/torii_norito_rpc_canary.md`).
 

@@ -2823,10 +2823,12 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ),
     (
         "SumeragiV2TimeoutViewProgressProofs",
-        "TimeoutRetiredFormTcCandidateAbsent",
+        "TimeoutAtomicCertificateFormationKernelProperty",
     ): (
-        "\\A candidate \\in AsyncCandidateSet: "
-        'candidate.kind = "FormTC" => ~CandidateScheduled(candidate)'
+        "specification => \\A target \\in AsyncCurrentResponsiveVoters, "
+        "roundView \\in Views: "
+        "TimeoutReceiptQuorumInstallAuthority(target, roundView) "
+        "~> TimeoutDirectGoal(target, roundView)"
     ),
     (
         "SumeragiV2AsyncTemporalClosureProofs",

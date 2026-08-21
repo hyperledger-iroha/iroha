@@ -22,6 +22,8 @@ mod predecode_max_ops;
 mod predecode_memory_cap;
 #[path = "../predecode_stats.rs"]
 mod predecode_stats;
+#[path = "../predecode_test_support.rs"]
+mod predecode_test_support;
 #[path = "../predecode_vm_path.rs"]
 mod predecode_vm_path;
 #[path = "../predecoder_fixture_verify.rs"]

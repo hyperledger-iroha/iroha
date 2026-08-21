@@ -114,7 +114,7 @@ BY IsaT(120)
        BeginObservePrepare, PersistObservePrepare,
        BeginLockCommit, PersistLockCommit, FormCommitQC,
        BeginDecision, PersistDecision, BeginTimeout,
-       ByzantineBroadcastTimeout, DeliverTimeout, FormTC, DeliverTC,
+       ByzantineBroadcastTimeout, DeliverTimeout, DeliverTC,
        BeginInstallTC, PersistInstallTC, FetchCertifiedBody,
        AcceptCertifiedResponseCapability, InstallCertifiedBodyEffect,
        ApplyDecision, Restart, ResumeProposal, ResumeVote, DropProposal

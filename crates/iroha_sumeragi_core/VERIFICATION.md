@@ -49,96 +49,77 @@ verification results:: 1690 verified, 0 errors  # pinned vstd dependency
 verification results:: 157 verified, 0 errors   # iroha_sumeragi_core root obligations
 ```
 
-Evidence for the source-link edit itself uses the isolated harness because
-`iroha_sumeragi_core` is intentionally excluded from the root workspace:
+## Formal-only TLC trace replay V1
+
+The first-release replay corridor has one supported mode, `formal-only`, and
+does not execute or claim reducer, integration, or network results. Its event
+graph is derived directly from the collector source:
 
 ```text
-bash scripts/formal/run_sumeragi_v2_harness.sh --unit
-  118 unit/reducer/WAL/refinement tests passed
-bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay
-  8 model-trace replay tests passed
-bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
-  11 deterministic network simulations passed
-bash scripts/formal/run_sumeragi_v2_harness.sh --chaos-100k
-  50,000 permissioned + 50,000 NPoS heights passed
-  400,000 validator finalizations; 0 failures; 91.29 seconds
-bash scripts/formal/run_sumeragi_v2_harness.sh --clippy
-  passed
+standalone_sany -> raw_tlc -> normalizer
 ```
 
-The current Rust runs exercise the source-shared reducer/WAL/refinement logic,
-model replay, all eleven named fast-network scenarios, and the deterministic
-chaos schedule. They are not a Verus discharge. A fresh pinned run is required
-before the changed primitive-to-derived-fact or production commit-gate
-obligations can be marked verified. Unverified `std` collection code,
-cryptography, and adapter contracts remain outside Verus in any case; the
-remaining boundary is listed explicitly below.
+The model has no standalone timeout-certificate formation transition or
+compatibility tombstone. Certificate formation is atomic with the local
+receipt-admitting turn.
 
-## TLC trace replay against production
-
-`tests/model_trace_replay.rs` replays a normalized 95-action TLC witness against
-this crate's exact public `Reducer::step` API. It is freshly emitted from the
-`SumeragiV2TraceWitness.tla` behavior with a nonresponsive view-zero leader.
-Three timeout votes form and durably install a TC, all four reducers enter view
-one, the rotated leader proposes subject A, and distinct three-validator
-Prepare and Commit quorums produce a durable decision. The replay drives actual
-Persist, Sign, Broadcast, FetchBody, StoreBody, ValidateBody, EnterView, and
-Apply effects; it does not call a test reference reducer.
-
-The witness module selects one representative production-replay schedule; its
-selection operators are not Core behavior or proof premises. It starts at GST,
-does not refetch an exact body after durable storage, uses the view leader as
-the single projected PrepareQC aggregator, and emits one projected PrepareQC
-and CommitQC per round and subject. One designated non-preparing validator is
-kept below a local Prepare quorum and delays body validation until QC
-observation begins, which makes the finite trace cross the `ObservePrepare` WAL
-boundary. It remains a voting validator in the four-validator model. These
-selection rules apply only to Prepare scheduling and QC projection. They never
-restrict Commit vote delivery or retransmission: the same signed Commit
-envelope can be attempted before a lock and admitted after intervening lock
-persistence.
-
-TLA2Tools 1.7.4 is checksum pinned. That release does not support
-`-dumpTrace json`, so the comparator uses supported `-tool` message framing and
-extracts the trace-only scalar `witnessAction` record. Reproduce and compare the
-witness with:
+Run the corridor with the checksum-pinned TLA2Tools 1.7.4 jar and the sealed
+two-file TLAPM projection from commit
+`3ab43c7ff31db4ced850619d4746fa4c841a7681`:
 
 ```text
-scripts/formal/check_sumeragi_v2_replay_trace.sh
-TLC replay witness matches 100 checked-in production actions and the production reducer
-
-CARGO_TARGET_DIR=/tmp/codex-sumeragi-model-trace-target \
-  cargo test --locked -p iroha_sumeragi_core --test model_trace_replay
-8 passed; 0 failed
+TLA2TOOLS_JAR=/absolute/path/to/tla2tools.jar \
+TLAPM_PROJECTION=/absolute/path/to/sealed-projection \
+scripts/formal/check_sumeragi_v2_replay_trace.sh \
+  --formal-only \
+  --output-root /absolute/path/to/absent-output-root
 ```
 
-The normalizer rejects malformed tool-message framing, a mismatched seed or
-invariant, non-contiguous states, duplicate or non-scalar marker fields,
-unknown actions, invalid four-validator parameters, and any trace not ending
-at `PersistDecision`. The Rust trace parser additionally rejects malformed
-fields, stale/wrong leaders, missing durable intent boundaries, and
-Prepare/Commit certificate formation without three distinct delivered voters.
-Adversarial production tests recover every prefix of the witness WALs and
-confirm that the combined trace crosses all seven record classes. They also
-cover exact signed Commit-envelope redelivery across the pre-lock/post-lock
-consumer boundary, crash after acknowledged intent, exact WAL resume,
-stale-generation completion, duplicate and overlapping certificate signers, Prepare-vote and
-full-high-QC timeout equivocation, and invalid body validation withholding
-Prepare. The Python normalizer suite adds 15 positive and fail-closed parser
-cases.
+The wrapper uses the canonical projection directly and creates no compatibility
+symlink. The normalizer rejects hidden diagnostics, malformed or incomplete
+tool framing, control characters, extra or duplicate state headings,
+non-contiguous states, malformed scalar markers, unknown actions, and any trace
+that does not end at `PersistDecision`.
 
-This is executable refinement evidence, not deductive proof. The checked-in
-witness uses one four-validator permissioned/count context; unequal-stake
-traces remain in `network_simulation.rs`, not in this TLC fixture. The model's
-genesis height zero maps to production height one, model validator integers map
-to deterministic 32-byte IDs, and model subject atoms map to deterministic
-hash fixtures. The TLA model exposes ObservePrepare then LockCommit while the
-production WAL atomically persists highest PrepareQC, lock, and Commit intent;
-the harness explicitly accepts only that stronger `LockAndCommit` mapping.
-The raw TLC witness has no crash action, so crash/stale-completion coverage is a
-derived adversarial replay. Signature verification, Norito decoding, physical
-WAL framing/fsync, and the asynchronous runtime adapter remain outside this
-pure-reducer harness.
+The V1 collector records exact argv, cwd, closed environment, descriptors,
+statuses, output hashes, timeouts, process-group cleanup, source identities,
+tool identities, artifact modes, and link counts. Publication is create-only
+and rejects overwrite, partial output, symlinks, hard links, and unexpected
+files. The independent checker reconstructs those contracts, derives the graph
+from the runner source, rehashes every input and output, and compares the
+normalized bytes with `tests/fixtures/tlc_replay_witness.tsv`.
+
+The final-source run on 2026-08-21 produced:
+
+```text
+standalone SANY:       0
+raw TLC:               12
+normalizer:            0
+wrapper:               0
+tool states:           101
+normalized actions:    100
+separate stderr:       empty
+raw TLC SHA-256:       2f7f2ad7e7f779b84b7f27335ed63ce9ac25a47c57e03ad589179dc473e01df6
+normalized SHA-256:    32b3a409c731cb7c9619d1f8d6ee74e8b6bce666766dae557c04de7b3394b748
+receipt SHA-256:       c57126bcd5578358c93fc70cad2d1f2c411a10b7c6d85d936d72628cfd430239
+source manifest:       120059637afe2fe699d29a3f3a42bf6afe5bab0206bce05f4b7a9df4cd5b03ba
+tool manifest:         3484b697e7f8744b506d6150a2d1079026f8709dc2c7da8439c3cd8b15e0a863
+```
+
+All three stderr files were empty regular mode-0600 single-link files, and the
+normalized output matched the tracked TSV byte for byte. The independent
+checker exited 0. Release-required checking exited 2 because the existing
+project signing facility authenticates source commits, not the canonical
+receipt and its execution artifacts. The receipt is therefore explicitly
+`unsigned-diagnostic`; it cannot promote a proof ledger, result registry,
+reducer result, or integration result. No custom cryptography or unsigned
+release fallback is accepted.
+
+The complete proof-ledger checker has no reset-scoped error after the hard cut.
+It still exits 1 on nine unchanged `fc09b635` inventory/hash debts outside this
+reset: the queue include inventory; four reducer/effects/worker source seals;
+the multilane and G-UNIT inventories; and the publication-writer and bootstrap
+symbol inventories.
 
 ## Accelerated 100,000-height chaos gate
 

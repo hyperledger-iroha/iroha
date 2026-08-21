@@ -100,9 +100,14 @@ planned for v1). Examples:
    swift test --package-path IrohaSwift --filter ToriiClientTests/testGetRuntimeAbiHash
    ```
    Add/extend fixtures for any new manifest fields.
-2. **Parity fixtures.** Run `make swift-fixtures` (wraps
-   `scripts/check_swift_fixtures.py` and `ci/check_swift_fixtures.sh`) so the
-   Norito fixture rotation captures the new ABI metadata.
+2. **Parity fixtures.** Render the complete create-only owner publication at an
+   absent path with `cargo run --locked -p xtask --features dev-tools --bin
+   xtask -- norito-rpc-fixtures --output-root
+   /path/to/first-new-norito-rpc-publication`, repeat at a second absent root,
+   and require identical exact path sets, entry types, modes, completion
+   manifests, and every file byte. Apply the reviewed identity-relative tracked
+   patch, then run `norito-rpc-verify` and `ci/check_swift_fixtures.sh` so the Norito fixture rotation
+   captures the new ABI metadata.
 3. **Dashboards & CI.** Execute `ci/check_swift_dashboards.sh` and
    `scripts/check_swift_dashboard_data.py` to ensure the parity/CI feeds
    referenced by `dashboards/mobile_parity.swift` and

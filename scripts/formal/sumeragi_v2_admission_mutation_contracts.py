@@ -180,7 +180,7 @@ POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
         "5570219ab51b8e1fea28c45c18115466130c7c656f090f96df74f1fa5caf3c1d"
     ),
     "post_decision_timeout_successor_bug.cfg": (
-        "a045606b2b34d755ab9e5fff0b486562a2193a2085ef24dc7252a55bfb2d9e3d"
+        "f49067ad9b80732235f4a39fe489ecceb2a1dcaff8b7fca2c59d5036e60ed3f7"
     ),
     POST_DECISION_TIMEOUT_MUTATION_RUNNER: (
         "ff5d34f872f1250f98e11945781cc2cc25d17c3870d7fb415d0636dab7a76c1b"

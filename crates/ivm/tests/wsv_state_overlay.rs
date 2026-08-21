@@ -196,10 +196,10 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
     ));
     fs::create_dir_all(&tmp_dir).expect("tmp dir");
     let blocker = tmp_dir.join("blocker");
-    fs::write(&blocker, b"block").expect("blocker file");
     let persist_path = blocker.join("state.json");
     let wsv =
         MockWorldStateView::with_state_store(persist_path).expect("persisted mock WSV available");
+    fs::write(&blocker, b"block").expect("blocker file");
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(wsv, sample_account(), HashMap::new());
     vm.set_host(host);

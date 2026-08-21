@@ -325,8 +325,18 @@ behind a CLI that other SDKs can reuse.
    bundle referenced by CI:
 
    ```bash
-   ./scripts/android_fixture_regen.sh
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
+   python3 scripts/check_android_fixtures.py
    ```
+
+   Both external roots must be absent. Before any tracked update, require
+   identical exact path sets, entry types, modes, completion manifests, and
+   every file byte; apply the reviewed identity-relative patch from either
+   sealed root, then run the verifier and Android checker shown above.
 
 2. Run the CLI with the desired scenario (see
    `tools/torii_mock_harness/config/default.toml`). The `--sdk` label feeds the

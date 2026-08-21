@@ -204,11 +204,14 @@ The catalogue above captures every handler that extracts or emits `NoritoJson`/`
   `specs/soranet/spec.md`.
 - OpenAPI and Norito fixture automation is available through
   `cargo run -p xtask --features dev-tools --bin xtask -- openapi`,
-  `cargo run -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures`, and
-  `cargo run -p xtask --features dev-tools --bin xtask -- norito-rpc-verify`. The canonical payloads and schema hashes
-  live under `fixtures/norito_rpc/`, and
-  `scripts/run_norito_rpc_fixtures.sh` records SDK cadence evidence under
-  `artifacts/norito_rpc/`.
+  `cargo run --locked -p xtask --features dev-tools --bin xtask --
+  norito-rpc-fixtures --output-root <absent-absolute-external-root>`, and `cargo run
+  --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify`.
+  Render at two independent absent roots and, before any tracked update, require
+  identical exact path sets, entry types, modes, completion manifests, and
+  every file byte. Apply the reviewed identity-relative patch from either sealed
+  root, then run the verifier. Record cadence evidence directly with
+  `norito-rpc-verify --json-out <report-path>` under `artifacts/norito_rpc/`.
 
 ### 14. Stakeholder Brief & Distribution
 

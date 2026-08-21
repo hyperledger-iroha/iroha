@@ -19870,6 +19870,41 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     source = path.read_text(encoding="utf-8")
     errors: list[str] = []
 
+    # V1 has no standalone timeout-certificate formation action.  Scan every
+    # active formal/checker/test source with the spelling assembled here so
+    # the checker cannot itself preserve the retired identifier as inventory.
+    retired_timeout_action = "Form" + "TC"
+    active_roots = (
+        formal_dir,
+        repo_root / "scripts" / "formal",
+        repo_root / "pytests" / "scripts",
+    )
+    active_suffixes = {".cfg", ".json", ".md", ".py", ".sh", ".tla"}
+    for active_root in active_roots:
+        if not active_root.is_dir():
+            continue
+        for active_path in sorted(active_root.rglob("*")):
+            if (
+                active_path.suffix not in active_suffixes
+                or not active_path.is_file()
+                or active_path.is_symlink()
+            ):
+                continue
+            try:
+                active_source = active_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                errors.append(
+                    f"{active_path}: active formal hard-cut source must be "
+                    f"readable UTF-8: {error}"
+                )
+                continue
+            if retired_timeout_action in active_source:
+                errors.append(
+                    f"{active_path}: active formal hard-cut source must not "
+                    "retain the retired standalone timeout-certificate "
+                    "action identifier"
+                )
+
     exact_liveness_operators = {
         "ExactLockedCommitTimeoutRecoveryWitness": (
             "/\\ qc.context = context "
@@ -19941,6 +19976,8 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "GenerationCanIncrement": (
                 "ViewDomain = Nat \\/ value < MaxGeneration"
             ),
+            "FiniteGenerations": "0..MaxGeneration",
+            "FiniteGenerationCanIncrement": "value < MaxGeneration",
             "NoDecisionForNode": (
                 "~\\E decision \\in decisions: "
                 "/\\ decision.node = node "
@@ -20036,6 +20073,43 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"{core_path}:{line}: {symbol} must equal only "
                     f"{exact_body!r}; found {normalized!r}"
                 )
+
+        model_configuration = _top_level_operator_body(
+            core_source, "ModelConfiguration", preserve_string_contents=True
+        )
+        finite_model_configuration = _top_level_operator_body(
+            core_source, "FiniteModelConfiguration", preserve_string_contents=True
+        )
+        if model_configuration is None:
+            errors.append(f"{core_path}: missing production ModelConfiguration")
+        elif finite_model_configuration is None:
+            errors.append(f"{core_path}: missing finite TLC ModelConfiguration")
+        else:
+            model_body, _ = model_configuration
+            finite_body, finite_line = finite_model_configuration
+            model_normalized = " ".join(model_body.split())
+            finite_normalized = " ".join(finite_body.split())
+            unbounded_discriminator = (
+                "/\\ \\/ ViewDomain = Nat \\/ "
+                "ViewDomain \\subseteq 0..MaxGeneration"
+            )
+            if model_normalized.count(unbounded_discriminator) != 1:
+                errors.append(
+                    f"{core_path}: production ModelConfiguration lost its exact "
+                    "unbounded domain discriminator"
+                )
+            else:
+                expected_finite = model_normalized.replace(
+                    unbounded_discriminator,
+                    "/\\ ViewDomain \\subseteq 0..MaxGeneration",
+                    1,
+                )
+                if finite_normalized != expected_finite:
+                    errors.append(
+                        f"{core_path}:{finite_line}: FiniteModelConfiguration must "
+                        "equal the production configuration with only the Nat "
+                        "discriminator projected to the finite width"
+                    )
 
         type_invariant = _top_level_operator_body(
             core_source, "TypeInvariant", preserve_string_contents=True
@@ -21166,7 +21240,6 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "PostDecisionTimeoutControlExcluded": (
             "\\A node: ~NoDecisionForNode(node) "
             "=> /\\ ~BeginTimeout(node) "
-            "/\\ \\A roundView: ~FormTC(node, roundView) "
             "/\\ \\A tc: ~BeginInstallTC(node, tc)"
         ),
         "PostDecisionTimeoutTrafficConsumeOnly": (

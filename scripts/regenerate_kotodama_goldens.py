@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Build, validate, and atomically publish the canonical Kotodama V1 goldens.
+"""Build, validate, and publish the canonical Kotodama V1 goldens.
 
 Prerequisites are freshly built ``koto`` and ``iroha`` binaries. The script
 never invokes Cargo or accepts signing material. Scratch files are confined to
-the selected staging root, and publication is confined to the selected output
-root when ``--write`` is explicit. The checked-in ``ivm_artifacts.tsv`` file is
-the authoritative ownership and source-to-artifact map for every IVM program
-in the repository.
+the selected staging root. ``--write`` requires an absent absolute output root
+outside the source workspace and can only create one sealed publication there.
+The checked-in ``ivm_artifacts.tsv`` file is the authoritative ownership and
+source-to-artifact map for every IVM program in the repository.
 
-``--check`` is the safe default: compile everything in a temporary staging
-tree and fail if any checked-in artifact or compiler manifest differs.
-``--write`` prevalidates the complete staging tree before replacing changed
-destinations one file at a time. The signed prediction-market deployment
+``--check`` is the safe default: compile everything in two independent
+temporary staging trees and fail unless their canonical path sets, bytes, and
+modes are identical to each other and to the selected checked tree. ``--write``
+uses the same two-pass proof before publishing the absent external
+``--output-root``. Its exact directory/file inventory is descriptor-bound and
+the owner manifest is written last as the mandatory completion seal. Failed
+external runs leave unsealed, create-only residue. Checked-in outputs are
+refreshed only by a reviewed identity-relative patch from a sealed tree and are
+then verified with ``--check``. The signed prediction-market deployment
 manifest is intentionally untracked and outside this workflow because private
 signing input must remain runtime-only.
 """
@@ -19,6 +24,7 @@ signing input must remain runtime-only.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -27,10 +33,11 @@ import struct
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 
 MAX_CYCLES = 1_000_000
@@ -39,12 +46,12 @@ ZK_MODE_BIT = 0x01
 VECTOR_MODE_BIT = 0x02
 KNOWN_CONTRACT_MODE_BITS = ZK_MODE_BIT | VECTOR_MODE_BIT
 MAP_PATH = Path("scripts/ivm_artifacts.tsv")
-SIZE_BASELINE_PATH = Path("scripts/kotodama_v1_size_baseline.json")
+ATTRIBUTES_PATH = Path(".gitattributes")
 TEST_SOURCE = Path("crates/ivm/docs/examples/19_contract_flow_test.test.ko")
 FILTERED_TEST_FRAGMENT = "actor_helpers"
 EXACT_TEST_NAME = "actor_helpers_roundtrip"
-SIZE_BASELINE_SCHEMA = "kotodama-v1-size-baseline-v1"
-SIZE_BASELINE_CORPUS = "kotodama-v1-audited-padding-heavy-control-flow"
+OWNER_MANIFEST_SCHEMA = "iroha.kotodama.generated-owner.v1"
+PUBLICATION_MANIFEST_PATH = Path(".kotodama-v1-owner-manifest.json")
 # `ADDI r0, r0, 0` is reserved by the Kotodama assembler as its one-word
 # relocation placeholder. A deployable image may contain it only when it was
 # deliberately emitted as a semantic no-op; V1 keeps such words below 1%.
@@ -67,7 +74,7 @@ COMPILER_MANIFESTS = {
         "demo/prediction_market.manifest.json"
     ),
 }
-RETIRED_OUTPUTS = (
+FORBIDDEN_LEGACY_OUTPUTS = (
     Path("crates/ivm/docs/examples/01_init.to"),
     Path("crates/ivm/docs/examples/02_entry_fn.to"),
     Path("crates/ivm/docs/examples/03_upgrade.to"),
@@ -103,6 +110,39 @@ class ArtifactCodeMetrics:
     relocation_nop_words: int
 
 
+@dataclass(frozen=True)
+class RenderedFile:
+    """One canonical generated destination, mode, and byte payload."""
+
+    relative_path: Path
+    mode: int
+    payload: bytes
+
+
+@dataclass(frozen=True)
+class RenderedDirectory:
+    """One canonical generated directory and its publication mode."""
+
+    relative_path: Path
+    mode: int = 0o755
+
+
+@dataclass(frozen=True)
+class FileSeal:
+    """Stable identity and content digest for one generation input."""
+
+    path: Path
+    device: int
+    inode: int
+    mode: int
+    uid: int
+    links: int
+    size: int
+    modified_ns: int
+    changed_ns: int
+    sha256: str
+
+
 def repository_root() -> Path:
     """Return the repository root containing this script's parent directory."""
 
@@ -110,15 +150,30 @@ def repository_root() -> Path:
 
 
 def _safe_relative(raw: str, suffix: str, context: str) -> Path:
+    if (
+        not raw
+        or "\\" in raw
+        or "\x00" in raw
+        or raw != unicodedata.normalize("NFC", raw)
+    ):
+        raise GoldenError(f"invalid {context} path {raw!r}")
     path = Path(raw)
     if (
         path.is_absolute()
         or not path.parts
+        or "." in path.parts
         or ".." in path.parts
         or path.suffix != suffix
+        or path.as_posix() != raw
     ):
         raise GoldenError(f"invalid {context} path {raw!r}")
     return path
+
+
+def _logical_path_identity(path: Path) -> str:
+    """Return the platform-independent logical identity for a relative path."""
+
+    return unicodedata.normalize("NFC", path.as_posix()).casefold()
 
 
 def read_map(path: Path) -> list[Golden]:
@@ -133,7 +188,9 @@ def read_map(path: Path) -> list[Golden]:
 
     rows: list[Golden] = []
     destinations: set[Path] = set()
+    destination_identities: set[str] = set()
     source_modes: dict[Path, str] = {}
+    source_identities: dict[str, Path] = {}
     for number, line in enumerate(lines, 1):
         if not line or line.startswith("#"):
             continue
@@ -147,12 +204,24 @@ def read_map(path: Path) -> list[Golden]:
         mode = fields[0].removeprefix("kotodama-")
         source = _safe_relative(fields[1], ".ko", f"row {number} source")
         destination = _safe_relative(fields[2], ".to", f"row {number} output")
+        source_identity = _logical_path_identity(source)
+        previous_source = source_identities.setdefault(source_identity, source)
+        if previous_source != source:
+            raise GoldenError(
+                f"duplicate logical source identity: {previous_source} and {source}"
+            )
         previous_mode = source_modes.setdefault(source, mode)
         if previous_mode != mode:
             raise GoldenError(f"source {source} has conflicting execution modes")
         if destination in destinations:
             raise GoldenError(f"duplicate golden destination {destination}")
+        destination_identity = _logical_path_identity(destination)
+        if destination_identity in destination_identities:
+            raise GoldenError(
+                f"duplicate logical golden destination {destination}"
+            )
         destinations.add(destination)
+        destination_identities.add(destination_identity)
         rows.append(Golden(mode, source, destination))
     if not rows:
         raise GoldenError(f"golden map {path} contains no Kotodama artifacts")
@@ -191,6 +260,71 @@ def tracked_sources(root: Path) -> list[Path]:
     if not sources:
         raise GoldenError("repository contains no tracked Kotodama sources")
     return sorted(sources)
+
+
+def partition_source_policy(
+    root: Path,
+    sources: Sequence[Path],
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Split canonical sources into checked code and byte-exact fixtures.
+
+    ``.gitattributes`` is the repository-owned policy boundary: only an exact
+    ``whitespace: unset`` result excludes an extracted fixture from formatter
+    and standalone compiler checks. Every ordinary source must report the
+    exact Git sentinel ``unspecified``. Any other value or malformed framing
+    fails closed instead of silently widening either set.
+    """
+
+    command = [
+        "git",
+        "-C",
+        str(root),
+        "check-attr",
+        "-z",
+        "whitespace",
+        "--",
+        *(source.as_posix() for source in sources),
+    ]
+    result = subprocess.run(
+        command,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        message = result.stderr.decode("utf-8", errors="replace").strip()
+        raise GoldenError(f"failed to classify Kotodama source policy: {message}")
+    fields = result.stdout.split(b"\0")
+    if not fields or fields[-1] != b"":
+        raise GoldenError("malformed git check-attr framing for Kotodama sources")
+    fields.pop()
+    if len(fields) != len(sources) * 3:
+        raise GoldenError("malformed git check-attr record count for Kotodama sources")
+
+    checked: list[Path] = []
+    byte_exact: list[Path] = []
+    for index, expected in enumerate(sources):
+        raw_path, raw_attribute, raw_value = fields[index * 3 : index * 3 + 3]
+        try:
+            path = raw_path.decode("utf-8")
+            attribute = raw_attribute.decode("utf-8")
+            value = raw_value.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise GoldenError(
+                "malformed non-UTF-8 git check-attr output for Kotodama sources"
+            ) from error
+        if path != expected.as_posix() or attribute != "whitespace":
+            raise GoldenError("malformed git check-attr identity for Kotodama sources")
+        if value == "unspecified":
+            checked.append(expected)
+        elif value == "unset":
+            byte_exact.append(expected)
+        else:
+            raise GoldenError(
+                f"unsupported whitespace attribute for Kotodama source {expected}: "
+                f"{value!r}"
+            )
+    return tuple(checked), tuple(byte_exact)
 
 
 def tracked_outputs(root: Path) -> list[Path]:
@@ -297,6 +431,100 @@ def run(command: Sequence[os.PathLike[str] | str], root: Path) -> str:
         details = result.stderr.strip() or result.stdout.strip()
         raise GoldenError(f"command failed ({' '.join(rendered)}):\n{details}")
     return result.stdout
+
+
+def _read_sealed_regular(path: Path, context: str) -> tuple[bytes, os.stat_result]:
+    """Read one single-link regular file without following a symbolic link."""
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise GoldenError("sealed generation requires O_NOFOLLOW support")
+    flags |= no_follow
+    try:
+        named_before = path.lstat()
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise GoldenError(f"failed to open {context} {path}: {error}") from error
+    try:
+        opened_before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(named_before.st_mode)
+            or not stat.S_ISREG(opened_before.st_mode)
+            or _metadata_identity(named_before)[:3]
+            != _metadata_identity(opened_before)[:3]
+            or opened_before.st_nlink != 1
+            or opened_before.st_size < 0
+        ):
+            raise GoldenError(
+                f"{context} must be one regular non-symlink file with one hard link: {path}"
+            )
+        chunks: list[bytes] = []
+        remaining = opened_before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise GoldenError(f"{context} was truncated while reading: {path}")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise GoldenError(f"{context} grew while reading: {path}")
+        opened_after = os.fstat(descriptor)
+        named_after = path.lstat()
+        if (
+            _metadata_identity(opened_before) != _metadata_identity(opened_after)
+            or _metadata_identity(opened_after) != _metadata_identity(named_after)
+        ):
+            raise GoldenError(f"{context} identity changed while reading: {path}")
+        return b"".join(chunks), opened_after
+    finally:
+        os.close(descriptor)
+
+
+def seal_file(path: Path, context: str) -> FileSeal:
+    """Return a stable identity and SHA-256 seal for one generation input."""
+
+    payload, metadata = _read_sealed_regular(path, context)
+    return FileSeal(
+        path=path,
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        mode=metadata.st_mode,
+        uid=metadata.st_uid,
+        links=metadata.st_nlink,
+        size=metadata.st_size,
+        modified_ns=metadata.st_mtime_ns,
+        changed_ns=metadata.st_ctime_ns,
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+
+def generation_input_seals(
+    root: Path,
+    sources: Sequence[Path],
+    koto: Path,
+    iroha: Path,
+) -> tuple[FileSeal, ...]:
+    """Seal the exact source, map, owner, and executable inputs to generation."""
+
+    inputs = [
+        root / ATTRIBUTES_PATH,
+        root / MAP_PATH,
+        Path(__file__).resolve(strict=True),
+        *(root / source for source in sources),
+        koto,
+        iroha,
+    ]
+    if len(inputs) != len(set(inputs)):
+        raise GoldenError("generation input inventory contains duplicate paths")
+    seals = tuple(
+        seal_file(path, "generation input")
+        for path in sorted(inputs, key=lambda value: os.fspath(value))
+    )
+    inode_identities = [(seal.device, seal.inode) for seal in seals]
+    if len(inode_identities) != len(set(inode_identities)):
+        raise GoldenError("generation inputs contain duplicate filesystem identities")
+    return seals
 
 
 def validate_noop_build_output(output: str, expected_fresh: int) -> None:
@@ -431,68 +659,15 @@ def artifact_code_metrics(path: Path) -> ArtifactCodeMetrics:
     )
 
 
-def read_size_baseline(path: Path) -> dict[Path, int]:
-    """Read immutable pre-reset evidence for the normative V1 size corpus."""
-
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as error:
-        raise GoldenError(f"failed to read Kotodama size baseline {path}: {error}") from error
-    except json.JSONDecodeError as error:
-        raise GoldenError(f"invalid Kotodama size baseline JSON {path}: {error}") from error
-    if not isinstance(payload, dict) or payload.get("schema") != SIZE_BASELINE_SCHEMA:
-        raise GoldenError(
-            f"Kotodama size baseline {path} must declare schema "
-            f"{SIZE_BASELINE_SCHEMA!r}"
-        )
-    if payload.get("unit") != "code_bytes":
-        raise GoldenError(f"Kotodama size baseline {path} must use code_bytes")
-    if payload.get("corpus") != SIZE_BASELINE_CORPUS:
-        raise GoldenError(
-            f"Kotodama size baseline {path} must bind the normative corpus "
-            f"{SIZE_BASELINE_CORPUS!r}"
-        )
-    source_revision = payload.get("source_revision")
-    if (
-        not isinstance(source_revision, str)
-        or len(source_revision) != 40
-        or any(character not in "0123456789abcdef" for character in source_revision)
-    ):
-        raise GoldenError(
-            f"Kotodama size baseline {path} must bind a lowercase 40-hex source_revision"
-        )
-    samples = payload.get("samples")
-    if not isinstance(samples, dict) or not samples:
-        raise GoldenError(f"Kotodama size baseline {path} has no samples")
-
-    result: dict[Path, int] = {}
-    for raw_path, raw_size in samples.items():
-        if not isinstance(raw_path, str):
-            raise GoldenError(f"Kotodama size baseline {path} contains a non-string path")
-        artifact_path = _safe_relative(raw_path, ".to", "size baseline")
-        if isinstance(raw_size, bool) or not isinstance(raw_size, int):
-            raise GoldenError(f"size baseline for {artifact_path} must be an integer")
-        if raw_size <= 0 or raw_size % 4 != 0:
-            raise GoldenError(
-                f"size baseline for {artifact_path} must be positive and word aligned"
-            )
-        result[artifact_path] = raw_size
-    return result
-
-
 def validate_performance(
     stage: Path,
     builds: Sequence[Golden],
-    rows: Sequence[Golden],
-    baseline_path: Path,
 ) -> None:
-    """Enforce relocation-padding and representative code-size acceptance gates."""
+    """Enforce the deterministic relocation-padding acceptance gate."""
 
-    metrics_by_source: dict[Path, ArtifactCodeMetrics] = {}
     for build in builds:
         artifact = stage / "release" / f"{build.source.stem}.to"
         metrics = artifact_code_metrics(artifact)
-        metrics_by_source[build.source] = metrics
         # Strictly below 1%, expressed with integer arithmetic so boundary
         # behavior is deterministic on every host.
         if (
@@ -505,68 +680,143 @@ def validate_performance(
                 "strictly less than 1%"
             )
 
-    by_destination = {row.destination: row for row in rows}
-    for destination, old_code_bytes in read_size_baseline(baseline_path).items():
-        row = by_destination.get(destination)
-        if row is None:
-            raise GoldenError(
-                f"size baseline references unmapped Kotodama artifact {destination}"
-            )
-        metrics = metrics_by_source.get(row.source)
-        if metrics is None:
-            raise GoldenError(f"size baseline source was not built: {row.source}")
-        if metrics.code_bytes * 2 > old_code_bytes:
-            raise GoldenError(
-                f"{destination} code region is {metrics.code_bytes} bytes; V1 requires "
-                f"at least a 50% reduction from the audited {old_code_bytes}-byte baseline"
-            )
 
+def _metadata_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return fields that must remain stable across a guarded publication."""
 
-def atomic_publish(source: Path, destination: Path) -> bool:
-    """Replace one destination atomically only when its bytes changed."""
-
-    payload = source.read_bytes()
-    try:
-        metadata = destination.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-            raise GoldenError(
-                f"generated destination must be a regular non-symlink file: {destination}"
-            )
-        if destination.read_bytes() == payload:
-            return False
-    except FileNotFoundError:
-        pass
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.", dir=destination.parent
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
     )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return True
+
+
+def compare_payload(expected: bytes, destination: Path, expected_mode: int = 0o644) -> None:
+    """Require one sealed destination to match canonical bytes and mode."""
+
+    actual, metadata = _read_sealed_regular(destination, "generated destination")
+    if stat.S_IMODE(metadata.st_mode) != expected_mode:
+        raise GoldenError(
+            f"generated destination mode differs: {destination} "
+            f"(expected {expected_mode:04o}, got {stat.S_IMODE(metadata.st_mode):04o})"
+        )
+    if actual != expected:
+        raise GoldenError(f"stale Kotodama generated output: {destination}")
 
 
 def compare_file(source: Path, destination: Path) -> None:
     """Require a checked-in destination to exactly match its staged source."""
 
-    try:
-        metadata = destination.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+    expected, metadata = _read_sealed_regular(source, "staged generated output")
+    compare_payload(expected, destination, stat.S_IMODE(metadata.st_mode))
+
+
+def rendered_files(stage: Path, rows: Sequence[Golden]) -> tuple[RenderedFile, ...]:
+    """Read the canonical sorted destination set from one validated stage."""
+
+    sources: dict[Path, Path] = {}
+    for row in rows:
+        sources[row.destination] = stage / "release" / f"{row.source.stem}.to"
+    for source, destination in COMPILER_MANIFESTS.items():
+        if destination in sources:
+            raise GoldenError(f"duplicate generated destination {destination}")
+        sources[destination] = stage / "release" / f"{source.stem}.manifest.json"
+
+    logical_identities = [_logical_path_identity(path) for path in sources]
+    if len(logical_identities) != len(set(logical_identities)):
+        raise GoldenError("generated destinations contain duplicate logical identities")
+
+    rendered: list[RenderedFile] = []
+    for destination in sorted(sources, key=lambda value: value.as_posix()):
+        payload, metadata = _read_sealed_regular(
+            sources[destination], "staged generated output"
+        )
+        mode = stat.S_IMODE(metadata.st_mode)
+        if mode != 0o644:
             raise GoldenError(
-                f"generated destination must be a regular non-symlink file: {destination}"
+                f"staged generated output must use mode 0644: {sources[destination]}"
             )
-        expected = source.read_bytes()
-        actual = destination.read_bytes()
-    except OSError as error:
-        raise GoldenError(f"failed to compare {destination}: {error}") from error
-    if actual != expected:
-        raise GoldenError(f"stale Kotodama generated output: {destination}")
+        rendered.append(RenderedFile(destination, mode, payload))
+    return tuple(rendered)
+
+
+def rendered_directories(
+    rendered: Sequence[RenderedFile],
+) -> tuple[RenderedDirectory, ...]:
+    """Derive the complete sorted directory inventory for one rendering."""
+
+    paths: set[Path] = set()
+    file_paths = {output.relative_path for output in rendered}
+    for output in rendered:
+        parent = output.relative_path.parent
+        while parent != Path("."):
+            if parent in file_paths:
+                raise GoldenError(
+                    f"generated path is both a file and a directory: {parent}"
+                )
+            paths.add(parent)
+            parent = parent.parent
+
+    ordered = sorted(paths, key=lambda value: value.as_posix())
+    identities = [_logical_path_identity(path) for path in (*ordered, *file_paths)]
+    if len(identities) != len(set(identities)):
+        raise GoldenError(
+            "generated file and directory paths contain duplicate logical identities"
+        )
+    return tuple(RenderedDirectory(path) for path in ordered)
+
+
+def owner_manifest(rendered: Sequence[RenderedFile]) -> bytes:
+    """Render the deterministic owner manifest used for two-pass comparison."""
+
+    document = {
+        "schema": OWNER_MANIFEST_SCHEMA,
+        "root_mode": "0700",
+        "directories": [
+            {
+                "path": directory.relative_path.as_posix(),
+                "mode": f"{directory.mode:04o}",
+            }
+            for directory in rendered_directories(rendered)
+        ],
+        "files": [
+            {
+                "path": output.relative_path.as_posix(),
+                "mode": f"{output.mode:04o}",
+                "size": len(output.payload),
+                "sha256": hashlib.sha256(output.payload).hexdigest(),
+            }
+            for output in rendered
+        ],
+    }
+    return (json.dumps(document, indent=2, ensure_ascii=True) + "\n").encode("utf-8")
+
+
+def compare_renderings(
+    first: Sequence[RenderedFile], second: Sequence[RenderedFile]
+) -> None:
+    """Require two independent renders and manifests to be byte-for-byte equal."""
+
+    first_paths = tuple(output.relative_path for output in first)
+    second_paths = tuple(output.relative_path for output in second)
+    if first_paths != second_paths:
+        raise GoldenError("independent Kotodama renders have different path sets")
+    for left, right in zip(first, second):
+        if left.mode != right.mode:
+            raise GoldenError(
+                f"independent Kotodama renders differ in mode: {left.relative_path}"
+            )
+        if left.payload != right.payload:
+            raise GoldenError(
+                f"independent Kotodama renders differ in bytes: {left.relative_path}"
+            )
+    if owner_manifest(first) != owner_manifest(second):
+        raise GoldenError("independent Kotodama owner manifests differ")
 
 
 def build_command(
@@ -851,7 +1101,7 @@ def build_and_validate(
         artifact = stage / "release" / f"{row.source.stem}.to"
         manifest = stage / "release" / f"{row.source.stem}.manifest.json"
         validate_artifact(artifact, row.mode, manifest_abi_hash(manifest))
-    validate_performance(stage, builds, rows, root / SIZE_BASELINE_PATH)
+    validate_performance(stage, builds)
     if iroha is not None:
         verify_runtime_manifests(iroha, root, stage, builds)
     if run_tests:
@@ -871,64 +1121,476 @@ def build_and_validate(
     return builds
 
 
-def publish_or_check(
-    output_root: Path,
-    stage: Path,
-    rows: Sequence[Golden],
-    write: bool,
+def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    """Return whether two metadata records name the same filesystem object."""
+
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _open_canonical_publication_parent(path: Path) -> int:
+    """Open and bind the canonical real parent of one publication path."""
+
+    if not path.is_absolute() or path.name in {"", ".", ".."}:
+        raise GoldenError(f"Kotodama publication path must be absolute and narrow: {path}")
+    parent = path.parent
+    try:
+        lexical = parent.lstat()
+        canonical = parent.resolve(strict=True)
+    except OSError as error:
+        raise GoldenError(f"Kotodama publication parent is unavailable: {parent}") from error
+    if (
+        stat.S_ISLNK(lexical.st_mode)
+        or not stat.S_ISDIR(lexical.st_mode)
+        or canonical != parent
+    ):
+        raise GoldenError(
+            f"Kotodama publication parent must be one canonical real directory: {parent}"
+        )
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(parent, flags)
+    except OSError as error:
+        raise GoldenError(f"failed to bind Kotodama publication parent: {parent}") from error
+    bound = os.fstat(descriptor)
+    if not _same_file_identity(lexical, bound) or not stat.S_ISDIR(bound.st_mode):
+        os.close(descriptor)
+        raise GoldenError(f"Kotodama publication parent changed while opening: {parent}")
+    return descriptor
+
+
+def _revalidate_publication_boundary(
+    path: Path, parent_descriptor: int, root_descriptor: int
+) -> None:
+    """Require the held parent and root to remain at the requested pathname."""
+
+    parent_bound = os.fstat(parent_descriptor)
+    root_bound = os.fstat(root_descriptor)
+    try:
+        parent_lexical = path.parent.lstat()
+        root_from_parent = os.stat(
+            path.name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        root_lexical = path.lstat()
+    except OSError as error:
+        raise GoldenError("Kotodama publication boundary changed during publication") from error
+    if (
+        not _same_file_identity(parent_bound, parent_lexical)
+        or not _same_file_identity(root_bound, root_from_parent)
+        or not _same_file_identity(root_bound, root_lexical)
+        or stat.S_ISLNK(root_lexical.st_mode)
+        or not stat.S_ISDIR(root_lexical.st_mode)
+    ):
+        raise GoldenError("Kotodama publication boundary changed during publication")
+
+
+def _open_directory_beneath(
+    root_descriptor: int, relative: Path, *, create: bool
 ) -> int:
-    """Publish or compare every mapped artifact and selected compiler manifest."""
+    """Open a real directory beneath a bound root, optionally creating it."""
+
+    if relative == Path("."):
+        return os.dup(root_descriptor)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise GoldenError(f"invalid generated directory: {relative}")
+    descriptor = os.dup(root_descriptor)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        for component in relative.parts:
+            if component in {"", ".", ".."}:
+                raise GoldenError(f"invalid generated directory: {relative}")
+            if create:
+                try:
+                    os.mkdir(component, 0o755, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+            try:
+                child = os.open(component, flags, dir_fd=descriptor)
+            except OSError as error:
+                raise GoldenError(
+                    f"generated directory is missing or unsafe: {relative}"
+                ) from error
+            metadata = os.fstat(child)
+            if not stat.S_ISDIR(metadata.st_mode):
+                os.close(child)
+                raise GoldenError(f"generated directory is not real: {relative}")
+            if create:
+                os.fchmod(child, 0o755)
+                metadata = os.fstat(child)
+            if stat.S_IMODE(metadata.st_mode) != 0o755:
+                os.close(child)
+                raise GoldenError(f"generated directory has the wrong mode: {relative}")
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _create_file_beneath(
+    root_descriptor: int, relative: Path, payload: bytes, mode: int = 0o644
+) -> None:
+    """Create, flush, and authenticate one file relative to a bound root."""
+
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise GoldenError(f"invalid generated file: {relative}")
+    parent = _open_directory_beneath(
+        root_descriptor,
+        relative.parent,
+        create=False,
+    )
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        try:
+            descriptor = os.open(relative.name, flags, mode, dir_fd=parent)
+        except OSError as error:
+            raise GoldenError(
+                f"create-only generated destination exists or is unsafe: {relative}"
+            ) from error
+        try:
+            os.fchmod(descriptor, mode)
+            with os.fdopen(descriptor, "wb", closefd=False) as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != mode
+                or metadata.st_size != len(payload)
+            ):
+                raise GoldenError(f"generated destination failed validation: {relative}")
+        finally:
+            os.close(descriptor)
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+
+
+def _snapshot_bound_tree(
+    root_descriptor: int,
+    relative: Path = Path("."),
+) -> dict[Path, tuple[str, int, bytes | None]]:
+    """Read a complete no-follow tree inventory through held descriptors."""
+
+    snapshot: dict[Path, tuple[str, int, bytes | None]] = {}
+    directory = _open_directory_beneath(root_descriptor, relative, create=False)
+    try:
+        names = sorted(os.listdir(directory))
+        for name in names:
+            if name in {"", ".", ".."} or "/" in name:
+                raise GoldenError("generated output tree contains an invalid path")
+            child_path = Path(name) if relative == Path(".") else relative / name
+            metadata = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if stat.S_ISDIR(metadata.st_mode):
+                child = os.open(
+                    name,
+                    os.O_RDONLY
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=directory,
+                )
+                try:
+                    if not _same_file_identity(metadata, os.fstat(child)):
+                        raise GoldenError(
+                            f"generated directory changed while reading: {child_path}"
+                        )
+                finally:
+                    os.close(child)
+                snapshot[child_path] = (
+                    "directory",
+                    stat.S_IMODE(metadata.st_mode),
+                    None,
+                )
+                snapshot.update(_snapshot_bound_tree(root_descriptor, child_path))
+            elif stat.S_ISREG(metadata.st_mode):
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
+                descriptor = os.open(name, flags, dir_fd=directory)
+                try:
+                    bound = os.fstat(descriptor)
+                    if (
+                        not _same_file_identity(metadata, bound)
+                        or bound.st_nlink != 1
+                    ):
+                        raise GoldenError(
+                            f"generated file is hard-linked or changed: {child_path}"
+                        )
+                    chunks: list[bytes] = []
+                    while True:
+                        chunk = os.read(descriptor, 1024 * 1024)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                    after = os.fstat(descriptor)
+                    from_parent = os.stat(
+                        name,
+                        dir_fd=directory,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        not _same_file_identity(bound, after)
+                        or not _same_file_identity(bound, from_parent)
+                        or bound.st_size != after.st_size
+                    ):
+                        raise GoldenError(
+                            f"generated file changed while reading: {child_path}"
+                        )
+                    snapshot[child_path] = (
+                        "file",
+                        stat.S_IMODE(bound.st_mode),
+                        b"".join(chunks),
+                    )
+                finally:
+                    os.close(descriptor)
+            else:
+                raise GoldenError(
+                    f"generated output tree contains a link or special file: {child_path}"
+                )
+    finally:
+        os.close(directory)
+    return snapshot
+
+
+def _expected_external_snapshot(
+    rendered: Sequence[RenderedFile], *, complete: bool
+) -> dict[Path, tuple[str, int, bytes | None]]:
+    """Return the exact accepted external publication inventory."""
+
+    expected: dict[Path, tuple[str, int, bytes | None]] = {
+        directory.relative_path: ("directory", directory.mode, None)
+        for directory in rendered_directories(rendered)
+    }
+    for output in rendered:
+        if output.relative_path in expected:
+            raise GoldenError(f"duplicate generated path: {output.relative_path}")
+        expected[output.relative_path] = ("file", output.mode, output.payload)
+    if PUBLICATION_MANIFEST_PATH in expected:
+        raise GoldenError(
+            f"generated output collides with publication seal: {PUBLICATION_MANIFEST_PATH}"
+        )
+    if complete:
+        expected[PUBLICATION_MANIFEST_PATH] = (
+            "file",
+            0o644,
+            owner_manifest(rendered),
+        )
+    return expected
+
+
+def _compare_external_snapshot(
+    actual: dict[Path, tuple[str, int, bytes | None]],
+    expected: dict[Path, tuple[str, int, bytes | None]],
+) -> None:
+    """Require exact node paths, kinds, modes, and bytes."""
+
+    if set(actual) != set(expected):
+        missing = sorted(set(expected) - set(actual), key=lambda value: value.as_posix())
+        unexpected = sorted(set(actual) - set(expected), key=lambda value: value.as_posix())
+        details: list[str] = []
+        if missing:
+            details.append("missing " + ", ".join(path.as_posix() for path in missing))
+        if unexpected:
+            details.append(
+                "unexpected " + ", ".join(path.as_posix() for path in unexpected)
+            )
+        raise GoldenError("generated output tree is not complete: " + "; ".join(details))
+    for path in sorted(expected, key=lambda value: value.as_posix()):
+        if actual[path] != expected[path]:
+            raise GoldenError(
+                f"generated output node differs in kind, mode, or bytes: {path}"
+            )
+
+
+def _validate_external_publication(
+    path: Path, rendered: Sequence[RenderedFile]
+) -> None:
+    """Verify one completed external tree through an inode-bound boundary."""
+
+    parent = _open_canonical_publication_parent(path)
+    root = -1
+    try:
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            root = os.open(path.name, flags, dir_fd=parent)
+        except OSError as error:
+            raise GoldenError(
+                f"completed Kotodama publication is missing or unsafe: {path}"
+            ) from error
+        metadata = os.fstat(root)
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700:
+            raise GoldenError("Kotodama publication root must be a mode-0700 directory")
+        _revalidate_publication_boundary(path, parent, root)
+        actual = _snapshot_bound_tree(root)
+        _compare_external_snapshot(
+            actual,
+            _expected_external_snapshot(rendered, complete=True),
+        )
+        _revalidate_publication_boundary(path, parent, root)
+    finally:
+        if root >= 0:
+            os.close(root)
+        os.close(parent)
+
+
+def publish_external_create_only(
+    path: Path,
+    rendered: Sequence[RenderedFile],
+    *,
+    preseal: Callable[[], None] | None = None,
+) -> int:
+    """Create an immutable external tree and write its completion seal last.
+
+    The destination directory becomes visible when it is atomically reserved,
+    but it is not a publication until the owner manifest exists. Every checker
+    requires that final seal. Any failure leaves unsealed residue in place and
+    never removes or overwrites a caller-selected path.
+    """
+
+    expected_incomplete = _expected_external_snapshot(rendered, complete=False)
+    parent = _open_canonical_publication_parent(path)
+    root = -1
+    try:
+        try:
+            os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise GoldenError(f"Kotodama publication is create-only: {path}")
+        try:
+            os.mkdir(path.name, 0o700, dir_fd=parent)
+        except OSError as error:
+            raise GoldenError(f"failed to reserve Kotodama publication: {path}") from error
+        os.fsync(parent)
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        root = os.open(path.name, flags, dir_fd=parent)
+        os.fchmod(root, 0o700)
+        _revalidate_publication_boundary(path, parent, root)
+
+        directories = sorted(
+            rendered_directories(rendered),
+            key=lambda value: (len(value.relative_path.parts), value.relative_path.as_posix()),
+        )
+        for directory in directories:
+            descriptor = _open_directory_beneath(
+                root,
+                directory.relative_path,
+                create=True,
+            )
+            os.fsync(descriptor)
+            os.close(descriptor)
+        for output in rendered:
+            _revalidate_publication_boundary(path, parent, root)
+            _create_file_beneath(
+                root,
+                output.relative_path,
+                output.payload,
+                output.mode,
+            )
+
+        _compare_external_snapshot(
+            _snapshot_bound_tree(root),
+            expected_incomplete,
+        )
+        if preseal is not None:
+            preseal()
+        _revalidate_publication_boundary(path, parent, root)
+        _create_file_beneath(
+            root,
+            PUBLICATION_MANIFEST_PATH,
+            owner_manifest(rendered),
+        )
+        os.fsync(root)
+        os.fsync(parent)
+        _revalidate_publication_boundary(path, parent, root)
+    finally:
+        if root >= 0:
+            os.close(root)
+        os.close(parent)
+
+    _validate_external_publication(path, rendered)
+    return len(rendered)
+
+
+def verify_rendered_tree(
+    output_root: Path,
+    rendered: Sequence[RenderedFile],
+) -> int:
+    """Check the repository or one completed sealed external tree."""
 
     output_root = _prepare_real_directory(
         output_root,
         context="Kotodama golden output root",
         create=False,
     )
-    changed = 0
-    for row in rows:
-        staged = stage / "release" / f"{row.source.stem}.to"
-        destination = _confined_destination(
-            output_root,
-            row.destination,
-            create_parent=write,
-            missing_parent_ok=False,
-        )
-        if write:
-            changed += int(atomic_publish(staged, destination))
-        else:
-            compare_file(staged, destination)
-    for source, relative_destination in COMPILER_MANIFESTS.items():
-        staged = stage / "release" / f"{source.stem}.manifest.json"
-        destination = _confined_destination(
-            output_root,
-            relative_destination,
-            create_parent=write,
-            missing_parent_ok=False,
-        )
-        if write:
-            changed += int(atomic_publish(staged, destination))
-        else:
-            compare_file(staged, destination)
-    for retired in RETIRED_OUTPUTS:
+    strict_external_root = output_root != repository_root().resolve(strict=True)
+    if strict_external_root:
+        _validate_external_publication(output_root, rendered)
+        return 0
+
+    expected_paths = {output.relative_path for output in rendered}
+    if len(expected_paths) != len(rendered):
+        raise GoldenError("canonical rendering contains duplicate output paths")
+
+    # Retired outputs are rejected, never migrated or removed.
+    for retired in FORBIDDEN_LEGACY_OUTPUTS:
         path = _confined_destination(
             output_root,
             retired,
-            create_parent=False,
             missing_parent_ok=True,
         )
         try:
-            metadata = path.lstat()
+            path.lstat()
         except FileNotFoundError:
             continue
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-            raise GoldenError(
-                f"retired Kotodama destination must be a regular non-symlink file: {path}"
-            )
-        if not write:
-            raise GoldenError(f"retired Kotodama artifact still exists: {retired}")
-        path.unlink()
-        changed += 1
-    return changed
+        raise GoldenError(f"retired Kotodama artifact still exists: {retired}")
+
+    for output in rendered:
+        destination = _confined_destination(
+            output_root,
+            output.relative_path,
+            missing_parent_ok=False,
+        )
+        try:
+            destination.lstat()
+        except FileNotFoundError:
+            raise GoldenError(f"generated destination is missing: {destination}") from None
+        else:
+            compare_payload(output.payload, destination, output.mode)
+    return 0
 
 
 class _UniquePathAction(argparse.Action):
@@ -969,13 +1631,26 @@ def _explicit_root_path(value: str) -> Path:
     return path
 
 
+def _absolute_output_root_path(value: str) -> Path:
+    """Parse an absolute publication/check root without resolving it early."""
+
+    path = _explicit_root_path(value)
+    if not path.is_absolute():
+        raise argparse.ArgumentTypeError("output root must be absolute")
+    return path
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     """Parse the discoverable command-line interface."""
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="verify without publishing (default)")
-    mode.add_argument("--write", action="store_true", help="publish all prevalidated changes")
+    mode.add_argument(
+        "--write",
+        action="store_true",
+        help="create one prevalidated publication at an absent external output root",
+    )
     parser.add_argument(
         "--koto",
         type=_non_empty_path,
@@ -990,9 +1665,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-root",
-        type=_explicit_root_path,
+        type=_absolute_output_root_path,
         action=_UniquePathAction,
-        help="publish or compare generated artifacts below this root",
+        help="publish or compare below this absolute root outside the workspace",
     )
     parser.add_argument(
         "--staging-root",
@@ -1003,7 +1678,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     arguments = list(argv)
     if sum(argument in {"--check", "--write"} for argument in arguments) > 1:
         parser.error("select --check or --write at most once")
-    return parser.parse_args(arguments)
+    parsed = parser.parse_args(arguments)
+    if parsed.write and parsed.output_root is None:
+        parser.error("--write requires --output-root <absent-absolute-external-root>")
+    return parsed
 
 
 def _resolve_tool(root: Path, path: Path, name: str) -> Path:
@@ -1043,14 +1721,42 @@ def _prepare_real_directory(
     return path.resolve(strict=True)
 
 
+def _preflight_create_only_output_path(path: Path) -> Path:
+    """Validate an absent publication path without reserving it early."""
+
+    parent = _open_canonical_publication_parent(path)
+    try:
+        try:
+            os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            return path
+        raise GoldenError(f"Kotodama publication is create-only: {path}")
+    finally:
+        os.close(parent)
+
+
+def _require_external_output_path(root: Path, path: Path) -> Path:
+    """Require an absolute canonical-parent path outside the source workspace."""
+
+    if not path.is_absolute():
+        raise GoldenError(f"Kotodama output root must be absolute: {path}")
+    workspace = root.resolve(strict=True)
+    parent = _open_canonical_publication_parent(path)
+    os.close(parent)
+    if path == workspace or workspace in path.parents:
+        raise GoldenError(
+            f"Kotodama output root must be outside the source workspace: {path}"
+        )
+    return path
+
+
 def _confined_destination(
     root: Path,
     relative: Path,
     *,
-    create_parent: bool,
     missing_parent_ok: bool,
 ) -> Path:
-    """Return one destination after a no-symlink walk beneath ``root``."""
+    """Return one existing destination after a no-symlink walk beneath ``root``."""
 
     if relative.is_absolute() or not relative.parts or ".." in relative.parts:
         raise GoldenError(f"invalid generated destination below {root}: {relative}")
@@ -1064,10 +1770,7 @@ def _confined_destination(
         except FileNotFoundError:
             if missing_parent_ok:
                 return root / relative
-            if not create_parent:
-                raise GoldenError(f"generated output parent does not exist: {parent}") from None
-            parent.mkdir()
-            metadata = parent.lstat()
+            raise GoldenError(f"generated output parent does not exist: {parent}") from None
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
             raise GoldenError(
                 f"generated output parent must be a real directory: {parent}"
@@ -1079,19 +1782,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the complete fail-closed golden pipeline."""
 
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    root = repository_root()
+    root = repository_root().resolve(strict=True)
     try:
-        output_root = _rooted_path(root, args.output_root, root)
+        if args.output_root is None:
+            output_root = root
+        else:
+            output_root = _require_external_output_path(root, args.output_root)
         staging_root = _rooted_path(
             root,
             args.staging_root,
             root / "target" / "kotodama",
         )
-        output_root = _prepare_real_directory(
-            output_root,
-            context="Kotodama golden output root",
-            create=args.write,
-        )
+        if args.write:
+            output_root = _preflight_create_only_output_path(output_root)
+        else:
+            output_root = _prepare_real_directory(
+                output_root,
+                context="Kotodama golden output root",
+                create=False,
+            )
         staging_root = _prepare_real_directory(
             staging_root,
             context="Kotodama golden staging root",
@@ -1102,26 +1811,70 @@ def main(argv: Sequence[str] | None = None) -> int:
         validate_output_inventory(rows, sources, tracked_outputs(root))
         koto = _resolve_tool(root, args.koto, "koto")
         iroha = _resolve_tool(root, args.iroha, "iroha")
-        validate_sources(koto, root, sources)
+        sealed_inputs = generation_input_seals(root, sources, koto, iroha)
+        checked_sources, byte_exact_sources = partition_source_policy(root, sources)
+        if not checked_sources or not byte_exact_sources:
+            raise GoldenError(
+                "Kotodama source policy must contain checked and byte-exact sources"
+            )
+        if generation_input_seals(root, sources, koto, iroha) != sealed_inputs:
+            raise GoldenError(
+                "Kotodama generation inputs drifted during source classification"
+            )
+        validate_sources(koto, root, checked_sources)
         with tempfile.TemporaryDirectory(
-            prefix="v1-goldens.",
+            prefix="v1-goldens-first.",
             dir=staging_root,
-        ) as raw_stage:
-            stage = Path(raw_stage)
+        ) as raw_first_stage, tempfile.TemporaryDirectory(
+            prefix="v1-goldens-second.",
+            dir=staging_root,
+        ) as raw_second_stage:
+            first_stage = Path(raw_first_stage)
+            second_stage = Path(raw_second_stage)
+            if first_stage.resolve(strict=True) == second_stage.resolve(strict=True):
+                raise GoldenError("independent Kotodama staging roots alias each other")
             build_and_validate(
                 koto,
                 iroha,
                 root,
-                stage,
+                first_stage,
                 rows,
                 True,
             )
-            changed = publish_or_check(output_root, stage, rows, args.write)
+            build_and_validate(
+                koto,
+                iroha,
+                root,
+                second_stage,
+                rows,
+                False,
+            )
+            first_render = rendered_files(first_stage, rows)
+            second_render = rendered_files(second_stage, rows)
+            compare_renderings(first_render, second_render)
+            def require_stable_inputs() -> None:
+                if generation_input_seals(root, sources, koto, iroha) != sealed_inputs:
+                    raise GoldenError("Kotodama generation inputs drifted during rendering")
+
+            require_stable_inputs()
+            if args.write:
+                changed = publish_external_create_only(
+                    output_root,
+                    first_render,
+                    preseal=require_stable_inputs,
+                )
+            else:
+                changed = verify_rendered_tree(output_root, first_render)
+                require_stable_inputs()
+            manifest_sha256 = hashlib.sha256(owner_manifest(first_render)).hexdigest()
     except (GoldenError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     action = "published" if args.write else "verified"
-    print(f"{action} {len(rows)} Kotodama V1 artifact mappings ({changed} changes)")
+    print(
+        f"{action} {len(rows)} Kotodama V1 artifact mappings "
+        f"({changed} changes; owner manifest sha256={manifest_sha256})"
+    )
     return 0
 
 

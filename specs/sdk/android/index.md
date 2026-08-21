@@ -37,8 +37,11 @@ layered on top via the keystore abstraction when running on devices.
   Sora VPN helpers use canonical request signatures to create XOR lease quotes,
   open sessions only after the quote-bound native escrow transaction commits,
   and parse native lease settlement instructions from operator receipts.
-- **Fixtures & tooling:** `scripts/android_fixture_regen.sh` regenerates the
-  Norito fixtures from the shared Rust exporter, and
+- **Fixtures & tooling:** `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication`
+  renders the complete Norito fixture owner publication. Repeat at a second
+  absent root and require identical exact path sets, entry types, modes,
+  completion manifests, and every file byte before applying the reviewed
+  identity-relative tracked patch; then run `norito-rpc-verify`.
   `scripts/check_android_fixtures.py` guards parity during CI.
 
 ## Quickstart
@@ -211,7 +214,10 @@ that pays earned XOR from escrow and refunds the unused lease amount.
 
 ```bash
 make android-tests            # compiles Java sources and runs assertion-based tests
-make android-fixtures         # regenerates Norito fixtures + manifest
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
 make android-fixtures-check   # validates fixtures against canonical hashes
 ```
 
@@ -219,7 +225,9 @@ Requirements:
 
 - JDK 21+ (`javac`/`java` must be on `PATH` or reachable via `JAVA_HOME`)
 - Python 3.11+ for fixture checks
-- Access to the Rust workspace when regenerating fixtures
+- Access to the Rust workspace when regenerating fixtures; compare both owner
+  publications' sorted paths, modes, manifests, and bytes before applying the
+  reviewed tracked patch
 
 `ci/run_android_tests.sh` mirrors CI: it compiles the Norito codec and
 SDK sources together, executes the test mains listed in the script, and finally

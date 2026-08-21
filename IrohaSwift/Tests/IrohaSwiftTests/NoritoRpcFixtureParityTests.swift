@@ -274,7 +274,12 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             NoritoNativeBridge.shared.isAvailable,
             "NoritoBridge native decoder not linked"
         )
-        let signedBytes = try XCTUnwrap(Data(base64Encoded: fixture.entry.signedBase64))
+        let signedFrameBytes = try XCTUnwrap(Data(base64Encoded: fixture.entry.signedBase64))
+        let signedBytes = try requireCanonicalFixtureFrame(
+            signedFrameBytes,
+            name: "\(fixture.entry.name).signed",
+            typeName: FixtureConstants.signedTransactionType
+        )
         let versionedSignedBytes = versionedSignedTransaction(signedBytes)
         let json = try NoritoNativeBridge.shared.withChainDiscriminant(
             FixtureConstants.networkPrefix
@@ -319,10 +324,20 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         )
         let payloadHash = IrohaHash.hash(payloadBytes).hexLowercased()
         XCTAssertEqual(payloadHash, fixture.entry.payloadHash, "payload hash mismatch for \(name)")
-        let signedPayload = try canonicalSignedTransactionPayload(signedBytes)
+        let payloadBare = try requireCanonicalFixtureFrame(
+            payloadBytes,
+            name: "\(name).payload",
+            typeName: FixtureConstants.transactionPayloadType
+        )
+        let signedBare = try requireCanonicalFixtureFrame(
+            signedBytes,
+            name: "\(name).signed",
+            typeName: FixtureConstants.signedTransactionType
+        )
+        let signedPayload = try canonicalSignedTransactionPayload(signedBare)
         XCTAssertEqual(
             signedPayload,
-            payloadBytes,
+            payloadBare,
             "signed transaction payload mismatch for \(name)"
         )
         var entrypoint = CompactNoritoWriter()
@@ -339,9 +354,14 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
 
     private func assertFixtureNativeRoundTrip(loader: NoritoRpcFixtureLoader, name: String) throws {
         let fixture = try loader.fixture(named: name)
-        let signedBytes = try XCTUnwrap(
+        let signedFrameBytes = try XCTUnwrap(
             Data(base64Encoded: fixture.entry.signedBase64),
             "signed_base64 missing or invalid for \(name)"
+        )
+        let signedBytes = try requireCanonicalFixtureFrame(
+            signedFrameBytes,
+            name: "\(name).signed",
+            typeName: FixtureConstants.signedTransactionType
         )
         let expectedAuthority = try expectedAuthorityLiteral(from: fixture.entry.authority)
         XCTAssertEqual(
@@ -1039,13 +1059,25 @@ private struct NoritoRpcFixtureLoader {
         )
         guard payloadBytes.count == entry.encodedLen,
               signedBytes.count == entry.signedLen,
-              IrohaHash.hash(payloadBytes).hexLowercased() == entry.payloadHash,
-              try canonicalSignedTransactionPayload(signedBytes) == payloadBytes else {
+              IrohaHash.hash(payloadBytes).hexLowercased() == entry.payloadHash else {
+            throw FixtureError.invalidIdentity(entry.name)
+        }
+        let payloadBare = try requireCanonicalFixtureFrame(
+            payloadBytes,
+            name: "\(entry.name).payload",
+            typeName: FixtureConstants.transactionPayloadType
+        )
+        let signedBare = try requireCanonicalFixtureFrame(
+            signedBytes,
+            name: "\(entry.name).signed",
+            typeName: FixtureConstants.signedTransactionType
+        )
+        guard try canonicalSignedTransactionPayload(signedBare) == payloadBare else {
             throw FixtureError.invalidIdentity(entry.name)
         }
         var compact = CompactNoritoWriter()
         compact.writeUInt32LE(0)
-        compact.writeField(payloadBytes)
+        compact.writeField(payloadBare)
         guard IrohaHash.hash(compact.data).hexLowercased() == entry.signedHash else {
             throw FixtureError.invalidIdentity(entry.name)
         }
@@ -1082,9 +1114,29 @@ private struct NoritoRpcFixture {
     let payloadBytes: Data
 }
 
+private func requireCanonicalFixtureFrame(
+    _ data: Data,
+    name: String,
+    typeName: String
+) throws -> Data {
+    guard let frame = noritoDecodeFrame(data),
+          frame.header.schema == noritoSchemaHash(forTypeName: typeName),
+          frame.header.compression == .none,
+          frame.header.flags == NoritoHeader.compactLen,
+          frame.paddingLength == 0,
+          noritoDecodeFrame(frame.payload) == nil else {
+        throw FixtureError.invalidIdentity(name)
+    }
+    return frame.payload
+}
+
 private enum FixtureConstants {
     static let networkPrefix: UInt16 = 753
     static let signedTransactionVersion: UInt8 = 1
+    static let transactionPayloadType =
+        "iroha_data_model::transaction::signed::model::TransactionPayload"
+    static let signedTransactionType =
+        "iroha_data_model::transaction::signed::model::SignedTransaction"
     static let networkId =
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 }

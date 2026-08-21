@@ -5142,7 +5142,7 @@ even when that successor inherits the installed TC's causal origin.
 ***************************************************************************)
 AsyncTimeoutLifecycleKinds ==
   {"BeginTimeout", "PersistTimeout", "SignTimeout",
-   "DeliverTimeout", "FormTC", "DeliverTC",
+   "DeliverTimeout", "DeliverTC",
    "BeginInstallTC", "PersistInstallTC"}
 
 AsyncTimeoutLifecycleCandidateRetiredThroughInstall(candidate) ==
@@ -5698,7 +5698,7 @@ LockedPrepareFetchFrontier(command) ==
     /\ command.view = qc.view
     /\ command.subject = qc.subject
     /\ command.evidence = qc
-    /\ LockedPrepareRecoverySource(command.node, qc)
+    /\ HistoricalLockedPrepareSource(command.node, qc)
 
 CertifiedRecoveryFetchFrontier(command) ==
   \/ DecisionFetchFrontier(command)

@@ -1,131 +1,183 @@
 #!/usr/bin/env bash
+# Run and independently verify the sealed Sumeragi V2 replay corridor.
+#
+# Prerequisites:
+#   TLA2TOOLS_JAR     canonical pinned TLA2Tools 1.7.4 jar
+#   TLAPM_PROJECTION  sealed directory containing only regular Functions.tla
+#                     and Folds.tla files from the pinned TLAPM commit
+# Optional environment:
+#   JAVA_BIN          Java executable or name accepted by resolve_java.sh
+#   PYTHON_BIN        Python 3.9+ executable or command name (default python3)
+#   SUMERAGI_V2_REPLAY_TIMEOUT_SECONDS  per-process timeout (default 1800)
+
 set -euo pipefail
+umask 077
 
-readonly TLA2TOOLS_VERSION="1.7.4"
-readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
-readonly TLC_MAX_SET_SIZE="1000000"
-readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
-readonly TLAPM_FUNCTIONS_SHA256="b54ff63b7c76c327525c17c188d5f9f5e53d92f3fd701f5e2ba54f0f54391063"
-readonly TLAPM_FOLDS_SHA256="aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b8b471790086da"
-readonly SEED="19349663"
-REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly REPO_ROOT
-readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
-readonly FIXTURE_DIR="${REPO_ROOT}/crates/iroha_sumeragi_core/tests/fixtures"
-readonly EXPECTED="${FIXTURE_DIR}/tlc_replay_witness.tsv"
-readonly CONFIG="${FIXTURE_DIR}/tlc_replay_witness.cfg"
-readonly NORMALIZER="${REPO_ROOT}/scripts/normalize_sumeragi_v2_tlc_trace.py"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
-source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
+usage() {
+  cat <<'USAGE'
+Usage: check_sumeragi_v2_replay_trace.sh [options]
+
+Options:
+  --formal-only                 run the only supported V1 replay corridor
+  --output-root PATH            persist a create-only diagnostic receipt
+  --help                        show this help
+
+Without --output-root the verified diagnostic receipt is temporary. The
+wrapper never creates TLAPM compatibility symlinks; TLAPM_PROJECTION must
+already be a canonical sealed regular-file projection.
+USAGE
+}
+
+mode="formal-only"
+output_root=""
+while (($#)); do
+  case "$1" in
+    --formal-only)
+      shift
+      ;;
+    --output-root)
+      (($# >= 2)) || {
+        echo "--output-root requires a path" >&2
+        exit 2
+      }
+      output_root="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+readonly REPO_ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly COLLECTOR="${REPO_ROOT}/scripts/formal/collect_sumeragi_v2_replay_receipt.py"
+readonly CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_replay_receipt.py"
+readonly RESULT_CONTRACT="${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external jar}"
+readonly TLAPM_PROJECTION="${TLAPM_PROJECTION:?TLAPM_PROJECTION must name the sealed two-file projection}"
+readonly TIMEOUT_SECONDS="${SUMERAGI_V2_REPLAY_TIMEOUT_SECONDS:-1800}"
+
 if [[ -n "${JAVA_BIN:-}" ]]; then
-  resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
+  resolved_java="$(${REPO_ROOT}/scripts/formal/resolve_java.sh "$JAVA_BIN")"
 else
-  resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh")"
+  resolved_java="$(${REPO_ROOT}/scripts/formal/resolve_java.sh)"
 fi
-readonly JAVA_BIN="$resolved_java_bin"
+readonly RESOLVED_JAVA="$resolved_java"
 
-case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) readonly TLAPM_PLATFORM="x86_64-linux-gnu" ;;
-  Darwin-arm64) readonly TLAPM_PLATFORM="arm64-darwin" ;;
-  *)
-    echo "unsupported TLAPM host: $(uname -s)-$(uname -m)" >&2
-    exit 1
-    ;;
-esac
-readonly TLAPM_STDLIB="${TLAPM_STDLIB:?TLAPM_STDLIB must name the authenticated external standard library}"
-
-hash_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-
-[[ -f "$TLA2TOOLS_JAR" ]] || {
-  echo "pinned TLA2Tools v${TLA2TOOLS_VERSION} is required at ${TLA2TOOLS_JAR}" >&2
+requested_python="${PYTHON_BIN:-python3}"
+python_candidate="$(type -P "$requested_python")" || {
+  echo "Python 3.9 or newer is required" >&2
   exit 1
 }
-actual_sha256="$(hash_file "$TLA2TOOLS_JAR")"
-if [[ "$actual_sha256" != "$TLA2TOOLS_SHA256" ]]; then
-  echo "TLA2Tools checksum mismatch" >&2
-  echo "expected: ${TLA2TOOLS_SHA256}" >&2
-  echo "actual:   ${actual_sha256}" >&2
-  exit 1
-fi
-"$JAVA_BIN" -version >/dev/null 2>&1 || {
-  echo "a working Java runtime is required for TLC" >&2
+resolved_python="$($python_candidate -I -S -c 'import os,sys; print(os.path.realpath(sys.executable))')"
+readonly RESOLVED_PYTHON="$resolved_python"
+"$RESOLVED_PYTHON" -I -S -c \
+  'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' || {
+  echo "Python 3.9 or newer is required" >&2
   exit 1
 }
-for module in Functions Folds; do
-  [[ -f "${TLAPM_STDLIB}/${module}.tla" ]] || {
-    echo "pinned TLAPM ${TLAPM_COMMIT} standard library is required at ${TLAPM_STDLIB}" >&2
-    echo "run scripts/formal/install_sumeragi_v2_tlapm.sh first" >&2
-    exit 1
-  }
-done
-for module_and_hash in \
-  "Functions:${TLAPM_FUNCTIONS_SHA256}" \
-  "Folds:${TLAPM_FOLDS_SHA256}"; do
-  module="${module_and_hash%%:*}"
-  expected_sha256="${module_and_hash#*:}"
-  actual_sha256="$(hash_file "${TLAPM_STDLIB}/${module}.tla")"
-  if [[ "$actual_sha256" != "$expected_sha256" ]]; then
-    echo "pinned TLAPM standard-library checksum mismatch for ${module}.tla" >&2
-    echo "expected: ${expected_sha256}" >&2
-    echo "actual:   ${actual_sha256}" >&2
-    exit 1
-  fi
-done
 
-run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-replay.XXXXXX")"
-trap 'rm -rf -- "$run_dir"' EXIT
-tlapm_compat_dir="${run_dir}/tlapm-stdlib"
-mkdir -p "$tlapm_compat_dir"
-ln -s "${TLAPM_STDLIB}/Functions.tla" "${tlapm_compat_dir}/Functions.tla"
-ln -s "${TLAPM_STDLIB}/Folds.tla" "${tlapm_compat_dir}/Folds.tla"
-normalized_trace="${run_dir}/trace.tsv"
-tlc_log="${run_dir}/tlc.log"
+run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-replay-wrapper.XXXXXX")"
+run_dir="$(cd -P -- "$run_dir" && pwd)"
+chmod 0700 "$run_dir"
+run_identity="$($RESOLVED_PYTHON -I -S -c \
+  'import os,sys; s=os.lstat(sys.argv[1]); print(s.st_dev, s.st_ino)' "$run_dir")"
+read -r run_device run_inode <<<"$run_identity"
+readonly run_device run_inode
+wrapper_complete=0
+cleanup_wrapper() {
+  ((wrapper_complete)) || return 0
+  wrapper_complete=0
+  "$RESOLVED_PYTHON" -B -I -S -c '
+import importlib.util
+from pathlib import Path
+import sys
+spec = importlib.util.spec_from_file_location("sumeragi_replay_collector_cleanup", sys.argv[1])
+if spec is None or spec.loader is None:
+    raise SystemExit("collector cleanup module is unavailable")
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+module.remove_owned_directory_path(Path(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]))
+' "$COLLECTOR" "$run_dir" "$run_device" "$run_inode"
+}
+trap cleanup_wrapper EXIT
 
-set +e
-(
-  cd "$FORMAL_DIR"
-  "$JAVA_BIN" -XX:+UseParallelGC "-DTLA-Library=${tlapm_compat_dir}" \
-    -cp "$TLA2TOOLS_JAR" tlc2.TLC \
-    -maxSetSize "$TLC_MAX_SET_SIZE" \
-    -metadir "${run_dir}/states" \
-    -workers 1 \
-    -depth 500 \
-    -seed "$SEED" \
-    -simulate num=200 \
-    -config "$CONFIG" \
-    -tool \
-    SumeragiV2TraceWitness
-) >"$tlc_log" 2>&1
-tlc_status=$?
-set -e
+persist_receipt=1
+if [[ -z "$output_root" ]]; then
+  output_root="${run_dir}/receipt"
+  persist_receipt=0
+else
+  output_root="$($RESOLVED_PYTHON -I -S -c \
+    'import os,sys; print(os.path.abspath(sys.argv[1]))' "$output_root")"
+fi
+readonly output_root
 
-# The witness module intentionally asks TLC to violate NoDecision. The
-# invariant-violation exit code plus the normalizer's exact tool-message checks
-# prove that the trace ends at the first durable model decision; any other
-# status is a tooling/model failure.
-if [[ "$tlc_status" -ne 12 || ! -s "$tlc_log" ]]; then
-  cat "$tlc_log" >&2
-  echo "TLC did not emit the expected decision witness (status=${tlc_status})" >&2
+collector_stdout="${run_dir}/collector.stdout"
+collector_stderr="${run_dir}/collector.stderr"
+collector_args=(
+  --root "$REPO_ROOT"
+  --java-bin "$RESOLVED_JAVA"
+  --python-bin "$RESOLVED_PYTHON"
+  --tla2tools-jar "$TLA2TOOLS_JAR"
+  --tlapm-projection "$TLAPM_PROJECTION"
+  --output-root "$output_root"
+  --mode "$mode"
+  --timeout-seconds "$TIMEOUT_SECONDS"
+)
+
+cd "$REPO_ROOT"
+if ! "$RESOLVED_PYTHON" -B -I -S "$COLLECTOR" "${collector_args[@]}" \
+  >"$collector_stdout" 2>"$collector_stderr"; then
+  cat "$collector_stderr" >&2
+  echo "Sumeragi V2 replay collection failed" >&2
   exit 1
 fi
-sumeragi_v2_tlc_assert_regular_log "replay-decision-witness" "$tlc_log"
+[[ ! -s "$collector_stderr" ]] || {
+  cat "$collector_stderr" >&2
+  echo "replay collector emitted stderr" >&2
+  exit 1
+}
+receipt_path="$(sed -n '1p' "$collector_stdout")"
+[[ "$receipt_path" == "${output_root}/receipt.json" \
+  && "$(wc -l <"$collector_stdout" | tr -d ' ')" == 1 ]] || {
+  echo "replay collector returned a malformed receipt path" >&2
+  exit 1
+}
+source "$RESULT_CONTRACT"
+sumeragi_v2_tlc_assert_replay_tool_result \
+  "replay-decision-witness" \
+  "${output_root}/events/02-raw_tlc.stdout" \
+  "${output_root}/events/02-raw_tlc.stderr" \
+  12
 
-if ! python3 "$NORMALIZER" "$tlc_log" --seed "$SEED" >"$normalized_trace"; then
-  echo "TLC decision witness normalization failed" >&2
+checker_stdout="${run_dir}/checker.stdout"
+checker_stderr="${run_dir}/checker.stderr"
+checker_args=("$receipt_path")
+if ! "$RESOLVED_PYTHON" -B -I -S "$CHECKER" "${checker_args[@]}" \
+  >"$checker_stdout" 2>"$checker_stderr"; then
+  cat "$checker_stderr" >&2
+  echo "Sumeragi V2 replay receipt verification failed" >&2
   exit 1
 fi
-if ! cmp -s "$EXPECTED" "$normalized_trace"; then
-  diff -u "$EXPECTED" "$normalized_trace" || true
-  echo "normalized Sumeragi v2 replay witness drifted" >&2
+[[ ! -s "$checker_stderr" ]] || {
+  cat "$checker_stderr" >&2
+  echo "replay receipt checker emitted stderr" >&2
+  exit 1
+}
+cat "$checker_stdout"
+if ((persist_receipt)); then
+  echo "receipt: ${receipt_path}"
+fi
+wrapper_complete=1
+if ! cleanup_wrapper; then
+  echo "verified wrapper temporary directory could not be cleaned safely: $run_dir" >&2
   exit 1
 fi
-
-action_count="$(grep -c '^[0-9]' "$normalized_trace")"
-bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" --model-replay
-echo "TLC replay witness matches ${action_count} checked-in production actions and the production reducer"
+trap - EXIT

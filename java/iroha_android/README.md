@@ -953,16 +953,22 @@ those payload bytes directly. Never edit the mirror or its hashes by hand.
 Regenerate and verify the complete owner set from the repository root:
 
 ```bash
-cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
 cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
 bash ci/check_android_fixtures.sh
 ```
 
-`make android-fixtures` is a convenience wrapper around the same xtask owner and
-then runs the Android parity check; `make android-fixtures-check` runs only that
-check. A successful generation updates the canonical directory and every SDK
-mirror together. Commit the complete generated change set, not an Android-only
-subset. The parity wrapper can still write its JSON summary under
+Both external generation roots are create-only and must not already exist.
+Before any tracked update, require identical exact path sets, entry types,
+modes, completion manifests, and every file byte. Apply the reviewed
+identity-relative patch from either sealed root, then run the verifier and
+Android fixture checker shown above. `make android-fixtures-check` runs only the
+parity check. A successful owner generation contains the canonical directory
+and every SDK mirror together. Commit the complete generated change set, not an
+Android-only subset. The parity wrapper can still write its JSON summary under
 `artifacts/android/parity/` for CI evidence, but that report is not fixture source
 material.
 
@@ -1635,15 +1641,21 @@ The transaction descriptors, manifest, and matching `.norito` files under
 Regenerate them only through the canonical Rust owner:
 
 ```bash
-cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
 cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
 python3 scripts/check_android_fixtures.py
 ```
 
-The owner rewrites the canonical corpus first and publishes the Java mirror plus
-the Python and Swift descriptor-only mirrors from the same result. Always commit
-the complete generated set together; never retain an old hash, retired fixture,
-or compatibility-only payload in the Java resource directory.
+Each invocation writes a complete publication only beneath its absent external
+output root; it does not rewrite the tracked corpus. Require identical exact
+path sets, entry types, modes, completion manifests, and every file byte before
+applying the reviewed identity-relative tracked patch. Then run the verifier
+and Android checker above. Always commit the complete generated set together;
+never retain an old hash, retired fixture, or compatibility-only payload in the
+Java resource directory.
 
 ### Musubi V1 registry reads
 

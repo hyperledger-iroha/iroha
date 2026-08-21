@@ -1,214 +1,164 @@
-"""Fail-closed tests for the pinned TLC replay-trace normalizer."""
+"""Adversarial tests for the exact TLC 1.7.4 replay transcript contract."""
 
 from __future__ import annotations
 
 import importlib.util
-import sys
 from pathlib import Path
+import re
+import sys
 
 import pytest
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-NORMALIZER = ROOT_DIR / "scripts" / "normalize_sumeragi_v2_tlc_trace.py"
+ROOT = Path(__file__).resolve().parents[2]
+NORMALIZER_PATH = ROOT / "scripts/normalize_sumeragi_v2_tlc_trace.py"
+HELPER_PATH = ROOT / "scripts/formal/sumeragi_v2_replay_receipt_test.py"
+FIXTURE = ROOT / "crates/iroha_sumeragi_core/tests/fixtures/tlc_replay_witness.tsv"
 
 
-def load_normalizer():
-    """Load the normalizer as a module without requiring a scripts package."""
-
-    spec = importlib.util.spec_from_file_location("sumeragi_tlc_normalizer", NORMALIZER)
+def load(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
-MODULE = load_normalizer()
+NORMALIZER = load("sumeragi_v2_tlc_normalizer", NORMALIZER_PATH)
+HELPER = load("sumeragi_v2_replay_test_helper", HELPER_PATH)
+VALID = HELPER.canonical_tlc_log()
+STATE_BLOCK = re.compile(
+    r"@!@!@STARTMSG 2217:4 @!@!@\n.*?\n@!@!@ENDMSG 2217 @!@!@\n?",
+    re.DOTALL,
+)
 
 
-def message(code: int, payload: str, severity: int = 0) -> str:
-    """Return one TLC tool-mode message block."""
+def test_exact_transcript_normalizes_to_tracked_bytes() -> None:
+    actions = NORMALIZER.normalize(VALID, 19349663, 0)
 
-    return (
-        f"@!@!@STARTMSG {code}:{severity} @!@!@\n"
-        f"{payload}\n"
-        f"@!@!@ENDMSG {code} @!@!@"
-    )
+    assert len(actions) == 100
+    assert actions[-1].action == "PersistDecision"
+    assert NORMALIZER.render(actions, 19349663).encode("utf-8") == FIXTURE.read_bytes()
 
 
-def marker(
-    action: str,
-    node: int | str = -1,
-    peer: int | str = -1,
-    view: int | str = -1,
-    phase: str = "-",
-    subject: str = "-",
-) -> str:
-    """Render a witnessAction value in TLC's field-sorted presentation."""
+def test_requires_exact_101_state_and_100_action_census() -> None:
+    states = list(STATE_BLOCK.finditer(VALID))
+    assert len(states) == 101
+    source = VALID[: states[50].start()] + VALID[states[50].end() :]
 
-    def scalar(value: int | str) -> str:
-        return str(value) if isinstance(value, int) else f'"{value}"'
-
-    return (
-        f"[ node |-> {scalar(node)},\n"
-        f"  peer |-> {scalar(peer)},\n"
-        f'  phase |-> "{phase}",\n'
-        f'  subject |-> "{subject}",\n'
-        f'  action |-> "{action}",\n'
-        f"  view |-> {scalar(view)} ]"
-    )
-
-
-def state(number: int, value: str) -> str:
-    """Return one minimal state payload with a trace marker."""
-
-    return message(
-        2217,
-        f"{number}: <Action from test>\n"
-        f"/\\ witnessAction = {value}\n"
-        "/\\ unrelatedCoreVariable = {}",
-        severity=4,
-    )
-
-
-def valid_log() -> str:
-    """Return the smallest valid NoDecision counterexample log."""
-
-    return "\n".join(
-        (
-            "unstructured SANY output is permitted outside tool messages",
-            message(2188, "Running Random Simulation with seed 19349663 with 1 worker"),
-            message(2110, "Invariant NoDecision is violated.", severity=1),
-            message(2121, "The behavior up to this point is:", severity=1),
-            state(1, marker("Initial")),
-            state(2, marker("SetGST")),
-            state(
-                3,
-                marker(
-                    "PersistDecision",
-                    node=1,
-                    view=1,
-                    phase="Commit",
-                    subject="A",
-                ),
-            ),
-        )
-    )
-
-
-def test_normalizes_tool_messages_and_numeric_sentinels() -> None:
-    source = NORMALIZER.read_text(encoding="utf-8")
-    assert "from typing import TypeAlias" not in source
-    assert "Scalar: TypeAlias = int | str" not in source
-
-    actions = MODULE.normalize(valid_log(), 19349663)
-
-    assert [action.action for action in actions] == ["SetGST", "PersistDecision"]
-    assert actions[0].node == "-"
-    assert actions[1].node == 1
-    assert MODULE.render(actions, 19349663).endswith(
-        "1\tSetGST\t-\t-\t-\t-\t-\n"
-        "2\tPersistDecision\t1\t-\t1\tCommit\tA\n"
-    )
-
-
-def test_rejects_string_sentinel_in_numeric_marker_field() -> None:
-    source = valid_log().replace(
-        state(1, marker("Initial")),
-        state(1, marker("Initial", node="-")),
-        1,
-    )
-
-    with pytest.raises(ValueError, match="node must be an integer"):
-        MODULE.normalize(source, 19349663)
+    with pytest.raises(ValueError):
+        NORMALIZER.normalize(source, 19349663, 0)
 
 
 @pytest.mark.parametrize(
-    ("source", "error"),
+    "source",
     (
-        (valid_log().replace("seed 19349663", "seed 9", 1), "seed differs"),
-        (
-            valid_log().replace(
-                "Invariant NoDecision is violated.",
-                "Invariant TypeOK is violated.",
-                1,
+        VALID.replace("Parsing file /sealed/Naturals.tla\nParsing file /sealed/Integers.tla", "Parsing file /sealed/Integers.tla\nParsing file /sealed/Naturals.tla", 1),
+        VALID.replace("Semantic processing of module FiniteSets\n", "", 1),
+        VALID.replace(
+            HELPER.message(2219, 0, "SANY finished."),
+            HELPER.message(2219, 0, "SANY finished.")
+            + "\nSemantic processing of module ExtraModule",
+            1,
+        ),
+        VALID.replace(
+            HELPER.message(2110, 1, "Invariant NoDecision is violated.")
+            + "\n"
+            + HELPER.message(2121, 1, "The behavior up to this point is:"),
+            HELPER.message(2121, 1, "The behavior up to this point is:")
+            + "\n"
+            + HELPER.message(2110, 1, "Invariant NoDecision is violated."),
+            1,
+        ),
+        VALID.replace(
+            HELPER.message(2186, 0, "Finished in 01s at (2026-08-21 12:00:01)"),
+            HELPER.message(2000, 0, "unexpected")
+            + "\n"
+            + HELPER.message(2186, 0, "Finished in 01s at (2026-08-21 12:00:01)"),
+            1,
+        ),
+        VALID.replace(
+            HELPER.message(
+                2209,
+                0,
+                "Progress(-1) at 2026-08-21 12:00:01: 1,002 states generated, "
+                "-1 distinct states found, -1 states left on queue.",
             ),
-            "exact NoDecision",
+            "",
+            1,
         ),
-        (
-            valid_log().replace(
-                "The behavior up to this point is:", "A different trace follows:", 1
-            ),
-            "exact TLC counterexample introduction",
-        ),
-        (
-            valid_log().replace("STARTMSG 2217:4", "STARTMSG 2217:3", 1),
-            "unexpected severity",
-        ),
-        (valid_log().replace("3: <Action", "4: <Action", 1), "non-contiguous"),
-        (
-            valid_log().replace('action |-> "SetGST"', 'action |-> "BeginDecision"', 1),
-            "unsupported action",
-        ),
-        (
-            valid_log().replace(
-                'action |-> "PersistDecision"', 'action |-> "FormCommitQC"', 1
-            ),
-            "last action is FormCommitQC",
-        ),
-        (
-            valid_log().replace(
-                'phase |-> "Commit"', 'phase |-> "Prepare"', 1
-            ),
-            "requires phase='Commit'",
-        ),
+        VALID + HELPER.message(2000, 0, "after termination") + "\n",
     ),
 )
-def test_counterexample_contract_fails_closed(source: str, error: str) -> None:
-    with pytest.raises(ValueError, match=error):
-        MODULE.normalize(source, 19349663)
-
-
-def test_rejects_duplicate_record_field() -> None:
-    source = valid_log().replace(
-        'action |-> "SetGST",',
-        'action |-> "SetGST",\n  action |-> "SetGST",',
-        1,
-    )
-
-    with pytest.raises(ValueError, match="repeats field 'action'"):
-        MODULE.normalize(source, 19349663)
+def test_rejects_incomplete_reordered_or_extra_transcript_items(source: str) -> None:
+    with pytest.raises(ValueError):
+        NORMALIZER.normalize(source, 19349663, 0)
 
 
 @pytest.mark.parametrize(
-    ("source", "error"),
+    "source",
     (
-        (
-            valid_log().replace("@!@!@ENDMSG 2217 @!@!@", "@!@!@ENDMSG 999 @!@!@", 1),
-            "code mismatch",
+        VALID.replace("Starting SANY...", "Starting SANY...\nError: hidden raw diagnostic", 1),
+        VALID.replace("  peer |-> -1,", "  peer |-> -1,\nError: hidden state diagnostic", 1),
+        VALID.replace("@!@!@STARTMSG 2262:0 @!@!@", "@!@!@BROKEN 2262:0 @!@!@", 1),
+        VALID.replace("TLC2 Version", "TLC2\x00 Version", 1),
+        VALID.replace("TLC2 Version", "TLC2\x85 Version", 1),
+        VALID.replace("TLC2 Version", "TLC2\u00a0Version", 1),
+    ),
+)
+def test_rejects_hidden_diagnostics_bad_framing_and_controls(source: str) -> None:
+    with pytest.raises(ValueError):
+        NORMALIZER.normalize(source, 19349663, 0)
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        VALID.replace(
+            "1: <Initial predicate>\n/\\ witnessAction",
+            "1: <Initial predicate>\n2: <WitnessNext line 1, col 1 to line 1, "
+            "col 1 of module SumeragiV2TraceWitness>\n/\\ witnessAction",
+            1,
         ),
-        (
-            valid_log() + "\n@!@!@STARTMSG 2000:0 @!@!@\nunterminated",
-            "unterminated TLC tool message",
+        VALID.replace(
+            "2: <WitnessNext line 1, col 1 to line 1, col 1 of module "
+            "SumeragiV2TraceWitness>",
+            "2: <Initial predicate>",
+            1,
         ),
-        (
-            "@!@!@ENDMSG 2217 @!@!@\n" + valid_log(),
-            "orphan TLC tool-message end",
+        VALID.replace("  peer |-> -1,", "peer |-> -1,", 1),
+        VALID.replace(
+            "/\\ witnessAction = [ node |-> -1,",
+            "/\\ witnessAction = [ node |-> \"-\",",
+            1,
+        ),
+        VALID.replace('action |-> "SetGST"', 'action |-> "RetiredDecision"', 1),
+        VALID.replace(
+            '/\\ witnessAction = [ node |-> -1,',
+            '/\\ witnessAction = [ action |-> "Initial",\n/\\ witnessAction = [ node |-> -1,',
+            1,
         ),
     ),
 )
-def test_tool_message_delimiters_fail_closed(source: str, error: str) -> None:
-    with pytest.raises(ValueError, match=error):
-        MODULE.normalize(source, 19349663)
+def test_rejects_nested_headings_malformed_assignments_and_records(source: str) -> None:
+    with pytest.raises(ValueError):
+        NORMALIZER.normalize(source, 19349663, 0)
 
 
-def test_rejects_multiple_witness_assignments_in_one_state() -> None:
-    source = valid_log().replace(
-        "/\\ unrelatedCoreVariable = {}",
-        f"/\\ witnessAction = {marker('Initial')}",
-        1,
-    )
-
-    with pytest.raises(ValueError, match="2 witnessAction assignments"):
-        MODULE.normalize(source, 19349663)
+@pytest.mark.parametrize(
+    ("source", "seed", "aril"),
+    (
+        (VALID.replace("seed 19349663", "seed 99", 1), 19349663, 0),
+        (VALID.replace("Simulation using seed 19349663", "Simulation using seed 99", 1), 19349663, 0),
+        (VALID.replace("and aril 0", "and aril 9", 1), 19349663, 0),
+        (VALID.replace("The number of states generated: 1,001", "The number of states generated: 999", 1), 19349663, 0),
+        (VALID.replace("1,002 states generated", "999 states generated", 1), 19349663, 0),
+        (VALID, 19349663, 1),
+    ),
+)
+def test_rejects_seed_aril_and_generated_count_drift(
+    source: str, seed: int, aril: int
+) -> None:
+    with pytest.raises(ValueError):
+        NORMALIZER.normalize(source, seed, aril)

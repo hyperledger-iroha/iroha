@@ -15,7 +15,7 @@ integration tests drift from the Rust reference implementation.
 - `dashboards/mobile_ci.swift` shows the `ci/xcode-swift-parity` lane below the
   95 % success-rate threshold or `consecutive_failures > 0`.
 - `scripts/check_swift_fixtures.py` fails locally/CI when comparing
-  `IrohaSwift/Fixtures` against the canonical Android fixtures.
+  `IrohaSwift/Fixtures` against the canonical `fixtures/norito_rpc/` corpus.
 - Governance (council) notifies SDK owners about upcoming Norito discriminator/ABI
   changes that require fixture refresh.
 
@@ -25,18 +25,15 @@ integration tests drift from the Rust reference implementation.
 
 - **Window.** Scheduled regeneration happens every Wednesday at 17:00 UTC with
   the Android Foundations TL owning odd weeks and the Swift Lead owning even
-  weeks. The helper `scripts/swift_fixture_regen.sh` derives the slot
-  automatically and stores the metadata in
-  `artifacts/swift_fixture_regen_state.json`.
+  weeks. The operator renders one complete owner publication into a new,
+  create-only absolute external `--output-root` and records the run in the
+  parity handoff.
 - **SLA.** Any governance-approved discriminator/ABI change must be mirrored
   into Swift fixtures within 48 hours. `ci/check_swift_fixtures.sh` and the
   parity dashboards alert whenever the SLA is breached.
-- **Reporting.** After each scheduled run, the owner posts the regen summary
-  (`SWIFT_FIXTURE_ROTATION_OWNER`, `SWIFT_FIXTURE_CADENCE`,
-  `SWIFT_FIXTURE_CADENCE_INTERVAL_HOURS`,
-  `SWIFT_FIXTURE_ALERT_CONTACT/CHANNEL`, archive digests) in
-  `#sdk-parity`, runs `make swift-fixtures-check`, and records the entry in
-  `status.md` plus the weekly digest.
+- **Reporting.** After each scheduled run, the owner posts the sealed
+  publication identity in `#sdk-parity`, runs `make swift-fixtures-check`, and
+  records the entry in `status.md` plus the weekly digest.
 
 ### Manual fallback cadence
 
@@ -49,13 +46,20 @@ Trigger the fallback whenever **either** of the following holds:
 
 Fallback procedure:
 
-1. Set `SWIFT_FIXTURE_EVENT_TRIGGER=1` and
-   `SWIFT_FIXTURE_EVENT_REASON=fallback-weekly` so the cadence state records why
-   the unscheduled run occurred. Include `SWIFT_FIXTURE_ROTATION_OWNER=<name>`
-   when someone outside the normal roster is covering.
-2. Run `make swift-fixtures` followed by `make swift-fixtures-check`. If you are
-   consuming a signed Rust archive, pass `SWIFT_FIXTURE_ARCHIVE=/path/to.tar.gz`
-   so the state file captures the source digest.
+1. Record the fallback reason and covering owner in the parity handoff.
+2. Run the canonical owner into two independent absent absolute external
+   directories,
+   require identical exact path sets, entry types, modes, completion manifests,
+   and every file byte, apply the reviewed identity-relative patch from either
+   sealed tree, then run the parity check:
+   ```bash
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
+   make swift-fixtures-check
+   ```
 3. Execute `swift test --package-path IrohaSwift` (or `make swift-ci` if the
    `/v1/pipeline` helpers changed) to ensure fixtures and builders stay in sync.
 4. Regenerate the parity metrics:
@@ -90,36 +94,32 @@ the Slack link that documents the manual run.
 ### Exiting fallback mode
 
 Once governance confirms the regular cadence (meeting minutes capture the
-decision) and the next scheduled slot is executed on time, clear the fallback
-reason by running `SWIFT_FIXTURE_EVENT_TRIGGER=0 make swift-fixtures` during the
-following scheduled run so the cadence state returns to “scheduled”. Update the
-weekly digest with the exit date and close any incident tickets tied to the
-fallback window.
+decision) and the next scheduled owner publication is executed on time, clear
+the fallback reason in the handoff. Update the weekly digest with the exit date
+and close any incident tickets tied to the fallback window.
 
 ## Preparation
 
 1. Ensure the Rust toolchain and Android fixtures are up to date:
    ```bash
    git pull --rebase
-   make android-fixtures
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+     norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
    make android-fixtures-check
    ```
+   Before any tracked update, compare the exact path sets, entry types, modes,
+   completion manifests, and every file byte, then apply the reviewed
+   identity-relative patch from either sealed root.
 2. Confirm you can run Swift package tests locally:
    ```bash
    swift test --package-path IrohaSwift
    ```
-3. Export the latest Norito fixtures if the Android tree already consumed the
-   update:
-   ```bash
-   SWIFT_FIXTURE_SOURCE=java/iroha_android/src/test/resources \
-   make swift-fixtures
-   ```
-   The regeneration script writes cadence metadata to
-   `artifacts/swift_fixture_regen_state.json`. Set
-   `SWIFT_FIXTURE_ROTATION_OWNER=<name>` (and optionally
-   `SWIFT_FIXTURE_CADENCE=<label>` /
-   `SWIFT_FIXTURE_CADENCE_INTERVAL_HOURS=<hours>`) before running the script so
-   the state file captures the on-call owner for CI alerts.
+3. Confirm the Swift descriptor mirror in the sealed owner publication exactly
+   matches its canonical descriptor pair. Android is a generated consumer, not
+   an alternate fixture source.
 
 ## Triage workflow
 
@@ -127,7 +127,8 @@ fallback window.
    - Run `make swift-dashboards` to render the local summary using the same JSON
      feeds as CI. Note the instruction name, owner, and diff age.
    - If the diff originates from an intentional Rust change, confirm the culprit
-     commit and check whether Android/Python already mirrored it.
+     commit. Android, Python, and Swift mirrors must arrive together from one
+     canonical publication; a partial mirror update is invalid.
    - For CI context, review the `device_tag` printed by `dashboards/mobile_ci.swift`
      (and stored in Buildkite metadata `ci/xcframework-smoke:<lane>:device_tag`) so you
      can confirm whether the latest failure involved the `iphone-sim`, `ipad-sim`,
@@ -142,23 +143,16 @@ fallback window.
    - Run `make swift-fixtures-check`. This invokes
      `scripts/check_swift_fixtures.py IrohaSwift/Fixtures` and prints any
      mismatched files with their SHA-256 hashes.
-   - For isolated instruction files you can regenerate only the impacted subset by
-     passing an override:
-     ```bash
-     SWIFT_FIXTURE_SOURCE=/path/to/export/out \
-     SWIFT_FIXTURE_OUT=IrohaSwift/Fixtures \
-     scripts/swift_fixture_regen.sh
-     ```
+   - Regeneration is all-or-nothing; subset and alternate-source modes are not
+     supported.
 3. **Update fixtures**
-   - When the Rust exporter publishes a signed archive, set
-     `SWIFT_FIXTURE_ARCHIVE=/path/to/norito-fixtures.tar.gz` (or `.zip`) before running
-     `make swift-fixtures`. The script extracts the archive to a temporary directory,
-     mirrors the contents into `IrohaSwift/Fixtures`, and annotates the cadence state
-     with `source_kind=archive`, the digest, and archive path for CI/alerting.
-   - If the diff is expected, regenerate from the Android source (temporary until
-     the shared Rust exporter emits Swift artifacts) and re-run the checker.
-   - Verify the Git diff only contains `.norito` and JSON fixture updates. Commit
-     messages should mention the originating Rust change or governance decision.
+   - Render two independent create-only owner publications at absent absolute
+     external roots and require identical exact path sets, entry types, modes,
+     completion manifests, and every file byte before applying the reviewed
+     identity-relative tracked patch.
+   - Verify the Git diff only contains the complete owned `.norito`, descriptor,
+     manifest, schema, vector, and SDK mirror updates. Commit messages should
+     mention the originating Rust change or governance decision.
    - Confirm `artifacts/swift_fixture_regen_state.json` reflects the current
      rotation owner and timestamp; CI fails when the age exceeds the 48 h SLA
      (`SWIFT_FIXTURE_MAX_AGE_HOURS`, default 48). When CI needs to tolerate more
@@ -224,10 +218,15 @@ Escalations should also update the `Outstanding Follow-Ups` table in `status.md`
 ## Reference commands
 
 ```bash
-# Sync fixtures from Android tree
-make swift-fixtures
+# Render the complete owner publication into two absent absolute external directories
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
 
-# Validate fixtures (CI uses the same command)
+# Compare exact paths/types/modes/manifests/bytes, apply the reviewed
+# identity-relative tracked patch, then validate (CI uses the same check).
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
 make swift-fixtures-check
 
 # Render dashboards locally
@@ -242,7 +241,6 @@ For additional background see:
 - `dashboards/mobile_parity.swift`
 - `dashboards/mobile_ci.swift`
 - `specs/references/ios_metrics.md`
-- `scripts/swift_fixture_regen.sh`
 - `scripts/check_swift_fixtures.py`
 - `scripts/render_swift_dashboards.sh`
 - `specs/references/ci_operations.md`

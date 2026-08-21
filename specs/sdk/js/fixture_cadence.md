@@ -47,11 +47,17 @@ scope, ownership, cadence, evidence, and rollback expectations.
 1. **Sync canonical artefacts.**
    - From the repository root run the only fixture owner:
      ```bash
-     cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+     cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+       norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+     cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+       norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
      ```
-     This refreshes `fixtures/norito_rpc/`, Java's generated descriptor-and-blob
-     mirror, and the descriptor-only Python and Swift mirrors. Do not regenerate
-     from an SDK mirror or copy blobs between SDK directories.
+     Both external output paths must be absent. Require identical exact path
+     sets, entry types, modes, completion manifests, and every file byte before
+     applying the reviewed identity-relative patch to the tracked paths, including
+     Java's generated descriptor-and-blob mirror and the descriptor-only Python
+     and Swift mirrors. Do not regenerate from an SDK mirror or copy blobs
+     between SDK directories.
    - Update `javascript/iroha_js/test/fixtures/torii_responses.json` when Torii
      projections change; keep the responses trimmed to the fields used by the
      SDK tests.
@@ -60,6 +66,8 @@ scope, ownership, cadence, evidence, and rollback expectations.
    - Tag the Java, Python, and Swift maintainers for review; diff bot should emit the
      structured comparison so reviewers can confirm nothing regresses.
 3. **Validate.**
+   - Run `cargo run --locked -p xtask --features dev-tools --bin xtask --
+     norito-rpc-verify` against the reviewed tracked tree.
    - Run `npm test` plus `npm run test:integration` (with
      `IROHA_TORII_INTEGRATION_MUTATE=1`) to prove the new fixtures work across
      the unit and integration suites.【javascript/iroha_js/scripts/run_integration.mjs:1】

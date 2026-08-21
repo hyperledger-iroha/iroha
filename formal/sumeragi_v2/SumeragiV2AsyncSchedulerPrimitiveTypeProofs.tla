@@ -3194,7 +3194,7 @@ PROOF
              MatchingCertifiedRequests, CertifiedRequestAuthority,
              CertifiedBodyRecoveryAuthority,
              DecisionCertifiedBodyRecoveryAuthority,
-             LockedPrepareRecoverySource,
+             HistoricalLockedPrepareSource,
              HistoricalLockedPrepareRecoveryProvenance,
              InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
              NoDecisionForNode, ActiveCertifiedRequestHashes,

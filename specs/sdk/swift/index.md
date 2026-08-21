@@ -819,14 +819,20 @@ it contains `transaction_payloads.json` and
 payloads. Regenerate and verify before updating tests or dashboards:
 
 ```bash
-cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
 python3 scripts/check_swift_fixtures.py
 make swift-ci
 ```
 
-The owner command refreshes the canonical corpus, Java's generated mirror, and
-the descriptor-only Python and Swift mirrors as one publication.
-`scripts/swift_fixture_regen.sh` is only a delegate. CI pipelines run
+Require identical exact path sets, entry types, modes, completion manifests,
+and every file byte between the two owner publications before applying the
+reviewed identity-relative tracked patch. The owner
+command renders the canonical corpus, Java's generated mirror, and the
+descriptor-only Python and Swift mirrors as one publication.
+There is no SDK-specific regeneration delegate. CI pipelines run
 `ci/check_swift_fixtures.sh` to enforce descriptor parity automatically.
 `make swift-ci` also validates the dashboard feeds; when running in CI ensure the
 Buildkite agents expose `ci/xcframework-smoke:<lane>:device_tag` metadata so the rendered

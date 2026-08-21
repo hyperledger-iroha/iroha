@@ -2075,12 +2075,17 @@ The Rust xtask is the sole owner of the shared Norito RPC fixtures in
 Regenerate the canonical corpus and every SDK mirror with:
 
 ```bash
-cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication
+cargo run --locked -p xtask --features dev-tools --bin xtask -- \
+  norito-rpc-fixtures --output-root /path/to/second-new-norito-rpc-publication
 ```
 
-`./scripts/python_fixture_regen.sh` and `make python-fixtures` are convenience
-wrappers around that same owner; they do not select an Android or alternate fixture
-source. Verify both the owner and Python mirror with:
+Both external output roots are create-only and must not already exist. Before
+any tracked update, require identical exact path sets, entry types, modes,
+completion manifests, and every file byte. Apply the reviewed identity-relative
+patch from either sealed root, then verify both the tracked owner and Python
+mirror with:
 
 ```bash
 cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify

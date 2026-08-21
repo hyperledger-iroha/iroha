@@ -1,6 +1,7 @@
 //! Ensure the pre-decode cache evicts by approximate byte budget, not only count.
 #[test]
 fn predecode_memory_budget_eviction() {
+    let _lease = crate::predecode_test_support::exclusive();
     // Large entry-cap so only byte budget triggers eviction.
     // Use a small byte budget so that a second insert forces eviction.
     let baseline = ivm::ivm_cache::cache_limits();

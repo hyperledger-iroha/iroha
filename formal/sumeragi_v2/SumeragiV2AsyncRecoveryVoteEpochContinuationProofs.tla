@@ -105,7 +105,7 @@ BY RestartSignatureReplayCommandsAreSignatures,
        ResponsiveReplayQuarantined, ResponsiveReplayDraining,
        RestartLockedCertifiedRequest,
        RestartLockedBodyPipelineCandidate,
-       RestartLockedPrepareQCs, LockedPrepareRecoverySource,
+       RestartLockedPrepareQCs, HistoricalLockedPrepareSource,
        ResponsiveReplayScheduledCandidates,
        QueuedCandidates, DeferredCandidates, CausalCandidates,
        TrackedWorkCandidates, CandidateScheduled,
@@ -199,7 +199,7 @@ PROOF
              CertificatePhasesCorrect, LockCommitQcValues,
              ReceivedQcValues, CurrentOpenPrepareForCommit,
              HistoricalLockedPrepareForCommit,
-             HistoricalLockedPrepareSource, LockedPrepareRecoverySource,
+             HistoricalLockedPrepareSource,
              BeginLockCommit
     <2>5. /\ sourceQc.context = context
            /\ sourceQc \in prepareQCs
@@ -210,7 +210,7 @@ PROOF
          DEF StrongInductiveInvariant, Safety, TypeInvariant,
              ReducerProvenanceInvariant, CertificatesBackedByIntents,
              HistoricalQcValid, HistoricalLockedPrepareForCommit,
-             HistoricalLockedPrepareSource, LockedPrepareRecoverySource
+             HistoricalLockedPrepareSource
     <2>6. SamePrepareRecoveryRef(selectedQc, sourceQc)
       BY <1>1, <2>1, <2>2, <2>3, <2>5, SMT
          DEF CommandMatches, SamePrepareRecoveryRef,

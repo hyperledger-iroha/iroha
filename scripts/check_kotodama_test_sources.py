@@ -68,17 +68,18 @@ TEST_SINGLE_CASE_MACROS = {
     "crates/kotodama_lang/src/ir.rs": ("alias_lowering_case",),
 }
 EXPECTED_FIXTURE_COUNT = 248
+<<<<<<< Updated upstream
 EXPECTED_TEMPLATE_COUNT = 53
+=======
+>>>>>>> Stashed changes
 ROOT_KEYS = frozenset(
     {
         "format",
         "schema_version",
         "fixtures_sha256",
-        "retained_templates_sha256",
         "test_inventory_sha256",
         "source_files",
         "fixtures",
-        "retained_templates",
     }
 )
 SOURCE_KEYS = frozenset(
@@ -146,22 +147,11 @@ class FunctionSpan:
 
 
 @dataclass(frozen=True)
-class RawLiteral:
-    """One multiline Rust raw-string literal."""
-
-    start: int
-    end: int
-    hashes: int
-    content: str
-
-
-@dataclass(frozen=True)
 class ValidationStats:
     """Summary returned after a successful validation."""
 
     fixtures: int
     legacy_fixtures: int
-    retained_templates: int
     tests: int
 
 
@@ -295,25 +285,6 @@ def _mask_rust(source: str) -> str:
                 continue
         cursor += 1
     return "".join(masked)
-
-
-def _raw_literals(source: str) -> list[RawLiteral]:
-    literals: list[RawLiteral] = []
-    cursor = 0
-    while match := RAW_STRING_RE.search(source, cursor):
-        hashes = match.group("hashes")
-        marker = '"' + hashes
-        end = source.find(marker, match.end())
-        if end < 0:
-            _fail("unterminated Rust raw string")
-        content = source[match.end():end]
-        literal_end = end + len(marker)
-        if content.count("\n") + 1 > 1:
-            literals.append(
-                RawLiteral(match.start(), literal_end, len(hashes), content)
-            )
-        cursor = literal_end
-    return literals
 
 
 def _function_spans(source: str) -> list[FunctionSpan]:
@@ -602,23 +573,12 @@ def validate_manifest(
 
     source_entries = payload["source_files"]
     fixtures = payload["fixtures"]
-    retained = payload["retained_templates"]
     if not isinstance(source_entries, list):
         _fail("manifest.source_files must be an array")
     if not isinstance(fixtures, list) or len(fixtures) != EXPECTED_FIXTURE_COUNT:
         _fail(f"manifest.fixtures must contain exactly {EXPECTED_FIXTURE_COUNT} entries")
-    if not isinstance(retained, list) or len(retained) != EXPECTED_TEMPLATE_COUNT:
-        _fail(
-            "manifest.retained_templates must contain exactly "
-            f"{EXPECTED_TEMPLATE_COUNT} entries"
-        )
     if _sha256(payload["fixtures_sha256"], "fixtures_sha256") != _digest_json(fixtures):
         _fail("fixtures_sha256 does not authenticate the ordered fixture inventory")
-    if (
-        _sha256(payload["retained_templates_sha256"], "retained_templates_sha256")
-        != _digest_json(retained)
-    ):
-        _fail("retained_templates_sha256 does not authenticate the template inventory")
     if (
         _sha256(payload["test_inventory_sha256"], "test_inventory_sha256")
         != _digest_json(source_entries)
@@ -653,17 +613,20 @@ def validate_manifest(
     if tuple(sources) != EXPECTED_SOURCES:
         _fail(f"source inventory must be exactly {list(EXPECTED_SOURCES)} in order")
 
-    source_text: dict[str, str] = {}
-    source_spans: dict[str, list[FunctionSpan]] = {}
     include_inventory: dict[str, list[tuple[str, FunctionSpan]]] = {}
-    retained_inventory: list[dict[str, Any]] = []
     for source_path, (directory, _, expected_names) in sources.items():
         path = root / source_path
         text = _regular_bytes(path, source_path).decode("utf-8")
-        source_text[source_path] = text
         spans = _function_spans(text)
+<<<<<<< Updated upstream
         source_spans[source_path] = spans
         observed_names = _expanded_test_names(root, source_path, text)
+=======
+        masked = _mask_rust(text)
+        observed_names = [
+            match.group("name") for match in TEST_FUNCTION_RE.finditer(masked)
+        ]
+>>>>>>> Stashed changes
         if observed_names != expected_names:
             _fail(f"Rust test name/order inventory changed in {source_path}")
         expected_include_prefix = PurePosixPath(directory).relative_to(
@@ -675,28 +638,6 @@ def validate_manifest(
             if include_path.startswith(expected_include_prefix):
                 includes.append((include_path, _owner(spans, match.start())))
         include_inventory[source_path] = includes
-        template_ordinal = 0
-        for literal in _raw_literals(text):
-            template_ordinal += 1
-            owner = _owner(spans, literal.start)
-            content = literal.content.encode("utf-8")
-            token = text[literal.start:literal.end].encode("utf-8")
-            retained_inventory.append(
-                {
-                    "ordinal": template_ordinal,
-                    "owner_source": source_path,
-                    "owner_function": owner.name,
-                    "owner_is_test": owner.is_test,
-                    "source_line_before_migration": None,
-                    "raw_hashes": literal.hashes,
-                    "byte_len": len(content),
-                    "newline_count": literal.content.count("\n"),
-                    "starts_with_lf": literal.content.startswith("\n"),
-                    "ends_with_lf": literal.content.endswith("\n"),
-                    "content_sha256": hashlib.sha256(content).hexdigest(),
-                    "raw_literal_sha256": hashlib.sha256(token).hexdigest(),
-                }
-            )
 
     seen_assets: set[str] = set()
     expected_by_source: dict[str, list[tuple[str, str, bool]]] = {
@@ -764,18 +705,6 @@ def validate_manifest(
         if observed_assets != expected_assets:
             _fail(f"fixture directory membership changed under {directory.relative_to(root)}")
 
-    if len(retained_inventory) != len(retained):
-        _fail("retained multiline template count changed")
-    for index, raw_entry in enumerate(retained):
-        label = f"retained_templates[{index}]"
-        expected = _exact_keys(raw_entry, COMMON_LITERAL_KEYS, label)
-        _validate_common_literal(expected, label)
-        observed = retained_inventory[index]
-        historical_line = expected["source_line_before_migration"]
-        observed["source_line_before_migration"] = historical_line
-        if observed != expected:
-            _fail(f"{label} content/order/ownership changed")
-
     if legacy_manifest_path is None:
         legacy_manifest_path = root / DEFAULT_LEGACY_MANIFEST
     elif not legacy_manifest_path.is_absolute():
@@ -785,7 +714,6 @@ def validate_manifest(
     return ValidationStats(
         fixtures=len(fixtures),
         legacy_fixtures=legacy_fixtures,
-        retained_templates=len(retained),
         tests=total_tests,
     )
 
@@ -831,7 +759,7 @@ def main() -> int:
         "kotodama_test_sources: "
         f"fixtures={stats.fixtures} "
         f"legacy_fixtures={stats.legacy_fixtures} "
-        f"retained_templates={stats.retained_templates} tests={stats.tests}"
+        f"tests={stats.tests}"
     )
     return 0
 

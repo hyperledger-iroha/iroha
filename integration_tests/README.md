@@ -18,6 +18,12 @@ This crate hosts cross-component tests for Iroha.
 - Release acceptance must require its network fixtures instead of accepting sandbox-related skips.
   Run the dynamic-access serialization gate with
   `IROHA_TEST_REQUIRE_NETWORK=1 cargo test -p integration_tests --test core_api contracts::dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers -- --exact --nocapture`.
+  The Kotodama/IVM V1 release gate is
+  `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test core_api contracts::contract_v1_executes_and_survives_four_peer_da_rbc_restart -- --exact --nocapture --test-threads=1`.
+  It authenticates the signed NPoS/mandatory-DA genesis contract, requires
+  cross-peer RBC evidence for the deployment, decodes the canonical `int`
+  result and persisted state on all four peers, then repeats both reads through
+  a cold-restarted validator.
   The pull-request test job sets this switch; ordinary developer runs keep the existing sandbox-skip behavior.
 - Feature flags: `telemetry` (default), `fault_injection`, `norito_streaming_fec`, `js_host_parity`, `zk-stark`, and the non-shipping `privacy-release-evidence` gate. Enable with `cargo test -p integration_tests --features "<feature list>"`.
 - Ignored/long cases (e.g., adversarial network, flaky trigger paths): `IROHA_RUN_IGNORED=1 cargo test -p integration_tests -- --ignored --nocapture`.

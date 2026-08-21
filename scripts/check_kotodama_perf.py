@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """Enforce the Kotodama V1 Criterion regression budget.
 
-The gate compares every source-proven pre-reset compiler/runtime workload
-against Criterion's runner-local ``base`` samples. New V1 List, decimal,
-quantity, compiler/runtime-phase, and typed-query workloads are mandatory
-candidate evidence; missing or malformed samples fail closed. A comparable
-workload fails when its median is more than five percent slower, and List sugar
-has an independent zero-slowdown check against its manual-loop counterpart.
-
-Comparison is disabled until the selected predecessor's independently archived
-original ``Cargo.lock`` digest is authenticated in this policy. Candidate
-samples can never be captured as a portable or self baseline.
+The gate compares every current compiler/runtime workload against Criterion's
+runner-local ``base`` samples captured from the clean reset anchor. Missing or
+malformed samples fail closed. A workload fails when its median is more than
+five percent slower, and List sugar has an independent zero-slowdown check
+against its manual-loop counterpart. Candidate samples can never be captured
+as a portable or self baseline.
 """
 
 from __future__ import annotations
@@ -30,16 +26,12 @@ from typing import Mapping, Sequence
 
 MAX_REGRESSION = 0.05
 LIST_SUGAR_MAX_SLOWDOWN = 0.0
-# `2ca45d754d0a993009dc45fc33d4e1976b39d087` introduced the reset
-# performance policy and describes its selected comparison parent. Its second
-# parent is this revision, whose native benchmark sources contain exactly the
-# 33 comparable identities below and none of the 13 candidate-only identities.
-PREDECESSOR_SHA = "a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab"
-# Deliberately unavailable. The selected predecessor does not contain
-# `Cargo.lock`, and no authenticated digest of its original lockfile is
-# archived in this repository. Populate this only from independently recovered
-# provenance; never derive it from the candidate lockfile.
-PREDECESSOR_CARGO_LOCK_SHA256: str | None = None
+# The user-selected reset anchor is the untouched comparison baseline. It
+# contains the complete current benchmark inventory and its original lockfile.
+BASELINE_SHA = "fc09b635df385d0488067f09baaa92a8d16fa124"
+BASELINE_CARGO_LOCK_SHA256 = (
+    "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+)
 LIST_SUGAR_BENCHMARK = "kotodama_list_comprehension_runtime_64"
 LIST_MANUAL_BENCHMARK = "kotodama_list_manual_runtime_64"
 DECIMAL_BENCHMARKS = (
@@ -59,15 +51,13 @@ RUNTIME_PHASE_BENCHMARKS = (
     "kotodama_runtime_phase_execute_prepared",
 )
 INTERFACE_PHASE_BENCHMARKS = ("kotodama_phase_interface_summary",)
-# These identities were added after the selected pre-reset comparison revision.
-# They must be present in every candidate run, but promoting them into the 5%
-# comparison set requires an independently captured earlier-revision sample.
+# These identities receive additional source-shape checks as well as the
+# ordinary same-runner comparison.
 SOURCE_BOUND_BENCHMARKS = (
     DECIMAL_BENCHMARKS
     + INTERFACE_PHASE_BENCHMARKS
     + RUNTIME_PHASE_BENCHMARKS
 )
-CANDIDATE_ONLY_BENCHMARKS = SOURCE_BOUND_BENCHMARKS
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_SOURCE_PATHS = (
     Path("crates/ivm/benches/bench_kotodama.rs"),
@@ -147,19 +137,15 @@ REPRESENTATIVE_BENCHMARKS = (
     "kotodama_core_runtime_warm_add",
 )
 
-# Only identities that existed in the selected pre-reset revision may consume a
-# base sample. Candidate-only presence is not regression evidence and must not
-# be turned into a self-baseline by running a new harness against old code.
-REGRESSION_BENCHMARKS = tuple(
-    name
-    for name in REPRESENTATIVE_BENCHMARKS
-    if name not in CANDIDATE_ONLY_BENCHMARKS
-)
+# The clean anchor contains the complete current inventory, so every required
+# candidate identity has a native baseline sample.
+REGRESSION_BENCHMARKS = REPRESENTATIVE_BENCHMARKS
 QUANTITY_ROUND_BENCHMARKS = (
     "kotodama_quantity_div_round_floor",
     "kotodama_quantity_div_round_ceil",
     "kotodama_quantity_div_round_nearest_even",
 )
+DECIMAL_ROUND_BENCHMARKS = DECIMAL_BENCHMARKS[-3:]
 TYPED_QUERY_BENCHMARKS = (
     "typed_core_query_accounts_page_64",
     "typed_core_query_assets_page_64",
@@ -170,22 +156,28 @@ TYPED_QUERY_BENCHMARKS = (
 STATIC_REGRESSION_BENCHMARKS = tuple(
     name
     for name in REGRESSION_BENCHMARKS
-    if name not in {*QUANTITY_ROUND_BENCHMARKS, *TYPED_QUERY_BENCHMARKS}
+    if name
+    not in {
+        *DECIMAL_ROUND_BENCHMARKS,
+        *QUANTITY_ROUND_BENCHMARKS,
+        *TYPED_QUERY_BENCHMARKS,
+    }
 )
 CORE_RUNTIME_WARM_BENCHMARK = "kotodama_core_runtime_warm_add"
-CORE_RUNTIME_PREDECESSOR_CHECKOUT = ".checkout_runtime(GAS_LIMIT)"
+CORE_RUNTIME_BASELINE_CHECKOUT = ".checkout_runtime(GAS_LIMIT)"
 CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT = (
     ".checkout_runtime(GAS_LIMIT, ivm::Memory::HEAP_MAX_SIZE)"
 )
 
-# Filled from the normalized native timed closures at `PREDECESSOR_SHA`.
+# Filled from the normalized native timed closures at `BASELINE_SHA`.
 # Shared Criterion loops deliberately have one closure hash per identity; their
 # identity-to-mode/family declaration is prepended before hashing so a mapping
 # mutation cannot hide behind an unchanged shared closure.
-PREDECESSOR_TIMED_BODY_SHA256: Mapping[str, str] = {
+BASELINE_TIMED_BODY_SHA256: Mapping[str, str] = {
     "kotodama_phase_parse": "1f21f2b13cba3c59d78948343b967ed357760132264301db6f47cdb289625cc9",
     "kotodama_phase_resolved_hir": "5bd4e90133ef1a7b2ee4e08b048c54272ed84d59dbefcf51e15f3317d2eb3185",
     "kotodama_phase_semantic": "fa4e992084b581d1d76425ac014c629594efe384998fe9d838643b0a56131bbf",
+    "kotodama_phase_interface_summary": "d50459e751760e7162fd5572928b416097436ef5b276574511fb975d9c3673e7",
     "kotodama_phase_typed_effect_hir": "fa4e992084b581d1d76425ac014c629594efe384998fe9d838643b0a56131bbf",
     "kotodama_phase_ir_lower": "49823939b2bc7afbeca3c3c70b1c25cacfd03b852a11838307ad5fb2efb94333",
     "kotodama_phase_ssa_construct": "6fc353843dd5811ff7df6d0afd5492f220da1ff86cc5bc0de2a56e4f47c76d82",
@@ -208,11 +200,23 @@ PREDECESSOR_TIMED_BODY_SHA256: Mapping[str, str] = {
     "kotodama_quantity_div_round_floor": "03555a08de20e9c43e666fdda9fdbf155b9adc3b4f7b2e6940a86ee592fc9bdc",
     "kotodama_quantity_div_round_ceil": "088992b8211a234df39bac9bad5d59dd3204f22d794be49f02ca122d53f4a3da",
     "kotodama_quantity_div_round_nearest_even": "878d48f01a6a45799599936592f9188d7dda8a2155638371bd0be12bd68f83e8",
+    "kotodama_decimal_add": "5f80aea629f705895bbf0d9f05f564f2ee9e7fe713e9fa71e945b5dd4fb52cdc",
+    "kotodama_decimal_sub": "6d216130785ae68e2b1bb9a890eb19335d8768ceeb13a71f7db59a49ac3a75e8",
+    "kotodama_decimal_mul": "e0610a72326267d6ae3aa298d21d90986c9192d96a6a0af96bb8a7ce1c6826f6",
+    "kotodama_decimal_div_exact": "215405066b95f53ae8103aa9087532927c9785c3b817a2eafc8cb55cd13c4084",
+    "kotodama_decimal_div_round_floor": "21a3ef198b78ad43320faf5feee7eca5bc99683581500d19a56460370b0e2cf5",
+    "kotodama_decimal_div_round_ceil": "982a1d87fc28dd5604c511ba3fb430749f3ebd1044090966ed78e85a06785bec",
+    "kotodama_decimal_div_round_nearest_even": "f5f8abca81ce3896eea1d2ae64de6d6ec2fda222236ddf6ad6ff4e5f5bb874c2",
     "typed_core_query_accounts_page_64": "7ed21c1ff54a4bedea4a076088757bfd636963f059959b0b54180a5a3eba4b64",
     "typed_core_query_assets_page_64": "c785e42d815962065f34d75861b7b6e192e3754f6ee36128bb6978a9576a9455",
     "typed_core_query_asset_definitions_page_64": "057da321707eac734857d824215d3dd2b98efc8cd3382a4b821d31e76c80040b",
     "typed_core_query_domains_page_64": "942d43e4fefbdf768bd1dc67693ecd7078643f26a021879b2f6cfaba0d83e57b",
     "typed_core_query_nfts_page_64": "7271bd2da13604645ec09add36611290fa93646a432d551337b4cec5b1f28496",
+    "kotodama_runtime_phase_prepare_validate_predecode": "3b5096d7b272453fcf8b4bf902c9f7f6516dc0bdb2cdbf9fb4bf57acbb77c903",
+    "kotodama_runtime_phase_argument_decode": "a6c94994ede14bd3a5163e5740a51aefef43aeb282335b02a0a721a5cca27ef5",
+    "kotodama_runtime_phase_load_prepared": "fd31c6a28d828a5d854793c9b7d56f571d39f33aac88735d359957b6b5c07fef",
+    "kotodama_runtime_phase_dirty_reset": "eeac94120c46d1bfc846470f5e1d4ed3f94e2105cc5ecc07051e4ddd8311fd79",
+    "kotodama_runtime_phase_execute_prepared": "d7cdaf57b514b5d2012878cfec365a2ceccf0cb0364981112ce7f696f3775030",
     "kotodama_runtime_cold_add": "effde7658da204115d374e68fa2e445962920ee412b56fcb37f97a64ba3ee365",
     "kotodama_runtime_warm_add": "ef0b880de04e2d9bf0ffa528688e2721aab6791f7b776b2f943787f28f212776",
     "kotodama_core_runtime_warm_add": "33bec4effbbaac3bdcf312506b3c031737af9d9dad1d8ad9a2446f9b53bc4fa9",
@@ -241,51 +245,52 @@ def _git_head(root: Path) -> str:
             text=True,
         )
     except OSError as error:
-        raise GateError(f"failed to inspect predecessor Git revision: {error}") from error
+        raise GateError(f"failed to inspect baseline Git revision: {error}") from error
     if result.returncode != 0:
         detail = result.stderr.strip() or f"git exited {result.returncode}"
-        raise GateError(f"failed to inspect predecessor Git revision: {detail}")
+        raise GateError(f"failed to inspect baseline Git revision: {detail}")
     revision = result.stdout.strip()
     if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
         raise GateError(
-            "predecessor Git revision must be one lowercase 40-hex commit"
+            "baseline Git revision must be one lowercase 40-hex commit"
         )
     return revision
 
 
 def _require_git_paths_clean(root: Path, relative_paths: Sequence[Path]) -> None:
-    """Reject tracked changes outside the selected predecessor commit."""
+    """Reject tracked changes outside the selected baseline commit."""
 
     command = [
         "git",
         "-C",
         str(root),
-        "diff",
-        "--quiet",
-        "HEAD",
-        "--",
-        *(relative.as_posix() for relative in relative_paths),
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
     ]
+    if relative_paths:
+        command.extend(("--", *(relative.as_posix() for relative in relative_paths)))
     try:
         result = subprocess.run(
             command,
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
         )
     except OSError as error:
         raise GateError(
-            f"failed to verify predecessor benchmark source provenance: {error}"
+            f"failed to verify baseline benchmark source provenance: {error}"
         ) from error
-    if result.returncode == 1:
+    if result.returncode == 0 and result.stdout:
         raise GateError(
-            "predecessor tracked sources differ from the selected Git commit"
+            "baseline checkout contains tracked or untracked source drift"
         )
     if result.returncode != 0:
-        detail = result.stderr.strip() or f"git exited {result.returncode}"
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        detail = detail or f"git exited {result.returncode}"
         raise GateError(
-            f"failed to verify predecessor benchmark source provenance: {detail}"
+            f"failed to verify baseline benchmark source provenance: {detail}"
         )
 
 
@@ -304,50 +309,49 @@ def _sha256_regular_file(path: Path, label: str) -> str:
     return digest.hexdigest()
 
 
-def validate_predecessor_provenance(
-    predecessor_root: Path,
+def validate_baseline_provenance(
+    baseline_root: Path,
     candidate_sources: Sequence[Path] = BENCHMARK_SOURCES,
 ) -> None:
     """Require an exact source and lockfile identity before median comparison.
 
-    The selected predecessor commit lacks ``Cargo.lock``. Consequently this
-    function intentionally fails until an independently authenticated digest of
-    that revision's original lockfile is added to the policy.
+    The selected baseline commit and its original ``Cargo.lock`` digest are
+    policy-pinned; both must match before runner-local timing evidence is read.
     """
 
-    expected_lock = PREDECESSOR_CARGO_LOCK_SHA256
+    expected_lock = BASELINE_CARGO_LOCK_SHA256
     if expected_lock is None:
         raise GateError(
-            "authenticated predecessor Cargo.lock provenance is unavailable; "
+            "authenticated baseline Cargo.lock provenance is unavailable; "
             "the <=5% comparison is disabled"
         )
     if re.fullmatch(r"[0-9a-f]{64}", expected_lock) is None:
         raise GateError(
-            "predecessor Cargo.lock policy digest must be lowercase 64-hex"
+            "baseline Cargo.lock policy digest must be lowercase 64-hex"
         )
     try:
-        root = predecessor_root.resolve(strict=True)
+        root = baseline_root.resolve(strict=True)
     except OSError as error:
         raise GateError(
-            f"failed to resolve predecessor checkout {predecessor_root}: {error}"
+            f"failed to resolve baseline checkout {baseline_root}: {error}"
         ) from error
     if not root.is_dir():
-        raise GateError(f"predecessor checkout is not a directory: {root}")
+        raise GateError(f"baseline checkout is not a directory: {root}")
 
     revision = _git_head(root)
-    if revision != PREDECESSOR_SHA:
+    if revision != BASELINE_SHA:
         raise GateError(
-            "predecessor checkout revision mismatch: "
-            f"expected {PREDECESSOR_SHA}, got {revision}"
+            "baseline checkout revision mismatch: "
+            f"expected {BASELINE_SHA}, got {revision}"
         )
     _require_git_paths_clean(root, ())
 
     actual_lock = _sha256_regular_file(
-        root / "Cargo.lock", "predecessor Cargo.lock"
+        root / "Cargo.lock", "baseline Cargo.lock"
     )
     if actual_lock != expected_lock:
         raise GateError(
-            "predecessor Cargo.lock digest mismatch: "
+            "baseline Cargo.lock digest mismatch: "
             f"expected {expected_lock}, got {actual_lock}"
         )
 
@@ -465,9 +469,9 @@ def _top_level_rust_arguments(
         raise GateError(f"{revision} {context} has unterminated arguments")
 
     boundaries = [start - 1 for start in starts[1:]] + [close_index]
-    return [
-        text[start:end].strip() for start, end in zip(starts, boundaries, strict=True)
-    ]
+    if len(starts) != len(boundaries):
+        raise GateError(f"{revision} {context} has inconsistent argument boundaries")
+    return [text[start:end].strip() for start, end in zip(starts, boundaries)]
 
 
 def _rust_function_from_marker(
@@ -577,17 +581,17 @@ def _canonicalize_comparable_timed_body(
             )
         return body.replace(
             CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT,
-            CORE_RUNTIME_PREDECESSOR_CHECKOUT,
+            CORE_RUNTIME_BASELINE_CHECKOUT,
             1,
         )
-    if CORE_RUNTIME_PREDECESSOR_CHECKOUT in body:
-        if body.count(CORE_RUNTIME_PREDECESSOR_CHECKOUT) != 1:
+    if CORE_RUNTIME_BASELINE_CHECKOUT in body:
+        if body.count(CORE_RUNTIME_BASELINE_CHECKOUT) != 1:
             raise GateError(
-                f"{revision} {name} predecessor checkout must be unique"
+                f"{revision} {name} baseline checkout must be unique"
             )
         return body
     raise GateError(
-        f"{revision} {name} must use the predecessor-equivalent heap limit"
+        f"{revision} {name} must use the baseline-equivalent heap limit"
     )
 
 
@@ -625,7 +629,7 @@ def _typed_query_identity_binding(text: str, name: str, revision: str) -> str:
 
 
 def _benchmark_timed_bodies_from_text(text: str, revision: str) -> dict[str, str]:
-    """Extract every predecessor-comparable native Criterion timed closure."""
+    """Extract every baseline-comparable native Criterion timed closure."""
 
     bodies = {}
     for name in STATIC_REGRESSION_BENCHMARKS:
@@ -639,6 +643,21 @@ def _benchmark_timed_bodies_from_text(text: str, revision: str) -> dict[str, str
         bodies[name] = _canonicalize_comparable_timed_body(
             name, body, revision
         )
+
+    decimal_anchor = text.index(f'"{DECIMAL_ROUND_BENCHMARKS[0]}"')
+    decimal_invocation = _criterion_invocation(
+        text,
+        "c.bench_function(name,",
+        revision,
+        "rounded Decimal",
+        decimal_anchor,
+    )
+    decimal_body = _criterion_timed_closure(
+        decimal_invocation, revision, "rounded Decimal"
+    )
+    for name in DECIMAL_ROUND_BENCHMARKS:
+        binding = _quoted_identity_binding(text, name, revision)
+        bodies[name] = f"{binding} => {decimal_body}"
 
     quantity_anchor = text.index(f'"{QUANTITY_ROUND_BENCHMARKS[0]}"')
     quantity_invocation = _criterion_invocation(
@@ -687,21 +706,21 @@ def _benchmark_timed_bodies(
 def validate_comparable_timed_bodies(
     sources: Sequence[Path], revision: str
 ) -> dict[str, str]:
-    """Bind every comparable identity to the selected predecessor workload."""
+    """Bind every comparable identity to the selected baseline workload."""
 
     bodies = _benchmark_timed_bodies(sources, revision)
     expected_names = set(REGRESSION_BENCHMARKS)
-    if set(PREDECESSOR_TIMED_BODY_SHA256) != expected_names:
-        raise GateError("predecessor timed-body policy coverage is incomplete")
+    if set(BASELINE_TIMED_BODY_SHA256) != expected_names:
+        raise GateError("baseline timed-body policy coverage is incomplete")
     failures = []
     for name in REGRESSION_BENCHMARKS:
         actual = hashlib.sha256(bodies[name].encode("utf-8")).hexdigest()
-        expected = PREDECESSOR_TIMED_BODY_SHA256[name]
+        expected = BASELINE_TIMED_BODY_SHA256[name]
         if actual != expected:
             failures.append(f"{name}: expected {expected}, got {actual}")
     if failures:
         raise GateError(
-            f"{revision} comparable timed-body drift from {PREDECESSOR_SHA}:\n  "
+            f"{revision} comparable timed-body drift from {BASELINE_SHA}:\n  "
             + "\n  ".join(failures)
         )
     return bodies
@@ -825,29 +844,14 @@ def validate_benchmark_policy(
 
     representative = set(REPRESENTATIVE_BENCHMARKS)
     comparable = set(REGRESSION_BENCHMARKS)
-    candidate_only = set(CANDIDATE_ONLY_BENCHMARKS)
     if len(representative) != len(REPRESENTATIVE_BENCHMARKS):
         raise GateError("representative benchmark policy contains duplicate identities")
-    if len(candidate_only) != len(CANDIDATE_ONLY_BENCHMARKS):
-        raise GateError("candidate-only benchmark policy contains duplicate identities")
     if len(set(SOURCE_BOUND_BENCHMARKS)) != len(SOURCE_BOUND_BENCHMARKS):
         raise GateError("source-bound benchmark policy contains duplicate identities")
-    if not candidate_only <= representative:
-        missing = sorted(candidate_only - representative)
+    if comparable != representative:
         raise GateError(
-            "candidate-only benchmarks are absent from candidate coverage: "
-            + ", ".join(missing)
-        )
-    if not candidate_only <= set(SOURCE_BOUND_BENCHMARKS):
-        unknown = sorted(candidate_only - set(SOURCE_BOUND_BENCHMARKS))
-        raise GateError(
-            "candidate-only benchmarks are absent from the source-bound policy: "
-            + ", ".join(unknown)
-        )
-    if comparable != representative - candidate_only:
-        raise GateError(
-            "comparable benchmark policy must exactly cover representative "
-            "benchmarks except candidate-only identities"
+            "comparable benchmark policy must exactly cover every representative "
+            "benchmark at the current baseline"
         )
 
     text = _read_sources(sources, "candidate")
@@ -869,7 +873,7 @@ def validate_benchmark_policy(
         if duplicated:
             details.append("declared more than once: " + ", ".join(duplicated))
         raise GateError(
-            "candidate-only benchmark coverage drift (" + "; ".join(details) + ")"
+            "source-bound benchmark coverage drift (" + "; ".join(details) + ")"
         )
     _typed_query_raw_entity_contract(sources, "candidate")
     _typed_query_timed_body(sources, "candidate")
@@ -887,19 +891,6 @@ def validate_revision_inventories(
     _require_identity_counts(
         _identity_counts(base_text, REGRESSION_BENCHMARKS), 1, "base"
     )
-    invented = sorted(
-        name
-        for name, count in _identity_counts(
-            base_text, CANDIDATE_ONLY_BENCHMARKS
-        ).items()
-        if count != 0
-    )
-    if invented:
-        raise GateError(
-            "candidate-only benchmarks are present in the base revision and "
-            "must be reclassified: "
-            + ", ".join(invented)
-        )
     base_bodies = validate_comparable_timed_bodies(base_sources, "base")
     if candidate_bodies != base_bodies:
         drifted = sorted(
@@ -917,7 +908,7 @@ def validate_revision_inventories(
     if candidate_timed_body != base_timed_body:
         raise GateError(
             "comparable typed-query timed body drift; preserve the exact "
-            "predecessor workload or rename and reclassify all five typed "
+            "baseline workload or rename and reclassify all five typed "
             "query benchmark identities"
         )
     validate_typed_query_raw_entity_contract(base_sources, candidate_sources)
@@ -1066,16 +1057,16 @@ def render(comparisons: Sequence[Comparison]) -> str:
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument(
         "--criterion-dir", type=Path, default=Path("target/criterion")
     )
     parser.add_argument(
-        "--predecessor-root",
+        "--baseline-root",
         type=Path,
         required=True,
         help=(
-            "exact checkout of the policy-pinned predecessor; its Git revision, "
+            "exact checkout of the policy-pinned baseline; its Git revision, "
             "native benchmark sources, and authenticated original Cargo.lock "
             "must match before comparison"
         ),
@@ -1088,7 +1079,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         validate_benchmark_policy()
-        validate_predecessor_provenance(args.predecessor_root)
+        validate_baseline_provenance(args.baseline_root)
         current = read_current_samples(
             args.criterion_dir, REPRESENTATIVE_BENCHMARKS
         )
@@ -1105,7 +1096,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     print(
         "All comparable Kotodama medians are within the 5% V1 budget, every "
-        "candidate workload is present, and List sugar is no slower than its "
+        "required workload is present, and List sugar is no slower than its "
         "manual-loop baseline."
     )
     return 0

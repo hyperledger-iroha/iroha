@@ -73,8 +73,13 @@ incident must include links to parity dashboards, fixture age from
 
 Before sharing artefacts outside engineering:
 
-1. **Parity + Fixtures:** Run `make swift-fixtures` and
-   `make swift-fixtures-check`; archive `artifacts/swift_fixture_regen_state.json`.
+1. **Parity + Fixtures:** Render the complete owner tree at an absent path with
+   `cargo run --locked -p xtask --features dev-tools --bin xtask --
+   norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication`,
+   repeat at a second absent root, and require identical exact path sets, entry
+   types, modes, completion manifests, and every file byte. Apply the reviewed
+   identity-relative tracked patch, then run `norito-rpc-verify` and `make
+   swift-fixtures-check`; archive both verified publication identities.
 2. **CI & Dashboards:** Execute `make swift-ci` (wraps fixtures + dashboards)
    and save the resulting parity/telemetry snapshots.
 3. **Reproducibility:** Follow
@@ -131,12 +136,11 @@ or `ci/check_swift_fixtures.sh` fail; rerun only after the root cause is fixed.
 
 - `roadmap.md` — IOS8 Production Readiness & Support requirements.
 - `status.md` — weekly Swift updates referencing this playbook.
-- `Makefile` targets: `swift-fixtures`, `swift-fixtures-check`, `swift-ci`,
-  `swift-status`, `swift-dashboards`.
+- `Makefile` targets: `swift-fixtures-check`, `swift-ci`, `swift-status`,
+  `swift-dashboards`.
 - CI wrappers: `.buildkite/swift-status-export.yml`,
   `ci/swift_status_export.sh`, `ci/xcode-swift-parity`.
-- Scripts: `scripts/swift_fixture_regen.sh`,
-  `scripts/check_swift_fixtures.py`, `scripts/swift_status_export.py`,
+- Scripts: `scripts/check_swift_fixtures.py`, `scripts/swift_status_export.py`,
   `scripts/swift_collect_redaction_status.py`,
   `scripts/swift_telemetry_override.py`.
 

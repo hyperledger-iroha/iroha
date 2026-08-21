@@ -7,6 +7,8 @@ readonly SUMERAGI_V2_TLC_STATE_SUMMARY_PATTERN='^[0-9][0-9,]* states generated, 
 readonly SUMERAGI_V2_TLC_STATE_SUMMARY_PREFIX='^[0-9][0-9,]* states generated, [0-9][0-9,]* distinct states found'
 readonly SUMERAGI_V2_TLC_FAILURE_DIAGNOSTIC_PATTERN='^[[:space:]]*(Error:|Deadlock reached([.]|$)|Temporal properties were violated[.]$)'
 readonly SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN='^[[:space:]]*(Error: (Invariant |Action property |Temporal properties were violated[.]$|Deadlock reached([.]|$))|Deadlock reached([.]|$)|Temporal properties were violated[.]$)'
+readonly SUMERAGI_V2_REPLAY_TOOL_MESSAGE_COUNT=113
+readonly SUMERAGI_V2_REPLAY_TOOL_STATE_COUNT=101
 
 sumeragi_v2_tlc_contract_fail() {
   local label="$1"
@@ -113,4 +115,48 @@ sumeragi_v2_tlc_assert_fixed_success() {
       "successful TLC run emitted ${failure_count} error/deadlock diagnostics"
   }
   sumeragi_v2_tlc_assert_terminal "$label" "$log"
+}
+
+# Assert the process-level result contract before the Python normalizer applies
+# its stricter ordered transcript and payload validation. stdout and stderr are
+# deliberately separate; merged output is never admissible evidence.
+sumeragi_v2_tlc_assert_replay_tool_result() {
+  local label="$1"
+  local stdout_log="$2"
+  local stderr_log="$3"
+  local actual_status="$4"
+  local start_count
+  local end_count
+  local state_start_count
+  local state_end_count
+
+  sumeragi_v2_tlc_assert_regular_log "$label" "$stdout_log"
+  sumeragi_v2_tlc_assert_regular_log "$label-stderr" "$stderr_log"
+  [[ ! -s "$stderr_log" ]] || {
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$stderr_log" "TLC emitted separate stderr"
+  }
+  [[ "$actual_status" -eq 12 ]] || {
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$stdout_log" \
+      "TLC returned status ${actual_status}, expected invariant status 12"
+  }
+  # The replay paths are ASCII. Anything outside TAB, LF, and printable ASCII
+  # includes forbidden controls, C1 bytes, or framing-obscuring whitespace.
+  if [[ -n "$(LC_ALL=C tr -d '\11\12\40-\176' <"$stdout_log")" ]]; then
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$stdout_log" "TLC stdout contains forbidden bytes"
+  fi
+  start_count="$(grep -Ec '^@!@!@STARTMSG [0-9]+:[0-9]+ @!@!@$' "$stdout_log" || true)"
+  end_count="$(grep -Ec '^@!@!@ENDMSG [0-9]+ @!@!@$' "$stdout_log" || true)"
+  state_start_count="$(grep -Fxc '@!@!@STARTMSG 2217:4 @!@!@' "$stdout_log" || true)"
+  state_end_count="$(grep -Fxc '@!@!@ENDMSG 2217 @!@!@' "$stdout_log" || true)"
+  [[ "$start_count" == "$SUMERAGI_V2_REPLAY_TOOL_MESSAGE_COUNT" \
+    && "$end_count" == "$SUMERAGI_V2_REPLAY_TOOL_MESSAGE_COUNT" \
+    && "$state_start_count" == "$SUMERAGI_V2_REPLAY_TOOL_STATE_COUNT" \
+    && "$state_end_count" == "$SUMERAGI_V2_REPLAY_TOOL_STATE_COUNT" ]] || {
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$stdout_log" \
+      "TLC tool-message census differs (start=${start_count}, end=${end_count}, state-start=${state_start_count}, state-end=${state_end_count})"
+  }
 }

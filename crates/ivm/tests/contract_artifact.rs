@@ -934,10 +934,10 @@ fn verify_rejects_unexecutable_control_flow_even_when_unreachable() {
 }
 #[test]
 fn verify_rejects_disallowed_syscalls_before_execution() {
-    let disallowed_number = ivm::syscalls::RETIRED_SYSCALL_BUILD_PATH_MAP_KEY;
+    let disallowed_number = 0x54;
     let disallowed = ivm::encoding::wide::encode_sys(
         ivm::instruction::wide::system::SCALL,
-        u8::try_from(disallowed_number).expect("retired syscall fits SCALL immediate"),
+        u8::try_from(disallowed_number).expect("unassigned syscall fits SCALL immediate"),
     );
     assert!(!ivm::syscalls::is_syscall_allowed(
         ivm::SyscallPolicy::AbiV1,

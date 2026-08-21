@@ -28,7 +28,6 @@ on:
       - "scripts/check_kotodama_docs.py"
       - "scripts/regenerate_kotodama_goldens.py"
       - "scripts/ivm_artifacts.tsv"
-      - "scripts/kotodama_v1_size_baseline.json"
       - "pytests/scripts/check_kotodama_perf_test.py"
       - "pytests/scripts/check_kotodama_docs_test.py"
       - "pytests/scripts/regenerate_kotodama_goldens_test.py"
@@ -111,7 +110,7 @@ jobs:
       - name: Check out comparison base
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab
+          ref: fc09b635df385d0488067f09baaa92a8d16fa124
           path: baseline
 
       - name: Require regular revision lockfiles
@@ -153,11 +152,9 @@ jobs:
         run: rm -rf "$CARGO_TARGET_DIR/criterion"
 
       # Benchmark sources are revision-native. The policy also requires the
-      # exact selected Git commit and an independently authenticated digest of
-      # that revision's original Cargo.lock before any timing comparison. The
-      # digest is deliberately unavailable today, so this step preserves the
-      # documented release blocker rather than accepting a copied lockfile.
-      - name: Require authenticated predecessor provenance
+      # exact selected Git commit and the policy-pinned digest of that
+      # revision's original Cargo.lock before any timing comparison.
+      - name: Require authenticated baseline provenance
         run: |
           python3 - <<'PY'
           import runpy
@@ -178,8 +175,8 @@ jobs:
               base_sources=base_sources,
               candidate_sources=candidate_sources,
           )
-          policy["validate_predecessor_provenance"](
-              predecessor_root=Path("baseline"),
+          policy["validate_baseline_provenance"](
+              baseline_root=Path("baseline"),
               candidate_sources=candidate_sources,
           )
           PY
@@ -219,7 +216,7 @@ jobs:
         run: >-
           python3 scripts/check_kotodama_perf.py
           --criterion-dir ../target-kotodama-perf/criterion
-          --predecessor-root ../baseline
+          --baseline-root ../baseline
           --threshold 0.05
 
       - name: Build canonical Kotodama release tools

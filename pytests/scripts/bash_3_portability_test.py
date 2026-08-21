@@ -16,7 +16,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASH_3_ENTRYPOINTS = (
     REPO_ROOT / "scripts/ci/run_xcframework_smoke.sh",
-    REPO_ROOT / "scripts/swift_fixture_regen.sh",
     REPO_ROOT / "scripts/run_full_tests.sh",
     REPO_ROOT / "check_pending_incentive_snapshots.sh",
     REPO_ROOT / "scripts/android_sbom_provenance.sh",
@@ -108,73 +107,6 @@ def test_portable_replacements_keep_all_fixed_mappings() -> None:
     ):
         assert module in sbom
         assert filename in sbom
-
-    for script_name in (
-        "python_fixture_regen.sh",
-        "swift_fixture_regen.sh",
-        "android_fixture_regen.sh",
-    ):
-        fixture_regen = (REPO_ROOT / "scripts" / script_name).read_text(
-            encoding="utf-8"
-        )
-        assert 'norito-rpc-fixtures "$@"' in fixture_regen
-        for retired in ("rsync", "export_norito_fixtures", "SWIFT_FIXTURE_ARCHIVE"):
-            assert retired not in fixture_regen
-
-
-@pytest.mark.parametrize(
-    "script_name",
-    [
-        "python_fixture_regen.sh",
-        "swift_fixture_regen.sh",
-        "android_fixture_regen.sh",
-    ],
-)
-def test_fixture_regen_delegates_exactly_to_the_canonical_owner(
-    tmp_path: Path, script_name: str
-) -> None:
-    fake_cargo = tmp_path / "cargo"
-    capture = tmp_path / "args.txt"
-    _write_executable(
-        fake_cargo,
-        """
-        #!/bin/bash
-        printf '%s\n' "$@" > "${CAPTURE_ARGS}"
-        """,
-    )
-    env = os.environ.copy()
-    env.update({"CARGO_BIN": str(fake_cargo), "CAPTURE_ARGS": str(capture)})
-
-    result = subprocess.run(
-        [
-            "/bin/bash",
-            str(REPO_ROOT / "scripts" / script_name),
-            "--output-root",
-            "artifacts/norito-stage",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-        env=env,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert capture.read_text(encoding="utf-8").splitlines() == [
-        "run",
-        "--locked",
-        "-p",
-        "xtask",
-        "--features",
-        "dev-tools",
-        "--bin",
-        "xtask",
-        "--",
-        "norito-rpc-fixtures",
-        "--output-root",
-        "artifacts/norito-stage",
-    ]
-
 
 def test_android_sbom_collection_preserves_each_module_report(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"

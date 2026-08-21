@@ -50,7 +50,8 @@ import static org.junit.Assert.fail;
 
 /**
  * Validates the Norito fixture manifest emitted by the canonical Rust owner, {@code cargo run -p
- * xtask --features dev-tools --bin xtask -- norito-rpc-fixtures}.
+ * xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root
+ * &lt;absent-absolute-external-root&gt;}.
  *
  * <p>The manifest advertises deterministic hashes, base64 payloads, and encoded blob lengths used
  * by downstream Android fixtures. This test ensures the entries stay in sync with the checked-in
@@ -62,6 +63,10 @@ public final class TransactionFixtureManifestTests {
   private static final Pattern FIXTURE_NAME = Pattern.compile("^[a-z0-9][a-z0-9_-]*$");
   private static final String HASH_ALGORITHM = "BLAKE2B-256";
   private static final String SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1";
+  private static final String TRANSACTION_PAYLOAD_TYPE =
+      "iroha_data_model::transaction::signed::model::TransactionPayload";
+  private static final String SIGNED_TRANSACTION_TYPE =
+      "iroha_data_model::transaction::signed::model::SignedTransaction";
   private static final Set<String> MANIFEST_FIELDS = fieldSet("fixtures");
   private static final Set<String> FIXTURE_FIELDS =
       fieldSet(
@@ -489,18 +494,22 @@ public final class TransactionFixtureManifestTests {
         actualBase64);
 
     // Validate the signed payload looks well-formed base64 and matches the advertised length.
-    final byte[] payloadBytes = decodeBase64(payloadBase64, name + ".payload_base64");
-    final byte[] signedBytes = decodeBase64(signedBase64, name + ".signed_base64");
+    final byte[] payloadFrameBytes = decodeBase64(payloadBase64, name + ".payload_base64");
+    final byte[] signedFrameBytes = decodeBase64(signedBase64, name + ".signed_base64");
+    final byte[] payloadBytes =
+        decodeCanonicalFrame(name + ".payload", payloadFrameBytes, TRANSACTION_PAYLOAD_TYPE);
+    final byte[] signedBytes =
+        decodeCanonicalFrame(name + ".signed", signedFrameBytes, SIGNED_TRANSACTION_TYPE);
     assertEquals(
-        name + ": signed_len mismatch (expected " + signedLen + ", found " + signedBytes.length + ")",
+        name + ": signed_len mismatch (expected " + signedLen + ", found " + signedFrameBytes.length + ")",
         signedLen,
-        signedBytes.length);
+        signedFrameBytes.length);
 
     assertTrue(name + ": payload_hash must be a 64-character hex string",
         HEX_64.matcher(payloadHash).matches());
     assertTrue(name + ": signed_hash must be a 64-character hex string",
         HEX_64.matcher(signedHash).matches());
-    final String computedPayloadHash = canonicalHashHex(payloadBytes);
+    final String computedPayloadHash = canonicalHashHex(payloadFrameBytes);
     assertEquals(
         name + ": payload hash mismatch (expected " + payloadHash + ", computed " + computedPayloadHash + ")",
         payloadHash,
@@ -553,6 +562,45 @@ public final class TransactionFixtureManifestTests {
         ttl,
         nonce,
         deriveSigningKey(authority, name));
+  }
+
+  private static byte[] decodeCanonicalFrame(
+      final String name, final byte[] frame, final String typeName) {
+    final NoritoHeader.DecodeResult decoded = NoritoHeader.decode(frame, schemaHash(typeName));
+    if (decoded.header().compression() != NoritoHeader.COMPRESSION_NONE) {
+      throw new IllegalStateException(name + ": compressed fixture frames are not canonical");
+    }
+    if (decoded.header().flags() != NoritoHeader.COMPACT_LEN) {
+      throw new IllegalStateException(name + ": fixture frame does not use the exact canonical flags");
+    }
+    if (frame.length != NoritoHeader.HEADER_LENGTH + decoded.header().payloadLength()) {
+      throw new IllegalStateException(name + ": fixture frame does not use exact zero padding");
+    }
+    boolean nonzeroSchema = false;
+    for (final byte value : decoded.header().schemaHash()) {
+      nonzeroSchema |= value != 0;
+    }
+    if (!nonzeroSchema) {
+      throw new IllegalStateException(name + ": all-zero schema hashes are forbidden");
+    }
+    decoded.header().validateChecksum(decoded.payload());
+    try {
+      NoritoHeader.decode(decoded.payload(), null);
+      throw new IllegalStateException(name + ": bare fixture payload was accepted as a frame");
+    } catch (final IllegalArgumentException expected) {
+      // Bare codec bytes are intentionally not a supported fixture transport.
+    }
+    return decoded.payload();
+  }
+
+  private static byte[] schemaHash(final String typeName) {
+    try {
+      final MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      digest.update("norito:v1:type-name\0".getBytes(StandardCharsets.UTF_8));
+      return Arrays.copyOf(digest.digest(typeName.getBytes(StandardCharsets.UTF_8)), 16);
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new IllegalStateException("SHA-256 is required for Norito schema identities", ex);
+    }
   }
 
   private static byte[] decodeBase64(final String value, final String fieldName) {

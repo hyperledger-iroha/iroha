@@ -504,8 +504,9 @@ The VM binds map-key construction and iteration to the loaded CNTR declaration:
 the base must name exactly one declared `StateMap`, and numeric keys must be
 canonical pointer envelopes of that map's nominal `int`, `decimal`, or
 `quantity` key type. Missing schemas, malformed or noncanonical frames, and
-cross-type envelopes fail closed. Pre-release scalar path syscall `0x54` is
-permanently retired and is not part of ABI V1.
+cross-type envelopes fail closed. Number `0x54` is unassigned in ABI V1 and is
+rejected as unknown; V1 defines no compatibility reservation or tombstone for
+the pre-release scalar path helper.
 SDKs MUST use arbitrary-precision integer or exact-decimal representations and
 MUST NOT map these values to JavaScript
 `number`, Java/Kotlin `double`, Swift `Double`, or another lossy host type.

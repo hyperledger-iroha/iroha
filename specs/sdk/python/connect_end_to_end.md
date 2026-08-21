@@ -242,8 +242,12 @@ evidence when closing PY6-P2 items.
   integration marker before publishing notebooks or docs.
 - Use `python/iroha_python/scripts/run_norito_rpc_smoke.sh` to validate the
   Norito RPC helpers that power `/v1/pipeline` submissions.
-- `python3 scripts/python_fixture_regen.sh` keeps the SDK’s copy of the Norito
-  fixtures in sync with Android; `python3 scripts/check_python_fixtures.py`
+- `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication`
+  renders the complete canonical owner publication. Repeat at a second absent
+  root and require identical exact path sets, entry types, modes, completion
+  manifests, and every file byte before applying the reviewed identity-relative
+  tracked patch; Python and Android are
+  generated consumers of that same result. `python3 scripts/check_python_fixtures.py`
   enforces the parity gate referenced in `roadmap.md`.
 
 When filing readiness reports, include:

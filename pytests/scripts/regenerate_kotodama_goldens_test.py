@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import struct
 import sys
 from pathlib import Path
@@ -60,6 +61,14 @@ def test_read_map_accepts_aliases_but_rejects_conflicts(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(goldens.GoldenError, match="conflicting execution modes"):
+        goldens.read_map(mapping)
+
+    mapping.write_text(
+        "kotodama-standard\ta/demo.ko\ta/Demo.to\n"
+        "kotodama-standard\ta/demo.ko\ta/demo.to\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(goldens.GoldenError, match="duplicate logical"):
         goldens.read_map(mapping)
 
 
@@ -196,16 +205,25 @@ def test_repository_compiler_manifests_derive_one_current_abi_hash() -> None:
         )
 
 
-def test_atomic_publish_does_not_rewrite_equal_output(tmp_path: Path) -> None:
-    source = tmp_path / "source.to"
+def test_tracked_verification_never_rewrites_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     destination = tmp_path / "nested" / "destination.to"
-    source.write_bytes(b"canonical")
+    destination.parent.mkdir()
+    destination.write_bytes(b"canonical")
+    rendered = (
+        goldens.RenderedFile(Path("nested/destination.to"), 0o644, b"canonical"),
+    )
+    monkeypatch.setattr(goldens, "repository_root", lambda: tmp_path)
 
-    assert goldens.atomic_publish(source, destination)
     before = destination.stat().st_mtime_ns
-    assert not goldens.atomic_publish(source, destination)
+    assert goldens.verify_rendered_tree(tmp_path, rendered) == 0
     assert destination.stat().st_mtime_ns == before
-    assert destination.read_bytes() == b"canonical"
+
+    destination.write_bytes(b"stale")
+    with pytest.raises(goldens.GoldenError, match="stale"):
+        goldens.verify_rendered_tree(tmp_path, rendered)
+    assert destination.read_bytes() == b"stale"
 
 
 def test_runtime_manifest_verification_uses_canonical_contract_command(
@@ -465,63 +483,14 @@ def test_artifact_code_metrics_locates_literals_and_counts_relocation_nops(
     assert path.read_bytes()[metrics.code_offset :] == code
 
 
-def test_size_baseline_is_strict_and_word_aligned(tmp_path: Path) -> None:
-    baseline = tmp_path / "baseline.json"
-    baseline.write_text(
-        json.dumps(
-            {
-                "schema": goldens.SIZE_BASELINE_SCHEMA,
-                "unit": "code_bytes",
-                "corpus": goldens.SIZE_BASELINE_CORPUS,
-                "source_revision": "0" * 40,
-                "samples": {"samples/demo.to": 128},
-            }
-        ),
-        encoding="utf-8",
-    )
-    assert goldens.read_size_baseline(baseline) == {Path("samples/demo.to"): 128}
-
-    payload = json.loads(baseline.read_text(encoding="utf-8"))
-    del payload["corpus"]
-    baseline.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(goldens.GoldenError, match="normative corpus"):
-        goldens.read_size_baseline(baseline)
-
-    payload["corpus"] = goldens.SIZE_BASELINE_CORPUS
-    del payload["source_revision"]
-    baseline.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(goldens.GoldenError, match="source_revision"):
-        goldens.read_size_baseline(baseline)
-
-    payload["source_revision"] = "0" * 40
-    payload["samples"]["samples/demo.to"] = 127
-    baseline.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(goldens.GoldenError, match="word aligned"):
-        goldens.read_size_baseline(baseline)
-
-
-def test_performance_gate_rejects_one_percent_padding_and_size_regression(
+def test_performance_gate_rejects_one_percent_padding(
     tmp_path: Path,
 ) -> None:
     stage = tmp_path / "stage"
     release = stage / "release"
     release.mkdir(parents=True)
     source = Path("samples/demo.ko")
-    destination = Path("samples/demo.to")
-    row = goldens.Golden("standard", source, destination)
-    baseline = tmp_path / "baseline.json"
-    baseline.write_text(
-        json.dumps(
-            {
-                "schema": goldens.SIZE_BASELINE_SCHEMA,
-                "unit": "code_bytes",
-                "corpus": goldens.SIZE_BASELINE_CORPUS,
-                "source_revision": "0" * 40,
-                "samples": {destination.as_posix(): 800},
-            }
-        ),
-        encoding="utf-8",
-    )
+    row = goldens.Golden("standard", source, Path("samples/demo.to"))
 
     # One placeholder among 100 words is exactly 1%, which is not below 1%.
     words = [goldens.RELOCATION_NOP_WORD, *([0x0102_0304] * 99)]
@@ -529,16 +498,45 @@ def test_performance_gate_rejects_one_percent_padding_and_size_regression(
         artifact(suffix=b"".join(struct.pack("<I", word) for word in words))
     )
     with pytest.raises(goldens.GoldenError, match="strictly less than 1%"):
-        goldens.validate_performance(stage, [row], [row], baseline)
+        goldens.validate_performance(stage, [row])
 
-    # Padding-free output must still be no more than half its audited baseline.
+    # Padding-free output is accepted without retaining an obsolete predecessor
+    # revision as a predicted release gate.
     (release / "demo.to").write_bytes(
         artifact(suffix=b"".join(struct.pack("<I", 0x0102_0304) for _ in range(101)))
     )
-    with pytest.raises(goldens.GoldenError, match="50% reduction"):
-        goldens.validate_performance(stage, [row], [row], baseline)
+    goldens.validate_performance(stage, [row])
 
-    (release / "demo.to").write_bytes(
-        artifact(suffix=b"".join(struct.pack("<I", 0x0102_0304) for _ in range(100)))
+
+def test_two_pass_rendering_binds_paths_modes_bytes_and_manifest() -> None:
+    first = (
+        goldens.RenderedFile(Path("a/one.to"), 0o644, b"one"),
+        goldens.RenderedFile(Path("b/two.to"), 0o644, b"two"),
     )
-    goldens.validate_performance(stage, [row], [row], baseline)
+    goldens.compare_renderings(first, tuple(first))
+    assert goldens.owner_manifest(first) == goldens.owner_manifest(tuple(first))
+
+    with pytest.raises(goldens.GoldenError, match="path sets"):
+        goldens.compare_renderings(first, first[::-1])
+    with pytest.raises(goldens.GoldenError, match="mode"):
+        goldens.compare_renderings(
+            first,
+            (first[0], goldens.RenderedFile(Path("b/two.to"), 0o600, b"two")),
+        )
+    with pytest.raises(goldens.GoldenError, match="bytes"):
+        goldens.compare_renderings(
+            first,
+            (first[0], goldens.RenderedFile(Path("b/two.to"), 0o644, b"drift")),
+        )
+
+
+def test_sealed_regular_reader_rejects_hard_links(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    alias = tmp_path / "alias"
+    source.write_bytes(b"sealed")
+    try:
+        os.link(source, alias)
+    except (NotImplementedError, OSError):
+        pytest.skip("hard links are unavailable")
+    with pytest.raises(goldens.GoldenError, match="one hard link"):
+        goldens.seal_file(source, "test input")

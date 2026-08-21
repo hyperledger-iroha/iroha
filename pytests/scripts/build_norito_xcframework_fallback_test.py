@@ -129,6 +129,24 @@ def test_xcodebuild_failure_has_no_manual_packaging_fallback() -> None:
     assert cleanup < candidate < packaging_start < publication
 
 
+def test_test_only_prebuilt_slice_mode_is_fully_retired() -> None:
+    source = _source()
+
+    for retired in (
+        "TEST_ONLY_PREBUILT_SLICES",
+        "NORITO_BRIDGE_TEST_PREBUILT_SLICES",
+        "NORITO_BRIDGE_CHECKER_MARKER",
+        "NORITO_BRIDGE_CHECKER_EXIT",
+        "TEST_ONLY_MANIFEST_FIELD",
+    ):
+        assert retired not in source
+
+    assert source.count('"$LIPO_BINARY" -create -output "$SIM_UNI"') == 1
+    assert source.count('"$LIPO_BINARY" -create -output "$MAC_UNI"') == 1
+    assert source.count("release staged NoritoBridge contains test-only prebuilt slices") == 1
+    assert source.count("scripts/check_mobile_sdk_artifacts.sh") == 2
+
+
 def test_build_and_output_roots_are_canonical_disjoint_directories() -> None:
     source = _source()
     assert "canonical_writable_directory()" in source

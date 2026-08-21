@@ -1,4 +1,8 @@
 # owner\tsource-or-tag\tartifact
+# Admission disposition is encoded by owner and enforced for every row:
+# - kotodama-standard/kotodama-zk: deployable IVM 1.1 CNTR contract
+# - predecoder: non-contract IVM 1.1 predecoder fixture
+# - default: non-contract generic IVM 1.0 executor with the current ABI hash
 kotodama-standard	crates/ivm/docs/examples/01_hajimari.ko	crates/ivm/docs/examples/01_hajimari.to
 kotodama-standard	crates/ivm/docs/examples/02_kotoage_public_fn.ko	crates/ivm/docs/examples/02_kotoage_public_fn.to
 kotodama-standard	crates/ivm/docs/examples/03_kaizen_permission.ko	crates/ivm/docs/examples/03_kaizen_permission.to

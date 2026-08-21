@@ -418,7 +418,6 @@ LockStableNext ==
        highestPrepare \in PrepareQcOptionSet:
        ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
   \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
-  \/ \E node \in ValidatorIds, roundView \in Views: FormTC(node, roundView)
   \/ \E envelope \in tcNetwork: DeliverTC(envelope)
   \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
        BeginInstallTC(node, tc)
@@ -462,7 +461,7 @@ BY IsaM("blast")
        PersistObservePrepare, BeginLockCommit, FormCommitQC,
        BeginDecision, PersistDecision, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
-       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
+       DeliverTimeout, DeliverTC, BeginInstallTC,
        FetchCertifiedBody, AcceptCertifiedResponseCapability,
        InstallCertifiedBodyEffect, ApplyDecision, Crash, Restart, ResumeProposal,
        ResumeVote, ResumeTimeout, DropProposal
@@ -491,7 +490,7 @@ BY IsaM("blast")
        PersistObservePrepare, BeginLockCommit, PersistLockCommit,
        FormCommitQC, BeginDecision, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
-       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC, PersistInstallTC,
+       DeliverTimeout, DeliverTC, BeginInstallTC, PersistInstallTC,
        FetchCertifiedBody, AcceptCertifiedResponseCapability,
        InstallCertifiedBodyEffect, Crash, Restart, ResumeProposal, ResumeVote,
        ResumeTimeout, DropProposal
