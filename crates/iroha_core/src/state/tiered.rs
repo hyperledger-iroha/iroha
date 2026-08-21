@@ -1844,11 +1844,7 @@ impl TieredStateBackend {
             AssetMetadata,
             world.asset_metadata
         );
-        collect_map!(
-            TieredSegment::AxtPolicies,
-            AxtPolicy,
-            world.axt_policies
-        );
+        collect_map!(TieredSegment::AxtPolicies, AxtPolicy, world.axt_policies);
         collect_map!(
             TieredSegment::AxtHandleCounters,
             AxtHandleCounter,
@@ -2609,9 +2605,9 @@ mod measured_bytes_impls {
         metadata::Metadata,
         name::Name,
         nexus::{
-            AxtAssetIncarnationV1, AxtHandleBudgetRecord, AxtHandleCounterRecord,
-            AxtPolicyEntry, AxtReplayRecord, LanePrivacyMerkleWitness, LanePrivacyProof,
-            LanePrivacyWitness, UniversalAccountId,
+            AxtAssetIncarnationV1, AxtHandleBudgetRecord, AxtHandleCounterRecord, AxtPolicyEntry,
+            AxtReplayRecord, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
+            UniversalAccountId,
         },
         nft::NftData,
         peer::PeerId,
@@ -2877,8 +2873,7 @@ mod measured_bytes_impls {
     }
     impl MeasuredBytes for AxtReplayRecord {
         fn measured_bytes(&self) -> usize {
-            size_of::<AxtReplayRecord>()
-                .saturating_add(self.budget_key.allocated_heap_bytes())
+            size_of::<AxtReplayRecord>().saturating_add(self.budget_key.allocated_heap_bytes())
         }
     }
     impl<T> MeasuredBytes for HashOf<T> {

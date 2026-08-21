@@ -382,7 +382,11 @@ fn source(id: SourceId) -> String {
         SourceId::LaneWork => include_str!("v2_lane_work.rs").to_owned(),
         SourceId::Launch => include_str!("v2_lifecycle_launch.rs").to_owned(),
         SourceId::Ledger => reviewed_lifecycle_ledger_source_for_test().to_owned(),
-        SourceId::LifecycleOpen => include_str!("v2_lifecycle_open.rs").to_owned(),
+        SourceId::LifecycleOpen => include_str!("v2_lifecycle_open.rs").replacen(
+            "include!(\"v2_lifecycle_open_output_recovery.rs\");\n",
+            include_str!("v2_lifecycle_open_output_recovery.rs"),
+            1,
+        ),
         SourceId::LifecycleRecovery => include_str!("v2_lifecycle_recovery.rs").to_owned(),
         SourceId::Projection => include_str!("v2_lifecycle_projection.rs").to_owned(),
         SourceId::Registry => reviewed_lifecycle_work_registry_source_for_test().to_owned(),
@@ -669,9 +673,9 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
             _ => return Err(format!("invalid source contract asset line {line_number}")),
         }
     }
-    if current.is_some() || cases.len() != 45 {
+    if current.is_some() || cases.len() != 46 {
         return Err(format!(
-            "source contract asset must contain exactly 45 closed cases"
+            "source contract asset must contain exactly 46 closed cases"
         ));
     }
     Ok(cases)
@@ -802,7 +806,7 @@ fn source_contract_case_ids_are_unique() {
         cases.iter().all(|case| ids.insert(case.id.as_str())),
         "source contract case IDs must be unique"
     );
-    assert_eq!(ids.len(), 45, "source contract inventory drifted");
+    assert_eq!(ids.len(), 46, "source contract inventory drifted");
     for id in ids {
         run_source_contract(id);
     }

@@ -1,11 +1,8 @@
-//! Production boundary for the executable Sumeragi v2 reducer. The reducer crate has no
-//! codec, cryptography, filesystem, or networking dependencies. This module is the adapter binding it
-//! to the canonical data-model wire types and the crash-safe safety WAL.  WAL
-//! effects are handled synchronously: a complete frame is encoded, appended,
-//! flushed, and synchronised, and only then is the exact persistence identifier
-//! acknowledged to the reducer.  Consequently a caller can never observe a
-//! signing, broadcast, view-change, or apply effect which was causally ordered
-//! after an unacknowledged safety write.
+//! Production adapter for the executable Sumeragi v2 reducer, whose crate has no codec,
+//! cryptography, filesystem, or networking dependencies. This module binds it to canonical
+//! data-model wire types and the crash-safe safety WAL. A complete WAL frame is encoded, appended,
+//! flushed, and synchronised before its exact persistence identifier is acknowledged. No caller
+//! can observe a causally later signing, broadcast, view-change, or apply effect before that point.
 use super::v2_core as reducer;
 #[path = "v2_pending_kura_recovery.rs"]
 mod pending_kura_recovery;
@@ -13817,12 +13814,11 @@ impl SumeragiV2Adapter {
         self.ensure_ingress()?;
         let (dispatch_key, tag, request, signature, outbound_payload) =
             authority.consume_for_adapter(RecoveredLifecycleSignAdapterCompletionPermitV1::new());
+        // Busy-deferred lanes are inert until this exact signature fence clears;
+        // the prepared completion neither consumes nor reorders their owners.
         if !dispatch_key.matches_height_context(&self.wire_context)
             || self.current_tag() != tag
             || self.pending_persistence_id.is_some()
-            || !self.deferred_completions.is_empty()
-            || !self.deferred_progress_inputs.is_empty()
-            || !self.deferred_inputs.is_empty()
         {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }

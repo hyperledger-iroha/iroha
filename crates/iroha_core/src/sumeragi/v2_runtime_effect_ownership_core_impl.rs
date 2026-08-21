@@ -79,6 +79,18 @@ impl RuntimeEffectOwnership {
                     &production_adapter_effect_semantic_identity(effect),
                 )
     }
+    /// Return whether two sidecars name the same bound occurrence of one effect.
+    pub(crate) fn exactly_matches_bound_effect_occurrence(
+        &self,
+        other: &Self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        self.exactly_binds_adapter_effect(effect)
+            && other.exactly_binds_adapter_effect(effect)
+            && self.owner == other.owner
+            && self.causality == other.causality
+            && self.binding == other.binding
+    }
     /// Mint the ordinal-free lifecycle-admission binding for this exact effect.
     ///
     /// The operation fails closed when the supplied effect differs from the
@@ -407,5 +419,113 @@ pub(crate) const fn production_adapter_effect_kind(effect: &AdapterEffect) -> u8
         AdapterEffect::ReportInvalidCertifiedBody { .. } => {
             RUNTIME_EFFECT_KIND_REPORT_INVALID_CERTIFIED_BODY
         }
+    }
+}
+
+/// One-shot runtime-only permit for minting authenticated remote Proposal replay evidence.
+///
+/// Only the production dispatch carrier can construct this value after the
+/// signed envelope and its frozen receiver ownership have met. The non-Copy
+/// marker prevents the same dispatch occurrence from minting two envelopes.
+#[derive(Debug)]
+pub(in crate::sumeragi) struct RemoteProposalReplayMintPermit {
+    _linearity: RemoteProposalReplayMintLinearity,
+}
+#[derive(Debug)]
+struct RemoteProposalReplayMintLinearity;
+impl Drop for RemoteProposalReplayMintLinearity {
+    fn drop(&mut self) {}
+}
+impl RemoteProposalReplayMintPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: RemoteProposalReplayMintLinearity,
+        }
+    }
+}
+/// Exact authenticated Proposal plus its frozen direct-ingress carrier.
+///
+/// This value exists only between adapter dispatch and exact effect binding,
+/// or in the bounded deferred-ordinal map while the same Proposal waits behind
+/// reducer debt. It exposes no envelope, ingress, or scalar parts.
+pub(crate) struct AuthenticatedRemoteProposalDispatchOrigin {
+    authenticated: AuthenticatedConsensusMessage,
+    ingress: RuntimeIngressOwnershipEvidence,
+}
+impl AuthenticatedRemoteProposalDispatchOrigin {
+    fn new(
+        authenticated: AuthenticatedConsensusMessage,
+        ingress: RuntimeIngressOwnershipEvidence,
+    ) -> Option<Self> {
+        if !matches!(
+            authenticated.payload(),
+            wire::ConsensusMessageV2Payload::Proposal(_)
+        ) || !ingress.exactly_matches_authenticated(&authenticated)
+        {
+            return None;
+        }
+        Some(Self {
+            authenticated,
+            ingress,
+        })
+    }
+    fn rebind_retained_ingress(self, retained: RuntimeIngressOwnershipEvidence) -> Option<Self> {
+        if !retained.exactly_matches_authenticated(&self.authenticated) {
+            return None;
+        }
+        if self.ingress != retained {
+            let mut merged = self.ingress.clone();
+            merged.merge_downstream(retained.clone()).ok()?;
+            if merged != retained {
+                return None;
+            }
+        }
+        Some(Self {
+            authenticated: self.authenticated,
+            ingress: retained,
+        })
+    }
+    fn merge_retained(
+        self,
+        incumbent: Self,
+        retained: RuntimeIngressOwnershipEvidence,
+    ) -> Option<Self> {
+        if !self
+            .authenticated
+            .same_wire_envelope(&incumbent.authenticated)
+            || incumbent
+                .rebind_retained_ingress(retained.clone())
+                .is_none()
+        {
+            return None;
+        }
+        self.rebind_retained_ingress(retained)
+    }
+    fn exact_proposal(&self) -> Option<&wire::Proposal> {
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = self.authenticated.payload()
+        else {
+            return None;
+        };
+        self.ingress
+            .exactly_matches_authenticated(&self.authenticated)
+            .then_some(proposal)
+    }
+    fn same_authenticated_proposal(&self, other: &Self) -> bool {
+        self.exact_proposal().is_some()
+            && other.exact_proposal().is_some()
+            && self.authenticated.same_wire_envelope(&other.authenticated)
+    }
+    fn bind_exact_fetch(
+        self,
+        effect: &AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+    ) -> Option<RemoteProposalFetchReplayEvidenceV1> {
+        RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(
+            RemoteProposalReplayMintPermit::new(),
+            self.authenticated,
+            self.ingress,
+            effect,
+            pending,
+        )
     }
 }

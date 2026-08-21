@@ -2089,11 +2089,6 @@ impl ReadyValidatedExecutorCatalogAuthorityV1 {
     pub(in crate::sumeragi) fn into_validated_receipt(self) -> ValidatedBodyReceipt {
         self.validated
     }
-
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn for_test(validated: ValidatedBodyReceipt) -> Self {
-        Self { validated }
-    }
 }
 
 impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
@@ -2341,6 +2336,12 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
     }
 }
 // READY_DURABLE_VALIDATE_ADAPTER_JOIN_END
+#[cfg(test)]
+impl ReadyValidatedExecutorCatalogAuthorityV1 {
+    pub(in crate::sumeragi) fn for_test(validated: ValidatedBodyReceipt) -> Self {
+        Self { validated }
+    }
+}
 // RECOVERED_WAL_VALIDATE_REGISTRY_DETACH_BEGIN
 impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
     /// Detach the exact Ready/validated carrier for the fixed recovered-WAL join.

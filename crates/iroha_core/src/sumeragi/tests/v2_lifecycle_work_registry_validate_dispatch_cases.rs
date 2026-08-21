@@ -209,6 +209,7 @@ fn prospective_startup_census_rejects_extra_valid_carrier_before_publication() {
     let result = registry.install_certified_serve_startup_batch_before_publication(
         batch,
         &coordinator,
+        &std::collections::BTreeSet::new(),
         || {
             invoked.set(true);
             Ok::<(), ()>(())
@@ -246,6 +247,62 @@ fn complete_startup_census_rejects_live_store_without_a_carrier() {
 
     assert!(!registry.exactly_covers_recovered_ready_work(&coordinator));
     assert!(!registry.exactly_covers_recovered_ready_body_pipeline(&coordinator));
+}
+
+#[test]
+fn recovered_decision_store_census_reads_its_supported_store_row_directly() {
+    let candidate = recovered_wal_projection_candidate(
+        LifecyclePhase::Store,
+        LifecycleWorkClass::Store,
+        LifecycleStageKind::StoreBody,
+        0x64,
+    );
+    let context = LifecycleContext::new(candidate.key.context(), candidate.key.round().height());
+    let mut coordinator = LifecycleCoordinator::new(
+        context,
+        0,
+        super::super::schema::CapacityGeometry::new(
+            CapacityClass::ALL.into_iter().map(|class| (class, 8)),
+        ),
+    );
+    let super::super::AdmissionDecision::Admitted {
+        owner,
+        ordinal,
+        producer_turn_ordinal: None,
+    } = coordinator.reduce_admit(AdmissionRequest::Candidate(candidate))
+    else {
+        panic!("exact recovered Decision Store candidate must admit")
+    };
+    let slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+    let address = ConcreteWorkAddress::new(owner, ordinal, slot)
+        .expect("exact recovered Decision Store address");
+    let unsupported_live = coordinator
+        .records
+        .values()
+        .filter(|record| {
+            !matches!(record.state, super::super::LifecycleState::Terminal(_))
+                && !matches!(
+                    record.work_class,
+                    LifecycleWorkClass::Fetch
+                        | LifecycleWorkClass::Store
+                        | LifecycleWorkClass::Validate
+                        | LifecycleWorkClass::CertifiedServe
+                        | LifecycleWorkClass::ProducerTurn
+                )
+        })
+        .collect::<Vec<_>>();
+
+    assert!(unsupported_live.is_empty());
+    assert!(
+        coordinator
+            .records
+            .get(&address.ordinal)
+            .is_some_and(|record| {
+                record.owner == address.owner
+                    && record.work_class == LifecycleWorkClass::Store
+                    && record.state == super::super::LifecycleState::Ready
+            })
+    );
 }
 
 fn key(seed: u8) -> super::super::LifecycleKey {

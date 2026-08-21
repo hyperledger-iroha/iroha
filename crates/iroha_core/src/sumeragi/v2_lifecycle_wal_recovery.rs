@@ -257,6 +257,47 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             cold_proposal_output: self.cold_proposal_output.clone(),
         })
     }
+    /// Match one byte-identical runtime retransmit without transferring the
+    /// durable carrier's sole refanout authority.
+    pub(super) fn exactly_matches_runtime_retransmit(
+        &self,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.effect == *effect
+            && pending.exactly_binds_adapter_effect(effect)
+            && self.project_output_authority(verified).is_some()
+    }
+    /// Seal one byte-identical generic retransmit for the production-shaped
+    /// recovered-Broadcast settlement regression.
+    #[cfg(test)]
+    pub(super) fn runtime_retransmit_for_test(
+        &self,
+        verified: &VerifiedHeightContext,
+        tag: crate::sumeragi::v2_core::EventTag,
+        source_ordinal: u128,
+    ) -> Option<super::work_registry::PendingLifecycleOutputAdmissionV1> {
+        if self.project_output_authority(verified).is_none() {
+            return None;
+        }
+        let ownership = crate::sumeragi::v2_runtime::bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&self.effect),
+            vec![
+                crate::sumeragi::v2_runtime::RuntimeEffectOwnership::fresh_for_test(
+                    tag,
+                    source_ordinal,
+                ),
+            ],
+        )
+        .ok()?
+        .pop()?;
+        super::work_registry::PendingLifecycleOutputAdmissionV1::seal_exact(
+            self.effect.clone(),
+            ownership,
+        )
+        .ok()
+    }
     /// Compare the complete Ready child against one exact LedgerV1 row.
     pub(super) fn exactly_matches_record(
         &self,

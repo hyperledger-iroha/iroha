@@ -604,7 +604,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "Self::launch_local_identity_matches(",
             "binding.matches_launch_identity(inputs.kura.as_ref(), &inputs.key_pair)",
             "service.matches_lifecycle_launch(",
-            "exactly_covers_recovered_ready_work(&self.coordinator)",
+            "self.exact_lifecycle_output_ordinals_for_registry_census()",
+            "exactly_covers_recovered_ready_work_with_owner_held_outputs(",
         ],
     );
     assert!(!launch.contains("reply_route_source_capacity()"));
@@ -1555,9 +1556,12 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         "fn exactly_covers_finalization_work(",
         "fn exactly_covers_ready_work_with_extra(",
     );
-    assert!(
-        finalization_registry
-            .contains("exactly_covers_ready_work_with_extra(coordinator, extra, None, true)")
+    assert_required_source_tokens(
+        finalization_registry,
+        &[
+            "exactly_covers_ready_work_with_extra(",
+            "&std::collections::BTreeSet::new()",
+        ],
     );
     assert!(registry_validate_source.contains("broadcast.matches_current_finalization_record("));
 

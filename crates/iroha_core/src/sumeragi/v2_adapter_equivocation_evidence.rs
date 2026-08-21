@@ -204,3 +204,17 @@ impl AdapterEquivocationEvidence {
         Some((&pair.first, &pair.second))
     }
 }
+
+impl SumeragiV2Adapter {
+    /// Return whether this exact signed Proposal is the sole current-view
+    /// Set-B candidate waiting for its ordinary fallback Fetch.
+    pub(crate) fn retains_dormant_remote_proposal_fetch(&self, proposal: &wire::Proposal) -> bool {
+        let Some(candidate) = self.reducer.dormant_set_b_proposal_fetch_candidate() else {
+            return false;
+        };
+        let mut registry = self.registry.clone();
+        registry
+            .signed_proposal_to_wire(candidate, self.aggregator.as_ref())
+            .is_ok_and(|candidate| candidate == *proposal)
+    }
+}

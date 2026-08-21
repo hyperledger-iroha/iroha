@@ -34,14 +34,13 @@ Completed history lives in [`status.md`](./status.md).
   timeout envelope, then prove the empty queue leaves total and non-empty block
   heights stable; empty blocks are not a liveness mechanism.
 - Treat Sumeragi Validate/replay production wiring as complete and keep the
-  remaining gate evidence-driven. The exact focused matrix passes 34/34, the
-  `iroha_core` library and library-test targets compile cleanly, and the prior
-  formal/static inventory reconciled 864/864 production tests. The fresh
-  2,359-test Sumeragi namespace and unchanged 11,549-test Core baseline remain
-  in progress while reproducing broad pre-existing failures; capture their
-  final results, isolate unrelated failures, and then complete full-workspace
-  tests and strict all-target Clippy before the release freeze. None of the
-  focused or mutable-tree results substitutes for that release-wide run.
+  remaining gate evidence-driven. The source-contract harness covers all 46
+  named cases, and the specialized live-WAL mint census is exactly four sealed
+  replay authorities and three frame-bound pending owners. Capture fresh
+  focused, Core, static, formal, and relevant workspace results from the frozen
+  source, isolate unrelated failures, and then complete full-workspace tests
+  and strict all-target Clippy before the release freeze. No focused or
+  mutable-tree result substitutes for that release-wide run.
 - Freeze the current revision-4 candidate only after the physical ChainEpoch
   proof shards, exact four-validator fault corridor, and remaining authoritative
   formal and workspace-wide validation are complete. Historical mutable-tree
@@ -187,14 +186,21 @@ mandatory binding carries exactly the five `LiveWal`, `LocalBody`,
 `RemoteProposal`, `InvalidBodyReport`, and `DirectSigned` origins through all
 nine Ready outcomes. Same-row sidecar wait/wake and cold reopen, standalone
 local/remote Validate reopen, and cold Broadcast/equivocation/invalid-report
-output recovery are wired; the dormant generic WAL and legacy storage-recovery
-surfaces are removed. The source contract executes 44/44 cases across 353
-spans, with the static 3/2 sealed/pending WAL-mint and 1/1 active-storage-
-factory inventories reconciled. The exact focused matrix passes 34/34, Core
-library and library-test compilation is clean, the previous formal/static
-release inventory was green at 864/864 production tests, and `Cargo.lock` is
-unchanged. The still-running namespace/baseline suites and the strict network
-evidence below remain release gates, not implementation joins.
+output recovery are wired. Those three non-WAL output classes contribute an
+authenticated owner-held Ready-ordinal set to the exact registry census at open
+and launch; every carrier, private map key, ordinal, owner, and Ready row must
+match, and recovered-WAL carriers may not overlap that set. Their closed
+`Empty`/`Deferred`/`SourceRetained`/`Completed` settlement keeps
+`SourceRetained` distinct from ordering or lease deferral: it preserves the
+same row and carrier, returns before terminal staging, bypasses generic
+Completion classification, and schedules a timed retry before Producer
+planning. Only service acceptance may terminalize the row. The dormant generic
+WAL and legacy storage-recovery surfaces are removed. The source-contract
+harness covers all 46 named cases, with exactly four sealed and three pending
+live-WAL mint sites plus one active storage factory and one call site. Fresh
+focused, Core, static, formal, and workspace receipts plus the strict network
+evidence below remain release gates, not implementation joins. `Cargo.lock` is
+unchanged.
 
 The outstanding revision-4 work includes:
 
@@ -304,7 +310,10 @@ The outstanding revision-4 work includes:
   ingress capacity waits internally; takes at most one physical Completion
   head; classifies the complete Ready census; and returns the unchanged cursor
   only when no fair ingress winner exists. Its queue-owned ordinary ingress
-  prerequisite now freezes that exact fair winner. Current-height
+  remains inert while an earlier recovered Sign completion is previewed under
+  Completion-before-Runtime; pending effect, scheduler, and leader-wire
+  mutation debts still exclude that completion transaction. The ordinary
+  ingress prerequisite then freezes that exact fair winner. Current-height
   Certified-Serve enters the coordinator-owned selector/admission transaction,
   and the typed capacity/dequeue cut physically removes the same occurrence
   only when its registry-attested scheduler claim is ready.
@@ -422,8 +431,8 @@ The outstanding revision-4 work includes:
   lifecycle ordinals and the single bounded retry latch remain.
   The phase-vote/control-Sign/Decision-Fetch end-to-end owner-factory and
   empty/two-Fetch/terminal-Validate-plus-Serve startup checks, including steady
-  and payload-store-ahead terminal Serve, are included in the 34/34 passing
-  exact matrix. Decision Fetch now has an exact
+  and payload-store-ahead terminal Serve, are represented in the current
+  focused fixtures. Decision Fetch now has an exact
   certificate-only V1 origin for its absent manifest and enters the complete
   Ledger/registry/coordinator startup census with exact no-rewrite coalescing;
   quarantined markers cannot cross the revalidated-store seal. A matching
@@ -468,11 +477,12 @@ The outstanding revision-4 work includes:
   publication, same-row sidecar wake, restart reconstruction, and
   post-LedgerV1-fsync fail-stop in exact four-validator BLS/RS16 contexts, plus
   real four-validator success, view-change, restart, and authenticated
-  consensus Hold/Drop convergence. Those layered fixtures do not close the
-  strict live-network release gaps: no unskipped live invalid-body-report or
-  merge-sidecar-recovery test exists, the publication-phase-targeted live
-  restart matrix and direct `PayloadManifest`/`PayloadChunk` loss test remain
-  open, and the strongest observer/body-recovery case remains ignored. These
+  consensus Hold/Drop convergence. The feature-only controller and exact
+  four-validator test now cover authenticated, Proposal-bound `PayloadChunk`
+  Hold/heal selection, but the current-tree integration acceptance run remains
+  outstanding. The other strict live-network gaps are an unskipped invalid-
+  body-report test, merge-sidecar-recovery test, publication-phase-targeted
+  restart matrix, and the ignored strongest observer/body-recovery case. These
   are evidence gaps, not missing production joins. CompleteTip
   recovery now retains its full Kura artifact and receipt instead of a lossy
   predecessor hash projection, and terminal Apply has a separate exact

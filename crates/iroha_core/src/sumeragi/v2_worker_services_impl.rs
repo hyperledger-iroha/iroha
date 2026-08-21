@@ -3086,6 +3086,7 @@ impl ProductionV2Services {
                     || status.pending_fetches != 0
                     || status.pending_stores != 0
                     || status.pending_validations != 0
+                    || status.pending_outputs != 0
                     || status.pending_applications != 0
                     || !self.local_completions.is_empty()
                     || self.held_io_completion.is_some())
@@ -3096,6 +3097,7 @@ impl ProductionV2Services {
                     pending_fetches = status.pending_fetches,
                     pending_stores = status.pending_stores,
                     pending_validations = status.pending_validations,
+                    pending_outputs = status.pending_outputs,
                     pending_applications = status.pending_applications,
                     local_completions = self.local_completions.len(),
                     held_io_completion = self.held_io_completion.is_some(),

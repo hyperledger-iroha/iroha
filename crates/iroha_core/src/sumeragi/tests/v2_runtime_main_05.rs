@@ -672,10 +672,13 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
     );
     assert_eq!(context.id(), expected_context.id());
     let now = Instant::now();
+    let tag = runtime.round_tag();
+    runtime
+        .reconcile_active_view_producer(tag, true)
+        .expect("reserve the active-view local producer before clocks arm");
     runtime
         .arm_live_clocks(now)
         .expect("arm the local leader runtime");
-    let tag = runtime.round_tag();
     assert!(
         runtime
             .local_proposal_admission_available(tag)

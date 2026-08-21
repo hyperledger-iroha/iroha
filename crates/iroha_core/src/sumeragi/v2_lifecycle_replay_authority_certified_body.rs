@@ -11,6 +11,48 @@ struct CertifiedBodyPipelineCoordinatesV1 {
     fetch_manifest_present: bool,
     certified_sources: Vec<PeerId>,
 }
+
+fn remote_proposal_origin_matches_fetch(
+    authenticated: &crate::sumeragi::v2::AuthenticatedConsensusMessage,
+    ingress: &RuntimeIngressOwnershipEvidence,
+    source: &BodyPipelineReplaySourceV1,
+    effect: &AdapterEffect,
+) -> bool {
+    remote_proposal_fetch_effect(source).as_ref() == Some(effect)
+        && exact_remote_proposal_fetch(authenticated, ingress, effect).is_some()
+}
+
+impl RemoteProposalStoreReplayEvidenceV1 {
+    /// Recheck the exact ordinary Fetch which authenticated this later Store family.
+    pub(in crate::sumeragi) fn exactly_matches_origin_fetch(&self, effect: &AdapterEffect) -> bool {
+        remote_proposal_origin_matches_fetch(
+            &self.authenticated,
+            &self.ingress,
+            &self.source,
+            effect,
+        )
+    }
+}
+
+impl RemoteProposalStoredReplayEvidenceV1 {
+    /// Recheck the exact ordinary Fetch which authenticated this durable family.
+    pub(in crate::sumeragi) fn exactly_matches_origin_fetch(&self, effect: &AdapterEffect) -> bool {
+        self.family.exactly_matches_origin_fetch(effect)
+    }
+}
+
+impl RemoteProposalBodyPipelineReplayFamilyV1 {
+    fn exactly_matches_origin_fetch(&self, effect: &AdapterEffect) -> bool {
+        self.is_exact_for_stage(LifecycleStageKind::StoreBody)
+            && remote_proposal_origin_matches_fetch(
+                &self.authenticated,
+                &self.ingress,
+                &self.source,
+                effect,
+            )
+    }
+}
+
 impl AuthenticatedCertifiedFetchReplayOriginV1 {
     /// Bind the exact selector-authenticated response to its pending Fetch.
     pub(super) fn from_completion_authority(

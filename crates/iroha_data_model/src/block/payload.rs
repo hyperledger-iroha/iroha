@@ -611,9 +611,7 @@ impl SignedBlock {
     }
     /// Sticky AXT authorization transitions captured during execution, when results are present.
     #[inline]
-    pub fn axt_transitioned_dataspaces(
-        &self,
-    ) -> Option<&BTreeSet<crate::nexus::DataSpaceId>> {
+    pub fn axt_transitioned_dataspaces(&self) -> Option<&BTreeSet<crate::nexus::DataSpaceId>> {
         self.result
             .as_ref()
             .map(|result| &result.axt_transitioned_dataspaces)

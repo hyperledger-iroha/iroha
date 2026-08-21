@@ -2081,6 +2081,33 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
                 coordinator,
             )
     }
+    fn exactly_matches_runtime_retransmit(
+        &self,
+        address: ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+        coordinator: &LifecycleCoordinator,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.matches_current_finalization_record(address, installed_digest, coordinator)
+            && self
+                .broadcast
+                .exactly_matches_runtime_retransmit(&self.verified, effect, pending)
+    }
+    #[cfg(test)]
+    fn runtime_retransmit_for_test(
+        &self,
+        address: ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+        coordinator: &LifecycleCoordinator,
+        tag: crate::sumeragi::v2_core::EventTag,
+        source_ordinal: u128,
+    ) -> Option<PendingLifecycleOutputAdmissionV1> {
+        self.matches_current_finalization_record(address, installed_digest, coordinator)
+            .then_some(())?;
+        self.broadcast
+            .runtime_retransmit_for_test(&self.verified, tag, source_ordinal)
+    }
     fn project_claimed_output_authority(
         &self,
         address: ConcreteWorkAddress,
@@ -3820,15 +3847,23 @@ impl PreparedCertifiedServeRegistryBatchV1 {
         &self,
         registry: &ConcreteLifecycleWorkRegistry,
         coordinator: &LifecycleCoordinator,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
     ) -> bool {
         if !self.preflights_registry(registry) {
             return false;
         }
         let existing_is_exact = match registry.exact_recovered_wal_registry_slot() {
-            Some(slot) => {
-                registry.exactly_covers_recovered_ready_body_pipeline_with_extra(coordinator, slot)
-            }
-            None => registry.exactly_covers_recovered_ready_body_pipeline(coordinator),
+            Some(slot) => registry
+                .exactly_covers_recovered_ready_body_pipeline_with_extra_and_outputs(
+                    coordinator,
+                    slot,
+                    owner_held_outputs,
+                ),
+            None => registry.exactly_covers_recovered_ready_body_pipeline_with_extra_and_outputs(
+                coordinator,
+                RecoveredWalRegistrySlotV1::None,
+                owner_held_outputs,
+            ),
         };
         let live_serve_or_producer = coordinator
             .records

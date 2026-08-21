@@ -745,7 +745,10 @@ region|derive_remote_proposal_store_evidence|replay_authority|last|#[derive(|bef
 region|derive_remote_proposal_stored_evidence|replay_authority|last|#[derive(|before|pub(in crate::sumeragi) struct RemoteProposalStoredReplayEvidenceV1 {
 region|derive_remote_proposal_validate_evidence|replay_authority|last|#[derive(|before|pub(in crate::sumeragi) struct RemoteProposalValidateReplayEvidenceV1 {
 region|remote|replay_authority|after|pub(in crate::sumeragi) struct RemoteProposalFetchReplayEvidenceV1|before|/// Move-only pre-intent replay seal for one exact local
+region|remote_certified_body|replay_authority|at|fn remote_proposal_origin_matches_fetch(|before|impl CertifiedFetchReplayEvidenceV1 {
 region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|adapter|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|executor|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|outside|ledger|begin|-|before|pub(crate) mod tests {
 region|outside|worker|begin|-|end|-
 region|outside|runner|begin|-|end|-
@@ -760,6 +763,8 @@ required|remote|certified_sources.is_empty()|remote Proposal replay wrapper omit
 required|remote|pending.exactly_binds_adapter_effect(effect)|remote Proposal replay wrapper omitted pending.exactly_binds_adapter_effect(effect)
 required|remote|project_proposal_fetch_store_successor|remote Proposal replay wrapper omitted project_proposal_fetch_store_successor
 required|remote|project_store_validate_successor|remote Proposal replay wrapper omitted project_store_validate_successor
+required|remote|fn rebind_exact_consumer(|remote Proposal Fetch replay omitted its exact consumer-retag proof
+required|remote|project_store_validate_successor_with_authority_refinement(|remote Proposal replay omitted its monotonic Stored-to-Validate authority refinement
 required|remote|bind_durable_body(|remote Proposal replay wrapper omitted bind_durable_body(
 required|remote|durable_body_frame_reference|remote Proposal replay wrapper omitted durable_body_frame_reference
 required|remote|ReplayPayloadBindingV1::BodyFrame|remote Proposal replay wrapper omitted ReplayPayloadBindingV1::BodyFrame
@@ -767,6 +772,8 @@ required|remote|LifecycleStageKind::FetchBody|remote Proposal replay wrapper omi
 required|remote|LifecycleStageKind::StoreBody|remote Proposal replay wrapper omitted LifecycleStageKind::StoreBody
 required|remote|LifecycleStageKind::ValidateBody|remote Proposal replay wrapper omitted LifecycleStageKind::ValidateBody
 required|remote|canonical_replay_authority(|remote Proposal replay wrapper omitted canonical_replay_authority(
+required|remote_certified_body|fn remote_proposal_origin_matches_fetch(|remote Proposal projected stages lost their exact signed Fetch-origin matcher
+count|remote_certified_body|fn exactly_matches_origin_fetch(|3|the certified family plus Store and Stored Proposal stages must retain exactly three origin-Fetch matchers
 forbidden|remote|pub(crate) struct RemoteProposal|remote Proposal replay wrapper exposed or reserved pub(crate) struct RemoteProposal
 forbidden|remote|pub(in crate::sumeragi) fn authenticated(|remote Proposal replay wrapper exposed or reserved pub(in crate::sumeragi) fn authenticated(
 forbidden|remote|pub(in crate::sumeragi) fn ingress(|remote Proposal replay wrapper exposed or reserved pub(in crate::sumeragi) fn ingress(
@@ -781,10 +788,22 @@ forbidden|remote|is_zero()|remote Proposal replay wrapper exposed or reserved is
 count|runtime|RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(|1|only authenticated runtime dispatch mints remote Proposal evidence
 required|runtime|remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>|runtime remote Proposal transport omitted remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>
 required|runtime|deferred_remote_proposal_replay|runtime remote Proposal transport omitted deferred_remote_proposal_replay
+required|runtime|dormant_remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>|runtime remote Proposal transport omitted its bounded dormant Set-B slot
 required|runtime|DeferredEventKind::ProposalReceived|runtime remote Proposal transport omitted DeferredEventKind::ProposalReceived
 required|runtime|bind_remote_proposal_fetch_replay(|runtime remote Proposal transport omitted bind_remote_proposal_fetch_replay(
+required|runtime|remote_proposal_fetch_replay_is_dormant(|runtime remote Proposal transport omitted its closed dormant-candidate predicate
+required|runtime|source == RuntimeEffectSource::Retransmit|runtime remote Proposal transport omitted retransmit-only dormant consumption
+required|runtime|same_authenticated_proposal(|runtime remote Proposal transport omitted exact duplicate-envelope retention
 required|runtime|certificate: None|runtime remote Proposal transport omitted certificate: None
 required|runtime|exact_remote_proposal_fetch_replay(|runtime remote Proposal transport omitted exact_remote_proposal_fetch_replay(
+required|runtime|fn rebind_fetch_consumer(|runtime omitted the Proposal-only Fetch consumer rebind
+required|runtime|fn project_fetch_consumer_rebind(|runtime omitted the exact pending Fetch consumer projection
+required|runtime|fn project_store_validate_successor_with_authority_refinement(|runtime omitted the exact Stored-to-Validate authority refinement
+required|runtime|fn project_store_validate_successor_with_commit_refinement(|runtime omitted the Decision-only Commit Validate refinement
+required|adapter|retains_dormant_remote_proposal_fetch(|adapter omitted the exact dormant signed-Proposal matcher
+required|executor|!self.runtime.has_dormant_remote_proposal_replay()|executor terminal readiness omitted the dormant Proposal owner
+required|executor|.rebind_consumer(effective_tag)|executor protected Fetch lineage omitted the simulated post-EnterView ownership rebind
+required|executor|*candidate_owner = effective_ownership.clone();|executor protected Fetch candidate index omitted its simulated post-EnterView ownership
 forbidden|outside|RemoteProposalFetchReplayEvidenceV1|remote Proposal replay authority escaped its closed production boundary: RemoteProposalFetchReplayEvidenceV1
 forbidden|outside|PreparedRemoteProposalFetchReplayPreAdmission|remote Proposal replay authority escaped its closed production boundary: PreparedRemoteProposalFetchReplayPreAdmission
 forbidden|derive_remote_proposal_fetch_evidence|Decode|runtime replay wrapper RemoteProposalFetchReplayEvidenceV1 became codec-constructible
@@ -949,6 +968,12 @@ required|executor|self.pending_live_wal_sign_admission = Some(pending)|executor 
 required|executor|self.pending_live_wal_sign_admission.is_none()|height finish omitted live Sign admission debt
 required|executor|usize::from(self.pending_live_wal_sign_admission.is_some())|bounded pending work omitted live Sign admission debt
 required|executor|pending_signatures: self\n                .pending_signatures\n                .len()\n                .saturating_add(usize::from(self.pending_live_wal_sign_admission.is_some()))|status omitted live Sign admission debt
+required|executor|pending_outputs: self.pending_lifecycle_output_admissions.len()|status omitted lifecycle output admission debt
+required|executor|if matches!(&owned.effect, AdapterEffect::Apply { .. })|retained Apply omitted the lifecycle-admission settlement barrier
+required|executor|!self.pending_durable_validate_admissions.is_empty()|retained Apply could overtake durable Validate admission
+required|executor|self.pending_live_wal_sign_admission.is_some()|retained Apply could overtake live WAL Sign admission
+required|executor|!self.pending_lifecycle_output_admissions.is_empty()|retained Apply could overtake signed-output admission
+order|executor|5|if matches!(&owned.effect, AdapterEffect::Apply { .. })|!self.pending_durable_validate_admissions.is_empty()|self.pending_live_wal_sign_admission.is_some()|!self.pending_lifecycle_output_admissions.is_empty()|let pending_work_producer = Self::pending_work_producer(&owned.effect)|Apply must remain FIFO-retained until every move-only lifecycle admission owner settles
 order|executor|5|.take_live_proposal_intent_wal_sign(&effects)|self.retain_effect_batch_at_frontier(effects, ownership, frontier)|handoff.join_local_proposal(replay)|self.pending_live_wal_sign_admission = Some(pending)|.drain_retained_effect_batch(services, true)|the post-fsync Sign must leave the generic retained batch before generic effect dispatch
 required|settlement|pub(in crate::sumeragi) fn settle_live_wal_sign_admission(|production owner omitted atomic live Sign settlement
 required|registry|ConcreteLifecycleWorkKind::DurableLiveWalSign|registry omitted the dedicated live WAL Sign carrier
@@ -1017,6 +1042,10 @@ required|token|pub(in crate::sumeragi) fn bind_durable_body(|remote Proposal rep
 required|token|.bind_durable_body(&effect, &durable_receipt)|remote Proposal replay token omitted {required}
 required|token|pub(in crate::sumeragi) fn project_validate(|remote Proposal replay token omitted {required}
 required|token|.project_exact_validate(|remote Proposal replay token omitted {required}
+required|token|fn exactly_retains_owned_store(|Stored Proposal replay token lost its exact runtime Store owner
+required|token|fn project_incumbent_validate_ownership(|Stored Proposal replay token lost its exact same-body Validate incumbent
+required|token|fn project_validate_after_durable_decision(|Stored Proposal replay token lost its exact Decision Validate refinement
+count|token|fn exactly_authenticates_fetch_rediscovery(|3|Fetch, Store, and Stored Proposal pre-admissions must all authenticate the original Fetch
 required|token|fn into_durable_validate_carrier(|remote Proposal replay token omitted {required}
 required|token|replay_evidence: DurableValidateReplayEvidenceV1::remote_proposal(|remote Proposal replay token omitted {required}
 required|token|_fetch: PreparedRemoteProposalFetchReplayPreAdmission|remote Proposal replay token omitted {required}
@@ -1041,6 +1070,17 @@ forbidden|token|== [0; 32]|remote Proposal replay token exposed forbidden surfac
 forbidden|token|is_zero()|remote Proposal replay token exposed forbidden surface {forbidden}
 count|production|PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(|0|the registry declaration must not self-invoke the remote Proposal mint
 count|callers|PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(|1|remote Proposal pre-admission must have exactly one production executor caller
+required|callers|durable_validate_retry_seals:|executor omitted inert post-admission Validate retry seals
+required|callers|install_pending_durable_validate_admission(|executor omitted atomic Validate admission and retry-seal installation
+required|callers|RemoteProposalReplayStageV1::Stored {|executor no longer retains the exact runtime Store owner beside Stored Proposal replay
+required|callers|fn exactly_authenticates_fetch_rediscovery(&self, effect: &AdapterEffect)|executor lost its stage-closed Fetch rediscovery dispatcher
+required|callers|stage.exactly_authenticates_fetch_rediscovery(&exact_effect)|ordinary Proposal Fetch rediscovery stopped proving its retained signed origin
+required|callers|ordinary Proposal Fetch replay lost its exact in-flight task|Fetch-stage rediscovery stopped proving the original work ID remains live
+required|callers|ordinary Proposal Fetch rediscovery observed a transient Store admission|Fetch rediscovery stopped rejecting the transient Store-admission cut
+required|callers|durable_validate_retry_seals_are_finalization_inert(|executor rollover stopped proving every surviving Validate retry seal belongs to the exact decided body
+required|callers|.chain(self.durable_validate_retry_seals.keys())|protected-lock retirement omitted inert Validate retry seals from its exact body census
+required|callers|.retain(\pkey, _\p !drain_decision_body && *key == decision_body)|Decision cleanup stopped retaining only the exact live decision-body Validate retry seal
+required|callers|.retain(\pkey, _\p Some(*key) == protected_body)|EnterView cleanup stopped retaining only the exact protected-body Validate retry seal
 end
 case|invalid_body_replay_pre_admission_is_closed_exact_and_lifecycle_owned
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1127,6 +1167,17 @@ count|callers|.seal_live_wal_validate_sign()|1|live Validate Sign join must have
 end
 case|registry_remains_inert_and_scheduler_free
 region|prefix|registry|begin|-|before|#[cfg(test)]
+region|output_join|registry|after|pub(super) enum LifecycleOutputRegistryJoinV1 {|before|/// Seal the exact generic retransmit used
+region|output_settlement|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|output_pending|registry|after|pub(in crate::sumeragi) struct PendingLifecycleOutputAdmissionV1 {|before|impl PreparedLifecycleOutputExecutionV1 {
+region|runtime_occurrence|runtime|after|pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {|before|/// Mint the ordinal-free lifecycle-admission binding for this exact effect.
+region|cold_service|effects|after|pub(in crate::sumeragi) fn execute_recovered_lifecycle_output_service|before|/// Exhaustive source inventory of effects which may create pending work.
+region|cold_settlement|lifecycle_open|at|pub(in crate::sumeragi) fn settle_next_recovered_lifecycle_output<E>(|before|fn recovered_output_matches_ready_coordinator(
+region|cold_census|lifecycle_open|at|pub(super) fn exact_ready_ordinals_for_registry_census(|before|/// Result of attempting the oldest authenticated cold output.
+region|cold_runner|runner|after|fn advance_executor(|before|fn reconcile_executor_locked_body(
+region|cold_height_driver|runner_height_driver|at|fn recovered_output_drain_disposition(|before|\n/// Drain one bounded ordinary Completion/Runtime/Ingress batch through
+region|registry_output_census|registry|at|fn exact_optional_recovered_wal_authority(|before|/// Install one work value without overwriting an incumbent address.
+region|launch_output_census|launch|at|pub(in crate::sumeragi) fn launch(|before|let recovered_validate_sidecar =
 region|coordinator|coordinator|begin|-|end|-
 region|export|coordinator|after|pub(crate) use work_registry::{|before|};
 forbidden|prefix|SchedulerInputs|registry acquired forbidden scheduler authority: {forbidden}
@@ -1141,6 +1192,42 @@ forbidden|prefix|producer_debts:|registry acquired forbidden scheduler authority
 forbidden|prefix|fn plan(|registry acquired forbidden scheduler authority: {forbidden}
 forbidden|prefix|fn settle_turn(|registry acquired forbidden scheduler authority: {forbidden}
 forbidden|prefix|reserve_one|registry acquired forbidden scheduler authority: {forbidden}
+required|output_join|TerminalDirectOutputDuplicate|terminal direct output retry lost its exact durable duplicate classification
+required|output_join|fn terminal_direct_output_matches_record(|terminal direct output retry lost its closed record matcher
+required|output_join|metadata.continuation == super::schema::DurableContinuation::None|terminal direct output retry accepted a successor-bearing row
+required|output_join|metadata.replay_authority == authority|terminal direct output retry stopped comparing the byte-exact signed payload authority
+required|output_join|authority.structurally_matches_record(|terminal direct output retry stopped authenticating exact context, key, class, stage, and payload
+required|output_settlement|LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate|generic output settlement stopped recognizing exact terminal direct-output retries
+required|output_settlement|ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted|exact terminal direct-output retry no longer stutters before service I/O
+required|output_settlement|LifecycleOutputServiceDispositionV1::SourceRetained|generic output settlement stopped distinguishing transport backpressure from acceptance
+required|output_settlement|ProductionLifecycleOutputAdmissionSettlementV1::Deferred(\n                    execution.into_pending(),\n                )|transport backpressure no longer returns the exact Ready output owner
+order|output_settlement|3|execution.execute_with(execute)|LifecycleOutputServiceDispositionV1::SourceRetained|let mut staged = self.coordinator.stage_durable_transaction()|source-retained output must defer before terminal LedgerV1 staging
+required|output_pending|.exactly_matches_bound_effect_occurrence(ownership, effect)|output retry coalescence stopped comparing the full positional runtime binding
+required|runtime_occurrence|pub(crate) fn exactly_matches_bound_effect_occurrence(|runtime omitted the sealed full-occurrence comparison
+required|runtime_occurrence|self.binding == other.binding|full-occurrence comparison stopped authenticating the positional effect binding
+required|cold_service|ConsensusBroadcastDisposition::SourceRetained => {|cold output service stopped preserving transport backpressure
+required|cold_service|LifecycleOutputServiceDispositionV1::SourceRetained|cold output service stopped returning typed backpressure
+required|cold_settlement|LifecycleOutputServiceDispositionV1::SourceRetained|cold output settlement stopped recognizing typed backpressure
+required|cold_settlement|return Ok(RecoveredLifecycleOutputSettlementV1::SourceRetained)|cold output settlement stopped distinguishing retained-source ownership from ordering deferral
+order|cold_settlement|3|match execute(output.effect())|LifecycleOutputServiceDispositionV1::SourceRetained|let mut staged = coordinator.stage_durable_transaction()|cold source-retained output must defer before terminal LedgerV1 staging
+required|cold_census|*ordinal == output.ordinal()|cold output census stopped binding every private map key to the retained carrier ordinal
+required|cold_census|coordinator.ready_index.contains(ordinal)|cold output census stopped requiring every retained carrier in the Ready index
+required|cold_census|recovered_output_matches_ready_coordinator_row(coordinator, output)|cold output census stopped rejoining every retained carrier to its exact Ready row
+required|cold_census|self.entries.keys().copied().collect()|cold output census stopped projecting the exact owner-held ordinal set
+required|cold_census|self.lifecycle_outputs.as_ref().map_or_else(|authenticated recovery cut stopped proving the complete optional cold-output census
+required|cold_runner|fn recovered_lifecycle_output_requires_yield(|executor advancement stopped exhaustively classifying cold-output settlement
+required|cold_runner|RecoveredLifecycleOutputSettlementV1::SourceRetained => {\n            true|executor advancement stopped yielding while a source-retained cold carrier owns the Ready minimum
+required|cold_height_driver|RecoveredLifecycleOutputSettlementV1::SourceRetained => {|outer Completion scheduling stopped recognizing a source-retained owner-only row
+required|cold_height_driver|LifecycleV2IngressDrainDispositionV1::retry_before_producer(|source-retained cold output stopped selecting the timed retry disposition
+order|cold_height_driver|3|RecoveredLifecycleOutputSettlementV1::SourceRetained => {|LifecycleV2IngressDrainDispositionV1::retry_before_producer(|RecoveredLifecycleOutputSettlementV1::Completed => {|source-retained output must select timed retry while completed output selects ordinary Ready yield
+required|registry_output_census|owner_held_outputs: &std::collections::BTreeSet<u128>|registry census stopped accepting the sealed owner-held output ordinal set
+required|registry_output_census|!owner_held_outputs.contains(&record.ordinal)|registry census stopped excluding only authenticated owner-held output rows
+required|registry_output_census|extra.contains_record(record)|registry census stopped rejecting overlap between owner-held output and recovered-WAL carriers
+required|registry_output_census|RecoveredWalRegistrySlotV1::DecisionStore(address) => {|recovered Decision Store disappeared from the exact startup census
+order|registry_output_census|3|RecoveredWalRegistrySlotV1::DecisionStore(address) => {|coordinator.records.get(&address.ordinal)|if !unsupported_live.is_empty()|recovered Decision Store must read its supported Store row directly and reject unrelated unsupported rows
+required|launch_output_census|self.exact_lifecycle_output_ordinals_for_registry_census()|launch stopped authenticating the owner-held cold-output census
+required|launch_output_census|exactly_covers_recovered_ready_work_with_owner_held_outputs(|launch stopped joining ordinary startup work beside owner-held outputs
+required|launch_output_census|exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(|launch stopped joining recovered-WAL startup work beside owner-held outputs
 count|coordinator|work_registry::|7|only the seven reviewed opaque registry authority import groups may cross the module boundary
 required|coordinator|LiveValidateSignRegistryReservation|coordinator registry imports lost the opaque live Validate reservation
 required|coordinator|LiveValidateSignWorkProjectionPermit|coordinator registry imports lost the sealed live Validate projection permit
@@ -1303,6 +1390,7 @@ region|carrier|registry|after|struct DurableValidateBody {|before|impl DurableVa
 region|validation|registry|after|impl DurableValidateBody {|before|struct DurableValidateCompletion {
 region|common_work|registry|after|impl ConcreteLifecycleWork {|before|pub(super) enum CertifiedFetchCompletionError
 region|live_sign_work|registry|after|pub(in crate::sumeragi) struct PreparedLiveValidateSignRegistryWork {|before|/// Closed pre-mutation failure inventory for certified-Fetch conversion.
+region|live_sign_carrier|registry|after|struct DurableLiveWalSignWork {|before|impl PreparedLiveWalAdmissionV1 {
 region|live_sign_install|registry|after|impl LiveValidateSignRegistryReservation<'_> {|before|#[cfg_attr(not(test), allow(dead_code))]
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_validate_execution(|before|pub(super) fn classify_ready_validate_carrier(
 region|execution_impl|registry_recovery|after|impl PreparedDurableValidateExecution<'_>|end|-
@@ -1330,9 +1418,9 @@ forbidden|validation|fn new(|durable Validate carrier acquired a raw authority s
 forbidden|validation|for_test|durable Validate carrier acquired a raw authority seam: {forbidden}
 forbidden|validation|derive(Clone|durable Validate carrier acquired a raw authority seam: {forbidden}
 forbidden|validation|fn commit(|durable Validate carrier acquired a raw authority seam: {forbidden}
-count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|6|Validate carrier must remain exhaustive in validation, address, causal-root, effect-borrow, pending-adapter, and closed-carrier paths
-count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalSign|4|recovered Sign must remain exhaustive in validation, address, causal-root, and effect-borrow paths
-count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch|4|recovered Decision Fetch must remain exhaustive in validation, address, causal-root, and typed-effect rejection paths
+count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|7|Validate carrier must remain exhaustive in validation, address, causal-root, effect-borrow, pending-adapter, closed-carrier, and Ready-Broadcast classifier paths
+count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalSign|5|recovered Sign must remain exhaustive in validation, address, causal-root, effect-borrow, and Ready-Broadcast classifier paths
+count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch|5|recovered Decision Fetch must remain exhaustive in validation, address, causal-root, typed-effect rejection, and Ready-Broadcast classifier paths
 required|common_work|let ConcreteLifecycleWorkKind::PendingAdapter {|generic adapter recovery must reject every closed carrier through exhaustive destructuring
 required|common_work|closed lifecycle work requires its dedicated typed consumer|generic adapter recovery lost its fail-stop rejection for closed carriers
 required|production|pub(super) struct ConcreteLifecycleWork {|concrete lifecycle work lost its registry-private declaration
@@ -1348,7 +1436,7 @@ required|live_sign_work|SignRequest::Vote(vote)|opaque live Sign work omitted {r
 required|live_sign_work|wire::GlobalPhase::Prepare \p wire::GlobalPhase::Commit|opaque live Sign work omitted {required}
 required|live_sign_work|ConcreteWorkAddress::new(owner, ordinal, slot)|opaque live Sign work omitted {required}
 required|live_sign_work|PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)|opaque live Sign work omitted {required}
-required|live_sign_work|BTreeMap::from([(parent_address.slot, predecessor.digest())])|live Validate Sign predecessor omitted its exact retained terminal slot and digest
+required|live_sign_carrier|BTreeMap::from([(parent_address.slot, predecessor.digest())])|live Validate Sign predecessor omitted its exact retained terminal slot and digest
 required|live_sign_work|reservation.install_live_sign(self)|opaque live Sign work omitted its consuming registry reservation
 required|live_sign_install|PreparedLifecycleAdmissionOwnerV1::LiveWal(live)|live Validate Sign install omitted its exact live-WAL admission owner
 required|live_sign_install|DurableLiveWalSignOriginV1::Validate {|live Validate Sign install omitted its detached Validate predecessor
@@ -2008,6 +2096,10 @@ region|registry|registry|begin|-|end|-
 region|single|registry|after|fn prepare_recovered_lifecycle_sign_broadcast_successor|before|/// Seal the exact Broadcast-and-next-WAL-Sign pair
 region|combined|registry|after|fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor|before|impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter>
 region|pair|registry_recovery_impl|after|fn attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(|before|/// Project the exact claimed Broadcast
+region|broadcast_carrier|registry|after|pub(super) enum LifecycleOutputRegistryJoinV1 {|before|/// Seal the exact generic retransmit used
+region|completion_route|scheduler_inputs|after|fn classify_schedulable_completion_work(|before|/// Classify Ready work without claiming a lease or reserving capacity.
+region|completion_dispatch|scheduler_inputs|after|pub(super) fn dispatch_completion_with_runner_debt(|before|/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.
+region|refanout|scheduler_inputs|after|pub(super) fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(|before|/// Wake and reclaim one externally parked recovered Fetch
 required|closed|effect: AdapterEffect|closed projection omitted {required}
 required|closed|pending: PendingRuntimeEffectBinding|closed projection omitted {required}
 required|closed|candidate: CandidateAdmission|closed projection omitted {required}
@@ -2033,6 +2125,17 @@ required|pair|attest_ready_recovered_lifecycle_signed_broadcast(coordinator, bro
 required|pair|attest_ready_recovered_lifecycle_sign(coordinator, next_sign_ordinal)|pair attestation omitted {required}
 required|pair|DurableRecoveredLifecycleNextWalVoteSign(next_sign)|pair attestation omitted {required}
 required|pair|next_sign.matches_current_ready_record(|pair attestation omitted {required}
+required|broadcast_carrier|enum ReadyLifecycleBroadcastCarrierV1|Broadcast scheduling lost its closed concrete-kind discriminator
+required|broadcast_carrier|fn attest_ready_lifecycle_broadcast_carrier(|Broadcast scheduling lost exact registry carrier attestation
+required|broadcast_carrier|lifecycle_output_row_matches(|direct Broadcast attestation stopped proving its exact generic-output row
+required|broadcast_carrier|broadcast.matches_current_ready_record(|recovered Broadcast attestation stopped proving its exact typed carrier
+required|completion_route|attest_ready_lifecycle_broadcast_carrier(&self.coordinator, *ordinal)|Completion route selection returned to logical class-only Broadcast dispatch
+required|completion_route|oldest_is_retained_direct_output|oldest direct output stopped passing through to generic settlement
+required|completion_dispatch|AuthenticatedRecoveredCompletionReadyV1::RetainedDirectBroadcast|Completion full census omitted the exact retained direct output
+required|completion_dispatch|authenticated_retained_direct_broadcast_ready_row(|Completion scheduler stopped making the retained direct output passive
+required|refanout|let mut broadcast_carriers = BTreeMap::new();|refanout stopped classifying the complete mixed Broadcast census
+required|refanout|ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation)|refanout stopped authenticating coexisting direct output
+required|refanout|authenticated_retained_direct_broadcast_ready_row(|refanout made a coexisting direct output claimable
 end
 case|deferred_terminal_completion_requires_two_exact_stage_proofs_and_ordered_pending_coverage
 region|completion|lifecycle_recovery|at|pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_queue_actions(|before|/// Reconcile every local lifecycle bootstrap and cursor
@@ -2509,41 +2612,43 @@ forbidden|whole|pub executor:|turn outcome must not expose an executor
 forbidden|whole|pub services:|turn outcome must not expose services
 end
 case|ordinary_certified_body_pipeline_reserves_executes_and_publishes_ready_validate
-region|classifier|scheduler_inputs|after|pub(crate) fn classify_completion_ready_work(|before|/// Plan one turn from the complete directly-owned production Ready census.
-region|completion|turn_driver|after|fn settle_parked_lifecycle_durable_validate_completion(|before|fn publish_ready_durable_validate(
-region|publication|turn_driver|after|fn publish_ready_durable_validate(|before|fn advance_certified_body_pipeline(&mut self)
-region|dispatch|turn_driver|after|fn advance_certified_body_pipeline(&mut self)|before|fn drive_recovered_ingress_selector
+region|classifier|scheduler_inputs|after|fn classify_completion_ready_classes(|before|/// Phase-A outcome for one selected recovered Decision Fetch response.
+region|completion|turn_driver|after|fn settle_parked_lifecycle_validate_completion(|before|fn settle_parked_certified_fetch_body_persistence(
+region|publication|scheduler_inputs|after|fn publish_ready_validate_outcome(|before|fn rollback_ready_validate_publication(
+region|dispatch|scheduler_inputs|after|pub(super) fn dispatch_completion_with_runner_debt(|before|/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.
 region|worker|worker|begin|-|end|-
-region|sealed_publication|body_pipeline|at|impl<'coordinator, 'registry, 'adapter>\n    PreparedSealedValidateSignTransition|before|include!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
+region|sealed_publication|body_pipeline|at|impl<'coordinator, 'registry, 'adapter>\n    PreparedSealedValidateApplyTransition|before|include!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
 region|body_pipeline|body_pipeline|begin|-|end|-
 region|effects|effects|begin|-|end|-
 region|runtime|runtime|begin|-|end|-
-required|classifier|LifecycleWorkClass::Validate => self|ordinary Validate classification lost its exact carrier branch
-required|classifier|.attest_ready_validate_demand(&self.registry, *ordinal)|ordinary Validate classification lost exact coordinator/registry attestation
-required|classifier|return ProductionCompletionReadyWorkV1::CertifiedBodyPipeline;|authenticated ordinary Validate no longer enters the canonical body scheduler
-order|dispatch|4|LifecycleDurableValidateDispatchKeyV1::from_claimed(|capture_lifecycle_durable_validate_capacity(key)|begin_durable_validate_dispatch(|reservation.commit(dispatch)|Ready Validate must reserve its exact worker position before the Waiting mutation and command publication
-required|dispatch|rollback_unpublished_body_claim|backpressure or pre-publication failure lost exact claim rollback
-required|completion|LifecycleDurableValidateCompletionKindV1::Retry|durable Validate completion lost its typed retry branch
-required|completion|LifecycleDurableValidateRetryV1::Unavailable(completion)|backpressured retry no longer retains the exact completion owner
-required|completion|LifecycleDurableValidateRetryV1::RestartRequired|invalid or disconnected retry ownership no longer fails closed
+required|classifier|LifecycleWorkClass::Validate|ordinary Validate classification lost its exact carrier class
+required|classifier|ProductionCompletionReadyWorkV1::CompletionIo|ordinary Validate no longer enters the unified Completion I/O scheduler
+required|dispatch|.attest_ready_validate_demand(&self.registry, *ordinal)|ordinary Validate dispatch lost exact coordinator/registry attestation
+required|dispatch|AuthenticatedRecoveredCompletionReadyV1::Validate(attestation)|ordinary Validate dispatch lost its authenticated carrier
+required|dispatch|RecoveredCompletionCapacityProbeV1::Validate {|ordinary Validate dispatch lost its bounded worker-capacity probe
+order|dispatch|6|attest_ready_validate_demand(&self.registry, *ordinal)|capture_recovered_completion_capacity_census(probes)|.select_validate(ordinal)|begin_durable_validate_dispatch(&mut self.registry, lease, &self.verified)|reservation.preflight(&dispatch)|reservation.commit(dispatch)|Ready Validate must authenticate, reserve its exact worker position, enter Waiting, and publish one command in order
 required|completion|complete_durable_validate_dispatch(|executed Validate completion no longer returns Waiting to one authenticated Ready carrier
-required|completion|close_output_for_restart()|failed Validate completion publication no longer closes output for restart
-required|worker|LifecycleDurableValidateDispatchKeyV1|the dedicated Validate owner lost its address-keyed identity
-required|worker|BTreeMap<LifecycleDurableValidateDispatchKeyV1, V2IoTrackedLifecycleDurableValidateV1>|the dedicated Validate queue lost its exact keyed ownership index
-required|worker|LifecycleDurableValidateCapacityReservationV1|Ready Validate lost its pre-Wait capacity reservation
-required|worker|LifecycleDurableValidateWorkerResultV1|the worker lost its typed Validate completion owner
-required|worker|retry_lifecycle_durable_validate(dispatch)|the retained Validate command lost exact-key retry
-required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedInactive|validated inactive outcome lost terminal publication
-required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedNoEffect|validated no-effect outcome lost terminal publication
-required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedInactive|rejected inactive outcome lost terminal publication
-required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedNoEffect|rejected no-effect outcome lost terminal publication
-required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedApply|validated Apply outcome lost successor publication
-required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedPersist|validated Persist outcome lost Sign successor publication
-required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedReport|rejected report outcome lost invalid-body successor publication
-required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedBusy|validated Busy outcome lost its reducer-fence settlement
-required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedBusy|rejected Busy outcome lost its reducer-fence settlement
+required|completion|ack.acknowledge_after_publication();|Validate completion acknowledgement escaped before Ready publication
+required|completion|PreparedLifecycleValidateCompletionV1::from_publication_parts(dispatch, ack)|failed Validate completion publication no longer retains the exact guarded owner
+required|completion|LifecycleValidatePublicationRetry|failed Validate completion publication lost its typed retry result
+required|completion|close_admission_for_restart();|invalid Validate completion ownership no longer closes output for restart
+required|worker|LifecycleValidateDispatchKeyV1|the dedicated Validate owner lost its address-keyed identity
+required|worker|BTreeMap<LifecycleValidateDispatchKeyV1, V2IoTrackedLifecycleValidateV1>|the dedicated Validate queue lost its exact keyed ownership index
+required|worker|LifecycleValidateCapacityReservationV1|Ready Validate lost its pre-Wait capacity reservation
+required|worker|GuardedLifecycleValidateWorkerResultV1|the worker lost its typed guarded Validate completion owner
+required|worker|V2IoCommand::LifecycleValidate(task)|the retained Validate command lost exact-key queue publication
+required|worker|V2IoCompletion::LifecycleValidate(Box::new(|the bounded worker omitted typed Validate completion publication
+required|publication|Kind::ValidatedInactive|validated inactive outcome lost terminal publication
+required|publication|Kind::ValidatedNoEffect|validated no-effect outcome lost terminal publication
+required|publication|Kind::RejectedInactive|rejected inactive outcome lost terminal publication
+required|publication|Kind::RejectedNoEffect|rejected no-effect outcome lost terminal publication
+required|publication|Kind::ValidatedApply|validated Apply outcome lost successor publication
+required|publication|Kind::ValidatedPersist|validated Persist outcome lost Sign successor publication
+required|publication|Kind::RejectedReport|rejected report outcome lost invalid-body successor publication
+required|publication|Kind::ValidatedBusy|validated Busy outcome lost its reducer-fence settlement
+required|publication|Kind::RejectedBusy|rejected Busy outcome lost its reducer-fence settlement
 count|publication|.persist_and_publish()|4|each non-Busy Validate outcome family must use one sealed persistence/publication transaction
-required|publication|settle_sealed_validate_busy(lease, wait)|Busy Validate must remain durably recoverable and retry only after its exact reducer fence
+required|publication|park_validate_on_reducer_fence(lease, wait)|Busy Validate must remain durably recoverable and retry only after its exact reducer fence
 count|sealed_publication|pub(super) fn persist_and_publish(|4|Validate terminal, report, Apply, and Sign each require one consuming sealed transaction
 count|sealed_publication|persist_exact_staged_successor(&staged)|4|every Validate publication family must fsync its exact staged LedgerV1 successor
 forbidden|body_pipeline|atomic-publication gap|completed Validate branches must not retain the former publication blocker

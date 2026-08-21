@@ -679,6 +679,17 @@ live-Fetch count and verified body-store context. It has no clone, row,
 candidate, work, parts, or install API, so it cannot be reused to mint one row
 at a time or paired with a foreign store.
 
+The storage-only assembler separately derives the complete non-WAL cold-output
+census for live `Broadcast`, `EquivocationReport`, and `InvalidBodyReport` rows.
+Each move-only carrier stays keyed by its exact immutable LedgerV1 ordinal and
+must rejoin the same owner, candidate, ordinal, and logical `Ready` row. At
+durable open and again at launch, the authenticated owner-held ordinal set is
+the only exception to concrete-registry coverage; the registry must cover every
+other Ready row and rejects overlap with a recovered-WAL carrier. In
+particular, a Broadcast with a durable Sign predecessor remains exclusively in
+the recovered-WAL census rather than being downgraded to standalone output
+recovery.
+
 The sole V1 startup transaction now consumes that seal together with the
 matching authenticated Certified-Serve payload cut/store. It validates the
 complete Fetch census and empty registry before consuming terminal Validate
@@ -1434,6 +1445,23 @@ reauthenticates that still-live Broadcast, reserves exact output, changes only
 volatile coordinator state to a recovery wait, and then enqueues. LedgerV1
 remains Ready so restart reconstructs the output debt, while the volatile wait
 prevents duplicate topology fanouts during the current process.
+The serialized completion gate follows the outer Completion-before-Runtime
+order. Queued ingress is stable, inert state at that point: previewing the
+earlier Sign result neither consumes nor reorders its canonical bytes,
+admission ordinal, occurrence owner, or ingress ownership. The gate still
+fails closed when output is already closed or any active mutation debt remains:
+pending effect ownership, scheduler ownership, or leader-wire terminal work.
+This distinction prevents ordinary network timing from turning an unrelated
+queued command into a restart while preserving the sole-writer boundary.
+Non-WAL cold output uses the closed `Empty | Deferred | SourceRetained |
+Completed` settlement instead of generic Completion classification. `Deferred`
+means an earlier ordinal or active lease still owns priority. `SourceRetained`
+means the output service retained no occurrence: the same owner-held carrier,
+private map entry, and Ready row remain intact, and settlement returns before a
+terminal LedgerV1 successor is even staged. The height driver yields and
+schedules its timed retry before Producer planning. Only an `Accepted` service
+result may stage, fsync, and publish the exact same-row terminal successor,
+remove the carrier, and return `Completed`.
 Cold open rejoins that exact row pair to the recovered WAL request, verifies the
 signed consensus message against the recovered roster, replays `Signed` on the
 cold reducer, and installs only the authenticated Broadcast carrier. Proposal's

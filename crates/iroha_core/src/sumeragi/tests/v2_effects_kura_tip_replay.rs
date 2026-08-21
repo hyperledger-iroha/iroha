@@ -545,25 +545,6 @@ fn mismatched_kura_completion_fails_closed_before_application_ack() {
 #[test]
 fn service_runtime_body_store_and_status_failures_close_executor() {
     let fixture = Fixture::new();
-    let mut service_executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    services.fail_on = Some("broadcast");
-    let message = wire::ConsensusMessageV2 {
-        protocol_version: wire::PROTOCOL_VERSION,
-        payload: wire::ConsensusMessageV2Payload::Vote(wire::Vote {
-            signature: vec![1],
-            ..vote(&fixture)
-        }),
-    };
-    assert!(matches!(
-        service_executor.consume_effects(vec![AdapterEffect::Broadcast(message)], &mut services),
-        Err(EffectExecutorError::Service(_))
-    ));
-    assert!(service_executor.status().fail_closed);
-    assert!(
-        services.fail_on.is_none(),
-        "failure injection was not consumed"
-    );
     let mut runtime_executor = fixture.executor(EffectQueueConfig::default());
     let mut runtime_services = fixture.services();
     runtime_executor
@@ -610,18 +591,20 @@ fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
     failed.runtime.active_view_producer_retained = true;
     let mut failed_services = fixture.services();
     failed_services.fail_on = Some("broadcast");
-    assert!(matches!(
-        failed.consume_effects(
+    failed
+        .consume_effects(
             vec![AdapterEffect::Broadcast(message.clone())],
             &mut failed_services,
-        ),
-        Err(EffectExecutorError::Service(_))
-    ));
+        )
+        .expect("Proposal fanout stops at lifecycle admission before service I/O");
     assert!(
         failed.runtime.active_view_producer_retained,
-        "a rejected fanout must retain the exact producer fence"
+        "an admitted but unexecuted fanout must retain the exact producer fence"
     );
     assert!(failed.runtime.completed_proposal_fanouts.is_empty());
+    assert_eq!(failed.pending_lifecycle_output_admissions.len(), 1);
+    assert_eq!(failed_services.fail_on, Some("broadcast"));
+    assert!(failed_services.broadcast_attempts.is_empty());
     assert!(failed_services.broadcasts.is_empty());
     let mut retained = fixture.executor(EffectQueueConfig::default());
     retained.runtime.active_view_producer_retained = true;
@@ -634,13 +617,14 @@ fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
             vec![AdapterEffect::Broadcast(message.clone())],
             &mut retained_services,
         )
-        .expect("corridor pressure retains the Proposal source without failing closed");
+        .expect("Proposal source reaches the lifecycle-owned service boundary");
     assert!(
         retained.runtime.active_view_producer_retained,
         "a source-retained Proposal must keep the active producer fence"
     );
     assert!(retained.runtime.completed_proposal_fanouts.is_empty());
-    assert_eq!(retained_services.broadcast_attempts, vec![message.clone()]);
+    assert_eq!(retained.pending_lifecycle_output_admissions.len(), 1);
+    assert!(retained_services.broadcast_attempts.is_empty());
     assert!(retained_services.broadcasts.is_empty());
     assert!(retained.retained_effect_batch.is_none());
     assert!(!retained.status().fail_closed);
@@ -649,15 +633,53 @@ fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
             vec![AdapterEffect::Broadcast(message.clone())],
             &mut retained_services,
         )
-        .expect("periodic Proposal retransmission reaches exact service acceptance");
+        .expect("periodic Proposal retransmission stutters behind the exact owner");
+    assert!(retained.runtime.active_view_producer_retained);
+    assert_eq!(retained.pending_lifecycle_output_admissions.len(), 1);
+    assert!(retained_services.broadcast_attempts.is_empty());
+    assert!(retained.runtime.completed_proposal_fanouts.is_empty());
+    let effect = AdapterEffect::Broadcast(message.clone());
+    let ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&effect),
+        vec![retained.runtime.test_effect_ownership(&effect)],
+    )
+    .expect("reconstruct the exact one-effect Proposal occurrence")
+    .pop()
+    .expect("one Proposal output owner");
+    let key = *retained
+        .pending_lifecycle_output_admissions
+        .keys()
+        .next()
+        .expect("one parked Proposal owner");
+    let pending = retained
+        .pending_lifecycle_output_admissions
+        .remove(&key)
+        .expect("transfer Proposal ownership into lifecycle service settlement");
+    assert_eq!(
+        retained
+            .execute_lifecycle_output_service(&effect, &ownership, &mut retained_services)
+            .expect("source-retained Proposal service result"),
+        LifecycleOutputServiceDispositionV1::SourceRetained
+    );
+    assert!(retained.runtime.active_view_producer_retained);
+    assert!(retained.runtime.completed_proposal_fanouts.is_empty());
+    assert!(retained
+        .pending_lifecycle_output_admissions
+        .insert(key, pending)
+        .is_none());
+    let _accepted_pending = retained
+        .pending_lifecycle_output_admissions
+        .remove(&key)
+        .expect("retry the same Proposal owner after service capacity changes");
+    assert_eq!(
+        retained
+            .execute_lifecycle_output_service(&effect, &ownership, &mut retained_services)
+            .expect("accepted Proposal service result"),
+        LifecycleOutputServiceDispositionV1::Accepted
+    );
     assert!(!retained.runtime.active_view_producer_retained);
+    assert_eq!(retained.runtime.completed_proposal_fanouts.len(), 1);
     assert_eq!(retained_services.broadcast_attempts.len(), 2);
-    assert_eq!(retained_services.broadcasts, vec![message.clone()]);
-    let [(round, ownership)] = retained.runtime.completed_proposal_fanouts.as_slice() else {
-        panic!("only the accepted Proposal occurrence may retire the producer")
-    };
-    assert_eq!(*round, fixture.manifest.round);
-    assert_ne!(ownership.owner().lifecycle_ordinal(), 0);
     let mut accepted = fixture.executor(EffectQueueConfig::default());
     accepted.runtime.active_view_producer_retained = true;
     let mut accepted_services = fixture.services();
@@ -666,14 +688,12 @@ fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
             vec![AdapterEffect::Broadcast(message.clone())],
             &mut accepted_services,
         )
-        .expect("guarded Proposal fanout accepts the exact source owner");
-    assert!(!accepted.runtime.active_view_producer_retained);
-    assert_eq!(accepted_services.broadcasts, vec![message]);
-    let [(round, ownership)] = accepted.runtime.completed_proposal_fanouts.as_slice() else {
-        panic!("one accepted Proposal fanout must retire one active producer")
-    };
-    assert_eq!(*round, fixture.manifest.round);
-    assert_ne!(ownership.owner().lifecycle_ordinal(), 0);
+        .expect("guarded Proposal fanout transfers the exact source owner");
+    assert!(accepted.runtime.active_view_producer_retained);
+    assert_eq!(accepted.pending_lifecycle_output_admissions.len(), 1);
+    assert!(accepted_services.broadcast_attempts.is_empty());
+    assert!(accepted_services.broadcasts.is_empty());
+    assert!(accepted.runtime.completed_proposal_fanouts.is_empty());
 }
 #[test]
 fn source_retained_non_proposal_control_remains_retransmittable() {
@@ -690,8 +710,9 @@ fn source_retained_non_proposal_control_remains_retransmittable() {
             vec![AdapterEffect::Broadcast(control.clone())],
             &mut services,
         )
-        .expect("corridor pressure is retryable for ordinary controls");
-    assert_eq!(services.broadcast_attempts, vec![control.clone()]);
+        .expect("ordinary control reaches lifecycle admission");
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
+    assert!(services.broadcast_attempts.is_empty());
     assert!(services.broadcasts.is_empty());
     assert!(executor.runtime.completed_proposal_fanouts.is_empty());
     assert!(!executor.status().fail_closed);
@@ -700,12 +721,10 @@ fn source_retained_non_proposal_control_remains_retransmittable() {
             vec![AdapterEffect::Broadcast(control.clone())],
             &mut services,
         )
-        .expect("periodic control retransmission is accepted later");
-    assert_eq!(
-        services.broadcast_attempts,
-        vec![control.clone(), control.clone()]
-    );
-    assert_eq!(services.broadcasts, vec![control]);
+        .expect("periodic control retransmission stutters behind the exact owner");
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
+    assert!(services.broadcast_attempts.is_empty());
+    assert!(services.broadcasts.is_empty());
     assert!(executor.runtime.completed_proposal_fanouts.is_empty());
     assert!(!executor.status().fail_closed);
 }

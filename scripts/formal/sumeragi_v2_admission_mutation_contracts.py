@@ -796,7 +796,7 @@ coordinator
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_pre_admission.rs",
         """
 pub(super) enum PreparedLifecycleAdmissionOwnerV1 {
-    LiveWal(BoundAdapterEffectV1),
+    LiveWal(PreparedLiveWalAdmissionV1),
     LocalBody(PreparedLocalBodyValidateReplayPreAdmission),
     RemoteProposal(PreparedRemoteProposalValidateReplayPreAdmission),
     InvalidBodyReport(BoundAdapterEffectV1),

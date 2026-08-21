@@ -82,9 +82,9 @@ pub(in crate::sumeragi) use body_pipeline_transition::{
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
 pub(in crate::sumeragi) use concrete_admission::{
-    ProductionDurableValidateAdmissionSettlementV1, ProductionLifecycleOutputAdmissionFailureV1,
-    ProductionLifecycleOutputAdmissionSettlementV1, ProductionLiveWalSignAdmissionFailureV1,
-    ProductionLiveWalSignAdmissionSettlementV1,
+    LifecycleOutputServiceDispositionV1, ProductionDurableValidateAdmissionSettlementV1,
+    ProductionLifecycleOutputAdmissionFailureV1, ProductionLifecycleOutputAdmissionSettlementV1,
+    ProductionLiveWalSignAdmissionFailureV1, ProductionLiveWalSignAdmissionSettlementV1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use launch::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -164,6 +164,7 @@ pub(in crate::sumeragi) use ledger::{
     install_non_timeout_broadcast_before_current_control_for_test,
     install_timeout_broadcasts_before_current_control_for_test,
 };
+pub(in crate::sumeragi) use open::RecoveredLifecycleOutputSettlementV1;
 pub(super) use open::TerminalValidateNoSuccessorClaim;
 #[allow(unused_imports, reason = "release-bound lifecycle error seam")]
 pub(crate) use open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError};

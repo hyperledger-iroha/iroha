@@ -430,15 +430,21 @@ fn broadcast_view_and_evidence_effects_reach_exact_hooks() {
             ..vote(&fixture)
         }),
     };
+    executor.runtime.round_tag = Some(tag(1));
+    executor
+        .consume_effects(
+            vec![AdapterEffect::EnterView {
+                tag: tag(1),
+                certificate: timeout_certificate(&fixture),
+                protected_lock: None,
+            }],
+            &mut services,
+        )
+        .expect("consume the immediate view transition");
     executor
         .consume_effects(
             vec![
-                AdapterEffect::Broadcast(message.clone()),
-                AdapterEffect::EnterView {
-                    tag: tag(1),
-                    certificate: timeout_certificate(&fixture),
-                    protected_lock: None,
-                },
+                AdapterEffect::Broadcast(message),
                 AdapterEffect::ReportEquivocation {
                     evidence: vote_equivocation_evidence(&fixture, 1),
                 },
@@ -449,11 +455,12 @@ fn broadcast_view_and_evidence_effects_reach_exact_hooks() {
             ],
             &mut services,
         )
-        .expect("consume immediate effects");
-    assert_eq!(services.broadcasts, vec![message]);
+        .expect("transfer exact outputs into lifecycle admission");
     assert_eq!(services.entered_views, vec![tag(1)]);
-    assert_eq!(services.equivocations.len(), 1);
-    assert_eq!(services.invalid_bodies, vec![fixture.manifest.subject]);
+    assert!(services.broadcasts.is_empty());
+    assert!(services.equivocations.is_empty());
+    assert!(services.invalid_bodies.is_empty());
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 3);
 }
 #[test]
 fn equivocation_reporting_rejects_a_mutated_non_conflicting_pair() {
@@ -468,37 +475,76 @@ fn equivocation_reporting_rejects_a_mutated_non_conflicting_pair() {
     second.phase = first.phase;
     second.subject = first.subject;
     second.execution_commitment = first.execution_commitment;
+    let effect = AdapterEffect::ReportEquivocation {
+        evidence: AdapterEquivocationEvidence::vote_for_test(first, second),
+    };
+    let ownership = bound_test_effect_ownership(&effect, tag(0), 1);
+    executor.runtime.exact_effect_ownership = Some((effect.clone(), ownership.clone()));
+    executor
+        .consume_effects(vec![effect.clone()], &mut services)
+        .expect("executor transfers evidence validation to the lifecycle output owner");
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
+    assert!(services.equivocations.is_empty());
+    assert!(!executor.status().fail_closed);
+    let key = *executor
+        .pending_lifecycle_output_admissions
+        .keys()
+        .next()
+        .expect("one parked equivocation owner");
+    let _pending = executor
+        .pending_lifecycle_output_admissions
+        .remove(&key)
+        .expect("transfer malformed evidence into lifecycle service settlement");
     assert!(matches!(
-        executor.consume_effects(
-            vec![AdapterEffect::ReportEquivocation {
-                evidence: AdapterEquivocationEvidence::vote_for_test(first, second),
-            }],
-            &mut services,
-        ),
+        executor.execute_lifecycle_output_service(&effect, &ownership, &mut services),
         Err(EffectExecutorError::Contract(reason))
-            if reason.contains("do not form one conflict")
+            if reason.contains("ReportEquivocation carried invalid evidence")
     ));
     assert!(services.equivocations.is_empty());
 }
+
+fn authenticated_proposal_fetch_ownership(
+    fixture: &Fixture,
+    effect: &AdapterEffect,
+    lifecycle_ordinal: u128,
+) -> RuntimeEffectOwnership {
+    let AdapterEffect::FetchBody {
+        manifest: Some(manifest),
+        certificate: None,
+        ..
+    } = effect
+    else {
+        panic!("authenticated Proposal replay requires one ordinary manifest Fetch")
+    };
+    let wire::ConsensusMessageV2Payload::Proposal(mut proposal) = proposal(fixture).payload else {
+        unreachable!("Proposal fixture has one Proposal payload")
+    };
+    proposal.manifest.clone_from(manifest);
+    let mut ownership = bound_test_effect_ownership(effect, tag(0), lifecycle_ordinal);
+    assert!(ownership.bind_authenticated_remote_proposal_replay_for_test(proposal, effect));
+    ownership
+}
+
 #[test]
-fn authenticated_chunk_reconstruction_rejection_retires_fetch_nonfatally() {
+fn authenticated_chunk_reconstruction_rejection_retries_exact_proposal_fetch_nonfatally() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
+    let fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let ownership = authenticated_proposal_fetch_ownership(&fixture, &fetch, 9_018);
+    executor.runtime.exact_effect_ownership = Some((fetch.clone(), ownership));
     executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            }],
-            &mut services,
-        )
+        .consume_effects(vec![fetch.clone()], &mut services)
         .expect("begin fetch");
-    let work_id = services.fetch_tasks[0].id();
+    let fetch_task = services.fetch_tasks[0].clone();
+    let work_id = fetch_task.id();
     services.reject_authenticated_chunks = true;
     let mut chunk = wire::PayloadChunk {
         manifest_hash: HashOf::new(&fixture.manifest),
@@ -526,10 +572,45 @@ fn authenticated_chunk_reconstruction_rejection_retires_fetch_nonfatally() {
             "authenticated chunks reconstructed invalid or noncanonical body data"
         ))
     ));
-    assert!(executor.pending_fetches.is_empty());
-    assert!(executor.body_pipeline_owners.is_empty());
+    assert_eq!(executor.pending_fetches.len(), 1);
+    assert_eq!(executor.pending_fetches[&work_id].task, fetch_task);
+    assert!(
+        executor
+            .body_pipeline_owners
+            .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
+    );
+    assert!(matches!(
+        executor
+            .remote_proposal_replay
+            .get(&(fixture.manifest.round, fixture.manifest.subject)),
+        Some(RemoteProposalReplayStageV1::Fetch {
+            work_id: replay_work_id,
+            ..
+        }) if *replay_work_id == work_id
+    ));
+    assert_eq!(
+        services.fetch_tasks,
+        vec![fetch_task.clone(), fetch_task.clone()]
+    );
     assert_eq!(services.chunks, vec![work_id]);
     assert!(services.closed.is_empty());
+    assert!(!executor.status().fail_closed);
+
+    let periodic_ownership = bound_test_effect_ownership(&fetch, tag(0), 9_019);
+    assert!(
+        periodic_ownership
+            .exact_remote_proposal_fetch_replay(&fetch)
+            .is_none()
+    );
+    executor.runtime.exact_effect_ownership = Some((fetch.clone(), periodic_ownership));
+    assert_eq!(
+        executor
+            .consume_effects(vec![fetch], &mut services)
+            .expect("periodic rediscovery retries the retained authenticated Fetch owner"),
+        1
+    );
+    assert_eq!(services.fetch_tasks, vec![fetch_task.clone(); 3]);
+    assert_eq!(executor.pending_fetches[&work_id].task, fetch_task);
     assert!(!executor.status().fail_closed);
 }
 #[test]
@@ -729,7 +810,7 @@ fn owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work
     assert!(executor.status().fail_closed);
 }
 #[test]
-fn proposal_reconstruction_rejects_noncanonical_manifest_without_fail_close() {
+fn proposal_reconstruction_rejection_retries_and_preserves_hybrid_owner() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
@@ -741,20 +822,43 @@ fn proposal_reconstruction_rejects_noncanonical_manifest_without_fail_close() {
         fixture.manifest.subject,
         &alternate_chunk,
     );
+    let ordinary_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(alternate_manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let ordinary_ownership =
+        authenticated_proposal_fetch_ownership(&fixture, &ordinary_fetch, 9_020);
+    executor.runtime.exact_effect_ownership = Some((ordinary_fetch.clone(), ordinary_ownership));
     executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(alternate_manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            }],
-            &mut services,
-        )
+        .consume_effects(vec![ordinary_fetch], &mut services)
         .expect("proposal starts body acquisition");
-    let fetch_task = services.fetch_tasks[0].clone();
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let certified_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(alternate_manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    executor
+        .consume_effects(vec![certified_fetch.clone()], &mut services)
+        .expect("Prepare authority upgrades the authenticated Proposal fetch");
+    let fetch_task = services
+        .fetch_tasks
+        .last()
+        .expect("hybrid Fetch reaches the service")
+        .clone();
+    let work_id = fetch_task.id();
+    let request_hash = HashOf::new(
+        fetch_task
+            .certified_request()
+            .expect("hybrid Fetch owns one certified request"),
+    );
     assert_eq!(
         executor
             .complete_body_reconstruction(
@@ -766,11 +870,37 @@ fn proposal_reconstruction_rejects_noncanonical_manifest_without_fail_close() {
             .expect("noncanonical proposal data is a recoverable remote rejection"),
         CompletionDisposition::Rejected
     );
-    assert!(executor.pending_fetches.is_empty());
+    assert_eq!(executor.pending_fetches.len(), 1);
+    assert_eq!(executor.pending_fetches[&work_id].task, fetch_task);
+    assert_eq!(executor.certified_work.get(&request_hash), Some(&work_id));
+    assert!(executor.outstanding_requests.contains(request_hash));
     assert!(executor.ready_bodies.is_empty());
-    assert!(executor.body_pipeline_owners.is_empty());
+    assert!(
+        executor
+            .body_pipeline_owners
+            .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
+    );
+    assert!(matches!(
+        executor
+            .remote_proposal_replay
+            .get(&(fixture.manifest.round, fixture.manifest.subject)),
+        Some(RemoteProposalReplayStageV1::Fetch {
+            work_id: replay_work_id,
+            ..
+        }) if *replay_work_id == work_id
+    ));
     assert!(executor.runtime.completions.is_empty());
+    assert_eq!(services.fetch_tasks.last(), Some(&fetch_task));
+    assert_eq!(services.completed_reconstruction_fetches, vec![work_id]);
     assert!(services.closed.is_empty());
+    assert!(!executor.status().fail_closed);
+
+    executor
+        .consume_effects(vec![certified_fetch], &mut services)
+        .expect("periodic certified rediscovery retries the same hybrid owner");
+    assert_eq!(executor.pending_fetches[&work_id].task, fetch_task);
+    assert_eq!(executor.certified_work.get(&request_hash), Some(&work_id));
+    assert_eq!(executor.outstanding_requests.len(), 1);
     assert!(!executor.status().fail_closed);
 }
 #[test]

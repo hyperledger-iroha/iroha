@@ -10,8 +10,9 @@ use super::{
     work_registry::{
         ClaimedCertifiedServeDispatchErrorV1, ClaimedCertifiedServeDispatchV1,
         ClaimedProducerTurnErrorV1, ClaimedProducerTurnV1, ConcreteLifecycleWorkRegistry,
-        ReadyCertifiedServeAttestationV1, ReadyProducerTurnCensusAttestationErrorV1,
-        ReadyRecoveredDecisionApplyDemand,
+        ReadyCertifiedServeAttestationV1, ReadyLifecycleBroadcastCarrierV1,
+        ReadyProducerTurnCensusAttestationErrorV1, ReadyRecoveredDecisionApplyDemand,
+        ReadyRetainedDirectBroadcastAttestationV1,
     },
 };
 #[cfg(test)]
@@ -164,6 +165,17 @@ fn authenticated_ready_row_with_physical_capacity(
         recovered_fetch_attestation,
         physical_capacity_available,
         live_debts,
+    )
+}
+fn authenticated_retained_direct_broadcast_ready_row(
+    factory: &AuthenticatedSchedulerInputsFactory,
+    record: &super::LifecycleRecord,
+    attestation: ReadyRetainedDirectBroadcastAttestationV1,
+    live_debts: [u64; 6],
+) -> Option<SchedulerReadyInputs> {
+    attestation.matches_ready_record(record).then_some(())?;
+    authenticated_ready_row_with_physical_capacity(
+        factory, record, None, None, None, None, false, live_debts,
     )
 }
 fn authenticated_scheduler_inputs(
@@ -698,13 +710,23 @@ enum AuthenticatedRecoveredCompletionReadyV1 {
     Sign(super::work_registry::ReadyRecoveredLifecycleSignAttestationV1),
     Fetch(super::work_registry::ReadyRecoveredDecisionFetchAttestationV1),
     CertifiedBody(super::work_registry::ReadyCertifiedBodyPipelineAttestationV1),
+    RetainedDirectBroadcast(ReadyRetainedDirectBroadcastAttestationV1),
 }
 
 fn classify_completion_ready_classes(
     classes: &[LifecycleWorkClass],
+    has_retained_direct_output: bool,
+    oldest_is_retained_direct_output: bool,
 ) -> ProductionCompletionReadyWorkV1 {
+    if oldest_is_retained_direct_output {
+        return ProductionCompletionReadyWorkV1::PassThrough;
+    }
     if classes.is_empty() {
-        return ProductionCompletionReadyWorkV1::None;
+        return if has_retained_direct_output {
+            ProductionCompletionReadyWorkV1::PassThrough
+        } else {
+            ProductionCompletionReadyWorkV1::None
+        };
     }
     if classes.iter().any(|class| {
         matches!(
@@ -1133,6 +1155,46 @@ impl ProductionLifecycleOwnerV1 {
         )
     }
 
+    fn classify_schedulable_completion_work(
+        &self,
+        schedulable: &BTreeSet<u128>,
+    ) -> ProductionCompletionReadyWorkV1 {
+        let mut retained_direct_outputs = BTreeSet::new();
+        let mut classes = Vec::with_capacity(schedulable.len());
+        for ordinal in schedulable {
+            let Some(record) = self.coordinator.records.get(ordinal) else {
+                return ProductionCompletionReadyWorkV1::Invalid;
+            };
+            if record.work_class != LifecycleWorkClass::Broadcast {
+                classes.push(record.work_class);
+                continue;
+            }
+            match self
+                .registry
+                .registry()
+                .attest_ready_lifecycle_broadcast_carrier(&self.coordinator, *ordinal)
+            {
+                Ok(ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(_)) => {
+                    if !retained_direct_outputs.insert(*ordinal) {
+                        return ProductionCompletionReadyWorkV1::Invalid;
+                    }
+                }
+                Ok(ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout) => {
+                    classes.push(record.work_class);
+                }
+                Err(_) => return ProductionCompletionReadyWorkV1::Invalid,
+            }
+        }
+        let oldest_is_retained_direct_output = schedulable
+            .first()
+            .is_some_and(|ordinal| retained_direct_outputs.contains(ordinal));
+        classify_completion_ready_classes(
+            &classes,
+            !retained_direct_outputs.is_empty(),
+            oldest_is_retained_direct_output,
+        )
+    }
+
     /// Classify Ready work without claiming a lease or reserving capacity.
     ///
     /// Broadcast refanout and recovered Apply/Sign/Fetch each authenticate their
@@ -1174,12 +1236,7 @@ impl ProductionLifecycleOwnerV1 {
                     .then_some(*ordinal)
                 }),
         );
-        let classes = schedulable
-            .iter()
-            .filter_map(|ordinal| self.coordinator.records.get(ordinal))
-            .map(|record| record.work_class)
-            .collect::<Vec<_>>();
-        classify_completion_ready_classes(&classes)
+        self.classify_schedulable_completion_work(&schedulable)
     }
 
     /// Plan one turn from the complete directly-owned production Ready census.
@@ -1845,8 +1902,28 @@ impl ProductionLifecycleOwnerV1 {
                         None,
                     )
                 }
-                LifecycleWorkClass::Broadcast
-                | LifecycleWorkClass::EnterView
+                LifecycleWorkClass::Broadcast => {
+                    let attestation = match self
+                        .registry
+                        .registry()
+                        .attest_ready_lifecycle_broadcast_carrier(&self.coordinator, *ordinal)
+                        .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?
+                    {
+                        ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation) => {
+                            attestation
+                        }
+                        ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout => {
+                            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                        }
+                    };
+                    (
+                        AuthenticatedRecoveredCompletionReadyV1::RetainedDirectBroadcast(
+                            attestation,
+                        ),
+                        None,
+                    )
+                }
+                LifecycleWorkClass::EnterView
                 | LifecycleWorkClass::EquivocationReport
                 | LifecycleWorkClass::InvalidBodyReport
                 | LifecycleWorkClass::CertifiedServe
@@ -1893,7 +1970,13 @@ impl ProductionLifecycleOwnerV1 {
                 AuthenticatedRecoveredCompletionReadyV1::Validate(attestation)
                     if !attestation.requires_io_dispatch()
             );
-            let (physical_available, predecessor_debt) = if direct_physical {
+            let retained_direct_output = matches!(
+                &ready,
+                AuthenticatedRecoveredCompletionReadyV1::RetainedDirectBroadcast(_)
+            );
+            let (physical_available, predecessor_debt) = if retained_direct_output {
+                (false, 0)
+            } else if direct_physical {
                 (true, 0)
             } else {
                 census
@@ -1953,6 +2036,14 @@ impl ProductionLifecycleOwnerV1 {
                 }
                 AuthenticatedRecoveredCompletionReadyV1::CertifiedBody(attestation) => {
                     authenticated_certified_body_pipeline_ready_row(
+                        &factory,
+                        record,
+                        attestation,
+                        live_debts,
+                    )
+                }
+                AuthenticatedRecoveredCompletionReadyV1::RetainedDirectBroadcast(attestation) => {
+                    authenticated_retained_direct_broadcast_ready_row(
                         &factory,
                         record,
                         attestation,
@@ -2411,11 +2502,32 @@ impl ProductionLifecycleOwnerV1 {
                 ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidReadyCensus,
             );
         }
-        let Some(ordinal) = exact_ready.iter().copied().find(|ordinal| {
-            self.coordinator
-                .records
-                .get(ordinal)
-                .is_some_and(|record| record.work_class == LifecycleWorkClass::Broadcast)
+        let mut broadcast_carriers = BTreeMap::new();
+        for ready_ordinal in &exact_ready {
+            let Some(record) = self.coordinator.records.get(ready_ordinal) else {
+                return Err(
+                    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidReadyCensus,
+                );
+            };
+            if record.work_class != LifecycleWorkClass::Broadcast {
+                continue;
+            }
+            let carrier = self
+                .registry
+                .registry()
+                .attest_ready_lifecycle_broadcast_carrier(&self.coordinator, *ready_ordinal)
+                .map_err(|_| {
+                    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
+                })?;
+            if broadcast_carriers.insert(*ready_ordinal, carrier).is_some() {
+                return Err(
+                    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidReadyCensus,
+                );
+            }
+        }
+        let Some(ordinal) = broadcast_carriers.iter().find_map(|(ordinal, carrier)| {
+            matches!(carrier, ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout)
+                .then_some(*ordinal)
         }) else {
             if exact_ready.is_empty() {
                 return Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::None);
@@ -2467,25 +2579,41 @@ impl ProductionLifecycleOwnerV1 {
                 [1, 0, 0, 0, 0, runner_debt]
             };
             let row = match ready_record.work_class {
-                LifecycleWorkClass::Broadcast => {
-                    self.registry
-                        .attest_ready_recovered_lifecycle_signed_broadcast(
-                            &self.coordinator,
-                            *ready_ordinal,
+                LifecycleWorkClass::Broadcast => match broadcast_carriers
+                    .get(ready_ordinal)
+                    .copied()
+                    .ok_or(
+                        ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidReadyCensus,
+                    )?
+                {
+                    ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation) => {
+                        authenticated_retained_direct_broadcast_ready_row(
+                            &factory,
+                            ready_record,
+                            attestation,
+                            live_debts,
                         )
-                        .map_err(|_| {
-                            ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
-                        })?;
-                    authenticated_ready_row(
-                        &factory,
-                        ready_record,
-                        None,
-                        None,
-                        None,
-                        None,
-                        live_debts,
-                    )
-                }
+                    }
+                    ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout => {
+                        self.registry
+                            .attest_ready_recovered_lifecycle_signed_broadcast(
+                                &self.coordinator,
+                                *ready_ordinal,
+                            )
+                            .map_err(|_| {
+                                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
+                            })?;
+                        authenticated_ready_row(
+                            &factory,
+                            ready_record,
+                            None,
+                            None,
+                            None,
+                            None,
+                            live_debts,
+                        )
+                    }
+                },
                 LifecycleWorkClass::SignVote
                 | LifecycleWorkClass::SignProposal
                 | LifecycleWorkClass::SignTimeout => {
@@ -3141,6 +3269,7 @@ mod recovered_sign_capacity_tests {
     use super::super::schema::SchedulerEpisode;
     use super::{
         AuthenticatedSchedulerInputsFactory, ProductionCompletionDispatchV1,
+        ProductionCompletionReadyWorkV1,
         ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
         ProductionRecoveredLifecycleSignedBroadcastRefanoutV1, ProductionV2Services,
         authenticated_ready_row,
@@ -3148,8 +3277,9 @@ mod recovered_sign_capacity_tests {
     use crate::sumeragi::v2_lifecycle_coordinator::{
         CapacityClass, CausalRoot, LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord,
         LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleState, LifecycleWorkClass,
-        OwnerId, PhysicalSlotId, PredecessorScope, ProductionLifecycleOwnerV1,
-        SchedulerEpisodeUniverse, work_registry::ReadyRecoveredLifecycleSignAttestationV1,
+        OwnerId, PhysicalSlotId, PredecessorScope, ProductionLifecycleOutputAdmissionSettlementV1,
+        ProductionLifecycleOwnerV1, SchedulerEpisodeUniverse,
+        work_registry::ReadyRecoveredLifecycleSignAttestationV1,
     };
     use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
@@ -3158,6 +3288,23 @@ mod recovered_sign_capacity_tests {
         sync::Arc,
         time::{Duration, Instant},
     };
+
+    macro_rules! sumeragi_stack_test {
+        ($name:ident, $body:block) => {
+            #[test]
+            fn $name() {
+                let handle = crate::sumeragi::sumeragi_thread_builder(concat!(
+                    "sumeragi-v2-scheduler-test-",
+                    stringify!($name)
+                ))
+                .spawn(move || $body)
+                .expect("spawn scheduler regression on the production consensus stack");
+                if let Err(payload) = handle.join() {
+                    std::panic::resume_unwind(payload);
+                }
+            }
+        };
+    }
 
     fn digest(byte: u8) -> LifecycleDigest {
         LifecycleDigest::new([byte; 32])
@@ -3383,6 +3530,68 @@ mod recovered_sign_capacity_tests {
         planner_io.detach(&mut services);
     }
 
+    sumeragi_stack_test!(
+        direct_broadcast_deferred_behind_completion_is_passive_and_sign_is_selected,
+        {
+            let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+            let context = worker_context(&keys);
+            let proofs = keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("direct-output scheduler proof of possession")
+                })
+                .collect::<Vec<_>>();
+            let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+                .expect("verified direct-output scheduler context");
+            let directory =
+                tempfile::TempDir::new().expect("temporary direct-output scheduler store");
+            let runtime = recovered_completion_runtime(verified.clone(), directory.path());
+            let (mut owner, broadcast, paired, unrelated) =
+                ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                    verified,
+                    &keys[0],
+                    directory.path(),
+                );
+            let (direct, _direct_pending) = owner
+                .defer_direct_timeout_broadcast_for_test(0x71)
+                .expect("defer one exact direct timeout Broadcast behind Ready completion work");
+            assert!(owner.retire_ready_work_for_completion_test(broadcast));
+            assert_eq!(
+                owner.exact_ready_completion_classification_for_test(),
+                ProductionCompletionReadyWorkV1::CompletionIo,
+                "the later direct output cannot masquerade as recovered refanout"
+            );
+            let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+            let (mut executor, planner_io) = owner
+                .bind_body_store_to_recovered_completion_io_for_test(
+                    &mut services,
+                    runtime,
+                    Arc::clone(&output_guard),
+                    2,
+                );
+
+            assert_eq!(
+                owner
+                    .dispatch_completion_with_runner_debt(&services, &mut executor, 0)
+                    .expect("the exact completion census retains direct output passively"),
+                ProductionCompletionDispatchV1::SignQueued { ordinal: paired }
+            );
+            let state = owner.recovered_broadcast_scheduler_state_for_test(broadcast);
+            assert!(matches!(
+                state.records[&paired].state,
+                LifecycleState::Claimed(_)
+            ));
+            assert_eq!(state.records[&unrelated].state, LifecycleState::Ready);
+            assert_eq!(state.records[&direct].state, LifecycleState::Ready);
+            assert!(state.ready_index.contains(&direct));
+            assert!(state.active_lease.is_some());
+            assert!(state.fault.is_none());
+            assert!(!output_guard.restart_required());
+            planner_io.detach(&mut services);
+        }
+    );
+
     #[test]
     fn composite_recovered_completion_capacity_unavailable_claims_no_ready_sign() {
         let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
@@ -3498,6 +3707,128 @@ mod recovered_sign_capacity_tests {
         assert!(
             bounded_owner.finalization_registry_census_is_exact_for_test(),
             "finalization accepts the exact volatile refanout wait beside its Ready next Sign"
+        );
+    }
+
+    sumeragi_stack_test!(
+        recovered_refanout_authenticates_coexisting_direct_broadcast_without_claiming_it,
+        {
+            let (mut owner, services, _planner_io, _directory, broadcast, _paired, _unrelated) =
+                recovered_broadcast_scheduler_fixture();
+            let (direct, _direct_pending) = owner
+                .defer_direct_timeout_broadcast_for_test(0x72)
+                .expect("defer one exact direct timeout Broadcast beside recovered refanout");
+            assert_eq!(
+                owner.exact_ready_completion_classification_for_test(),
+                ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast
+            );
+
+            assert_eq!(
+                owner
+                    .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0)
+                    .expect("refanout authenticates the complete mixed Broadcast census"),
+                ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                    ordinal: broadcast
+                }
+            );
+            let after = owner.recovered_broadcast_scheduler_state_for_test(broadcast);
+            assert!(matches!(
+                after.records[&broadcast].state,
+                LifecycleState::Waiting(_)
+            ));
+            assert_eq!(after.records[&direct].state, LifecycleState::Ready);
+            assert!(after.ready_index.contains(&direct));
+            assert!(after.active_lease.is_none());
+            assert!(after.fault.is_none());
+        }
+    );
+
+    sumeragi_stack_test!(
+        broadcast_carrier_classifier_rejects_mismatched_direct_output,
+        {
+            let (mut owner, services, _planner_io, _directory, broadcast, _paired, _unrelated) =
+                recovered_broadcast_scheduler_fixture();
+            let (direct, _direct_pending) = owner
+                .defer_direct_timeout_broadcast_for_test(0x73)
+                .expect("defer one exact direct timeout Broadcast before corruption");
+            assert!(owner.corrupt_ready_digest_for_test(direct));
+            assert_eq!(
+                owner.exact_ready_completion_classification_for_test(),
+                ProductionCompletionReadyWorkV1::Invalid,
+                "a mismatched direct carrier must fail before route selection"
+            );
+            let before = owner.recovered_broadcast_scheduler_state_for_test(broadcast);
+            assert_eq!(
+                owner.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0),
+                Err(ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier)
+            );
+            assert_eq!(
+                owner.recovered_broadcast_scheduler_state_for_test(broadcast),
+                before,
+                "foreign direct-output coordinates fail before coordinator mutation"
+            );
+        }
+    );
+
+    #[test]
+    fn generic_retransmit_of_recovered_broadcast_stutters_without_registry_mutation() {
+        let (
+            mut owner,
+            services,
+            _planner_io,
+            _directory,
+            broadcast_ordinal,
+            _paired_ordinal,
+            _unrelated_ordinal,
+        ) = recovered_broadcast_scheduler_fixture();
+        let ready_before = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        let ready_retransmit = owner
+            .recovered_broadcast_runtime_retransmit_for_test(broadcast_ordinal, 11, 0xA1)
+            .expect("seal the byte-identical Ready recovered-Broadcast retransmit");
+        assert!(matches!(
+            owner.settle_lifecycle_output_admission::<()>(
+                ready_retransmit,
+                |_effect, _ownership| {
+                    panic!("the typed recovered Broadcast remains the sole service-I/O owner")
+                },
+            ),
+            ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+        ));
+        assert_eq!(
+            owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal),
+            ready_before,
+            "generic settlement cannot mutate or terminalize the Ready typed carrier"
+        );
+
+        assert_eq!(
+            owner
+                .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0)
+                .expect("the typed owner performs its exact refanout"),
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                ordinal: broadcast_ordinal,
+            }
+        );
+        let waiting_before = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert!(matches!(
+            waiting_before.records[&broadcast_ordinal].state,
+            LifecycleState::Waiting(_)
+        ));
+        let waiting_retransmit = owner
+            .recovered_broadcast_runtime_retransmit_for_test(broadcast_ordinal, 12, 0xA2)
+            .expect("seal the byte-identical Waiting recovered-Broadcast retransmit");
+        assert!(matches!(
+            owner.settle_lifecycle_output_admission::<()>(
+                waiting_retransmit,
+                |_effect, _ownership| {
+                    panic!("generic settlement cannot repeat typed recovered refanout")
+                },
+            ),
+            ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+        ));
+        assert_eq!(
+            owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal),
+            waiting_before,
+            "generic settlement cannot mutate the volatile typed refanout wait"
         );
     }
 
@@ -3727,6 +4058,131 @@ impl ProductionLifecycleOwnerV1 {
                     broadcast_ordinal,
                 ),
         }
+    }
+
+    /// Seal a generic runtime retransmit without exposing the typed carrier.
+    fn recovered_broadcast_runtime_retransmit_for_test(
+        &self,
+        broadcast_ordinal: u128,
+        generation: u64,
+        source_ordinal: u128,
+    ) -> Option<super::work_registry::PendingLifecycleOutputAdmissionV1> {
+        let record = self.coordinator.records.get(&broadcast_ordinal)?;
+        let tag = crate::sumeragi::v2_core::EventTag::new(
+            record.key.round().height(),
+            record.key.round().view(),
+            crate::sumeragi::v2_core::Generation::new(generation),
+        );
+        self.registry
+            .registry()
+            .recovered_broadcast_runtime_retransmit_for_test(
+                &self.coordinator,
+                broadcast_ordinal,
+                tag,
+                source_ordinal,
+            )
+    }
+
+    /// Admit one ordinary direct timeout Broadcast behind existing Ready work
+    /// and return its unchanged generic-settlement owner.
+    fn defer_direct_timeout_broadcast_for_test(
+        &mut self,
+        marker: u8,
+    ) -> Option<(
+        u128,
+        Box<super::work_registry::PendingLifecycleOutputAdmissionV1>,
+    )> {
+        use crate::sumeragi::v2_runtime::{
+            RuntimeEffectOwnership, bind_adapter_effect_batch_ownership,
+        };
+        use iroha_data_model::block::consensus_v2 as wire;
+
+        let context = self.verified.context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: u64::from(marker),
+        };
+        let effect = crate::sumeragi::v2::AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                round,
+                highest_prepare_qc: None,
+                signer: 0,
+                signature: vec![marker],
+            }),
+        ));
+        let source_ordinal = self.coordinator.high_water.checked_add(0x100)?;
+        let tag = crate::sumeragi::v2_core::EventTag::new(
+            round.height,
+            round.view,
+            crate::sumeragi::v2_core::Generation::new(u64::from(marker).saturating_add(1)),
+        );
+        let ownership = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, source_ordinal)],
+        )
+        .ok()?
+        .pop()?;
+        let pending =
+            super::work_registry::PendingLifecycleOutputAdmissionV1::seal_exact(effect, ownership)
+                .ok()?;
+        let expected_ordinal = self.coordinator.high_water.checked_add(1)?;
+        let super::ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending) = self
+            .settle_lifecycle_output_admission::<()>(pending, |_effect, _ownership| {
+                panic!("a later direct output cannot overtake existing Ready work")
+            })
+        else {
+            return None;
+        };
+        if self.coordinator.high_water != expected_ordinal {
+            return None;
+        }
+        let ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation) = self
+            .registry
+            .registry()
+            .attest_ready_lifecycle_broadcast_carrier(&self.coordinator, expected_ordinal)
+            .ok()?
+        else {
+            return None;
+        };
+        attestation
+            .matches_ready_record(self.coordinator.records.get(&expected_ordinal)?)
+            .then(|| (expected_ordinal, Box::new(pending)))
+    }
+
+    /// Classify the exact current Ready census without constructing a reducer
+    /// fence; scheduler fixtures contain no prospectively-woken rows.
+    fn exact_ready_completion_classification_for_test(&self) -> ProductionCompletionReadyWorkV1 {
+        let exact_ready = self
+            .coordinator
+            .records
+            .iter()
+            .filter_map(|(ordinal, record)| {
+                (record.state == LifecycleState::Ready).then_some(*ordinal)
+            })
+            .collect::<BTreeSet<_>>();
+        if exact_ready != self.coordinator.ready_index {
+            return ProductionCompletionReadyWorkV1::Invalid;
+        }
+        self.classify_schedulable_completion_work(&exact_ready)
+    }
+
+    /// Drift only one Ready row's physical digest away from its concrete
+    /// carrier while preserving the rest of the census.
+    fn corrupt_ready_digest_for_test(&mut self, ordinal: u128) -> bool {
+        let Some(record) = self.coordinator.records.get_mut(&ordinal) else {
+            return false;
+        };
+        let Some((&slot, &digest)) = record.physical_slots.first_key_value() else {
+            return false;
+        };
+        let replacement = if digest == super::LifecycleDigest::new([0xFD; 32]) {
+            super::LifecycleDigest::new([0xFE; 32])
+        } else {
+            super::LifecycleDigest::new([0xFD; 32])
+        };
+        record.physical_slots.insert(slot, replacement);
+        true
     }
 
     /// Remove the deliberately unrelated fixture Sign from the bounded owner.
@@ -4050,35 +4506,51 @@ mod unified_completion_classifier_tests {
     #[test]
     fn supported_ready_coexistence_selects_only_a_full_census_transaction() {
         assert_eq!(
-            classify_completion_ready_classes(&[
-                LifecycleWorkClass::Validate,
-                LifecycleWorkClass::Broadcast,
-                LifecycleWorkClass::SignVote,
-                LifecycleWorkClass::Apply,
-                LifecycleWorkClass::Fetch,
-            ]),
+            classify_completion_ready_classes(
+                &[
+                    LifecycleWorkClass::Validate,
+                    LifecycleWorkClass::Broadcast,
+                    LifecycleWorkClass::SignVote,
+                    LifecycleWorkClass::Apply,
+                    LifecycleWorkClass::Fetch,
+                ],
+                false,
+                false,
+            ),
             ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast
         );
         assert_eq!(
-            classify_completion_ready_classes(&[
-                LifecycleWorkClass::Broadcast,
-                LifecycleWorkClass::ProducerTurn,
-            ]),
+            classify_completion_ready_classes(
+                &[
+                    LifecycleWorkClass::Broadcast,
+                    LifecycleWorkClass::ProducerTurn,
+                ],
+                false,
+                false,
+            ),
             ProductionCompletionReadyWorkV1::PassThrough
         );
         assert_eq!(
-            classify_completion_ready_classes(&[
-                LifecycleWorkClass::Broadcast,
-                LifecycleWorkClass::CertifiedServe,
-            ]),
+            classify_completion_ready_classes(
+                &[
+                    LifecycleWorkClass::Broadcast,
+                    LifecycleWorkClass::CertifiedServe,
+                ],
+                false,
+                false,
+            ),
             ProductionCompletionReadyWorkV1::PassThrough
         );
         assert_eq!(
-            classify_completion_ready_classes(&[
-                LifecycleWorkClass::Apply,
-                LifecycleWorkClass::SignProposal,
-                LifecycleWorkClass::Fetch,
-            ]),
+            classify_completion_ready_classes(
+                &[
+                    LifecycleWorkClass::Apply,
+                    LifecycleWorkClass::SignProposal,
+                    LifecycleWorkClass::Fetch,
+                ],
+                false,
+                false,
+            ),
             ProductionCompletionReadyWorkV1::CompletionIo
         );
     }
@@ -4086,20 +4558,37 @@ mod unified_completion_classifier_tests {
     #[test]
     fn exact_single_ready_io_classes_use_the_same_composite_dispatcher() {
         assert_eq!(
-            classify_completion_ready_classes(&[LifecycleWorkClass::Apply]),
+            classify_completion_ready_classes(&[LifecycleWorkClass::Apply], false, false),
             ProductionCompletionReadyWorkV1::CompletionIo
         );
         assert_eq!(
-            classify_completion_ready_classes(&[LifecycleWorkClass::SignTimeout]),
+            classify_completion_ready_classes(&[LifecycleWorkClass::SignTimeout], false, false),
             ProductionCompletionReadyWorkV1::CompletionIo
         );
         assert_eq!(
-            classify_completion_ready_classes(&[LifecycleWorkClass::Fetch]),
+            classify_completion_ready_classes(&[LifecycleWorkClass::Fetch], false, false),
             ProductionCompletionReadyWorkV1::CompletionIo
         );
         assert_eq!(
-            classify_completion_ready_classes(&[]),
+            classify_completion_ready_classes(&[], false, false),
             ProductionCompletionReadyWorkV1::None
+        );
+    }
+
+    #[test]
+    fn later_retained_direct_broadcast_routes_validate_to_completion_io() {
+        assert_eq!(
+            classify_completion_ready_classes(&[LifecycleWorkClass::Validate], true, false),
+            ProductionCompletionReadyWorkV1::CompletionIo
+        );
+        assert_eq!(
+            classify_completion_ready_classes(&[LifecycleWorkClass::Validate], true, true),
+            ProductionCompletionReadyWorkV1::PassThrough,
+            "an oldest direct output remains owned by generic settlement"
+        );
+        assert_eq!(
+            classify_completion_ready_classes(&[], true, true),
+            ProductionCompletionReadyWorkV1::PassThrough
         );
     }
 }

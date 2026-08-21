@@ -287,13 +287,74 @@ fn decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work() {
             .expect("dispatch only exact post-Decision effects"),
         EffectExecutorStep::Advanced { effects: 2 }
     );
-    assert_eq!(services.broadcasts, vec![exact_commit_message]);
+    assert!(services.broadcasts.is_empty());
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
     assert!(services.sign_tasks.is_empty());
     assert_eq!(services.fetch_tasks.len(), 1);
     assert_eq!(services.fetch_tasks[0].round, commit.round);
     assert_eq!(services.fetch_tasks[0].subject, commit.subject);
     assert_eq!(services.retired_all_outbound, 1);
     assert_eq!(services.retired_candidate_work, 1);
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+#[test]
+fn decision_commit_broadcast_yields_exact_apply_until_lifecycle_output_settles() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    install_fsynced_validation_fixture(
+        &mut executor,
+        &mut services,
+        &fixture,
+        fixture.manifest.clone(),
+    );
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let exact_commit_message = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(commit.clone()),
+    );
+    let apply = AdapterEffect::Apply {
+        tag: tag(0),
+        subject: fixture.manifest.subject,
+        certificate: commit,
+    };
+    executor.runtime.decision_on_next_step = Some(decision);
+    executor
+        .runtime
+        .steps
+        .push_back(Ok(RuntimeStep::Advanced(vec![
+            AdapterEffect::Broadcast(exact_commit_message),
+            apply.clone(),
+        ])));
+
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("park the CommitQC output before terminal Decision cleanup"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+    assert_eq!(executor.protected_decision, Some(decision));
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
+    assert!(services.apply_tasks.is_empty());
+    let retained = executor
+        .retained_effect_batch
+        .as_ref()
+        .expect("retain the exact Apply suffix behind lifecycle settlement");
+    assert_eq!(retained.effects.len(), 1);
+    let retained_apply = retained.effects.front().expect("one retained Apply owner");
+    assert_eq!(retained_apply.effect, apply);
+    assert!(
+        retained_apply
+            .ownership
+            .exactly_binds_adapter_effect(&retained_apply.effect)
+    );
+    assert!(services.broadcasts.is_empty());
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
@@ -767,6 +828,659 @@ fn decision_body_stage_adoption_promotes_matching_prepare_authority() {
         .expect("matching Commit authority adopts the incumbent validation root");
     assert_eq!(adopted, incumbent);
 }
+
+fn prepared_remote_proposal_fetch_replay(
+    fixture: &Fixture,
+    replay_tag: EventTag,
+    ordinal: u128,
+) -> (
+    AdapterEffect,
+    RuntimeEffectOwnership,
+    PreparedRemoteProposalFetchReplayPreAdmission,
+) {
+    let fetch_effect = AdapterEffect::FetchBody {
+        tag: replay_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let mut fetch_ownership = bound_test_effect_ownership(&fetch_effect, replay_tag, ordinal);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal(fixture).payload else {
+        unreachable!("Proposal fixture has one Proposal payload")
+    };
+    assert!(
+        fetch_ownership
+            .bind_authenticated_remote_proposal_replay_for_test(proposal, &fetch_effect,)
+    );
+    let fetch_replay = PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(
+        fetch_effect.clone(),
+        fetch_ownership.clone(),
+    )
+    .unwrap_or_else(|_| panic!("seal exact authenticated Proposal Fetch"));
+    (fetch_effect, fetch_ownership, fetch_replay)
+}
+
+fn prepared_remote_proposal_store_replay(
+    fixture: &Fixture,
+    replay_tag: EventTag,
+    ordinal: u128,
+) -> (
+    AdapterEffect,
+    RuntimeEffectOwnership,
+    AdapterEffect,
+    RuntimeEffectOwnership,
+    PreparedRemoteProposalStoreReplayPreAdmission,
+) {
+    let (fetch_effect, fetch_ownership, fetch_replay) =
+        prepared_remote_proposal_fetch_replay(fixture, replay_tag, ordinal);
+    let store_effect = AdapterEffect::StoreBody {
+        tag: replay_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let store_ownership = fetch_ownership
+        .rebind_as_inherited_adapter_effect(&store_effect)
+        .expect("project exact Proposal Store owner");
+    let store_replay = fetch_replay
+        .project_store(store_effect.clone(), store_ownership.clone())
+        .unwrap_or_else(|_| panic!("project exact authenticated Proposal Store"));
+    (
+        fetch_effect,
+        fetch_ownership,
+        store_effect,
+        store_ownership,
+        store_replay,
+    )
+}
+
+fn install_stored_remote_proposal_replay(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    fixture: &Fixture,
+    replay_tag: EventTag,
+    ordinal: u128,
+) -> RuntimeEffectOwnership {
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let (_fetch_effect, _fetch_ownership, _store_effect, store_ownership, store_replay) =
+        prepared_remote_proposal_store_replay(fixture, replay_tag, ordinal);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        HashOf::new(&fixture.manifest),
+    );
+    let stored_replay = store_replay
+        .bind_durable_body(durable.clone())
+        .unwrap_or_else(|_| panic!("bind exact durable Proposal body"));
+    assert!(executor.durable_bodies.insert(key, durable).is_none());
+    assert!(
+        executor
+            .remote_proposal_replay
+            .insert(
+                key,
+                RemoteProposalReplayStageV1::Stored {
+                    replay: stored_replay,
+                    ownership: store_ownership.clone(),
+                },
+            )
+            .is_none()
+    );
+    store_ownership
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn periodic_proposal_fetch_stutters_only_against_its_exact_advanced_replay_family() {
+    let fixture = Fixture::new();
+    let replay_tag = tag(0);
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+
+    {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (fetch, ownership, replay) =
+            prepared_remote_proposal_fetch_replay(&fixture, replay_tag, 9_014);
+        let work_id = EffectWorkId::for_test(9_014);
+        let task = BodyFetchTask {
+            id: work_id,
+            tag: replay_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            sources: Vec::new(),
+            certified_request: None,
+            ownership: ownership.clone(),
+        };
+        assert!(
+            !executor
+                .bind_body_pipeline_owner_hash(
+                    replay_tag,
+                    key,
+                    Some(HashOf::new(&fixture.manifest)),
+                )
+                .expect("install the exact in-flight Proposal body owner")
+        );
+        assert!(
+            executor
+                .pending_fetches
+                .insert(
+                    work_id,
+                    PendingFetch {
+                        task: task.clone(),
+                        request_hash: None,
+                    },
+                )
+                .is_none()
+        );
+        assert!(
+            executor
+                .remote_proposal_replay
+                .insert(key, RemoteProposalReplayStageV1::Fetch { work_id, replay },)
+                .is_none()
+        );
+        executor
+            .retain_effect_batch(vec![fetch], vec![ownership])
+            .expect("retain the exact in-flight Proposal Fetch rediscovery");
+        assert_eq!(
+            executor
+                .drain_retained_effect_batch(&mut services, true)
+                .expect("the exact in-flight Proposal Fetch is redispatched"),
+            1
+        );
+        assert_eq!(services.fetch_tasks, vec![task]);
+        assert!(matches!(
+            executor.remote_proposal_replay.get(&key),
+            Some(RemoteProposalReplayStageV1::Fetch {
+                work_id: retained,
+                ..
+            }) if *retained == work_id
+        ));
+    }
+
+    {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (fetch, ownership, replay) =
+            prepared_remote_proposal_fetch_replay(&fixture, replay_tag, 9_015);
+        assert!(
+            executor
+                .remote_proposal_replay
+                .insert(key, RemoteProposalReplayStageV1::BodyAvailable(replay))
+                .is_none()
+        );
+        executor
+            .retain_effect_batch(vec![fetch], vec![ownership])
+            .expect("retain the Proposal Fetch rediscovered after BodyAvailable");
+        assert_eq!(
+            executor
+                .drain_retained_effect_batch(&mut services, true)
+                .expect("BodyAvailable stutters the exact Fetch rediscovery"),
+            1
+        );
+        assert!(services.fetch_tasks.is_empty());
+        assert!(matches!(
+            executor.remote_proposal_replay.get(&key),
+            Some(RemoteProposalReplayStageV1::BodyAvailable(_))
+        ));
+    }
+
+    {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (fetch, ownership, _store, _store_ownership, replay) =
+            prepared_remote_proposal_store_replay(&fixture, replay_tag, 9_016);
+        assert!(
+            executor
+                .remote_proposal_replay
+                .insert(key, RemoteProposalReplayStageV1::StoreAdmission(replay))
+                .is_none()
+        );
+        executor
+            .retain_effect_batch(vec![fetch], vec![ownership])
+            .expect("retain the Proposal Fetch rediscovered during Store admission");
+        assert!(matches!(
+            executor.drain_retained_effect_batch(&mut services, true),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("transient Store admission")
+        ));
+        assert!(services.fetch_tasks.is_empty());
+        assert!(matches!(
+            executor.remote_proposal_replay.get(&key),
+            Some(RemoteProposalReplayStageV1::StoreAdmission(_))
+        ));
+    }
+
+    {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (fetch, ownership, _store, _store_ownership, replay) =
+            prepared_remote_proposal_store_replay(&fixture, replay_tag, 9_017);
+        let work_id = EffectWorkId::for_test(9_017);
+        assert!(
+            executor
+                .remote_proposal_replay
+                .insert(key, RemoteProposalReplayStageV1::Store { work_id, replay },)
+                .is_none()
+        );
+        executor
+            .retain_effect_batch(vec![fetch], vec![ownership])
+            .expect("retain the Proposal Fetch rediscovered during Store I/O");
+        assert_eq!(
+            executor
+                .drain_retained_effect_batch(&mut services, true)
+                .expect("Store I/O stutters the exact Fetch rediscovery"),
+            1
+        );
+        assert!(services.fetch_tasks.is_empty());
+        assert!(matches!(
+            executor.remote_proposal_replay.get(&key),
+            Some(RemoteProposalReplayStageV1::Store {
+                work_id: retained,
+                ..
+            }) if *retained == work_id
+        ));
+    }
+
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    install_stored_remote_proposal_replay(&mut executor, &fixture, replay_tag, 9_018);
+    let (fetch, rediscovery, _replay) =
+        prepared_remote_proposal_fetch_replay(&fixture, replay_tag, 9_019);
+    executor
+        .retain_effect_batch(vec![fetch], vec![rediscovery])
+        .expect("retain one periodic Proposal Fetch rediscovery");
+    assert_eq!(
+        executor
+            .drain_retained_effect_batch(&mut services, true)
+            .expect("the exact Stored Proposal family stutters the stale Fetch"),
+        1
+    );
+    assert!(services.fetch_tasks.is_empty());
+    assert!(matches!(
+        executor.remote_proposal_replay.get(&key),
+        Some(RemoteProposalReplayStageV1::Stored { .. })
+    ));
+
+    let foreign_manifest = deliberately_conflicting_payload_manifest(
+        &fixture.context,
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        b"foreign periodic Proposal body",
+    );
+    let foreign_fetch = AdapterEffect::FetchBody {
+        tag: replay_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(foreign_manifest),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let foreign_owner = bound_test_effect_ownership(&foreign_fetch, replay_tag, 9_020);
+    executor
+        .retain_effect_batch(vec![foreign_fetch], vec![foreign_owner])
+        .expect("retain the conflicting periodic Fetch for exact replay rejection");
+    assert!(matches!(
+        executor.drain_retained_effect_batch(&mut services, true),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("changed its retained authenticated replay origin")
+    ));
+    assert!(services.fetch_tasks.is_empty());
+    assert!(matches!(
+        executor.remote_proposal_replay.get(&key),
+        Some(RemoteProposalReplayStageV1::Stored { .. })
+    ));
+}
+
+#[test]
+fn authenticated_ordinary_proposal_stutters_behind_certified_fetch() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let certified = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare.clone()),
+    };
+    executor
+        .consume_effects(vec![certified], &mut services)
+        .expect("admit the stronger certified Fetch first");
+    let incumbent = services
+        .fetch_tasks
+        .first()
+        .expect("certified Fetch owns one service task")
+        .clone();
+    let request = incumbent
+        .certified_request()
+        .expect("incumbent retains certified request")
+        .clone();
+
+    let ordinary = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let mut ordinary_ownership = bound_test_effect_ownership(&ordinary, tag(0), 9_017);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal(&fixture).payload else {
+        unreachable!("Proposal fixture has one Proposal payload")
+    };
+    assert!(
+        ordinary_ownership.bind_authenticated_remote_proposal_replay_for_test(proposal, &ordinary)
+    );
+    assert!(
+        ordinary_ownership
+            .exact_remote_proposal_fetch_replay(&ordinary)
+            .is_some()
+    );
+    executor.runtime.exact_effect_ownership = Some((ordinary.clone(), ordinary_ownership));
+
+    assert_eq!(
+        executor
+            .consume_effects(vec![ordinary], &mut services)
+            .expect("the stale authenticated Proposal terminates behind certified acquisition"),
+        0
+    );
+    assert_eq!(services.fetch_tasks, vec![incumbent.clone()]);
+    assert_eq!(executor.pending_fetches.len(), 1);
+    assert_eq!(executor.pending_fetches[&incumbent.id()].task, incumbent);
+    assert_eq!(executor.outstanding_requests.len(), 1);
+    assert_eq!(
+        executor.pending_fetches[&incumbent.id()]
+            .task
+            .certified_request(),
+        Some(&request)
+    );
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(!executor.status().fail_closed);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn durable_decision_preserves_stored_proposal_replay_for_commit_refined_validate() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let tag = tag(0);
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let store_ownership =
+        install_stored_remote_proposal_replay(&mut executor, &fixture, tag, 9_015);
+
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let ordinary_validate_ownership = store_ownership
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("project ordinary Proposal Validate owner");
+    executor
+        .retain_effect_batch(
+            vec![validate_effect.clone()],
+            vec![ordinary_validate_ownership],
+        )
+        .expect("retain ordinary Proposal Validate before Decision");
+    executor
+        .park_retained_effect_batch()
+        .expect("park ordinary Proposal Validate behind the next runtime turn");
+
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let commit_fetch = AdapterEffect::FetchBody {
+        tag,
+        round: commit.proposal_round,
+        subject: commit.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &commit),
+        certificate: Some(commit),
+    };
+    let commit_validate_ownership = bound_test_effect_ownership(&commit_fetch, tag, 9_016)
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("carry durable Commit authority into Validate");
+    assert!(
+        commit_validate_ownership
+            .binds_durable_decision_authority(decision.0, decision.1, decision.2, decision.3,)
+    );
+    executor.runtime.decided_body = Some(decision);
+    executor.runtime.exact_effect_ownership =
+        Some((validate_effect.clone(), commit_validate_ownership));
+
+    assert_eq!(
+        executor
+            .consume_effects(vec![validate_effect], &mut services)
+            .expect("Decision preserves and consumes the exact stored Proposal replay"),
+        1
+    );
+    assert_eq!(executor.protected_decision, Some(decision));
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(
+        executor
+            .pending_durable_validate_admissions
+            .contains_key(&key)
+    );
+    assert_eq!(
+        executor
+            .durable_validate_retry_seals
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![key]
+    );
+    assert!(executor.durable_validate_retry_seals_are_finalization_inert());
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn enter_view_preserves_stored_proposal_replay_for_prepare_refined_validate() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let next_tag = tag(1);
+    install_stored_remote_proposal_replay(&mut executor, &fixture, tag(0), 9_017);
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let mut timeout = timeout_certificate(&fixture);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    executor.runtime.round_tag = Some(next_tag);
+    executor.runtime.locked_body = Some(key);
+    executor
+        .install_view(next_tag, timeout, Some(prepare.clone()), &mut services)
+        .expect("EnterView preserves the protected fsynced Proposal Store lineage");
+    assert!(matches!(
+        executor.remote_proposal_replay.get(&key),
+        Some(RemoteProposalReplayStageV1::Stored { .. })
+    ));
+
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag: next_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let prepare_fetch = AdapterEffect::FetchBody {
+        tag: next_tag,
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let prepare_validate_ownership = bound_test_effect_ownership(&prepare_fetch, next_tag, 9_018)
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("carry Prepare authority into the protected Validate");
+    executor
+        .retain_effect_batch(vec![validate_effect], vec![prepare_validate_ownership])
+        .expect("adopt the Stored Proposal root under Prepare authority");
+    assert_eq!(
+        executor
+            .drain_retained_effect_batch(&mut services, true)
+            .expect("consume the replay-authorized protected Validate"),
+        1
+    );
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(
+        executor
+            .pending_durable_validate_admissions
+            .contains_key(&key)
+    );
+    assert!(executor.durable_validate_retry_seals.contains_key(&key));
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay_reuse() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let store_ownership =
+        install_stored_remote_proposal_replay(&mut executor, &fixture, tag(0), 9_019);
+    let ordinary_validate_ownership = store_ownership
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("project the ordinary Proposal Validate owner");
+    executor
+        .retain_effect_batch(
+            vec![validate_effect.clone()],
+            vec![ordinary_validate_ownership],
+        )
+        .expect("retain the first replay-authorized Validate");
+    assert_eq!(
+        executor
+            .drain_retained_effect_batch(&mut services, true)
+            .expect("install the first durable Validate admission"),
+        1
+    );
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(
+        executor
+            .pending_durable_validate_admissions
+            .remove(&key)
+            .is_some(),
+        "model the move-only owner transferring into the lifecycle registry"
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let prepare_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare.clone()),
+    };
+    let prepare_validate_ownership = bound_test_effect_ownership(&prepare_fetch, tag(0), 9_020)
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("carry Prepare authority into the duplicate Validate");
+    executor
+        .retain_effect_batch(
+            vec![validate_effect.clone()],
+            vec![prepare_validate_ownership],
+        )
+        .expect("the exact authority upgrade stutters at its retained seal");
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.remote_proposal_replay.is_empty());
+    let accepted_seal = executor.durable_validate_retry_seals[&key].clone();
+
+    let mut conflicting = prepare;
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"conflicting sealed Validate parent state"),
+        Hash::new(b"conflicting sealed Validate post state"),
+        Hash::new(b"conflicting sealed Validate ordinary writes"),
+        1,
+        Hash::new(b"conflicting sealed Validate executed block"),
+    );
+    let conflicting_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: conflicting.proposal_round,
+        subject: conflicting.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &conflicting),
+        certificate: Some(conflicting),
+    };
+    let conflicting_validate = bound_test_effect_ownership(&conflicting_fetch, tag(0), 9_021)
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("carry the conflicting Prepare authority into Validate");
+    assert!(matches!(
+        executor.retain_effect_batch(vec![validate_effect], vec![conflicting_validate]),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("body key or authority commitment")
+    ));
+    assert_eq!(executor.durable_validate_retry_seals[&key], accepted_seal);
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn unprotected_enter_view_retires_inert_validate_retry_seal_without_work_debt() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let store_ownership =
+        install_stored_remote_proposal_replay(&mut executor, &fixture, tag(0), 9_022);
+    let validate_ownership = store_ownership
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("project the ordinary Proposal Validate owner");
+    executor
+        .retain_effect_batch(vec![validate_effect], vec![validate_ownership])
+        .expect("retain the replay-authorized Validate");
+    assert_eq!(
+        executor
+            .drain_retained_effect_batch(&mut services, true)
+            .expect("install the durable Validate admission and retry tombstone"),
+        1
+    );
+    assert!(
+        executor
+            .pending_durable_validate_admissions
+            .remove(&key)
+            .is_some(),
+        "model the move-only owner transferring into the lifecycle registry"
+    );
+    assert!(executor.durable_validate_retry_seals.contains_key(&key));
+    assert_eq!(executor.pending_work(), 0);
+    assert_eq!(executor.status().pending_validations, 0);
+    assert!(!executor.durable_validate_retry_seals_are_finalization_inert());
+
+    let next_tag = tag(1);
+    executor.runtime.round_tag = Some(next_tag);
+    executor.runtime.locked_body = None;
+    executor
+        .install_view(next_tag, timeout_certificate(&fixture), None, &mut services)
+        .expect("unprotected EnterView retires the stale Validate tombstone");
+    assert!(executor.durable_validate_retry_seals.is_empty());
+    assert!(executor.durable_validate_retry_seals_are_finalization_inert());
+    assert_eq!(executor.pending_work(), 0);
+    assert_eq!(executor.status().pending_validations, 0);
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+
 #[test]
 fn decision_body_stage_adoption_rejects_commitment_drift() {
     let fixture = Fixture::new();

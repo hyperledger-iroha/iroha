@@ -896,6 +896,19 @@ mod protocol {
         };
     }
 
+    macro_rules! required_binding_value {
+        ($binding:expr, $field:ident) => {
+            ($binding).$field.ok_or(BrokerError::BindingMismatch)?
+        };
+    }
+    macro_rules! required_binding_ref {
+        ($binding:expr, $field:ident) => {
+            ($binding)
+                .$field
+                .as_ref()
+                .ok_or(BrokerError::BindingMismatch)?
+        };
+    }
     /// Exact operation identifiers and foundational canonical wire containers.
     mod primitives {
         use super::*;
@@ -10199,19 +10212,6 @@ mod protocol {
                     .$field
                     .as_ref()
                     .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?
-            };
-        }
-        macro_rules! required_binding_value {
-            ($binding:expr, $field:ident) => {
-                ($binding).$field.ok_or(BrokerError::BindingMismatch)?
-            };
-        }
-        macro_rules! required_binding_ref {
-            ($binding:expr, $field:ident) => {
-                ($binding)
-                    .$field
-                    .as_ref()
-                    .ok_or(BrokerError::BindingMismatch)?
             };
         }
         macro_rules! provider_call {

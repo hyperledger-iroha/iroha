@@ -923,7 +923,10 @@ impl AxtHandleBudgetKey {
             quantity.mantissa().bit_len().saturating_add(7) / 8
         }
 
-        let mut total = self.scope.capacity().saturating_mul(core::mem::size_of::<String>());
+        let mut total = self
+            .scope
+            .capacity()
+            .saturating_mul(core::mem::size_of::<String>());
         for item in &self.scope {
             total = total.saturating_add(item.capacity());
         }

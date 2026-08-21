@@ -124,6 +124,34 @@ impl PreparedLifecycleOutputRecoveryV1 {
     pub(in crate::sumeragi) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Project the complete authenticated cold-output ordinal census.
+    pub(super) fn exact_ready_ordinals_for_registry_census(
+        &self,
+        coordinator: &LifecycleCoordinator,
+    ) -> Option<BTreeSet<u128>> {
+        self.entries
+            .iter()
+            .all(|(ordinal, output)| {
+                *ordinal == output.ordinal()
+                    && coordinator.ready_index.contains(ordinal)
+                    && recovered_output_matches_ready_coordinator_row(coordinator, output)
+            })
+            .then(|| self.entries.keys().copied().collect())
+    }
+}
+
+impl AuthenticatedLifecycleRecoveryCut {
+    /// Rejoin the still-owned cold outputs to the opened coordinator census.
+    pub(super) fn exact_lifecycle_output_ordinals_for_registry_census(
+        &self,
+        coordinator: &LifecycleCoordinator,
+    ) -> Option<BTreeSet<u128>> {
+        self.lifecycle_outputs.as_ref().map_or_else(
+            || Some(BTreeSet::new()),
+            |outputs| outputs.exact_ready_ordinals_for_registry_census(coordinator),
+        )
+    }
 }
 
 /// Result of attempting the oldest authenticated cold output.
@@ -131,8 +159,10 @@ impl PreparedLifecycleOutputRecoveryV1 {
 pub(in crate::sumeragi) enum RecoveredLifecycleOutputSettlementV1 {
     /// No cold output remains owned by this height.
     Empty,
-    /// An older lifecycle row or active lease still owns execution order.
+    /// Ordering or an active lease defers execution until an earlier owner settles.
     Deferred,
+    /// The output source retained responsibility and the same Ready row remains owned.
+    SourceRetained,
     /// The exact output service and same-row terminal fsync both completed.
     Completed,
 }
@@ -149,6 +179,16 @@ pub(in crate::sumeragi) enum RecoveredLifecycleOutputSettlementErrorV1<E> {
 }
 
 impl super::ProductionLifecycleOwnerV1 {
+    /// Rejoin every retained cold output to this owner's current coordinator.
+    pub(super) fn exact_lifecycle_output_ordinals_for_registry_census(
+        &self,
+    ) -> Option<BTreeSet<u128>> {
+        self.recovered_lifecycle_outputs.as_ref().map_or_else(
+            || Some(BTreeSet::new()),
+            |outputs| outputs.exact_ready_ordinals_for_registry_census(&self.coordinator),
+        )
+    }
+
     /// Return whether an authenticated cold output still awaits exact settlement.
     pub(in crate::sumeragi) fn has_recovered_lifecycle_outputs(&self) -> bool {
         self.recovered_lifecycle_outputs
@@ -163,7 +203,12 @@ impl super::ProductionLifecycleOwnerV1 {
     /// so every earlier failure leaves the same row restart-recoverable.
     pub(in crate::sumeragi) fn settle_next_recovered_lifecycle_output<E>(
         &mut self,
-        execute: impl FnOnce(&crate::sumeragi::v2::AdapterEffect) -> Result<(), E>,
+        execute: impl FnOnce(
+            &crate::sumeragi::v2::AdapterEffect,
+        ) -> Result<
+            super::concrete_admission::LifecycleOutputServiceDispositionV1,
+            E,
+        >,
     ) -> Result<RecoveredLifecycleOutputSettlementV1, RecoveredLifecycleOutputSettlementErrorV1<E>>
     {
         let Self {
@@ -193,7 +238,14 @@ impl super::ProductionLifecycleOwnerV1 {
                 "cold output changed its exact Ready lifecycle row",
             ));
         }
-        execute(output.effect()).map_err(RecoveredLifecycleOutputSettlementErrorV1::Service)?;
+        match execute(output.effect())
+            .map_err(RecoveredLifecycleOutputSettlementErrorV1::Service)?
+        {
+            super::concrete_admission::LifecycleOutputServiceDispositionV1::Accepted => {}
+            super::concrete_admission::LifecycleOutputServiceDispositionV1::SourceRetained => {
+                return Ok(RecoveredLifecycleOutputSettlementV1::SourceRetained);
+            }
+        }
 
         let mut staged = coordinator.stage_durable_transaction();
         if staged
@@ -224,6 +276,15 @@ fn recovered_output_matches_ready_coordinator(
     coordinator: &LifecycleCoordinator,
     output: &super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1,
 ) -> bool {
+    coordinator.active_context == super::projection::lifecycle_context(verified.context())
+        && output.authenticates_settlement(verified)
+        && recovered_output_matches_ready_coordinator_row(coordinator, output)
+}
+
+fn recovered_output_matches_ready_coordinator_row(
+    coordinator: &LifecycleCoordinator,
+    output: &super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1,
+) -> bool {
     let candidate = output.candidate();
     let ordinal = output.ordinal();
     let (Some(record), Some(metadata)) = (
@@ -236,8 +297,6 @@ fn recovered_output_matches_ready_coordinator(
         return false;
     };
     coordinator.fault.is_none()
-        && coordinator.active_context == super::projection::lifecycle_context(verified.context())
-        && output.authenticates_settlement(verified)
         && candidate.initial_state == super::InitialLifecycleState::Ready
         && record.owner == output.owner()
         && record.owner.causal_root() == candidate.causal_root

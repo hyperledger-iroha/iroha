@@ -2316,16 +2316,18 @@ mod tests {
                 .result_merkle_commitment()
                 .map(|commitment| *commitment.root())
         );
-        let mut final_signatures = genesis.signatures();
-        let final_signature = final_signatures
-            .next()
-            .expect("result-bearing archive genesis signature");
-        assert_eq!(final_signature.index(), 0);
-        assert!(final_signatures.next().is_none());
-        final_signature
-            .signature()
-            .verify_hash(genesis_signer.public_key(), genesis.hash())
-            .expect("verify result-bearing archive genesis signature");
+        {
+            let mut final_signatures = genesis.signatures();
+            let final_signature = final_signatures
+                .next()
+                .expect("result-bearing archive genesis signature");
+            assert_eq!(final_signature.index(), 0);
+            assert!(final_signatures.next().is_none());
+            final_signature
+                .signature()
+                .verify_hash(genesis_signer.public_key(), genesis.hash())
+                .expect("verify result-bearing archive genesis signature");
+        }
         let genesis_hash = *genesis.hash().as_ref();
         let network_id = NetworkId::from_genesis_hash(genesis.hash());
         let kura = Kura::blank_kura_for_testing();

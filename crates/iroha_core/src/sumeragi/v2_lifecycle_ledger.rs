@@ -1989,9 +1989,18 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
         {
             return false;
         }
+        let Some(owner_held_outputs) = owner.exact_lifecycle_output_ordinals_for_registry_census()
+        else {
+            return false;
+        };
         let registry = owner.registry.registry_mut();
-        registry.exactly_covers_recovered_ready_work(&owner.coordinator)
-            || registry.exactly_covers_recovered_ready_work_and_wal_authority(&owner.coordinator)
+        registry.exactly_covers_recovered_ready_work_with_owner_held_outputs(
+            &owner.coordinator,
+            &owner_held_outputs,
+        ) || registry.exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(
+            &owner.coordinator,
+            &owner_held_outputs,
+        )
     }
     fn exactly_matches_successor_owner(&self, owner: &mut ProductionLifecycleOwnerV1) -> bool {
         self.successor_descends_from_retirement()
@@ -2727,9 +2736,19 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
                     ProductionLifecycleStartupErrorKindV1::CoordinatorOpen(error.into_error()),
                 )
             })?;
+        let Some(owner_held_outputs) =
+            recovery.exact_lifecycle_output_ordinals_for_registry_census(&coordinator)
+        else {
+            return Err(ProductionLifecycleStartupErrorV1::new(
+                ProductionLifecycleStartupErrorKindV1::RegistryCoordinatorMismatch,
+            ));
+        };
         if !registry
             .registry_mut()
-            .exactly_covers_recovered_ready_work(&coordinator)
+            .exactly_covers_recovered_ready_work_with_owner_held_outputs(
+                &coordinator,
+                &owner_held_outputs,
+            )
         {
             return Err(ProductionLifecycleStartupErrorV1::new(
                 ProductionLifecycleStartupErrorKindV1::RegistryCoordinatorMismatch,
@@ -3783,9 +3802,20 @@ impl ProductionLifecycleOwnerV1 {
                 ProductionLifecycleStartupErrorKindV1::InvalidStorageCut,
             ));
         }
+        let Some(owner_held_outputs) = recovered_lifecycle_outputs.as_ref().map_or_else(
+            || Some(std::collections::BTreeSet::new()),
+            |outputs| outputs.exact_ready_ordinals_for_registry_census(&coordinator),
+        ) else {
+            return Err(ProductionLifecycleStartupErrorV1::new(
+                ProductionLifecycleStartupErrorKindV1::RegistryCoordinatorMismatch,
+            ));
+        };
         if !registry
             .registry_mut()
-            .exactly_covers_recovered_ready_work_and_wal_authority(&coordinator)
+            .exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(
+                &coordinator,
+                &owner_held_outputs,
+            )
         {
             return Err(ProductionLifecycleStartupErrorV1::new(
                 ProductionLifecycleStartupErrorKindV1::RegistryCoordinatorMismatch,
@@ -3825,14 +3855,23 @@ impl ProductionLifecycleOwnerV1 {
             .body_store
             .as_ref()
             .expect("an unlaunched production owner retains its exact body store");
+        let Some(owner_held_outputs) = self.exact_lifecycle_output_ordinals_for_registry_census()
+        else {
+            return false;
+        };
         self.adapter_startup
             .as_ref()
             .is_some_and(ProductionLifecycleAdapterStartupV1::is_exact_for_test)
             && {
                 let registry = self.registry.registry_mut();
-                registry.exactly_covers_recovered_ready_work(&self.coordinator)
-                    || registry
-                        .exactly_covers_recovered_ready_work_and_wal_authority(&self.coordinator)
+                registry.exactly_covers_recovered_ready_work_with_owner_held_outputs(
+                    &self.coordinator,
+                    &owner_held_outputs,
+                ) || registry
+                    .exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(
+                        &self.coordinator,
+                        &owner_held_outputs,
+                    )
             }
     }
     /// Return the exact durable high-water/ordinal pair for the sole control row.

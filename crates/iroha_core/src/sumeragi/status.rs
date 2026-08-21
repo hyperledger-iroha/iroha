@@ -1,5 +1,4 @@
 //! Process-local operator diagnostics for Sumeragi v2 and Nexus lanes.
-//!
 //! Consensus state itself is published exclusively as the exact reducer-owned
 //! [`SumeragiV2Status`]. The remaining snapshots in this module are
 //! non-consensus Nexus economics, settlement, lane, and adapter diagnostics.
@@ -2242,6 +2241,7 @@ mod v2_liveness_watchdog_tests {
             pending_fetches: 0,
             pending_stores: 0,
             pending_validations: 0,
+            pending_outputs: 0,
             deferred_application_merge_work: 0,
             pending_applications: 0,
             ready_bodies: 0,

@@ -2938,6 +2938,77 @@ impl RemoteProposalFetchReplayEvidenceV1 {
             && self.source == candidate.source
             && self.fetch_pending == candidate.fetch_pending
     }
+    /// Retag one unchanged ordinary Proposal Fetch to its strictly later
+    /// reducer consumer without changing the authenticated replay family.
+    ///
+    /// The pending-binding projection proves that the causal root, candidate
+    /// statement, and every concrete Fetch coordinate except `EventTag` are
+    /// unchanged. Certified Fetches cannot enter this Proposal-only seam.
+    pub(in crate::sumeragi) fn rebind_exact_consumer(
+        &self,
+        previous_effect: &AdapterEffect,
+        previous_pending: &PendingRuntimeEffectBinding,
+        rebound_effect: &AdapterEffect,
+        rebound_pending: PendingRuntimeEffectBinding,
+    ) -> Option<Self> {
+        if !self.exactly_matches_fetch_pending(previous_effect, previous_pending)
+            || previous_pending
+                .project_fetch_consumer_rebind(previous_effect, rebound_effect)
+                .as_ref()
+                != Some(&rebound_pending)
+        {
+            return None;
+        }
+        let (
+            AdapterEffect::FetchBody {
+                tag: previous_tag,
+                round: previous_round,
+                subject: previous_subject,
+                manifest: Some(previous_manifest),
+                certified_sources: previous_sources,
+                certificate: None,
+            },
+            AdapterEffect::FetchBody {
+                tag: rebound_tag,
+                round: rebound_round,
+                subject: rebound_subject,
+                manifest: Some(rebound_manifest),
+                certified_sources: rebound_sources,
+                certificate: None,
+            },
+        ) = (previous_effect, rebound_effect)
+        else {
+            return None;
+        };
+        if !rebound_tag.strictly_advances(*previous_tag)
+            || previous_round != rebound_round
+            || previous_subject != rebound_subject
+            || previous_manifest != rebound_manifest
+            || !previous_sources.is_empty()
+            || previous_sources != rebound_sources
+        {
+            return None;
+        }
+        let proposal =
+            exact_remote_proposal_fetch(&self.authenticated, &self.ingress, rebound_effect)?;
+        let source = BodyPipelineReplaySourceV1 {
+            tag: ReplayEventTagV1::new(
+                rebound_tag.height(),
+                rebound_tag.view(),
+                rebound_tag.generation().get(),
+            ),
+            origin: BodyPipelineOriginV1::Proposal(proposal.clone()),
+        };
+        let rebound = Self {
+            authenticated: self.authenticated.clone(),
+            ingress: self.ingress.clone(),
+            source,
+            fetch_pending: Arc::new(rebound_pending),
+        };
+        rebound
+            .exactly_matches_fetch(rebound_effect)
+            .then_some(rebound)
+    }
     /// Preflight the only accepted Fetch-to-Store causal projection.
     pub(in crate::sumeragi) fn exactly_projects_store(
         &self,
@@ -3087,7 +3158,11 @@ impl RemoteProposalStoredReplayEvidenceV1 {
             )
             || self
                 .store_pending
-                .project_store_validate_successor(store_effect, validate_effect)
+                .project_store_validate_successor_with_authority_refinement(
+                    store_effect,
+                    validate_effect,
+                    validate_pending,
+                )
                 .as_ref()
                 != Some(validate_pending)
         {
@@ -3095,8 +3170,55 @@ impl RemoteProposalStoredReplayEvidenceV1 {
         }
         let projected = self
             .store_pending
-            .project_store_validate_successor(store_effect, validate_effect)
-            .expect("an exact remote Proposal Store has one Validate successor");
+            .project_store_validate_successor_with_authority_refinement(
+                store_effect,
+                validate_effect,
+                validate_pending,
+            )
+            .expect("an exact remote Proposal Store has one authority-refined Validate successor");
+        debug_assert_eq!(&projected, validate_pending);
+        Ok(RemoteProposalValidateReplayEvidenceV1 {
+            family: self.family,
+            validate_pending: Arc::new(projected),
+        })
+    }
+    /// Consume ordinary Proposal Store evidence through the exact
+    /// Commit-refined Validate owner selected by a durable Decision.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn project_exact_validate_after_durable_decision(
+        self,
+        store_effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+    ) -> Result<RemoteProposalValidateReplayEvidenceV1, Self> {
+        if !self.exactly_matches_store(store_effect, receipt)
+            || !remote_proposal_body_stage_matches(
+                &self.family,
+                validate_effect,
+                receipt,
+                LifecycleStageKind::ValidateBody,
+            )
+            || self
+                .store_pending
+                .project_store_validate_successor_with_commit_refinement(
+                    store_effect,
+                    validate_effect,
+                    validate_pending,
+                )
+                .as_ref()
+                != Some(validate_pending)
+        {
+            return Err(self);
+        }
+        let projected = self
+            .store_pending
+            .project_store_validate_successor_with_commit_refinement(
+                store_effect,
+                validate_effect,
+                validate_pending,
+            )
+            .expect("an exact ordinary Proposal Store has one Commit-refined Validate successor");
         debug_assert_eq!(&projected, validate_pending);
         Ok(RemoteProposalValidateReplayEvidenceV1 {
             family: self.family,
@@ -3273,8 +3395,16 @@ fn remote_proposal_body_stage_matches(
                 round,
                 subject,
             },
-        )
-        | (
+        ) => {
+            let BodyPipelineOriginV1::Proposal(proposal) = &family.source.origin else {
+                return false;
+            };
+            family.source.tag
+                == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
+                && *round == proposal.round
+                && *subject == proposal.subject
+        }
+        (
             LifecycleStageKind::ValidateBody,
             AdapterEffect::ValidateBody {
                 tag,
@@ -3285,8 +3415,13 @@ fn remote_proposal_body_stage_matches(
             let BodyPipelineOriginV1::Proposal(proposal) = &family.source.origin else {
                 return false;
             };
-            family.source.tag
-                == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
+            let source_tag = EventTag::new(
+                family.source.tag.height,
+                family.source.tag.view,
+                crate::sumeragi::v2_core::Generation::new(family.source.tag.generation),
+            );
+            tag.height() == source_tag.height()
+                && (*tag == source_tag || tag.strictly_advances(source_tag))
                 && *round == proposal.round
                 && *subject == proposal.subject
         }

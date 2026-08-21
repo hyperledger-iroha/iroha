@@ -365,6 +365,8 @@ fn remote_proposal_replay_pre_admission_is_closed_exact_and_live() {
         ".project_exact_store(&effect, &pending)",
         "fn bind_durable_body(",
         ".bind_durable_body(&effect, &durable_receipt)",
+        "fn exactly_authenticates_fetch_rediscovery(",
+        ".exactly_matches_origin_fetch(effect)",
         "fn project_validate(",
         ".project_exact_validate(",
         "fn into_durable_validate_carrier(",
@@ -379,6 +381,13 @@ fn remote_proposal_replay_pre_admission_is_closed_exact_and_live() {
             "remote Proposal replay token omitted {required}"
         );
     }
+    assert_eq!(
+        token
+            .matches("pub(in crate::sumeragi) fn exactly_authenticates_fetch_rediscovery(")
+            .count(),
+        3,
+        "Fetch, Store, and Stored wrappers must each retain the exact Proposal origin"
+    );
     for declaration in [
         "PreparedRemoteProposalFetchReplayPreAdmission {",
         "PreparedRemoteProposalStoreReplayPreAdmission {",
@@ -418,12 +427,20 @@ fn remote_proposal_replay_pre_admission_is_closed_exact_and_live() {
             "remote Proposal replay token exposed forbidden surface {forbidden}"
         );
     }
-    let executor = include_str!("../v2_effects.rs");
+    let executor = concat!(
+        include_str!("../v2_effects.rs"),
+        include_str!("../v2_effects_lifecycle_admission_settlement.rs"),
+    );
     for required in [
         "PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(",
+        "stage.exactly_authenticates_fetch_rediscovery(&exact_effect)",
+        "ordinary Proposal Fetch rediscovery observed a transient Store admission",
+        "RemoteProposalReplayStageV1::BodyAvailable(_)",
+        "RemoteProposalReplayStageV1::Store { .. }",
+        "RemoteProposalReplayStageV1::Stored { .. }",
         ".project_store(effect.clone(), ownership.clone())",
-        ".bind_durable_body(receipt)",
-        ".project_validate(effect, ownership)",
+        ".bind_durable_body(receipt.clone())",
+        ".project_validate(effect.clone(), validate_ownership.clone())",
         ".into_pending_durable_validate_admission()",
     ] {
         assert!(
