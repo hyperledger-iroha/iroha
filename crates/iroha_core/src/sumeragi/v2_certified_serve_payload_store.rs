@@ -355,7 +355,6 @@ impl RecoveredCertifiedServeCompletedPayload<'_> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     variant_size_differences,
-    clippy::large_enum_variant,
     reason = "the recovered state is a Copy borrowed view; boxing would allocate during startup recovery"
 )]
 pub(crate) enum RecoveredCertifiedServePayloadState<'a> {

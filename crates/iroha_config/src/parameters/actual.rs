@@ -8098,66 +8098,6 @@ pub struct ToriiTransport {
 }
 include!("actual/torii_http_transport.rs");
 include!("actual/torii_mcp_profile.rs");
-/// Native MCP configuration exposed by Torii.
-#[derive(Debug, Clone)]
-pub struct ToriiMcp {
-    /// Master enable switch for `/v1/mcp`.
-    pub enabled: bool,
-    /// Maximum accepted request payload size in bytes.
-    pub max_request_bytes: usize,
-    /// Maximum number of tools emitted in one `tools/list` response page.
-    pub max_tools_per_list: usize,
-    /// MCP tool profile.
-    pub profile: ToriiMcpProfile,
-    /// Expose operator-only routes in the MCP tool registry.
-    pub expose_operator_routes: bool,
-    /// Additional allow-list prefixes for tool names (empty => profile-only).
-    pub allow_tool_prefixes: Vec<String>,
-    /// Additional deny-list prefixes for tool names.
-    pub deny_tool_prefixes: Vec<String>,
-    /// Optional steady-state MCP request budget (requests per minute).
-    pub rate_per_minute: Option<NonZeroU32>,
-    /// Optional MCP burst budget.
-    pub burst: Option<NonZeroU32>,
-}
-/// Torii CORS response-header policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToriiCors {
-    /// Enable CORS response headers.
-    pub enabled: bool,
-    /// Explicit browser origins allowed to make cross-origin requests.
-    pub allowed_origins: Vec<String>,
-    /// Explicit HTTP methods allowed in CORS preflight responses.
-    pub allowed_methods: Vec<String>,
-    /// Explicit request headers allowed in CORS preflight responses.
-    pub allowed_headers: Vec<String>,
-    /// Explicit response headers exposed to browser clients.
-    pub exposed_headers: Vec<String>,
-    /// Maximum preflight cache age in seconds.
-    pub max_age_secs: u64,
-}
-impl_default!(ToriiCors => {
-        Self {
-            enabled: defaults::torii::cors::ENABLED,
-            allowed_origins: defaults::torii::cors::allowed_origins(),
-            allowed_methods: defaults::torii::cors::allowed_methods(),
-            allowed_headers: defaults::torii::cors::allowed_headers(),
-            exposed_headers: defaults::torii::cors::exposed_headers(),
-            max_age_secs: defaults::torii::cors::MAX_AGE_SECS,
-        }
-});
-impl From<user::ToriiCors> for ToriiCors {
-    fn from(value: user::ToriiCors) -> Self {
-        Self {
-            enabled: value.enabled,
-            allowed_origins: value.allowed_origins,
-            allowed_methods: value.allowed_methods,
-            allowed_headers: value.allowed_headers,
-            exposed_headers: value.exposed_headers,
-            max_age_secs: value.max_age_secs,
-        }
-    }
-}
 /// Norito-RPC transport configuration (stage, allowlist, toggles).
 #[derive(Debug, Clone)]
 pub struct NoritoRpcTransport {

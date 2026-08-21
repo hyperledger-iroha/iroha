@@ -991,12 +991,19 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_authority.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs"),
+        Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
         Path("crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs"),
         Path("crates/iroha_core/src/sumeragi/tests/v2_lifecycle_scheduler_certified_serve_cases.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs"),
         Path("crates/iroha_config/src/parameters/actual.rs"),
+        Path("crates/iroha_config/src/parameters/actual/tests.rs"),
         Path("crates/iroha_config/src/parameters/defaults.rs"),
         Path("crates/iroha_config/src/parameters/user.rs"),
+        Path("crates/iroha_test_network/src/lib.rs"),
+        Path("crates/izanami/src/chaos.rs"),
+        Path("crates/iroha_kagami/src/localnet.rs"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1004,6 +1011,70 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
     copy_reviewed_rust_include_components(tmp_path)
     # The lifecycle registry's reviewed include closure has one nested layer.
     copy_reviewed_rust_include_components(tmp_path)
+
+
+def test_lifecycle_capacity_production_source_and_mutations_are_bound(
+    tmp_path: Path,
+) -> None:
+    """Bind config admission, shipped profiles, and the runtime slot geometry."""
+
+    module = load_checker()
+    current_errors = module._lifecycle_capacity_production_source_fidelity_errors(
+        ROOT_DIR
+    )
+    assert current_errors == [], current_errors
+
+    fixture_root = tmp_path / "boundary_mutations"
+    exact_output_production_fixture(fixture_root)
+    mutations = (
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            ".and_then(|observer| validator_roster_len.checked_add(observer))",
+            ".and_then(|observer| MAX_VALIDATORS_PER_HEIGHT.checked_add(observer))",
+            "exact validator roster",
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            ".max(1)\n        .checked_mul(certified_request_capacity)",
+            ".max(2)\n        .checked_mul(certified_request_capacity)",
+            "authenticated-source lower boundary",
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            ".checked_mul(certified_request_capacity)",
+            ".saturating_mul(certified_request_capacity)",
+            "checked authenticated-source multiplication",
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            ".and_then(|sum| sum.checked_add(producer))",
+            ".and_then(|sum| Some(sum.saturating_add(producer)))",
+            "checked aggregate arithmetic",
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            "if total > maximum {",
+            "if total >= maximum {",
+            "aggregate total boundary",
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "pub const V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;",
+            "pub const V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize;",
+            "65,536-record physical namespace",
+        ),
+    )
+    expected_errors = []
+    for relative, old, new, expected_error in mutations:
+        path = fixture_root / relative
+        source = path.read_text(encoding="utf-8")
+        assert source.count(old) == 1, (relative, old)
+        path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        expected_errors.append(expected_error)
+
+    errors = module._lifecycle_capacity_production_source_fidelity_errors(fixture_root)
+    for expected_error in expected_errors:
+        assert any(expected_error in error for error in errors), errors
 
 
 @pytest.mark.parametrize(

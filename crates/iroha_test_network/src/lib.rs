@@ -12783,7 +12783,7 @@ mod tests {
             );
             assert_eq!(
                 actual.sumeragi.queues.body_bytes.get(),
-                (validator_count + authenticated_non_validator_sources + 1) * body_source_bytes
+                (validator_count + authenticated_non_validator_sources) * body_source_bytes
             );
             assert_eq!(
                 effective_network_reply_source_capacity(&actual.network),

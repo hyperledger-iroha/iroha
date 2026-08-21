@@ -1126,7 +1126,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolLinkedConsumerContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="install_view",
-                        item_token_sha256="f15646e36b63aa6d1fb538fcdd0b45d1eb61f66f54ffb25a781b98f076734a0f",
+                        item_token_sha256="d081de0f396bcb685e76d4f6906eff37347ae7da907a699616925deea89af379",
                         required_expression="""
                             let stale_body_cleanup =
                                 self.plan_certified_view_body_cleanup(

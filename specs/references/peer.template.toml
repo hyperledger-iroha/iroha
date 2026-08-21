@@ -120,7 +120,7 @@ expected_hash = "<exact signed genesis block hash>"
 [sumeragi.queues]
 # commands = 1024
 # authenticated_non_validator_sources = 2
-# bodies = 163
+# bodies = 161
 # body_bytes = 242221056
 # body_source_bytes = 34603008
 # chunks = 2048

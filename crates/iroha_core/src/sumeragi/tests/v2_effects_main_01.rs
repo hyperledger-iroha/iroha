@@ -592,18 +592,26 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     };
     let prepare_a =
         fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
-    let fetch_a = AdapterEffect::FetchBody {
+    let effects = vec![AdapterEffect::FetchBody {
         tag: fixture.executor.current_tag(),
         round: fixture.round,
         subject: fixture.subject,
         manifest: Some(fixture.manifest.clone()),
         certified_sources: fixture.certified_sources(&prepare_a),
         certificate: Some(prepare_a),
-    };
+    }];
     fixture
         .executor
-        .consume_effects(vec![fetch_a], &mut services)
-        .expect("A occupies the sole certified-request slot");
+        .runtime
+        .retain_retransmit_effect_ownership_for_test(&effects)
+        .expect("bind production retransmit lifecycle ownership");
+    assert_eq!(
+        fixture
+            .executor
+            .consume_effects(effects, &mut services)
+            .expect("fill production certified-request ownership"),
+        1
+    );
     let task_a = services.fetch_tasks[0].clone();
     let request_hash_a = HashOf::new(
         task_a
@@ -634,7 +642,7 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         wire::GlobalPhase::Prepare,
         commitment_b,
     );
-    let fetch_b = AdapterEffect::FetchBody {
+    let fetch_b_effects = vec![AdapterEffect::FetchBody {
         tag: EventTag::new(
             fixture.context.height,
             round_b.view,
@@ -645,32 +653,7 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         manifest: Some(manifest_b),
         certified_sources: fixture.certified_sources(&prepare_b),
         certificate: Some(prepare_b),
-    };
-    let next_work_id_before_b = fixture.executor.next_work_id;
-    assert_eq!(
-        fixture
-            .executor
-            .consume_effects(vec![fetch_b], &mut services)
-            .expect("request-saturated Fetch B retains its exact owner"),
-        0,
-    );
-    assert_eq!(fixture.executor.pending_fetches.len(), 1);
-    assert_eq!(fixture.executor.outstanding_requests.len(), 1);
-    assert!(
-        fixture
-            .executor
-            .certified_work
-            .contains_key(&request_hash_a)
-    );
-    assert!(fixture.executor.retained_effect_batch.is_some());
-    assert!(
-        !fixture
-            .executor
-            .body_pipeline_owners
-            .contains_key(&(round_b, subject_b)),
-        "B cannot gain partial pipeline ownership while its request is parked",
-    );
-
+    }];
     let initial_queues = fixture.executor.status().runtime_queues;
     for ordinal in 0..initial_queues.normal.capacity {
         let message = fixture
@@ -697,6 +680,35 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
             .enqueue_network(message)
             .expect("admit production Progress ingress");
     }
+    let next_work_id_before_b = fixture.executor.next_work_id;
+    fixture
+        .executor
+        .runtime
+        .retain_retransmit_effect_ownership_for_test(&fetch_b_effects)
+        .expect("bind deferred production retransmit lifecycle ownership");
+    assert_eq!(
+        fixture
+            .executor
+            .consume_effects(fetch_b_effects, &mut services)
+            .expect("defer Fetch B at production certified-request capacity"),
+        0,
+    );
+    assert_eq!(fixture.executor.pending_fetches.len(), 1);
+    assert_eq!(fixture.executor.outstanding_requests.len(), 1);
+    assert!(
+        fixture
+            .executor
+            .certified_work
+            .contains_key(&request_hash_a)
+    );
+    assert!(fixture.executor.retained_effect_batch.is_some());
+    assert!(
+        !fixture
+            .executor
+            .body_pipeline_owners
+            .contains_key(&(round_b, subject_b)),
+        "B cannot gain partial pipeline ownership while its request is parked",
+    );
     let saturated_status = fixture.executor.status();
     assert_eq!(
         saturated_status.runtime_queues.normal.depth,
@@ -778,6 +790,7 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
             owner_directory.path(),
         );
     let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut production_services,
         Arc::clone(&fixture.executor.output_guard),
@@ -821,7 +834,25 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
             &ingress,
             completion,
         )
-        .unwrap_or_else(|_| panic!("A must publish Ready and retire its physical response"));
+        .unwrap_or_else(|error| match error {
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::Retry(
+                error,
+            ) => panic!(
+                "A must publish Ready and retire its physical response: {}: {}",
+                error.reason(),
+                error.detail(),
+            ),
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
+                error,
+            ) => panic!(
+                "A reached a restart-only persistence failure: {}: {}",
+                error.reason(),
+                error.detail(),
+            ),
+            crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
+                error,
+            ) => panic!("A failed after the persistence commit: {error}"),
+        });
     assert!(matches!(
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
         (Some(LifecycleState::Ready), Some(1), None, false)

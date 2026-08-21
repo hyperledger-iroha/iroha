@@ -169,7 +169,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "fn append_recovered_lifecycle_proposal_prepare_wal(",
         "permit.authorizes(",
         "permit.authorizes_for_test(",
-        "initial Proposal WAL append must retain its armed output reservation",
+        "fail-stop initial Proposal WAL append must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2.rs",
@@ -225,7 +225,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "fn select_fair_v2_ingress_candidate<T>(",
         "for dependency_pass in [false, true]",
         "for dependency_pass in [true, false]",
-        "queue-owned recovered Decision Fetch fair selection must preserve exact production order",
+        "shared strict-then-dependency fair selection must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
@@ -484,14 +484,14 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "pub(in crate::sumeragi) fn project_proposal_exact_output_authority(",
         "RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign\n                    | RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
         "RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign",
-        "recovered Proposal output must preserve both first-release successor shapes",
+        "affine recovered Proposal exact-output projection must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
         "fn install_recovered_wal_decision_store<'registry>(",
         "fn install_recovered_wal_decision_store<'registry>(",
         "fn install_recovered_wal_decision_store(",
-        "recovered Decision Store installation must retain its registry lifetime",
+        "dedicated recovered Decision Store registry install omits production refinement tokens",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner.rs",

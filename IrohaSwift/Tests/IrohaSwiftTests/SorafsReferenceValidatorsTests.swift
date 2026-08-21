@@ -871,8 +871,8 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         }
         let expectedNodeCid = try XCTUnwrap(
             Data(
-                hexString: "9a2dc9a930494cbc70f0e4cab25df893"
-                    + "fb607e83f1fa52520ed62dabca918d5a"
+                hexString: "4dd7d8901fd8fdd78ce9edd0456fa1dc"
+                    + "6bb072709ddc762e43116013c15ff20c"
             )
         )
         let actual = try SorafsReferenceValidators.validateGovernanceLogNodeJSON(

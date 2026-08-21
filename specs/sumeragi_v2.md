@@ -306,14 +306,13 @@ traffic a turn.
 The final Sumeragi handoff repeats that source isolation instead of collapsing authenticated
 traffic into one FIFO. Each frozen-roster validator has a bounded ingress lane, authenticated
 non-validator sources receive on-demand lanes capped by
-`sumeragi.queues.authenticated_non_validator_sources = H`, and anonymous traffic retains its own
-persistent lane. Each validator owns an ordinary first-message slot, an ordinary Progress slot,
+`sumeragi.queues.authenticated_non_validator_sources = H`; identityless traffic has no production
+lane or capacity partition. Each validator owns an ordinary first-message slot, an ordinary Progress slot,
 a certified-fence-escape slot, a distinct signer-bounded TimeoutVote slot, and a
 TransportCompletion slot. Each materialized authenticated non-validator lane owns a generic slot,
-a certified-fence-escape slot, and a TransportCompletion slot; the anonymous
-lane owns only the generic and TransportCompletion pair for a non-empty roster. Configuration must therefore provide at least
-`5 * roster_len + 3 * H + 2` slots, or `3 * H + 1` for the no-roster diagnostic geometry, and body
-bytes must isolate `(roster_len + H + 1) * body_source_bytes`. A semantic duplicate carrying an
+a certified-fence-escape slot, and a TransportCompletion slot. Configuration must therefore provide at least
+`5 * roster_len + 3 * H` slots, or `3 * H` for the no-roster diagnostic geometry, and body
+bytes must isolate `(roster_len + H) * body_source_bytes`. A semantic duplicate carrying an
 alternate authenticated reply route attaches to its existing request before the new-lane `H` gate
 is evaluated. Exact-output route capacity remains the independent effective
 `network.max_total_connections` value `R`; root validation resolves any configured lane profile

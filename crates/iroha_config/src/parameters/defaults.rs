@@ -743,7 +743,11 @@ pub mod network {
         /// Core profile constant-rate neighbor budget.
         pub const CORE_CONSTANT_NEIGHBORS: usize = 48;
         /// Core profile soft cap for total connections.
-        pub const CORE_MAX_TOTAL_CONNECTIONS: usize = 120;
+        ///
+        /// The shared fallback also serves Kagami's 8,192-command profile; 97
+        /// reply sources keep its complete height-local lifecycle inventory at
+        /// 65,432 records, while 98 would exceed the 65,536-slot namespace.
+        pub const CORE_MAX_TOTAL_CONNECTIONS: usize = 97;
         /// Core profile soft cap for inbound connections.
         pub const CORE_MAX_INCOMING: usize = 48;
         /// Home profile scheduler tick (milliseconds) for shaping calculations.

@@ -2928,6 +2928,65 @@ return Ok(());
         "a successful same-owner Fetch authority upgrade must atomically install P/Q state, its Proposal replay lineage, and drain its retry",
         errors,
     )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+if let Some(stage) = self.authenticated_genesis_replay.get(&key) {
+    if proposal_replay.is_some()
+        || !stage.exactly_authenticates_fetch_rediscovery(&incoming_effect)
+    {
+        return Err(EffectExecutorError::Contract(
+            "certified genesis Fetch rediscovery changed its authenticated origin"
+                .to_owned(),
+        ));
+    }
+    if matches!(stage, AuthenticatedGenesisReplayStageV1::StoreAdmission(_)) {
+        return Err(EffectExecutorError::Contract(
+            "certified genesis Fetch rediscovery observed transient Store admission"
+                .to_owned(),
+        ));
+    }
+    return Ok(());
+}
+""",
+        "authenticated genesis Fetch rediscovery must preserve its exact replay origin and reject a transient Store admission",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+let genesis_replay = certificate
+    .is_some()
+    .then(|| {
+        PreparedAuthenticatedGenesisFetchReplayPreAdmission::seal_exact_fetch(
+            authenticated_genesis,
+            incoming_effect.clone(),
+            ownership.clone(),
+            genesis_manifest.clone(),
+        )
+    })
+    .transpose()
+""",
+        "a certified local genesis Fetch must mint replay authority from the authenticated staged genesis",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+if let Some(replay) = genesis_replay {
+    let previous = self.authenticated_genesis_replay.insert(
+        key,
+        AuthenticatedGenesisReplayStageV1::BodyAvailable(replay),
+    );
+    debug_assert!(previous.is_none());
+}
+""",
+        "authenticated genesis Fetch admission must retain its exact BodyAvailable replay owner",
+        errors,
+    )
     if begin_fetch is not None:
         _require_rust_item_token_sha256(
             effects_path,

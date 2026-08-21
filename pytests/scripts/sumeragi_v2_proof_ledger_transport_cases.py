@@ -19,10 +19,10 @@
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "source_update_from",
+            "source_freshness_from",
             "self.validate_delivery_binding()?;",
             "let _unchecked = &self.delivery_binding;",
-            "per-source updates validate both actor-minted delivery bindings before classifying rank",
+            "immutable source freshness validates bindings and rejects foreign, retargeted, or cross-source capabilities",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
@@ -50,7 +50,7 @@
             "merge_retired_delivery",
             "retired.validate_delivery_binding()?;",
             "let _unchecked = &retired.delivery_binding;",
-            "candidate tombstones validate their immutable binding and authority",
+            "candidate tombstones validate authority and can release a live source only through the joint tenure/delivery freshness kernel",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
@@ -68,10 +68,10 @@
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "source_update_from",
-            "if self.delivery_ordinal < prior.delivery_ordinal {",
-            "if false && self.delivery_ordinal < prior.delivery_ordinal {",
-            "per-source delivery ordinals reject stale or forged equal-ordinal tenures",
+            "source_freshness_from",
+            "std::cmp::Ordering::Less => NetworkReplyRouteSourceFreshness::Stale,",
+            "std::cmp::Ordering::Less => NetworkReplyRouteSourceFreshness::LaterDelivery,",
+            "source freshness requires both tenure and delivery ordinals to increase on reconnect and rejects both collision classes",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
@@ -85,129 +85,96 @@
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "retain_active",
-            "self.attempts.retain(|_, route| route.is_active());",
-            "self.attempts.retain(|_, _route| true);",
-            (
-                "owned route-set maintenance tombstones then releases only "
-                "inactive connection tenures"
-            ),
+            "retain_active_with_receipt_after_snapshot",
+            ".filter(|(_, route)| !route.is_active())",
+            ".filter(|(_, _route)| false)",
+            "owned route pruning removes only the exact inactive snapshot capability and binds its before/after receipt",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "retain_active",
+            "retain_active_with_receipt_after_snapshot",
             "self.record_retired_delivery(retired);",
             "drop(retired);",
-            (
-                "owned route-set maintenance tombstones then releases only "
-                "inactive connection tenures"
-            ),
+            "owned route pruning removes only the exact inactive snapshot capability and binds its before/after receipt",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
             "validate_after_retired_delivery",
             ".any(|retired| retired.equal_ordinal_different_tenure(route))",
             ".any(|_retired| false)",
-            (
-                "retired route history rejects forged equal ordinals and "
-                "non-progressing same-source replay"
-            ),
+            "retired route history rejects both forged ordinal classes and non-progressing same-source replay",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
             "validate_after_retired_delivery",
             "self.retired_attempts.get(&route.source_key())",
             "None",
-            (
-                "retired route history rejects forged equal ordinals and "
-                "non-progressing same-source replay"
-            ),
+            "retired route history rejects both forged ordinal classes and non-progressing same-source replay",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "merge",
+            "merge_with_receipt",
             "for retired in candidate.retired_attempts.values().cloned() {\n"
             "            merged.merge_retired_delivery(retired)?;\n"
             "        }",
             "let _ = &candidate.retired_attempts;",
-            (
-                "strict route-set merge preflights then applies tombstones "
-                "before live siblings on one atomic shadow copy"
-            ),
+            "strict route-set merge preflights, applies tombstones before live siblings, and binds one exact transition receipt",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
             "record_retired_delivery",
-            "if retired.delivery_ordinal > current.delivery_ordinal {",
-            "if retired.delivery_ordinal < current.delivery_ordinal {",
-            (
-                "retired route history remains source-bounded and monotonic by "
-                "actor-global delivery ordinal"
-            ),
+            "retired.source_freshness_from(current),",
+            "current.source_freshness_from(&retired),",
+            "retired route history remains source-bounded and advances only through the joint tenure/delivery freshness kernel",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
             "record_retired_delivery",
             "if self.retired_attempts.len() >= self.source_capacity",
             "if false && self.retired_attempts.len() >= self.source_capacity",
-            (
-                "retired route history remains source-bounded and monotonic by "
-                "actor-global delivery ordinal"
-            ),
+            "retired route history remains source-bounded and advances only through the joint tenure/delivery freshness kernel",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
             "preflight_merge",
             ".any(|prior| prior.equal_ordinal_different_tenure(route))",
             ".any(|_prior| false)",
-            (
-                "strict route-set preflight validates every live and "
-                "tombstoned candidate member before mutation"
-            ),
+            "strict route-set preflight validates every member and rejects delivery- or connection-ordinal tenure collisions before mutation",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
             "preflight_merge",
             ".any(|(_, other)| route.equal_ordinal_different_tenure(other))",
             ".any(|(_, _other)| false)",
-            (
-                "strict route-set preflight rejects internal equal-ordinal "
-                "tenure collisions atomically"
-            ),
+            "strict route-set preflight rejects internal delivery- or connection-ordinal tenure collisions atomically",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
             "merge_retired_delivery",
-            "retired.delivery_ordinal >= current.delivery_ordinal",
-            "retired.delivery_ordinal < current.delivery_ordinal",
-            (
-                "candidate tombstones validate their immutable binding and authority and can release only "
-                "a same-source live attempt at an equal or later ordinal"
-            ),
+            ".is_some_and(|freshness| !matches!(freshness, NetworkReplyRouteSourceFreshness::Stale));",
+            ".is_some_and(|freshness| matches!(freshness, NetworkReplyRouteSourceFreshness::Stale));",
+            "candidate tombstones validate authority and can release a live source only through the joint tenure/delivery freshness kernel",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
             "attach",
             ".any(|prior| prior.equal_ordinal_different_tenure(&route))",
             ".any(|_prior| false)",
-            (
-                "single-route attachment rejects equal actor-global ordinals "
-                "under different tenures"
-            ),
+            "single-route attachment rejects delivery- and connection-ordinal reuse under different tenures",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "source_update_from",
+            "source_freshness_from",
             "if !Arc::ptr_eq(&self.tenure.owner, &prior.tenure.owner) {",
             "if false && !Arc::ptr_eq(&self.tenure.owner, &prior.tenure.owner) {",
-            "per-source updates reject inactive, foreign, retargeted, and cross-source capabilities",
+            "immutable source freshness validates bindings and rejects foreign, retargeted, or cross-source capabilities",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "source_update_from",
-            ".ok_or(NetworkReplyRouteError::EqualOrdinalDifferentTenure);",
-            ".ok_or(NetworkReplyRouteError::Stale);",
-            "per-source delivery ordinals reject stale or forged equal-ordinal tenures",
+            "source_freshness_from",
+            "return Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure);",
+            "return Err(NetworkReplyRouteError::Stale);",
+            "source freshness requires both tenure and delivery ordinals to increase on reconnect and rejects both collision classes",
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
@@ -221,13 +188,10 @@
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "merge",
+            "merge_with_receipt",
             "let mut merged = self.clone();",
             "let mut merged = candidate.clone();",
-            (
-                "strict route-set merge preflights then applies tombstones "
-                "before live siblings on one atomic shadow copy"
-            ),
+            "strict route-set merge preflights, applies tombstones before live siblings, and binds one exact transition receipt",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
@@ -255,11 +219,11 @@
             "try_push_at",
             "merged.merge_with_receipt(candidate)",
             "merged.merge_with_receipt(retained)",
-            "coalesced ingress shadow-merges one source route without mutating the retained owner",
+            "coalesced ingress shadow-merges route capacity and attempt cursors without mutating the retained owner",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "try_recv_if_at_checked_classified",
+            "dequeue_selected_locked",
             "state.pending_wire_owners.remove(key)",
             "state.pending_wire_owners.get(key).cloned()",
             "semantic request ownership retires only when its queued occurrence is serviced",
@@ -451,8 +415,12 @@ def test_transport_geometry_source_fidelity_rejects_contextual_route_mutants(
     ("old", "new", "expected_error"),
     (
         (
-            "pub fn is_authenticated_via(&self, peer: &PeerId) -> bool {",
-            "pub(crate) fn is_authenticated_via(&self, peer: &PeerId) -> bool {",
+            "pub fn is_authenticated_via(&self, peer: &PeerId) -> bool {\n"
+            "        &self.tenure.delivery_peer == peer\n"
+            "    }",
+            "pub(crate) fn is_authenticated_via(&self, peer: &PeerId) -> bool {\n"
+            "        &self.tenure.delivery_peer == peer\n"
+            "    }",
             "public opaque authenticated-hop binding must remain public",
         ),
         (
@@ -518,7 +486,8 @@ def test_transport_geometry_source_fidelity_binds_public_route_helpers(
             "retired connection-generation-era wording",
         ),
         (
-            "requester's durable source retains its exact retry state.",
+            "requester's\n"
+            "    /// durable source retains its exact retry state throughout.",
             "requester's durable retry is its reconstruction path",
             "retired connection-generation-era wording",
         ),
@@ -550,9 +519,11 @@ def test_transport_geometry_source_fidelity_rejects_retired_generation_terminolo
         (
             "post_reply_recoverable",
             "self.post_reply_recoverable_with_flush_ack(msg, reply_route, ticket)\n"
-            "            .map(|flush_ack| match flush_ack {\n"
-            "                Some(_flush_ack) => NetworkReplyAdmissionOutcome::Admitted,\n"
-            "                None => NetworkReplyAdmissionOutcome::ReplyWriterUnavailable,\n"
+            "            .map(|flush_ack| {\n"
+            "                flush_ack.map_or(\n"
+            "                    NetworkReplyAdmissionOutcome::ReplyWriterUnavailable,\n"
+            "                    |_flush_ack| NetworkReplyAdmissionOutcome::Admitted,\n"
+            "                )\n"
             "            })",
             "self.post_reply_recoverable_with_flush_ack(msg, reply_route, ticket)\n"
             "            .map(|_flush_ack| NetworkReplyAdmissionOutcome::Admitted)",
@@ -1021,8 +992,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     core_path = geometry_root / "crates/iroha_core/src/sumeragi/mod.rs"
     core_source = core_path.read_text(encoding="utf-8")
     core_source = core_source.replace(
-        "    Authenticated(PeerId),\n    Anonymous,",
-        "    Authenticated,\n    Anonymous,",
+        "    Authenticated(PeerId),\n}",
+        "    Authenticated,\n}",
         1,
     )
     core_path.write_text(core_source, encoding="utf-8")
@@ -1031,9 +1002,9 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         core_path,
         "fair_v2_ingress_required_capacity",
         "authenticated_non_validator_source_capacity\n"
-        "                .checked_mul(2)",
+        "            .checked_mul(3)",
         "authenticated_non_validator_source_capacity\n"
-        "                .checked_mul(1)",
+        "            .checked_mul(2)",
     )
     mutate_rust_item_source(
         module,
@@ -1066,7 +1037,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     mutate_rust_item_source(
         module,
         core_path,
-        "try_recv_if_at_checked_classified",
+        "dequeue_selected_locked",
         "} else if matches!(&source, FairV2IngressSource::Authenticated(_)) {",
         "} else if false && matches!(&source, FairV2IngressSource::Authenticated(_)) {",
     )
@@ -1083,8 +1054,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     defaults_path = geometry_root / "crates/iroha_config/src/parameters/defaults.rs"
     defaults_source = defaults_path.read_text(encoding="utf-8")
     defaults_source = defaults_source.replace(
-        "+ 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()",
-        "+ QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()",
+        "3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()",
+        "2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()",
         1,
     )
     defaults_path.write_text(defaults_source, encoding="utf-8")
@@ -1121,8 +1092,12 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         module,
         kagami_path,
         "localnet_sumeragi_body_bytes",
-        ".checked_add(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)",
-        ".checked_add(0)",
+        "actual::sumeragi_v2_body_ingress_required_byte_capacity(\n"
+        "        validator_count,\n"
+        "        LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,",
+        "actual::sumeragi_v2_body_ingress_required_byte_capacity(\n"
+        "        validator_count,\n"
+        "        0,",
     )
 
     for relative in (
@@ -1139,18 +1114,18 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         geometry_root
     )
     for expected_error in (
-        "three-way fair-ingress source ownership inventory",
-        "semantic duplicate route attachment precedes authenticated non-validator lane-cap admission",
-        "authenticated non-validator lane cap excludes validator and anonymous lanes",
+        "two-way authenticated fair-ingress source ownership inventory",
+        "semantic duplicate coalescing must precede new-lane admission",
+        "authenticated non-validator lane cap excludes validator lanes",
         "empty authenticated non-validator lanes release their bounded churn slot",
-        "exact default 5N+3H+2 outer-ingress message geometry",
+        "exact default 5N+3H outer-ingress message geometry",
         "production H comes from Sumeragi ingress configuration rather than reply-route R",
         "root configuration derives R from the effective explicit or lane-profile network geometry",
         "root configuration rejects H greater than exact-output reply-source R",
         "shared Sumeragi fingerprint projection carries H beside ingress capacities",
-        "localnet aggregate bytes scale by N+H+1",
-        "default seven-validator Taira profile pins H=2 and ten source partitions",
-        "production Taira profile pins H=2 and seven source partitions",
+        "localnet aggregate bytes scale by N+H",
+        "default seven-validator Taira profile pins H=2 and nine source partitions",
+        "production Taira profile pins H=2 and six source partitions",
     ):
         assert any(expected_error in error for error in geometry_errors), (
             expected_error,
@@ -1231,8 +1206,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         (
             Path("xtask/src/kagami_profiles.rs"),
             None,
-            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 11_534_336;",
-            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 11_534_335;",
+            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 13_631_488;",
+            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 13_631_487;",
             "Kagami Taira transaction-gossip frame ceiling",
         ),
         (
@@ -1369,13 +1344,13 @@ def test_transport_geometry_source_fidelity_rejects_sm_distid_bit_length_mutant(
     (
         (
             "fair_v2_ingress_required_capacity",
-            ".checked_mul(4)",
             ".checked_mul(3)",
+            ".checked_mul(2)",
         ),
         (
             "fair_v2_ingress_lane_protected_slots",
-            "4_usize.saturating_sub(depth)",
             "3_usize.saturating_sub(depth)",
+            "2_usize.saturating_sub(depth)",
         ),
         (
             "fair_v2_ingress_required_manifest_bytes",
@@ -1420,8 +1395,8 @@ def test_transport_geometry_source_fidelity_rejects_sm_distid_bit_length_mutant(
         ),
         (
             "configure_roster_for_context",
-            ".max(required_recovery_request_bytes),",
-            ",",
+            ".max(required_recovery_request_bytes)",
+            "",
         ),
         (
             "configure_roster_for_context",
@@ -1754,13 +1729,13 @@ def test_transport_geometry_source_fidelity_requires_configure_and_open_rechecks
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
             "start",
             "block_sync_frame_byte_capacity,\n"
-            "            outbound_frame_queue_max_high_bytes,",
-            "block_sync_frame_byte_capacity,\n            usize::MAX,",
+            "                outbound_frame_queue_max_high_bytes,",
+            "block_sync_frame_byte_capacity,\n                usize::MAX,",
             "production fair-ingress construction with configured H and every progress cap",
         ),
         (
             Path("crates/irohad/src/main.rs"),
-            "start",
+            "start_with_runtime_deps",
             "max_frame_bytes: config.network.max_frame_bytes,",
             "max_frame_bytes: usize::MAX,",
             "daemon-to-Sumeragi global/topic/high-queue cap hand-off",
@@ -1795,7 +1770,7 @@ def test_transport_geometry_source_fidelity_requires_configure_and_open_rechecks
         ),
         (
             Path("crates/irohad/src/main.rs"),
-            "start",
+            "start_with_runtime_deps",
             ".p2p_outbound_frame_queue_max_high_bytes\n                .get(),",
             ".p2p_outbound_frame_queue_max_low_bytes\n                .get(),",
             "daemon-to-Sumeragi global/topic/high-queue cap hand-off",
@@ -1835,7 +1810,8 @@ def test_transport_geometry_source_fidelity_rejects_startup_cap_bypass(
             "encrypted global consensus frame ceiling",
         ),
         (
-            "pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = MAX_FRAME_BYTES;",
+            "pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = "
+            "MAX_PLAINTEXT_FRAME_BYTES;",
             "pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = "
             "MAX_FRAME_BYTES_CONTROL;",
             "consensus-recovery frame ceiling",
@@ -1846,23 +1822,22 @@ def test_transport_geometry_source_fidelity_rejects_startup_cap_bypass(
             "consensus-safety frame ceiling",
         ),
         (
-            "pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = MAX_FRAME_BYTES;",
+            "pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = "
+            "MAX_PLAINTEXT_FRAME_BYTES;",
             "pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = "
             "MAX_FRAME_BYTES_CONTROL;",
             "payload-completion frame ceiling",
         ),
         (
             "nonzero!(\n"
-            "        5 * MAX_VALIDATORS_PER_HEIGHT\n"
-            "            + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
-            "            + 2\n"
+            "        5 * MAX_VALIDATORS_PER_HEIGHT + 3 * "
+            "QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
             "    )",
             "nonzero!(\n"
-            "        4 * MAX_VALIDATORS_PER_HEIGHT\n"
-            "            + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
-            "            + 2\n"
+            "        4 * MAX_VALIDATORS_PER_HEIGHT + 3 * "
+            "QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
             "    )",
-            "exact default 5N+3H+2 outer-ingress message geometry",
+            "exact default 5N+3H outer-ingress message geometry",
         ),
     ),
 )
@@ -1939,10 +1914,10 @@ def test_transport_geometry_source_fidelity_rejects_shortened_default_cap(
         (
             Path("crates/iroha_p2p/src/peer.rs"),
             "let size = buf.get_u32() as usize;\n"
-            "            if size > "
+            "                if size > "
             "self.max_frame_bytes.min(crate::MAX_ENCRYPTED_FRAME_BYTES) {",
             "let size = buf.get_u32() as usize;\n"
-            "            if size > self.max_frame_bytes {",
+            "                if size > self.max_frame_bytes {",
             "runtime-clamped receiver parse boundary",
         ),
     ),

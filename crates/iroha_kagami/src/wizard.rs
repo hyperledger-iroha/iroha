@@ -915,9 +915,8 @@ fn prepare_profile_template_for_wizard(config: &mut TomlValue, profile: Profile)
         .get_mut("torii")
         .and_then(TomlValue::as_table_mut)
         .ok_or_else(|| eyre!("Taira wizard template must contain a torii table"))?;
-    // The tracked Taira config also feeds the validator-bundle renderer. Standalone wizard
-    // output must omit operator-only services whose secret/provider bindings are intentionally
-    // unresolved until deployment rendering.
+    // The tracked Taira profile includes operator-only services whose runtime secret/provider
+    // bindings are intentionally unresolved. Standalone wizard output must omit those services.
     torii.remove("kagemusha_commands");
     torii.remove("account_onboarding");
     torii.remove("faucet");

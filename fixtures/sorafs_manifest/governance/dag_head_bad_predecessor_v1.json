@@ -2,10 +2,10 @@
   "block_count": 2,
   "checkpoint_cid_hex": null,
   "generated_at": 1700001000,
-  "head_block_cid_hex": "15bea4cb5bd28e1618d2a8a185d5d33db4a5c98aedbcc52af2438cd6f2d8d837",
+  "head_block_cid_hex": "7d8217e4cd6f0dec1497bfff290e211320fc497a54dad986178edafe2dacb66e",
   "publisher_peer_id": "12D3KooWGovernanceDagPublisher",
   "signature_algorithm": "ed25519",
-  "signature_hex": "6418144d675e826b8e61a595869e994fbbb4e886d869245eee88f3567ecacf29069a663ae43c1a6deb732115c680989227b90a90f3211a47f4d6f8bdaedb3609",
+  "signature_hex": "ed4360447c68b8f8c8d4dff8feb4a7098eb367cfa03b92ba87155c8def303ff0de3da59a261593a6f727517b24684346f8ce1b524ecdfc54302d05e4f752000e",
   "signature_public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
   "version": 1
 }

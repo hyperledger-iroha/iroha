@@ -348,9 +348,9 @@ const STREAMING_IDENTITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:streaming-
 const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;
 /// Certified-body and block-sync outer-ingress capacity for generated localnets.
 ///
-/// This inherits the production 5N+3H+2 geometry at the protocol's maximum
-/// validator roster: five owners per validator, three per authenticated
-/// non-validator source, and two for anonymous delivery.
+/// This inherits the production 5N+3H geometry at the protocol's maximum
+/// validator roster: five owners per validator and three per authenticated
+/// non-validator source. Identityless ingress owns no partition.
 const LOCALNET_SUMERAGI_QUEUE_BODIES: usize =
     iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
 /// Authenticated non-validator fair-ingress lanes for generated localnets.
@@ -6394,7 +6394,7 @@ mod tests {
         );
         assert_eq!(
             queues.get("body_bytes").and_then(toml::Value::as_integer),
-            Some(231 * 1024 * 1024)
+            Some(198 * 1024 * 1024)
         );
         assert_eq!(
             queues
@@ -6942,8 +6942,8 @@ mod tests {
         );
         assert_eq!(
             queues.get("body_bytes").and_then(toml::Value::as_integer),
-            Some(330 * 1024 * 1024),
-            "seven validators, two authenticated non-validator sources, and anonymous delivery each need one isolated body quota"
+            Some(297 * 1024 * 1024),
+            "seven validators and two authenticated non-validator sources each need one isolated body quota"
         );
         let manifest = localnet_genesis_for_opts(&opts);
         let validators: Vec<_> = manifest
@@ -6983,9 +6983,9 @@ mod tests {
             assert_eq!(
                 localnet_sumeragi_body_bytes(validator_count)
                     .expect("every legal endpoint roster must remain representable"),
-                (validator_count + LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES + 1)
+                (validator_count + LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
                     * LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES,
-                "body ingress bytes must scale once per isolated authenticated or anonymous source"
+                "body ingress bytes must scale once per isolated authenticated source"
             );
         }
         let geometry_error = localnet_sumeragi_body_bytes(5)

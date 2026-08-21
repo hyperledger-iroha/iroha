@@ -409,7 +409,7 @@ region|ledger|ledger|begin|-|end|-
 region|authority|authority|begin|-|end|-
 region|lifecycle_open|lifecycle_open|begin|-|end|-
 region|outside|coordinator|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|outside|ledger|begin|-|end|-
+region|outside|ledger|begin|-|before|pub(crate) mod tests {
 region|outside|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|outside|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|outside|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1060,7 +1060,7 @@ required|token|.project_exact_validate(|remote Proposal replay token omitted {re
 required|token|fn exactly_retains_owned_store(|Stored Proposal replay token lost its exact runtime Store owner
 required|token|fn project_incumbent_validate_ownership(|Stored Proposal replay token lost its exact same-body Validate incumbent
 required|token|fn project_validate_after_durable_decision(|Stored Proposal replay token lost its exact Decision Validate refinement
-count|token|fn exactly_authenticates_fetch_rediscovery(|6|Remote Proposal and authenticated-genesis Fetch, Store, and Stored pre-admissions must all authenticate their original Fetch
+count|token|fn exactly_authenticates_fetch_rediscovery(|6|the remote-Proposal and launch-authenticated-genesis Fetch, Store, and Stored pre-admissions must all authenticate their original Fetch
 count|authenticated_genesis_token|fn exactly_authenticates_fetch_rediscovery(|3|authenticated-genesis Fetch, Store, and Stored pre-admissions must all authenticate the sealed Fetch
 required|token|fn into_durable_validate_carrier(|remote Proposal replay token omitted {required}
 required|token|replay_evidence: DurableValidateReplayEvidenceV1::remote_proposal(|remote Proposal replay token omitted {required}
@@ -1340,9 +1340,9 @@ region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|carrier|registry|after|struct DurableStoreBody {|before|impl DurableStoreBody
 region|validation|registry|after|impl DurableStoreBody {|before|struct DurableValidateBody
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_store_execution(|before|pub(super) fn prepare_durable_validate_execution(
-region|execution|registry_recovery_impl|after|impl<'a> PreparedDurableStoreExecution<'a>|end|-
+region|execution|registry|after|impl<'a> PreparedDurableStoreExecution<'a>|before|fn sealed_successor_parent<'a>(
 region|validate_token|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|/// Move-only Store projection sealed under its closed Fetch parent
-region|fetch_execution|registry_recovery_impl|after|impl<'a> PreparedCertifiedFetchExecution<'a>|before|impl<'a> PreparedDurableStoreExecution<'a>
+region|fetch_execution|registry|after|impl<'a> PreparedCertifiedFetchExecution<'a>|before|impl<'a> PreparedDurableStoreExecution<'a>
 region|callers|selector|begin|-|end|-
 region|callers|effects|begin|-|end|-
 region|callers|worker|begin|-|end|-
@@ -1605,8 +1605,11 @@ region|caller|selector|begin|-|end|-
 region|caller|effects|begin|-|end|-
 region|caller|runner|begin|-|end|-
 region|scheduler|scheduler_inputs|begin|-|end|-
+region|scheduler_dispatch|scheduler_inputs|after|pub(super) fn dispatch_completion_with_runner_debt(|before|/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.
 region|worker_path|worker|begin|-|end|-
+region|worker_dispatch|worker|begin|-|end|-
 region|turn_driver|turn_driver|begin|-|end|-
+region|coordinator_export|coordinator|begin|-|end|-
 required|declarations|struct DetachedDurableValidateExecution|detached Validate declarations omitted struct DetachedDurableValidateExecution
 required|declarations|address: ConcreteWorkAddress|detached Validate declarations omitted address: ConcreteWorkAddress
 required|declarations|incumbent_digest: LifecycleDigest|detached Validate declarations omitted incumbent_digest: LifecycleDigest
@@ -1700,8 +1703,11 @@ region|caller|selector|begin|-|end|-
 region|caller|effects|begin|-|end|-
 region|caller|runner|begin|-|end|-
 region|scheduler|scheduler_inputs|begin|-|end|-
+region|scheduler_dispatch|scheduler_inputs|after|pub(super) fn dispatch_completion_with_runner_debt(|before|/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.
 region|worker_path|worker|begin|-|end|-
+region|worker_dispatch|worker|begin|-|end|-
 region|turn_driver|turn_driver|begin|-|end|-
+region|coordinator_export|coordinator|begin|-|end|-
 required|declarations|struct DurableValidateWakeAuthority|wait-dispatch declaration omitted struct DurableValidateWakeAuthority
 required|declarations|wait_token: WaitToken|wait-dispatch declaration omitted wait_token: WaitToken
 required|declarations|struct DurableValidateDispatch|wait-dispatch declaration omitted struct DurableValidateDispatch
@@ -1769,6 +1775,13 @@ required|projection|durable_frame_hash|durable validation wait projection omitte
 required|projection|expected_manifest_hash|durable validation wait projection omitted expected_manifest_hash
 required|projection|lifecycle_key|durable validation wait projection omitted lifecycle_key
 required|projection|lifecycle_stage|durable validation wait projection omitted lifecycle_stage
+required|coordinator_export|pub(in crate::sumeragi) use work_registry|coordinator must expose only the reviewed Sumeragi-private dispatch
+required|coordinator_export|DurableValidateDispatch|coordinator lost the reviewed Validate dispatch re-export
+required|worker_dispatch|struct LifecycleValidateTaskV1|worker lost the exact lifecycle Validate command
+required|worker_dispatch|dispatch: DurableValidateDispatch|worker command lost its move-only registry dispatch
+required|worker_dispatch|task.dispatch\n                                                .execute(|worker lost the sole exact Validate execution path
+required|worker_dispatch|struct LifecycleValidateCapacityReservationV1|worker lost pre-claim Validate capacity ownership
+order|scheduler_dispatch|6|.attest_ready_validate_demand(|services.capture_recovered_completion_capacity_census(probes)|self.coordinator.plan_turn(inputs)|.select_validate(ordinal)|.begin_durable_validate_dispatch(|reservation.commit(dispatch)|Validate attestation, capacity freeze, claim, dispatch sealing, and queue publication must remain ordered
 forbidden|caller|begin_durable_validate_dispatch|durable Validate wait dispatch escaped its closed caller surface: begin_durable_validate_dispatch
 forbidden|caller|DurableValidateDispatch|durable Validate wait dispatch escaped its closed caller surface: DurableValidateDispatch
 required|scheduler|.select_validate(ordinal)|scheduler omitted exact Validate capacity reservation
@@ -1795,6 +1808,9 @@ region|commit|registry|after|pub(super) fn commit(mut self)|before|impl Drop for
 region|concrete_production|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|entrypoint|concrete_admission|after|pub(super) fn complete_durable_validate_dispatch(|before|/// Prepare one complete signed effect for mandatory replay-bound admission.
 region|waiting_exact|concrete_admission|after|fn waiting_durable_validate_record_is_exact(|before|fn staged_durable_validate_ready_is_exact(
+region|turn_driver_publication|turn_driver|after|fn settle_parked_lifecycle_validate_completion(|before|fn settle_parked_certified_fetch_body_persistence(
+region|coordinator_export|coordinator|begin|-|end|-
+region|worker_completion|worker|begin|-|end|-
 region|caller|adapter|begin|-|end|-
 region|caller|selector|begin|-|end|-
 region|caller|effects|begin|-|end|-
@@ -1908,6 +1924,12 @@ required|waiting_exact|.episode_authority\n            .universe_for(record.key)
 required|waiting_exact|episode_authority.admits_slots(|waiting completion exactness omitted episode_authority.admits_slots(
 required|waiting_exact|durable_validate_payload_is_exact(record.key, metadata.payload)|waiting completion exactness omitted durable_validate_payload_is_exact(record.key, metadata.payload)
 required|waiting_exact|authority.matches_durable_payload(metadata.payload)|waiting completion exactness omitted authority.matches_durable_payload(metadata.payload)
+required|coordinator_export|DurableValidateCompletionPublication|coordinator lost the reviewed completion-publication re-export
+required|worker_completion|DeferredDurableValidateDispatch|worker completion lost exact deferred sidecar ownership
+required|turn_driver_publication|completion.into_publication_parts()|turn driver must retain dispatch and acknowledgement together
+required|turn_driver_publication|complete_durable_validate_dispatch(|turn driver lost the sole volatile completion transaction
+required|turn_driver_publication|ack.acknowledge_after_publication()|worker completion must be acknowledged only after publication
+required|turn_driver_publication|PreparedLifecycleValidateCompletionV1::from_publication_parts(dispatch, ack)|publication failure must reconstruct the exact retained owner
 forbidden|caller|complete_durable_validate_dispatch|durable Validate completion escaped its closed caller surface: complete_durable_validate_dispatch
 forbidden|caller|DurableValidateCompletionPublication|durable Validate completion escaped its closed caller surface: DurableValidateCompletionPublication
 required|scheduler|reservation.commit(dispatch)|scheduler omitted exact lifecycle Validate queue publication

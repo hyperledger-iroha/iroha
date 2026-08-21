@@ -835,7 +835,7 @@ mod tests {
         let spend_key = [0x11; 32];
         let rho = [0x22; 32];
         let first_network = [0x33; 32];
-        let second_network = [0x34; 32];
+        let second_network = [0x35; 32];
         let diversifier = derive_diversifier_v3(b"recipient").expect("diversifier");
         let owner = derive_owner_tag_v3(&spend_key, &diversifier).expect("owner tag");
         let asset = derive_asset_tag_v3(b"rose#wonderland").expect("asset tag");

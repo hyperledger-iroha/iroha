@@ -1390,7 +1390,7 @@ fn sorafs_gateway_replay_matrix() {
     let policy = PinPolicyConstraints::default();
     assert_eq!(
         harness.scenarios.len(),
-        17,
+        16,
         "extend scenarios as harness matures"
     );
     for scenario in &harness.scenarios {

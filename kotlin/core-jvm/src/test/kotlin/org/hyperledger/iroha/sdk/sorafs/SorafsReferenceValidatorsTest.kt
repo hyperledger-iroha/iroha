@@ -847,8 +847,8 @@ class SorafsReferenceValidatorsTest {
                     fixture("sorafs_manifest", "moderation", "governance_node_v1.to"),
                 expectedNodeCid =
                     decodeHex(
-                        "5df8480672bf2aa1fd3e3382310f9b00" +
-                            "f4b0fcb263f4d0b3010c165d83a394bd",
+                        "4dd7d8901fd8fdd78ce9edd0456fa1dc" +
+                            "6bb072709ddc762e43116013c15ff20c",
                     ),
                 label = "moderation/governance_node_v1.to",
                 generatedAtUnix = referenceFixtureGeneratedAtUnix,

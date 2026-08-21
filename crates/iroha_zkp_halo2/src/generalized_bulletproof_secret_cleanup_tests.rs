@@ -25,7 +25,9 @@ fn cleanup_contracts() -> &'static std::collections::BTreeMap<String, Vec<String
                 let (id, encoded) = line.split_once('\t').expect("contract row separator");
                 assert!(!id.is_empty() && !encoded.is_empty(), "empty contract row");
                 assert!(
-                    encoded.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')),
+                    encoded
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')),
                     "contract values must use lowercase hexadecimal"
                 );
                 if id != active {
@@ -353,7 +355,9 @@ fn secret_scalar_owner_clears_constructor_and_transfer_slots() {
         constraint_precheck.matches("evaluation.is_zero()").count(),
         1
     );
-    for forbidden in cleanup_contract_strings("secret_scalar_owner_clears_constructor_and_transfer_slots.1") {
+    for forbidden in
+        cleanup_contract_strings("secret_scalar_owner_clears_constructor_and_transfer_slots.1")
+    {
         assert!(
             !constraint_precheck.contains(forbidden),
             "borrowed constraint zero-check {forbidden}"
@@ -665,7 +669,9 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .expect("computed-value owner handoff")
         .1;
     let mut cursor = 0;
-    for step in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.1") {
+    for step in cleanup_contract_strings(
+        "secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.1",
+    ) {
         let offset = handoff[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing owner-first MSM handoff step {step}"));
@@ -683,7 +689,9 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
     assert!(owned_push.contains("mut scalar: S::Scalar,"));
     assert!(owned_push.contains("mut point: S::Point,"));
     let mut cursor = 0;
-    for step in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.2") {
+    for step in cleanup_contract_strings(
+        "secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.2",
+    ) {
         let offset = owned_push[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing computed-term insertion step {step}"));
@@ -692,7 +700,9 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
     assert_eq!(owned_push.matches("incoming.take_term()").count(), 1);
     assert_eq!(owned_push.matches("self.terms.push(retained);").count(), 1);
     assert_eq!(owned_push.matches("drop(incoming);").count(), 1);
-    for forbidden in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.3") {
+    for forbidden in cleanup_contract_strings(
+        "secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.3",
+    ) {
         assert!(
             !handoff.contains(forbidden) && !owned_push.contains(forbidden),
             "owner-first computed-term path {forbidden}"
@@ -715,7 +725,9 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .expect("prover P-term boundary");
     let p_terms = &prover[p_terms_start..p_terms_end];
     let mut cursor = 0;
-    for step in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.4") {
+    for step in cleanup_contract_strings(
+        "secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.4",
+    ) {
         let offset = p_terms[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing fixed P-term step {step}"));
@@ -741,7 +753,9 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .expect("secret scalar encoding boundary")
         .0;
     let mut cursor = 0;
-    for step in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.5") {
+    for step in cleanup_contract_strings(
+        "secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.5",
+    ) {
         let offset = scalar_encodings[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing scalar-encoding owner-transfer step {step}"));
@@ -760,7 +774,9 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
     ] {
         assert_eq!(scalar_encodings.matches(needle).count(), expected);
     }
-    for forbidden in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.6") {
+    for forbidden in cleanup_contract_strings(
+        "secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.6",
+    ) {
         assert!(
             !scalar_encodings.contains(forbidden),
             "owner-first scalar-encoding path {forbidden}"
@@ -780,7 +796,9 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         "((*encoded_byte >> shift) & (SECRET_MSM_TABLE_ENTRIES_V1 as u8 - 1)) ^ candidate"
     ));
     assert!(nibble_comparator.contains("difference.wrapping_sub(1)"));
-    for forbidden in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.7") {
+    for forbidden in cleanup_contract_strings(
+        "secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.7",
+    ) {
         assert!(
             !nibble_comparator.contains(forbidden),
             "borrowed secret-window nibble comparator {forbidden}"
@@ -795,7 +813,9 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .expect("secret-window scan boundary")
         .0;
     let mut cursor = 0;
-    for step in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.8") {
+    for step in cleanup_contract_strings(
+        "secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.8",
+    ) {
         let offset = window_scan[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing fused secret-window scan step {step}"));
@@ -809,7 +829,9 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
     ] {
         assert_eq!(window_scan.matches(needle).count(), expected);
     }
-    for forbidden in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.9") {
+    for forbidden in cleanup_contract_strings(
+        "secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.9",
+    ) {
         assert!(
             !window_scan.contains(forbidden),
             "fused secret-window scan {forbidden}"
@@ -936,7 +958,9 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
         .expect("owned secret-point addition boundary")
         .0;
     let mut cursor = 0;
-    for step in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.1") {
+    for step in cleanup_contract_strings(
+        "secret_msm_point_owner_and_borrowed_publication_boundary_are_static.1",
+    ) {
         let offset = owned_add[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing owned secret-point addition step {step}"));
@@ -949,7 +973,9 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
     ] {
         assert_eq!(owned_add.matches(needle).count(), expected);
     }
-    for forbidden in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.2") {
+    for forbidden in cleanup_contract_strings(
+        "secret_msm_point_owner_and_borrowed_publication_boundary_are_static.2",
+    ) {
         assert!(
             !owned_add.contains(forbidden),
             "owned secret-point addition {forbidden}"
@@ -975,7 +1001,9 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
         .expect("owned scaled-pair point addition boundary")
         .0;
     let mut cursor = 0;
-    for step in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.3") {
+    for step in cleanup_contract_strings(
+        "secret_msm_point_owner_and_borrowed_publication_boundary_are_static.3",
+    ) {
         let offset = owned_scaled_pair[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing owned scaled-pair addition step {step}"));
@@ -993,7 +1021,9 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
     ] {
         assert_eq!(owned_scaled_pair.matches(needle).count(), expected);
     }
-    for forbidden in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.4") {
+    for forbidden in cleanup_contract_strings(
+        "secret_msm_point_owner_and_borrowed_publication_boundary_are_static.4",
+    ) {
         assert!(
             !owned_scaled_pair.contains(forbidden),
             "owned scaled-pair point addition {forbidden}"
@@ -1025,7 +1055,9 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
     assert!(transcript_trait.contains("point: &S::Point"));
     assert!(!transcript_trait.contains("point: S::Point"));
     assert_eq!(production.matches("transcript.push_point(").count(), 9);
-    for publication in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.5") {
+    for publication in cleanup_contract_strings(
+        "secret_msm_point_owner_and_borrowed_publication_boundary_are_static.5",
+    ) {
         assert!(production.contains(publication));
     }
     assert_eq!(
@@ -1046,7 +1078,9 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
             .count(),
         2
     );
-    for forbidden in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.6") {
+    for forbidden in cleanup_contract_strings(
+        "secret_msm_point_owner_and_borrowed_publication_boundary_are_static.6",
+    ) {
         assert!(!production.contains(forbidden));
     }
 }
@@ -1091,7 +1125,7 @@ fn secret_builder_matches_public_and_naive_msm_across_chunks() {
         .num_threads(1)
         .build()
         .expect("single-thread Rayon pool")
-        .install(&evaluate_secret);
+        .install(evaluate_secret);
     #[cfg(not(feature = "parallel"))]
     let single_thread = evaluate_secret();
     assert!(single_thread.equals(&expected));
@@ -1101,7 +1135,7 @@ fn secret_builder_matches_public_and_naive_msm_across_chunks() {
             .num_threads(4)
             .build()
             .expect("four-thread Rayon pool")
-            .install(&evaluate_secret);
+            .install(evaluate_secret);
         assert!(four_threads.equals(&expected));
         assert_eq!(
             (*single_thread.expose_ref()).encode(),
@@ -1325,7 +1359,9 @@ fn prover_scalar_publication_borrows_every_private_response() {
     assert!(transcript_trait.contains("scalar: &S::Scalar"));
     assert!(!transcript_trait.contains("scalar: S::Scalar"));
     assert_eq!(production.matches("transcript.push_scalar(").count(), 7);
-    for publication in cleanup_contract_strings("prover_scalar_publication_borrows_every_private_response.1") {
+    for publication in
+        cleanup_contract_strings("prover_scalar_publication_borrows_every_private_response.1")
+    {
         assert!(production.contains(publication));
     }
     assert_eq!(
@@ -1340,7 +1376,9 @@ fn prover_scalar_publication_borrows_every_private_response() {
             .count(),
         2
     );
-    for forbidden in cleanup_contract_strings("prover_scalar_publication_borrows_every_private_response.2") {
+    for forbidden in
+        cleanup_contract_strings("prover_scalar_publication_borrows_every_private_response.2")
+    {
         assert!(!production.contains(forbidden));
     }
 }
@@ -1418,7 +1456,7 @@ fn symbolic_h_proof_bytes_are_worker_count_independent() {
         .num_threads(1)
         .build()
         .expect("single-thread Rayon pool")
-        .install(&prove);
+        .install(prove);
     #[cfg(not(feature = "parallel"))]
     let single_thread = prove();
     assert!(!single_thread.is_empty());
@@ -1428,7 +1466,7 @@ fn symbolic_h_proof_bytes_are_worker_count_independent() {
             .num_threads(4)
             .build()
             .expect("four-thread Rayon pool")
-            .install(&prove);
+            .install(prove);
         assert_eq!(single_thread, four_threads);
     }
 }
@@ -1740,7 +1778,9 @@ fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
         .expect("borrowed product owner boundary")
         .0;
     let mut cursor = 0;
-    for step in cleanup_contract_strings("scalar_vector_borrowed_product_preallocates_and_clears_every_exit.1") {
+    for step in cleanup_contract_strings(
+        "scalar_vector_borrowed_product_preallocates_and_clears_every_exit.1",
+    ) {
         let offset = borrowed_product[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing borrowed-product step {step}"));
@@ -1768,7 +1808,9 @@ fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
             .count(),
         2
     );
-    for forbidden in cleanup_contract_strings("scalar_vector_borrowed_product_preallocates_and_clears_every_exit.2") {
+    for forbidden in cleanup_contract_strings(
+        "scalar_vector_borrowed_product_preallocates_and_clears_every_exit.2",
+    ) {
         assert!(
             !borrowed_product.contains(forbidden),
             "borrowed product path {forbidden}"
@@ -1976,7 +2018,9 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .find("*result += *coefficient * *scalar;")
         .expect("borrowed scaled coordinate update");
     assert!(length_check < coordinate_loop && coordinate_loop < coordinate_update);
-    for forbidden in cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.1") {
+    for forbidden in
+        cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.1")
+    {
         assert!(
             !accumulation.contains(forbidden),
             "borrowed scaled accumulation path {forbidden}"
@@ -1991,7 +2035,9 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .expect("generalized prover boundary")
         .0;
     let polynomial_evaluation = prover
-        .split_once("let x = ScalarVector::powers(transcript.challenge()?, t_poly_len);")
+        .split_once(
+            "let x = ScalarVector::try_powers_exact_v1(transcript.challenge()?, t_poly_len)?;",
+        )
         .expect("polynomial evaluation challenge")
         .1
         .split_once("let mut tau_ni = SecretScalar::new(S::Scalar::ZERO);")
@@ -1999,7 +2045,7 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .0;
     assert_eq!(
         polynomial_evaluation
-            .matches("ScalarVector::zero(n)")
+            .matches("ScalarVector::try_zero_exact_v1(n)?")
             .count(),
         1
     );
@@ -2013,7 +2059,7 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .find("let evaluate = |polynomial: &[ScalarVector<S::Scalar>]| {")
         .expect("borrowed polynomial evaluation closure");
     let result_owner = polynomial_evaluation
-        .find("let mut result = ScalarVector::zero(n);")
+        .find("let mut result = ScalarVector::try_zero_exact_v1(n)?;")
         .expect("polynomial result owner");
     let coefficient_loop = polynomial_evaluation
         .find("for (index, coefficient) in polynomial.iter().enumerate()")
@@ -2022,10 +2068,10 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .find("result.add_scaled_assign(coefficient, &x[index]);")
         .expect("borrowed polynomial accumulation call");
     let l_eval = polynomial_evaluation
-        .find("let l_eval = evaluate(&l);")
+        .find("let l_eval = evaluate(&l)?;")
         .expect("left polynomial evaluation");
     let r_eval = polynomial_evaluation
-        .find("let r_eval = evaluate(&r);")
+        .find("let r_eval = evaluate(&r)?;")
         .expect("right polynomial evaluation");
     let drop_l = polynomial_evaluation
         .find("drop(l);")
@@ -2040,7 +2086,9 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
     assert!(result_owner < coefficient_loop && coefficient_loop < accumulation_call);
     assert!(accumulation_call < l_eval && l_eval < r_eval);
     assert!(r_eval < drop_l && drop_l < drop_r && drop_r < t_caret);
-    for forbidden in cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.2") {
+    for forbidden in
+        cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.2")
+    {
         assert!(
             !polynomial_evaluation.contains(forbidden),
             "borrowed polynomial evaluation path {forbidden}"
@@ -2093,7 +2141,9 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .0;
     assert_eq!(left_rehome_region.matches("Vec::new()").count(), 1);
     assert_eq!(left_rehome_region.matches("core::mem::replace").count(), 1);
-    for forbidden in cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.3") {
+    for forbidden in
+        cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.3")
+    {
         assert!(
             !left_rehome_region.contains(forbidden),
             "left-witness rehome path {forbidden}"
@@ -2117,7 +2167,7 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .map(|position| output_commitment + position)
         .expect("output-wire commitment evaluation");
     let left_polynomial_allocation = prover
-        .find("let mut l = vec![ScalarVector(Vec::new()); is + 1];")
+        .find("let mut l = try_exact_capacity_vec_v1(polynomial_count)?;")
         .expect("left polynomial owner allocation");
     let output_handoff_index = prover
         .find(output_handoff)
@@ -2154,7 +2204,7 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .map(|position| right_commitment + position)
         .expect("right-witness AI commitment evaluation");
     let right_polynomial_allocation = prover
-        .find("let mut r = vec![ScalarVector(Vec::new()); is + 1];")
+        .find("let mut r = try_exact_capacity_vec_v1(polynomial_count)?;")
         .expect("right polynomial owner allocation");
     let right_handoff_index = prover
         .find(right_handoff)
@@ -2177,7 +2227,9 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         right_handoff_region.matches("core::mem::replace").count(),
         1
     );
-    for forbidden in cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.4") {
+    for forbidden in
+        cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.4")
+    {
         assert!(
             !right_handoff_region.contains(forbidden),
             "right-witness handoff path {forbidden}"

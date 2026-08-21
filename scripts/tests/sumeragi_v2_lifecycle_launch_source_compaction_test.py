@@ -16,9 +16,9 @@ SOURCE = SOURCE_PATH.read_text(encoding="utf-8")
 GUARD_START = "#[test]\nfn launch_source_keeps_status_sealed_and_orders_store_transfer()"
 GUARD_END = (
     "#[test]\n"
-    "fn recovered_decision_fetch_dispatch_reserves_capacity_before_claim_and_failures_leave_no_mutation"
+    "fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit"
 )
-EXPECTED_FINGERPRINT = "9b4d84083c993b7c1f6b1712d5d5030e470e2a187e8ab8f4c94eab5d670ae8eb"
+EXPECTED_FINGERPRINT = "a7dad7da7c94d55364f8642e3c38719c64707b464c743ec66fe9f9b91e64c670"
 
 
 def guarded_source(source: str = SOURCE) -> str:

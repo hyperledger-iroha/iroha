@@ -4,9 +4,7 @@ use crate::sumeragi::{
     v2::AdapterEquivocationEvidence,
     v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
     v2_core::Generation,
-    v2_lifecycle_coordinator::{
-        reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
-    },
+    v2_lifecycle_coordinator::reviewed_lifecycle_ledger_source_for_test,
     v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     v2_transport::authenticate_certified_body_request,
 };

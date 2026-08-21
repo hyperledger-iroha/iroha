@@ -193,9 +193,10 @@ impl V2EffectExecutor<FakeRuntime> {
             certified_work: self.certified_work.clone(),
             outstanding_request_hashes: self.outstanding_requests.hashes(),
             ready_bodies: self.ready_bodies.clone(),
-            authenticated_genesis_body: self.authenticated_genesis_body.as_ref().map(|retained| {
-                (retained.subject(), Arc::clone(retained.canonical_wire()))
-            }),
+            authenticated_genesis_body: self
+                .authenticated_genesis_body
+                .as_ref()
+                .map(|retained| (retained.subject(), Arc::clone(retained.canonical_wire()))),
             retained_locked_body: self.retained_locked_body.clone(),
             ready_body_bytes: self.ready_body_bytes,
             pending_store_bytes: self.pending_store_bytes,
@@ -1426,9 +1427,16 @@ impl ProductionTransportFixture {
             3_000,
             0,
         );
-        let signature = SignatureOf::try_from_hash(validator_keys[0].private_key(), header.hash())
-            .expect("production transport block signature");
-        let block = SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
+        let leader = context.leader(round.view);
+        let leader_index = usize::try_from(leader).expect("production leader fits usize");
+        let signature =
+            SignatureOf::try_from_hash(validator_keys[leader_index].private_key(), header.hash())
+                .expect("production transport block signature");
+        let block = SignedBlock::presigned(
+            BlockSignature::new(u64::from(leader), signature),
+            header,
+            Vec::new(),
+        );
         let body = block
             .encode_wire()
             .expect("production transport canonical block wire");

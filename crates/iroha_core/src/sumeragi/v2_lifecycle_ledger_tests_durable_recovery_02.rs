@@ -947,21 +947,25 @@ fn standalone_validate_cold_census_rejects_a_certified_origin() {
     let ledger = fixture.ledger(vec![standalone]);
     assert!(matches!(
         ledger.authenticate_durable_certified_body_pipeline_census(&fixture.verified, &body_store,),
-        Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow)
+        Err(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)
     ));
 
     let genesis_directory = TempDir::new().expect("temporary authenticated-genesis body store");
-    let leader_index = usize::try_from(fixture.verified.context().leader(0))
-        .expect("height-one leader index fits usize");
     let mut genesis_store = V2BodyStore::open_with_policy(
         genesis_directory.path(),
         fixture.verified.context().clone(),
-        BlockSignaturePolicy::GenesisAuthority(
-            fixture.keys[leader_index].public_key().clone(),
-        ),
+        BlockSignaturePolicy::GenesisAuthority(fixture.keys[0].public_key().clone()),
     )
     .expect("open authenticated-genesis body store");
-    let fetch = fixture.fetch_record(&mut genesis_store, 0, 0x76, 1, None, false);
+    let fetch = fixture.fetch_record_with_block_signature(
+        &mut genesis_store,
+        0,
+        0x76,
+        1,
+        None,
+        false,
+        Some((0, 0)),
+    );
     let seed = fixture.ledger(vec![fetch]);
     let mut records = seed
         .authenticate_durable_certified_body_pipeline_census(&fixture.verified, &genesis_store)

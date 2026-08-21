@@ -3,7 +3,7 @@
 This directory is the first-release formal corridor for the production
 Sumeragi v2 consensus protocol. There is no legacy Sumeragi proof corridor.
 The model fixes protocol revision 4 and is parameterized over arbitrary finite
-frozen rosters; production separately enforces the release limit of 128
+frozen rosters; production separately enforces the release limit of 31
 validators. Mechanization status is recorded per obligation in the proof
 ledger. The first-release implementation likewise has one canonical decoder:
 an omitted `proposal_round` is invalid rather than interpreted as the vote or
@@ -345,12 +345,11 @@ height-context state are not migrated in place.
   for a typed monotone authority refinement whose phase/commitment identity is
   deliberately distinct. Fair transport ingress for a non-empty roster has
   the exact minimum
-  `5 * |ValidatorIds| + 3 * H + 2` entries, where `H` is the configured maximum
+  `5 * |ValidatorIds| + 3 * H` entries, where `H` is the configured maximum
   number of simultaneously materialized authenticated non-validator source
   lanes. The potential separately reserves five owners per validator, three
-  owners per materialized authenticated non-validator lane, and two anonymous
-  owners. With no roster the diagnostic minimum is `3 * H + 1`, because no
-  roster-origin TransportCompletion can be valid on the anonymous lane. A
+  owners per materialized authenticated non-validator lane, and no identityless
+  ingress partition. With no roster the diagnostic minimum is `3 * H`. A
   semantic duplicate carrying a newly authenticated reply route is merged into
   its existing request before the new-lane `H` gate is evaluated. The
   inductive invariant also records that every individual source lane is at
@@ -361,7 +360,8 @@ height-context state are not migrated in place.
   reserve unavailable to ordinary traffic. Each validator additionally leaves a
   64 KiB timeout-vote reserve unavailable to ordinary traffic (in addition to body
   envelope headroom). That isolated region exceeds the conservative 4 KiB
-  maximum valid timeout-vote envelope, including a 128-signer PrepareQC. A
+  maximum valid timeout-vote envelope; the sizing envelope even covers a
+  128-signer PrepareQC, beyond the production cap of 31 validators. A
   validator lane owns at most one distinct queued TimeoutVote in that region;
   transport copies coalesce while that lane owns the exact envelope, and the
   authenticated delivery record continues coalescing while the corresponding
@@ -414,9 +414,10 @@ height-context state are not migrated in place.
   The production transport refinement uses exact checked canonical geometry at
   every layer. With `F(x)` denoting compact-length framing, the manifest bound
   is `F(8 + C * F(32)) + 228`; the proposal adds the maximal grouped TC,
-  separately carried highest PrepareQC, and signature. The recommended
-  128-validator proposal is 232,541 bare bytes, and the recommended maximum
-  transport completion is 16,811,581 bare bytes. `CertifiedBodyRequest`
+  separately carried highest PrepareQC, and signature. The conservative bound
+  sizes a 128-validator proposal at 232,541 bare bytes, beyond the production
+  cap of 31 validators, and the recommended maximum transport completion is
+  16,811,581 bare bytes. `CertifiedBodyRequest`
   carries a maximal PrepareQC, `CommitCertificateRequest` carries the actual
   frozen chain id, and `CommitCertificateResponse` carries a maximal CommitQC.
   Control takes the maximum of proposal and Commit-certificate response.
@@ -461,11 +462,11 @@ height-context state are not migrated in place.
   global-frame, or high-queue owner. The default instantiation uses
   17 MiB global/consensus/block-sync settings, 2 MiB control, a 128 MiB
   high-priority byte queue, `H = 2`, and
-  `4 * 128 + 2 * 2 + 2 = 518` outer-ingress entries.
-  Kagami rejects rosters above 128 and preserves one
+  `5 * 31 + 3 * 2 = 161` outer-ingress entries.
+  Kagami rejects rosters above 31 and preserves one
   source partition for every validator, every simultaneously materialized
-  authenticated non-validator lane, and the anonymous lane by scaling body
-  bytes to at least `(N + H + 1) * body_source_bytes`.
+  authenticated non-validator lane by scaling body bytes to at least
+  `(N + H) * body_source_bytes`.
   The production reducer's shared Rust/Verus refinement gate checks the local
   EnterView selection boundary: the persisted TC, pre-install lock,
   post-install durable lock, effect-carried lock, and immediately following
@@ -659,8 +660,9 @@ height-context state are not migrated in place.
   `SumeragiV2InFlightFirstRelease.tla` and its twenty-two mutation controls. Its
   three-validator TLA+ instance requires authenticated custody by its selected
   producer and uses the canonical 3-of-3 strict count quorum; it does not infer
-  all-peer preimage knowledge. The fixed-width Rust/Verus relation generalizes
-  that geometry to canonical committees of 1 through 128 validators and
+  all-peer preimage knowledge. The fixed-width Rust/Verus relation deliberately
+  generalizes beyond the production cap to canonical committees of 1 through
+  128 validators and
   covers the named QueuePlan, reservation, Kura/input/READY-QC, volatile body,
   lane-commit, WSV, per-key Commit/tombstone/ForgetCommit prefixes, and release
   actions, including snapshot stutter and the direct-release terminal. The
@@ -1691,8 +1693,8 @@ included two exact locked-Commit
 progress-witness regressions and six outer TransportCompletion-corridor
 regressions. The current
 geometry pins five owners per validator, three owners for each of the `H`
-simultaneously materialized authenticated non-validator lanes, and two
-anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
+simultaneously materialized authenticated non-validator lanes (`5N+3H` total),
+including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
@@ -1710,7 +1712,7 @@ inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
 recovery, post-decision timeout/TC quiescence, and the exact
-`5N+3H+2`/`2N+3` admission boundaries in addition to exact-lock,
+`5N+3H`/`2N+3` admission boundaries in addition to exact-lock,
 completion-ownership, future-acquisition rejection, rebound durable retry, and
 executor-batch boundaries. Those adapter boundaries pin a maximum flattened
 persistence macro-step of four effects within the reducer's eight-effect bound,

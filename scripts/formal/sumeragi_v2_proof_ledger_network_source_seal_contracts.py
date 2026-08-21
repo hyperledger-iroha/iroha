@@ -237,10 +237,10 @@ _PRODUCTION_P2P_REPLY_ROUTES_MERGE_OBSERVED_SHA256 = (
 )
 _PRODUCTION_TRANSPORT_REPLY_ROUTE_ITEM_SHA256 = {
     "try_from_transport_with_reply_route": (
-        "614facaea868b070cd9ce0dc08e8bb472f3afc3fff9769f09a85128e54a7c11e"
+        "74fbe8ba44897e0287c5fa03ffc03c0810f8af36d35b7c7d242335a41997a77f"
     ),
     "transport_reply_route_construction_is_fallible_and_target_bound": (
-        "4a26c079cad7e57615605b7af734211e3b62ba1e9dc54c36f2e0581fe5c23190"
+        "23ee9f116ee65e9e1ed1813f7212b8c5c3e40de0b221cddb6939e166fb147a75"
     ),
 }
 _PRODUCTION_DAEMON_FRAME_VALIDATION_ITEM_SHA256 = {

@@ -1079,7 +1079,7 @@ pub struct ProofBlob {
     /// `None` is an authenticated no-expiry sentinel. Proof-aware hosts must
     /// exact-compare this value with the proof metadata before applying the
     /// current AXT policy slot's freshness check.
-    #[norito(default)]
+    #[norito(required)]
     pub expiry_slot: Option<u64>,
 }
 /// Validate context-free proof-blob invariants.
@@ -1798,6 +1798,33 @@ mod tests {
                 expiry_slot: Some(0),
             }),
             Err(VMError::NoritoInvalid)
+        );
+    }
+    #[test]
+    fn proof_blob_requires_explicit_nullable_expiry_slot() {
+        #[derive(Encode)]
+        struct ProofBlobWithoutExpiry {
+            payload: Vec<u8>,
+        }
+
+        let omitted = encode_canonical_norito(&ProofBlobWithoutExpiry { payload: vec![1] })
+            .expect("encode pre-release proof blob without expiry slot");
+        assert_eq!(
+            decode_canonical_norito::<ProofBlob>(&omitted),
+            Err(VMError::NoritoInvalid),
+            "V1 must reject a proof blob that omits its nullable expiry slot"
+        );
+
+        let explicit_none = ProofBlob {
+            payload: vec![1],
+            expiry_slot: None,
+        };
+        let encoded =
+            encode_canonical_norito(&explicit_none).expect("encode explicit no-expiry proof blob");
+        assert_eq!(
+            decode_canonical_norito::<ProofBlob>(&encoded),
+            Ok(explicit_none),
+            "an explicit None remains the authenticated no-expiry value"
         );
     }
     fn sample_intent(dsid: DataSpaceId, amount: Option<u128>) -> RemoteSpendIntent {

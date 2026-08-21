@@ -1,6 +1,6 @@
 """Ingress geometry and admission source seals for the proof ledger."""
 
-# Exact pure geometry and admission items connecting the concrete 5N+3H+2
+# Exact pure geometry and admission items connecting the concrete 5N+3H
 # owner model to the authoritative production queue.  Whole-item token seals are
 # intentional here: every numeric term contributes to a progress reservation,
 # and comments or test-only lookalikes cannot satisfy this contract.
@@ -12,16 +12,16 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "73b744b27b3cc5ffe642fec4a017aeca5bb4fb314205afa0b66531d9fdbf776d"
     ),
     "fair_v2_ingress_required_capacity": (
-        "b3786ae53f4632d7035fc68d122a7dc542df6d26d2cc00ece1f6681840045105"
+        "8ad1236ac1728e777706855b7fe53bdaf43e85bfe1e613d2fd0efd18ff9eac50"
     ),
     "fair_v2_ingress_current_protected_slots": (
-        "58767f7d72045788225efb6019570df5e4f34d0aa4520a414d225f0ea1449549"
+        "cfa5470ddd16fb8d4c0be612b70b2510ce417c5a5bc63455185034cd357dd83e"
     ),
     "fair_v2_ingress_lane_protected_slots": (
-        "9ded1cd333e6cdb7415aced353a72caca4965fd74c705d11d3916faf251e4af8"
+        "3bdb6bf94f55225abbf41e692404c4d2556bc3a867e57922d24594ce32055bd6"
     ),
     "fair_v2_ingress_required_byte_capacity": (
-        "fa729db8b386470f3dec0dcb0d9ce6b2917ca1de67a1ea185a4b6ab0db717c00"
+        "1eef4625233bae0627b4ea7c94910c1b8600d26328137a51d435583bbf79ffa6"
     ),
     "fair_v2_ingress_compact_len_prefix_bytes": (
         "50cd13b1d620e26eb0502ae9650b7cb66e489073ab407d95a5217177de517d95"
@@ -664,9 +664,6 @@ let rollover_ready = activated.with_runner_runtime(
     },
 )?;
 if !rollover_ready {
-    activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
-        committed_lane_status_publisher.publish_if_changed(lane_work)
-    });
     let _ = wake_rx.recv_timeout(IDLE_POLL);
     continue;
 }
@@ -735,19 +732,19 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "new_with_source_geometry_and_transport_frame_caps": (
-        "575c36d584134403c1cba15a5bf4baba4c051da6041cb943e0940774ed485766"
+        "a41b4736d1aa01919dcbccf0b5c71378682e9ad5fd2c64909972f17f6d6c2be8"
     ),
     "configure_roster_for_context": (
         "19c00b3b692c6dba9ada1003dff9483ea7a90a47263a506dd6c764f1d24fc68c"
     ),
     "configure_roster_with_byte_requirements": (
-        "dd118c20b0f64df0f6c0ff317320c4704bc8376d68c085b493ac763621b59cf9"
+        "a514f0b70ec918a0457ab4fcf90aecab3a5d3370302ae15cc4b161b5d03c92f3"
     ),
     "open": (
         "5009fc5c34fbcd3f75897ef7f37e7c331e948ac00e555b749ca1a4bff85cadf7"
     ),
     "try_push_at": (
-        "a49c580b3629511260af545ce2d5b5916dd63f20a61a7ddba50d77b4d8f6a908"
+        "eb2a36ec0884655d739e38e34b4031467c0f5ed983c77583b3d331df6cceffac"
     ),
     "try_recv_if_at_checked": (
         "7b3b4b907715d56dba2dcc36dee64db07ef61cd7a456d039e24146cf4d60d20d"
@@ -756,7 +753,7 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "5f6184b1089ce6fee2ccb7f1ad8dadc5d47b8b017dfec383f7211eaec6fe9060"
     ),
     "dequeue_selected_locked": (
-        "2916aa1e30fb8e0894728d7e241b87b26fbc6ecfc54ccf23d010b1b5b943ddd0"
+        "14a706a0784006194f78d56b50268fca87a84de28f2bf0447d757f7c9dcd63a8"
     ),
 }
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {

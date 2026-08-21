@@ -35,7 +35,7 @@ proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
 authenticated_non_validator_sources = 2
-body_bytes = 346030080
+body_bytes = 311427072
 body_source_bytes = 34603008
 
 [network]

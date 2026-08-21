@@ -2108,7 +2108,7 @@ self.io.is_some()
                 adapter_source,
                 "drop-inert recovered Sign adapter preview",
                 "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(",
-                "/// Acknowledge successful application of the exact tagged decision.",
+                "pub(crate) fn application_completed(",
             )
             require_order(
                 adapter_path,
@@ -2118,7 +2118,7 @@ self.io.is_some()
                     "authority.consume_for_adapter(RecoveredLifecycleSignAdapterCompletionPermitV1::new())",
                     "verify_individual_signature(",
                     "let mut next_reducer = self.reducer.clone()",
-                    "next_reducer.step(event.clone())",
+                    "let outcome = next_reducer.step(event.clone())",
                     "if converted.first() != Some(&expected_broadcast)",
                     "Ok(PreparedRecoveredLifecycleSignAdapterCompletionV1 {",
                 ),
@@ -2358,7 +2358,7 @@ self.io.is_some()
                     "self.pending_prepare.as_ref().cloned()",
                     "expected_wal_sequence.checked_add(1) != Some(entry.id().get())",
                     "encode_wal_entry(&entry, self.adapter.aggregator.as_ref())",
-                    "next_reducer.step(persisted_event.clone())",
+                    "let continuation = next_reducer.step(persisted_event.clone())",
                     "message: reducer::SignableMessage::Vote(vote)",
                     "RecoveredLifecycleNextVoteBodyLookupV1::from_adapter_preview(",
                     "self.next_vote_body_store_identity = Some(body_store_identity)",
@@ -2854,7 +2854,7 @@ self.io.is_some()
                 (
                     "verified.verify_consensus_message(message)",
                     "adapter.reducer.awaiting_signature()",
-                    "next_reducer.step(event.clone())",
+                    "let outcome = next_reducer.step(event.clone())",
                     "replayed_broadcast != broadcast",
                     "replayed_next_sign != next_sign",
                     "adapter.reducer = next_reducer",

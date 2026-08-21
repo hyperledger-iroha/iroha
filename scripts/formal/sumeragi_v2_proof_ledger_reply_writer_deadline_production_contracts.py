@@ -69,61 +69,61 @@ _REPLY_WRITER_DEADLINE_NETWORK_ITEM_SHA256 = {
 
 _REPLY_WRITER_DEADLINE_NETWORK_TEST_SHA256 = {
     "reply_timeout_attempt_is_retained_by_actor_admission_ticket": (
-        "0986ff63db60a1a90e682f162f160ed1d75e4f4897b6fc0eaa606a97ad788f1c"
+        "0aeeff4435ef100ec1497a2aa7fe9bc45c88042266013c7a49a6562596d36ff1"
     ),
     "reply_flush_identity_requires_and_exposes_timeout_attempt": (
-        "082c9390e0720be8b3e6cb2ff96a12e1668a2987f35dd555072fa6ff06889689"
+        "612fd91dd4eb20fc5a03e2edce14010c2be09ac7e19c88c968be106605126e38"
     ),
     "reply_flush_test_fixture_distinguishes_success_timeout_and_close": (
         "48ed5103779d849e1313f465b6c7035f93e79b638249e2c3fabe23de4535355f"
     ),
     "reply_flush_ack_completes_only_after_peer_writer_flush": (
-        "a741724e907df8ae60e7027a8f7e55220f851e39f1575cd21f6c5e2805723559"
+        "425a9d65db42083e1c14e0fd2125ea6140f4a34ab9460440b5d70fa7bcbb34fa"
     ),
     "ready_exact_reply_flush_wins_route_retirement": (
-        "6be7e1c0a3a76e1b2beeb053e221a3c4d39765b9921cbace30d28d9b10792bea"
+        "fd852f73618a1c43b2a86be848bbc57ca66aea4fe8740f6f69a61492261683bf"
     ),
     "ready_exact_reply_flush_wins_connection_replacement": (
-        "1909afb3fb7b49b8b5b70c1e05ce476ea39211e812f3059c8c9121fc22f5b0d3"
+        "9932dee17db93df3bd7e4c45f1cfb7dabbd083edd16bf371936ec02606939cbb"
     ),
     "terminal_fence_observes_deadline_flush_published_after_initial_poll": (
-        "ee3d49954f7957baa856a48eb49719c5aec0780cb15c1013239d5735b461710e"
+        "151199ba599531779445570111ef01a42a2abf08fd43a5d6fa2f6086fd2d1944"
     ),
     "terminal_fence_observes_replacement_flush_published_after_initial_poll": (
-        "80cd284419da2442153124fc630f237f39a998415ec02c856e856a5b28bd2ee2"
+        "e722923a9917528fb672c52cac25c4c6b64aeb5c31634314cbbc401c85e2a26b"
     ),
     "terminal_fence_observes_inactive_route_flush_published_after_initial_poll": (
-        "0d92a63389e961f7b3c1b98245cc764064cd96341e2bb64be91713fa80aead68"
+        "69ea1f9475258fe187d820595dcfdeceda18d3606eb44272b27ff8b080879020"
     ),
     "terminal_fence_observes_send_before_close_and_rejects_send_after_close": (
-        "dca159634c2cc1debe1e1351d309aefa4789cc91e0dd608e3db8a288ecd0c72e"
+        "e8cdcd9e60d0cd8b9e4efffb1c1605101ea37faed5ba4dda88aa495175c61687"
     ),
     "cancelled_pending_exact_reply_observes_ready_flush_before_release": (
-        "87c9bc8d641c6ce2368ac46cfa36ce4ffa9497ec1beee48f4e4b73a4c4d858ff"
+        "3c651df6f91b3ada643dfb0ca864d17097250ad3517e1956dfa68e8052c57a8c"
     ),
     "pending_queue_drop_observes_ready_exact_flush_before_shutdown_close": (
-        "4c3c103d23b777143d128315b42a818b5a1a8ec3cdee9c5176c0919a9488169a"
+        "b3064a77b7ab2a5eb0d1b893c4450e053ccc8c90ea8be2dc7518f49ac223dae9"
     ),
     "nonready_exact_reply_ack_cannot_keep_stale_route_alive": (
-        "8c1524858f353d036644796393799834ca0ed3014d806d3954c92d30cf9b4c3f"
+        "80767d689ddc79e41beb025b12c155e297dbbf161213b20f651b0cc602bc3c0f"
     ),
     "adaptive_reply_attempt_flushes_between_base_and_doubled_deadline": (
-        "5385f9c6491f133e5209fcb0ffad4626ac839876ec9dc9ce30975727c1a2e808"
+        "f6f454400e2d0eae19d6680a1672066b02e7301ce9fbf88e8b0b42512e5721a6"
     ),
     "adaptive_reply_timeout_scaling_handles_extreme_duration_without_panicking": (
         "ce2e2978ca8d3e216f9e88d1b8e7d5dab753f90ad1b7d03347345a655735d078"
     ),
     "full_exact_writer_queue_times_out_closes_route_and_releases_actor_budget": (
-        "27e08446be5cc78d25829edbcd87612707a7bfca92d6578136b3f80e4d74c722"
+        "b35c8d487c8ed231fe78869adc31c72a37a619460b5f5535d6d4baea89a47052"
     ),
     "topology_writer_full_retry_does_not_acquire_exact_reply_deadline": (
-        "160a0aebe147a211a085857454cf71867e7b8f7b5a0bdfed54ad65b6adb64a77"
+        "00d95886404fe9aff6851ea43675c464839f96e7ff1cc1b76b832ceb5827d737"
     ),
     "stale_reply_writer_deadline_does_not_terminate_replacement": (
-        "5d2281de1428b09b1b8543001e2de3db746fdaac3a35316257c1dc5e6bde7a98"
+        "9bfbab71e67b06b14dd609d824933d52bcd3a85422bd632de15f47a2b173bc51"
     ),
     "reply_writer_deadline_retirement_is_idempotent": (
-        "0014e77c434b195ea916ff323ee5b70a609c1fe5219459c22bd3bd70fa793a7c"
+        "d3812390fd6c60a3d7dd5600be5f26d96996b2bfc94248f1e687dae306016af3"
     ),
 }
 
@@ -164,6 +164,122 @@ _REPLY_WRITER_DEADLINE_MERGE_TEST_SHA256 = {
     "sidecar_flush_admission_retains_timeout_attempt_identity": (
         "1ecbc2c924039bdf616a5de23771dc100b9885baef097467894f97c5060c2b1c"
     ),
+}
+
+_REPLY_WRITER_DEADLINE_NETWORK_TEST_MACROS = {
+    "let_test_network": """
+macro_rules! let_test_network {
+    ($network:ident) => {
+        let Some(mut $network) = bare_network() else {
+            return;
+        };
+    };
+    ($network:ident, $payload:ty) => {
+        let Some(mut $network) = bare_network_with::<$payload>() else {
+            return;
+        };
+    };
+}
+""",
+    "admit_lane_reply": """
+macro_rules! admit_lane_reply {
+    (
+        $handle:ident,
+        $progress_rx:ident => $completion:ident,
+        $admitted:ident;
+        $tag:expr,
+        $target:expr,
+        $route:ident
+    ) => {
+        let mut $completion = $handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane($tag),
+                    peer_id: $target,
+                    priority: Priority::High,
+                },
+                &$route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        let $admitted = $progress_rx.try_recv().expect("admitted reply actor item");
+    };
+}
+""",
+    "direct_frame": """
+macro_rules! direct_frame {
+    ($origin:expr, $target:expr, $priority:expr, $payload:expr) => {
+        RelayMessage::new(
+            $origin,
+            RelayTarget::Direct(($target).clone()),
+            DEFAULT_RELAY_TTL,
+            $priority,
+            $payload,
+        )
+    };
+}
+""",
+    "let_reply_handle": """
+macro_rules! let_reply_handle {
+    ($network:ident, $handle:ident, $progress_rx:ident) => {
+        let (mut $handle, _safety_rx, mut $progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        $handle.reply_route_owner = Arc::clone(&$network.reply_route_owner);
+    };
+}
+""",
+    "let_deferred_peer": """
+macro_rules! let_deferred_peer {
+    ($receivers:pat_param = $network:expr; $peer:expr, $address:expr, $connection:expr) => {
+        let (peer_handle, $receivers) = test_wire_peer_handle::<DeferredProgressMsg>(1);
+        insert_ref_peer($network, $peer, $address, $connection, peer_handle, true);
+    };
+    (
+        $receivers:pat_param = $network:expr;
+        $peer:expr,
+        $address:expr,
+        $connection:expr;
+        capacity $capacity:expr
+    ) => {
+        let (peer_handle, $receivers) = test_wire_peer_handle::<DeferredProgressMsg>($capacity);
+        insert_ref_peer($network, $peer, $address, $connection, peer_handle, true);
+    };
+}
+""",
+    "reconcile_test_topology": """
+macro_rules! reconcile_test_topology {
+    ($handle:ident.$field:ident, $topology:expr) => {
+        let _ = $handle
+            .$field
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reconcile($topology, &$handle.self_id);
+    };
+}
+""",
+    "assert_lane_flushed": """
+macro_rules! assert_lane_flushed {
+    ($receivers:ident, $tag:expr, $message:literal) => {
+        assert_eq!(
+            $receivers
+                .try_recv_any_and_acknowledge_flush()
+                .expect($message)
+                .payload,
+            DeferredProgressMsg::Lane($tag)
+        );
+    };
+    (consensus $receivers:ident, $tag:expr, $message:literal) => {
+        assert_eq!(
+            $receivers
+                .try_recv_consensus_and_acknowledge_flush()
+                .expect($message)
+                .payload,
+            DeferredProgressMsg::Lane($tag)
+        );
+    };
+}
+""",
 }
 
 
@@ -1375,6 +1491,32 @@ if matches!(status, NetworkReplyFlushAckStatus::TimedOut) {
         "only successful cursor advance resets the adaptive attempt",
         errors,
     )
+
+    for macro_name, expected_source in (
+        _REPLY_WRITER_DEADLINE_NETWORK_TEST_MACROS.items()
+    ):
+        macros = rust_macro_items(network_source, macro_name)
+        if len(macros) != 1:
+            errors.append(
+                f"{network_path}: reply-writer regressions require exactly one "
+                f"test helper macro {macro_name}; found {len(macros)}"
+            )
+            continue
+        macro = macros[0]
+        _require_rust_item_context(
+            network_path,
+            macro,
+            network_test_context,
+            f"reply-writer regression helper macro {macro_name}",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            network_path,
+            macro,
+            expected_source,
+            f"reply-writer regression helper macro {macro_name}",
+            errors,
+        )
 
     for test_name, expected_sha256 in (
         _REPLY_WRITER_DEADLINE_NETWORK_TEST_SHA256.items()

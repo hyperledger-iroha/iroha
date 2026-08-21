@@ -11024,7 +11024,7 @@ mod tests {
         for validator_count in [4, 7, MAX_VALIDATORS_PER_HEIGHT] {
             assert_eq!(
                 izanami_sumeragi_body_bytes(validator_count)?,
-                (validator_count + IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES + 1)
+                (validator_count + IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
                     * IZANAMI_SUMERAGI_BODY_SOURCE_BYTES
             );
         }

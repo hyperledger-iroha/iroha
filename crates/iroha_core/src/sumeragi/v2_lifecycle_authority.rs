@@ -10,10 +10,342 @@ use schema::{
     CapacityClass, CapacityGeometry, LifecycleContext, LifecycleDigest, LifecycleKey,
     PhysicalSlotId, SchedulerEpisodeUniverse,
 };
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Arc, Condvar, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 #[cfg(test)]
 use std::path::PathBuf;
 const ROSTER_IDENTITY_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:roster-identity:v1";
+
+#[derive(Debug)]
+struct PendingLifecycleOrdinalRange {
+    seal: Arc<()>,
+    first: u128,
+    last: u128,
+    successor: u128,
+}
+
+#[derive(Debug)]
+struct LifecycleOrdinalAuthorityState {
+    next: Option<u128>,
+    pending: Option<PendingLifecycleOrdinalRange>,
+}
+
+#[derive(Debug)]
+struct SharedLifecycleOrdinalAuthority {
+    state: Mutex<LifecycleOrdinalAuthorityState>,
+    durable_publication: Condvar,
+}
+
+impl SharedLifecycleOrdinalAuthority {
+    fn after_high_watermark(high_watermark: u128) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(LifecycleOrdinalAuthorityState {
+                next: high_watermark.checked_add(1),
+                pending: None,
+            }),
+            durable_publication: Condvar::new(),
+        })
+    }
+
+    fn lock_state(&self) -> Result<MutexGuard<'_, LifecycleOrdinalAuthorityState>, String> {
+        self.state
+            .lock()
+            .map_err(|_| "Sumeragi v2 lifecycle ordinal authority was poisoned".to_owned())
+    }
+
+    fn wait_for_durable_publication<'a>(
+        &self,
+        mut state: MutexGuard<'a, LifecycleOrdinalAuthorityState>,
+    ) -> Result<MutexGuard<'a, LifecycleOrdinalAuthorityState>, String> {
+        while state.pending.is_some() {
+            state = self.durable_publication.wait(state).map_err(|_| {
+                "Sumeragi v2 lifecycle ordinal authority was poisoned".to_owned()
+            })?;
+        }
+        Ok(state)
+    }
+
+    fn prospective_range(
+        next: Option<u128>,
+        count: usize,
+    ) -> Result<(Option<u128>, Option<u128>), String> {
+        if count == 0 {
+            return Ok((None, next));
+        }
+        let first = next.ok_or_else(|| {
+            "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
+        })?;
+        let offset = u128::try_from(count - 1)
+            .map_err(|_| "Sumeragi v2 lifecycle admission range is not representable".to_owned())?;
+        let last = first.checked_add(offset).ok_or_else(|| {
+            "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
+        })?;
+        let successor = last.checked_add(1).ok_or_else(|| {
+            "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
+        })?;
+        Ok((Some(first), Some(successor)))
+    }
+}
+
+/// Restricted runtime/fair-ingress handle for actor-global scheduler ordinals.
+#[derive(Clone, Debug)]
+pub(in crate::sumeragi) struct RuntimeLifecycleOrdinalAuthority {
+    shared: Arc<SharedLifecycleOrdinalAuthority>,
+}
+
+impl RuntimeLifecycleOrdinalAuthority {
+    /// Reserve a range and advance only after the local owner commits.
+    pub(in crate::sumeragi) fn with_checked_reservation<T, E>(
+        &self,
+        count: usize,
+        commit: impl FnOnce(u128, u128) -> Result<T, E>,
+    ) -> Result<Result<T, E>, String> {
+        let state = self.shared.lock_state()?;
+        let mut state = self.shared.wait_for_durable_publication(state)?;
+        let (first, successor) = SharedLifecycleOrdinalAuthority::prospective_range(state.next, count)?;
+        let first = first.ok_or_else(|| {
+            "Sumeragi v2 lifecycle ordinal reservation must contain an owner".to_owned()
+        })?;
+        let successor = successor.ok_or_else(|| {
+            "Sumeragi v2 lifecycle ordinal reservation lost its successor".to_owned()
+        })?;
+        let committed = commit(first, successor);
+        if committed.is_ok() {
+            state.next = Some(successor);
+        }
+        Ok(committed)
+    }
+
+    /// Inspect the current cursor while excluding a pending durable publication.
+    pub(in crate::sumeragi) fn with_checked_current<T, E>(
+        &self,
+        inspect: impl FnOnce(u128) -> Result<T, E>,
+    ) -> Result<Result<T, E>, String> {
+        let state = self.shared.lock_state()?;
+        let state = self.shared.wait_for_durable_publication(state)?;
+        let current = state.next.ok_or_else(|| {
+            "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
+        })?;
+        Ok(inspect(current))
+    }
+
+    /// Reserve one or more actor-global ordinals immediately.
+    pub(in crate::sumeragi) fn reserve_range(
+        &self,
+        count: usize,
+    ) -> Result<(Option<u128>, Option<u128>), String> {
+        let state = self.shared.lock_state()?;
+        let mut state = self.shared.wait_for_durable_publication(state)?;
+        let reserved = SharedLifecycleOrdinalAuthority::prospective_range(state.next, count)?;
+        if count != 0 {
+            state.next = reserved.1;
+        }
+        Ok(reserved)
+    }
+
+    /// Advance past a restored durable high-watermark before live ingress opens.
+    pub(in crate::sumeragi) fn advance_past(&self, high_watermark: u128) -> Result<(), String> {
+        let mut state = self.shared.lock_state()?;
+        if state.pending.is_some() {
+            return Err(
+                "Sumeragi v2 lifecycle ordinal restoration crossed a pending publication"
+                    .to_owned(),
+            );
+        }
+        match state.next {
+            None => Err(
+                "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned(),
+            ),
+            Some(candidate) if candidate <= high_watermark => {
+                state.next = Some(high_watermark.checked_add(1).ok_or_else(|| {
+                    "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
+                })?);
+                Ok(())
+            }
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// Read the next unused committed ordinal without reserving it.
+    pub(in crate::sumeragi) fn next_ordinal(&self) -> Result<Option<u128>, String> {
+        self.shared.lock_state().map(|state| state.next)
+    }
+
+    /// Test whether an ordinal precedes the committed actor-global cursor.
+    pub(in crate::sumeragi) fn recognizes_minted(&self, ordinal: u128) -> Result<bool, String> {
+        if ordinal == 0 {
+            return Ok(false);
+        }
+        self.shared
+            .lock_state()
+            .map(|state| state.next.is_some_and(|next| ordinal < next))
+    }
+}
+
+/// Restricted coordinator handle for reserving durable scheduler ordinals.
+#[derive(Clone, Debug)]
+pub(super) struct CoordinatorLifecycleOrdinalAuthority {
+    shared: Arc<SharedLifecycleOrdinalAuthority>,
+}
+
+/// Failure to create a coordinator-owned durable ordinal reservation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DurableLifecycleOrdinalReservationError {
+    /// No complete range and following cursor remain representable.
+    Exhausted,
+    /// Shared authority was poisoned or already retained another publication.
+    Invariant,
+}
+
+impl CoordinatorLifecycleOrdinalAuthority {
+    /// Reserve a still-unpublished range strictly after both shared and ledger cuts.
+    pub(super) fn begin_durable_range(
+        &self,
+        coordinator_high_water: u128,
+        count: usize,
+    ) -> Result<DurableLifecycleOrdinalReservation, DurableLifecycleOrdinalReservationError> {
+        if count == 0 {
+            return Err(DurableLifecycleOrdinalReservationError::Invariant);
+        }
+        let mut state = self
+            .shared
+            .lock_state()
+            .map_err(|_| DurableLifecycleOrdinalReservationError::Invariant)?;
+        if state.pending.is_some() {
+            return Err(DurableLifecycleOrdinalReservationError::Invariant);
+        }
+        let ledger_successor = coordinator_high_water
+            .checked_add(1)
+            .ok_or(DurableLifecycleOrdinalReservationError::Exhausted)?;
+        let source_next = state
+            .next
+            .ok_or(DurableLifecycleOrdinalReservationError::Exhausted)?;
+        let first = source_next.max(ledger_successor);
+        let (first, successor) =
+            SharedLifecycleOrdinalAuthority::prospective_range(Some(first), count)
+                .map_err(|_| DurableLifecycleOrdinalReservationError::Exhausted)?;
+        let first = first.expect("non-empty durable reservation has a first ordinal");
+        let successor = successor.expect("non-empty durable reservation has a successor");
+        let last = successor - 1;
+        let seal = Arc::new(());
+        state.pending = Some(PendingLifecycleOrdinalRange {
+            seal: Arc::clone(&seal),
+            first,
+            last,
+            successor,
+        });
+        Ok(DurableLifecycleOrdinalReservation {
+            shared: Arc::clone(&self.shared),
+            seal,
+            first,
+            last,
+            successor,
+            committed: AtomicBool::new(false),
+        })
+    }
+
+    /// Verify that launch restoration placed the shared cursor after the ledger.
+    pub(super) fn recognizes_high_water(&self, high_water: u128) -> Result<bool, String> {
+        self.shared
+            .lock_state()
+            .map(|state| state.pending.is_none() && state.next.is_some_and(|next| next > high_water))
+    }
+}
+
+/// Affine coordinator reservation committed only after its LedgerV1 successor is durable.
+#[derive(Debug)]
+pub(super) struct DurableLifecycleOrdinalReservation {
+    shared: Arc<SharedLifecycleOrdinalAuthority>,
+    seal: Arc<()>,
+    first: u128,
+    last: u128,
+    successor: u128,
+    committed: AtomicBool,
+}
+
+impl DurableLifecycleOrdinalReservation {
+    /// First ordinal in the pending contiguous range.
+    pub(super) const fn first(&self) -> u128 {
+        self.first
+    }
+
+    /// Last ordinal in the pending contiguous range.
+    pub(super) const fn last(&self) -> u128 {
+        self.last
+    }
+
+    /// Publish the range to runtime/fair ingress after LedgerV1 fsync.
+    pub(super) fn commit_after_durable_publication(&self) -> Result<(), String> {
+        if self.committed.load(Ordering::Acquire) {
+            return Err("durable lifecycle ordinal reservation was already committed".to_owned());
+        }
+        let mut state = self.shared.lock_state()?;
+        let Some(pending) = state.pending.as_ref() else {
+            return Err("durable lifecycle ordinal reservation lost its pending fence".to_owned());
+        };
+        if !Arc::ptr_eq(&pending.seal, &self.seal)
+            || pending.first != self.first
+            || pending.last != self.last
+            || pending.successor != self.successor
+        {
+            return Err("durable lifecycle ordinal reservation changed before commit".to_owned());
+        }
+        state.next = Some(self.successor);
+        state.pending = None;
+        self.committed.store(true, Ordering::Release);
+        drop(state);
+        self.shared.durable_publication.notify_all();
+        Ok(())
+    }
+}
+
+impl Drop for DurableLifecycleOrdinalReservation {
+    fn drop(&mut self) {
+        if self.committed.load(Ordering::Acquire) {
+            return;
+        }
+        let Ok(mut state) = self.shared.lock_state() else {
+            return;
+        };
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| Arc::ptr_eq(&pending.seal, &self.seal))
+        {
+            state.pending = None;
+            drop(state);
+            self.shared.durable_publication.notify_all();
+        }
+    }
+}
+
+/// Construct paired restricted views over one actor-global ordinal namespace.
+pub(super) fn lifecycle_ordinal_authorities_after_high_watermark(
+    high_watermark: u128,
+) -> (
+    RuntimeLifecycleOrdinalAuthority,
+    CoordinatorLifecycleOrdinalAuthority,
+) {
+    let shared = SharedLifecycleOrdinalAuthority::after_high_watermark(high_watermark);
+    (
+        RuntimeLifecycleOrdinalAuthority {
+            shared: Arc::clone(&shared),
+        },
+        CoordinatorLifecycleOrdinalAuthority { shared },
+    )
+}
+
+/// Construct a standalone runtime view for focused runtime owners and tests.
+pub(in crate::sumeragi) fn runtime_lifecycle_ordinal_authority_after_high_watermark(
+    high_watermark: u128,
+) -> RuntimeLifecycleOrdinalAuthority {
+    lifecycle_ordinal_authorities_after_high_watermark(high_watermark).0
+}
 /// Opaque, verified source of every scheduler-episode universe for one height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AuthenticatedEpisodeAuthority {

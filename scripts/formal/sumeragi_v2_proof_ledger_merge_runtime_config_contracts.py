@@ -918,3 +918,531 @@ if total_bytes
         )
 
     return errors
+
+def _lifecycle_capacity_production_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind admitted network geometry to the height-local lifecycle ledger."""
+
+    relative_paths = {
+        "actual": "crates/iroha_config/src/parameters/actual.rs",
+        "actual_tests": "crates/iroha_config/src/parameters/actual/tests.rs",
+        "user": "crates/iroha_config/src/parameters/user.rs",
+        "defaults": "crates/iroha_config/src/parameters/defaults.rs",
+        "authority": "crates/iroha_core/src/sumeragi/v2_lifecycle_authority.rs",
+        "schema": "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
+        "consensus": "crates/iroha_data_model/src/block/consensus_v2.rs",
+        "test_network": "crates/iroha_test_network/src/lib.rs",
+        "izanami": "crates/izanami/src/chaos.rs",
+        "kagami": "crates/iroha_kagami/src/localnet.rs",
+    }
+    errors: list[str] = []
+    paths: dict[str, Path] = {}
+    sources: dict[str, str] = {}
+    for role, relative in relative_paths.items():
+        path, source = _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            f"lifecycle-capacity {role} source",
+        )
+        paths[role] = path
+        sources[role] = source
+
+    helper = _require_rust_item(
+        paths["actual"],
+        sources["actual"],
+        "sumeragi_v2_lifecycle_capacity_geometry",
+        errors,
+    )
+    _require_rust_item_context(
+        paths["actual"],
+        helper,
+        (),
+        "lifecycle-capacity config kernel",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["actual"],
+        helper,
+        "0272693dc74b6bc4e1a1b1ebadb026ca2e45cc9788448aef59ae068e4460a7c8",
+        "lifecycle-capacity config kernel",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["actual"],
+        helper,
+        """
+let consensus = defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP
+    .checked_mul(2)
+    .ok_or(SumeragiV2LifecycleCapacityGeometryError::Overflow)?;
+""",
+        "lifecycle capacity must retain checked consensus arithmetic",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["actual"],
+        helper,
+        """
+let serve = authenticated_non_validator_source_capacity
+    .max(1)
+""",
+        "lifecycle capacity must retain the authenticated-source lower boundary",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["actual"],
+        helper,
+        """
+authenticated_non_validator_source_capacity
+    .max(1)
+    .checked_mul(certified_request_capacity)
+""",
+        "lifecycle capacity must use checked authenticated-source multiplication",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["actual"],
+        helper,
+        """
+    .and_then(|observer| validator_roster_len.checked_add(observer))
+    .and_then(|owners| {
+        owners.checked_mul(defaults::sumeragi::V2_CERTIFIED_SERVE_PHASE_FAMILIES)
+    })
+    .ok_or(SumeragiV2LifecycleCapacityGeometryError::Overflow)?;
+let producer = serve;
+""",
+        "lifecycle capacity must add the exact validator roster and checked two-phase Serve and Producer geometry",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["actual"],
+        helper,
+        """
+let total = consensus
+    .checked_add(effect_work_capacity)
+    .and_then(|sum| sum.checked_add(serve))
+    .and_then(|sum| sum.checked_add(producer))
+    .ok_or(SumeragiV2LifecycleCapacityGeometryError::Overflow)?;
+let maximum = defaults::sumeragi::V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
+""",
+        "lifecycle capacity must use checked aggregate arithmetic and the canonical height-local maximum",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["actual"],
+        helper,
+        """
+for (class, actual) in [
+    ("consensus", consensus),
+    ("effect", effect_work_capacity),
+    ("serve", serve),
+    ("producer", producer),
+] {
+    if actual > maximum {
+        return Err(SumeragiV2LifecycleCapacityGeometryError::ClassTooLarge {
+            class,
+            actual,
+            maximum,
+        });
+    }
+}
+""",
+        "lifecycle capacity must reject every class beyond the canonical physical-slot boundary",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["actual"],
+        helper,
+        """
+if total > maximum {
+    return Err(SumeragiV2LifecycleCapacityGeometryError::TotalTooLarge {
+        consensus,
+        effect: effect_work_capacity,
+        serve,
+        producer,
+        total,
+        maximum,
+    });
+}
+Ok(SumeragiV2LifecycleCapacityGeometry {
+    consensus,
+    effect: effect_work_capacity,
+    serve,
+    producer,
+    total,
+})
+""",
+        "lifecycle capacity must reject the aggregate total boundary and return all four admitted classes",
+        errors,
+    )
+
+    root_parse = _require_qualified_rust_item(
+        paths["user"],
+        sources["user"],
+        "Root",
+        "parse",
+        errors,
+        "lifecycle-capacity root configuration admission",
+        expected_attributes=("#[allow(clippy::too_many_lines)]",),
+    )
+    _require_rust_token_sequence(
+        paths["user"],
+        root_parse,
+        """
+if let Err(error) = actual::sumeragi_v2_lifecycle_capacity_geometry(
+    validator_roster_len,
+    effect_work_capacity,
+    sumeragi.queues.bodies.get(),
+    sumeragi.queues.authenticated_non_validator_sources.get(),
+) {
+    emitter.emit(
+        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+            "{error}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {}, and certified-request capacity is {}",
+            sumeragi.queues.authenticated_non_validator_sources,
+            sumeragi.queues.bodies,
+        )),
+    );
+}
+""",
+        "root parsing must reject the roster-aware lifecycle geometry before constructing the runtime config",
+        errors,
+    )
+
+    runtime_geometry = _require_rust_item(
+        paths["authority"],
+        sources["authority"],
+        "capacity_geometry_from_limits",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["authority"],
+        runtime_geometry,
+        "cbb57f9ac201e458f6464a911e2a157e630434ade36d89ddcc87182d42cbe151",
+        "runtime lifecycle-capacity authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["authority"],
+        runtime_geometry,
+        """
+let shared = sumeragi_v2_lifecycle_capacity_geometry(
+    roster_len,
+    effect_work_capacity,
+    certified_request_capacity,
+    authenticated_non_validator_source_capacity,
+)
+.ok()?;
+if effect_work_capacity == 0 || certified_request_capacity == 0 {
+    return None;
+}
+""",
+        "runtime lifecycle authority must consume the shared roster-aware geometry before minting slots",
+        errors,
+    )
+
+    production_runtime_geometry = _require_rust_item(
+        paths["authority"],
+        sources["authority"],
+        "production_capacity_geometry_from_limits",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["authority"],
+        production_runtime_geometry,
+        "089622fead5ce94277aa902be39296f39fab751d8ac773914a7247a47bf93e0d",
+        "production lifecycle source and reply-route boundary",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["authority"],
+        production_runtime_geometry,
+        """
+if authenticated_non_validator_source_capacity == 0
+    || authenticated_non_validator_source_capacity > reply_route_source_capacity
+{
+    return None;
+}
+capacity_geometry_from_limits(
+    roster_len,
+    effect_work_capacity,
+    certified_request_capacity,
+    authenticated_non_validator_source_capacity,
+)
+""",
+        "production lifecycle authority must keep authenticated source ownership distinct from the reply-route envelope",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["authority"],
+        runtime_geometry,
+        """
+let geometry = CapacityGeometry::new([
+    (CapacityClass::Consensus, shared.consensus),
+    (CapacityClass::Effect, shared.effect),
+    (CapacityClass::Serve, shared.serve),
+    (CapacityClass::Producer, shared.producer),
+]);
+Some(geometry)
+""",
+        "runtime lifecycle authority must project the same four admitted capacity classes",
+        errors,
+    )
+
+    for role, expected, description in (
+        (
+            "defaults",
+            """
+pub const V2_CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
+""",
+            "the canonical lifecycle geometry must retain two certified Serve and Producer phase families",
+        ),
+        (
+            "defaults",
+            """
+pub const V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;
+""",
+            "the canonical lifecycle geometry must retain the 65,536-record physical namespace",
+        ),
+        (
+            "schema",
+            """
+pub(super) const MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
+""",
+            "the lifecycle schema must consume the shared canonical record boundary",
+        ),
+        (
+            "consensus",
+            """
+pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT + 1;
+""",
+            "lifecycle admission must remain tied to the protocol validator ceiling",
+        ),
+        (
+            "kagami",
+            """
+const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;
+""",
+            "Kagami must retain the reviewed high-command localnet profile",
+        ),
+        (
+            "kagami",
+            """
+const LOCALNET_SUMERAGI_QUEUE_BODIES: usize =
+    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
+""",
+            "Kagami must inherit the canonical roster-aware body capacity",
+        ),
+        (
+            "kagami",
+            """
+const LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
+    iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+        .get();
+""",
+            "Kagami must pass the canonical authenticated non-validator source population",
+        ),
+        (
+            "izanami",
+            """
+const IZANAMI_SUMERAGI_QUEUE_COMMANDS: usize = 4_096;
+const IZANAMI_SUMERAGI_QUEUE_BODIES: usize =
+    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
+""",
+            "Izanami must retain its high-load command capacity and canonical body geometry",
+        ),
+        (
+            "izanami",
+            """
+const IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
+    iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+        .get();
+""",
+            "Izanami must pass the canonical authenticated non-validator source population",
+        ),
+    ):
+        _require_rust_source_token_sequence(
+            paths[role],
+            sources[role],
+            expected,
+            description,
+            errors,
+        )
+
+    generated_profile = _require_rust_item(
+        paths["test_network"],
+        sources["test_network"],
+        "generated_sumeragi_capacity_layer",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["test_network"],
+        generated_profile,
+        "ce80a20e6ff98adcf90b2799a064339fefc3487b74e5ee9df38cbda10800f879",
+        "test-network generated lifecycle profile",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["test_network"],
+        generated_profile,
+        """
+iroha_config::parameters::actual::sumeragi_v2_lifecycle_capacity_geometry(
+    validator_count,
+    effect_work_capacity,
+    bodies,
+    authenticated_non_validator_sources,
+)
+""",
+        "test-network generation must admit the exact planned roster and authenticated source population",
+        errors,
+    )
+    planned_profile = _require_rust_item(
+        paths["test_network"],
+        sources["test_network"],
+        "validate_planned_validator_capacity",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["test_network"],
+        planned_profile,
+        "0d7d4211e6fcc03a835b9d05025eb8d6d4f2c0e770faa4652a6e2e82ddead2a3",
+        "test-network planned lifecycle profile",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["test_network"],
+        planned_profile,
+        """
+iroha_config::parameters::actual::sumeragi_v2_lifecycle_capacity_geometry(
+    max_validator_capacity,
+    effect_work_capacity,
+    queues.bodies.get(),
+    authenticated_non_validator_sources,
+)
+""",
+        "test-network growth reservations must revalidate the complete planned roster geometry",
+        errors,
+    )
+
+    kagami_profile = _require_rust_item(
+        paths["kagami"],
+        sources["kagami"],
+        "localnet_sumeragi_body_bytes",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["kagami"],
+        kagami_profile,
+        "a0fc68da7bde0b89ef2a556872b1aa1ea664a3c36c5c95d3bd551b077273232f",
+        "Kagami roster-aware lifecycle profile",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["kagami"],
+        kagami_profile,
+        """
+actual::sumeragi_v2_lifecycle_capacity_geometry(
+    validator_count,
+    effect_work_capacity,
+    LOCALNET_SUMERAGI_QUEUE_BODIES,
+    LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+)
+""",
+        "Kagami must admit each exact legal validator roster against its shipped source profile",
+        errors,
+    )
+
+    izanami_profile = _require_rust_item(
+        paths["izanami"],
+        sources["izanami"],
+        "izanami_sumeragi_body_bytes",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["izanami"],
+        izanami_profile,
+        "35f399fa23cf39e8d94de9d474581b1da306dc3a13d9b36ece759ca520f23ec6",
+        "Izanami roster-aware lifecycle profile",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["izanami"],
+        izanami_profile,
+        """
+iroha_config::parameters::actual::sumeragi_v2_lifecycle_capacity_geometry(
+    validator_count,
+    effect_work_capacity,
+    IZANAMI_SUMERAGI_QUEUE_BODIES,
+    IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+)
+""",
+        "Izanami must admit each exact validator roster against its shipped source profile",
+        errors,
+    )
+    izanami_builder = _require_rust_item(
+        paths["izanami"],
+        sources["izanami"],
+        "make_network_builder_with_sorafs",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["izanami"],
+        izanami_builder,
+        """
+let max_total_connections = i64::try_from(IZANAMI_MAX_TOTAL_CONNECTIONS)
+    .wrap_err("Izanami network connection capacity exceeds TOML limits")?;
+""",
+        "Izanami must convert its derived connection profile without truncation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["izanami"],
+        izanami_builder,
+        """
+.write(["network", "max_total_connections"], max_total_connections)
+""",
+        "Izanami must publish the checked derived connection profile",
+        errors,
+    )
+
+    _require_rust_source_token_sequence(
+        paths["test_network"],
+        sources["test_network"],
+        """
+.write(["sumeragi", "queues", "bodies"], 512i64)
+""",
+        "test networks must not restore the lifecycle-invalid 512-body override",
+        errors,
+        count=0,
+    )
+
+    for role, name in (
+        (
+            "actual_tests",
+            "sumeragi_v2_lifecycle_geometry_uses_authenticated_ingress_sources",
+        ),
+        (
+            "actual_tests",
+            "sumeragi_v2_lifecycle_geometry_checks_source_and_arithmetic_boundaries",
+        ),
+        (
+            "user",
+            "sumeragi_v2_lifecycle_geometry_rejects_unreservable_authenticated_sources",
+        ),
+        (
+            "authority",
+            "production_capacity_geometry_matches_shared_runtime_resources",
+        ),
+        (
+            "authority",
+            "four_validator_geometry_uses_authenticated_ingress_source_bound",
+        ),
+    ):
+        found = len(rust_items(sources[role], name))
+        if found != 1:
+            errors.append(
+                f"lifecycle-capacity reviewed test {name} must occur exactly once; found {found}"
+            )
+
+    return errors

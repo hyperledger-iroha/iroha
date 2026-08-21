@@ -20,7 +20,7 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "efa8a4c8549dcb10367b3352069cb78742f53fff5f763dcb424464954b98247b"
     ),
     "scripts/formal/run_sumeragi_v2_harness.sh": (
-        "9be38068b2861daa6040cf38bc5d6bed182369a67ae16c709eee25eba028d7d3"
+        "e400734ca5d3a9079f5ac5b01cca06921b3811ea6ea8fa93e3e5d128984280b8"
     ),
 }
 
@@ -974,7 +974,7 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "92c68efed48f8c59f4f3e5abe567b11a68220708be22335cc0e36e7c457ebc67"
+        "5da377e380261bee2e6200930f7615c5781521e64ce25b810569a2e9e8c2517b"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
         "093f112f182ade0fecfe6ed51342f4d4ad2558977ac78fafae550b45e06e5ced"

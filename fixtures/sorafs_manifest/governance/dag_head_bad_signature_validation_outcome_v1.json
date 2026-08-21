@@ -2,7 +2,7 @@
   "status": "Error",
   "code": "SFS-SIG-007",
   "category": "signature",
-  "message": "governance DAG head-chain validation failed: head manifest validation failed: governance DAG head signature validation failed: governance log publisher signature verification failed: signature R is small-order (weak); rejected: Signature verification failed",
+  "message": "governance DAG head-chain validation failed: head manifest validation failed: governance DAG head signature validation failed: governance log publisher signature verification failed: signature error: Verification equation was not satisfied",
   "action": "Regenerate the governance DAG blocks and signed head manifest from one canonical parent-linked chain.",
   "docs_url": "https://docs.iroha.tech/",
   "telemetry_tags": [
@@ -20,7 +20,7 @@
     },
     {
       "key": "head_block_cid_hex",
-      "value": "2d94da6a8b387d45a8e99d9ea8a25e125e0e310ef12002bf4df0b9d7f2ee7554"
+      "value": "7528e4118078481d88cc62902c8a39b8548a77b9d161b27e2d96bf57a8a88ec7"
     },
     {
       "key": "head_block_cid_len",
@@ -60,15 +60,15 @@
     },
     {
       "key": "block_0_cid_hex",
-      "value": "83ae1817994d78c270f01f0f39eb05538ddcbbe1a054dd1437c8f1e712b2e645"
+      "value": "0a53d1afa7fd851f9e27dab4155b15bb72ac4ea75a6932763316d2e9c28bcfdb"
     },
     {
       "key": "block_1_cid_hex",
-      "value": "2d94da6a8b387d45a8e99d9ea8a25e125e0e310ef12002bf4df0b9d7f2ee7554"
+      "value": "7528e4118078481d88cc62902c8a39b8548a77b9d161b27e2d96bf57a8a88ec7"
     },
     {
       "key": "validation_error",
-      "value": "head manifest validation failed: governance DAG head signature validation failed: governance log publisher signature verification failed: signature R is small-order (weak); rejected: Signature verification failed"
+      "value": "head manifest validation failed: governance DAG head signature validation failed: governance log publisher signature verification failed: signature error: Verification equation was not satisfied"
     }
   ],
   "inputs": [

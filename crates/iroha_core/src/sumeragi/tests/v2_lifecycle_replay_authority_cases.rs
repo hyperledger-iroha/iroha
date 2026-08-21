@@ -1547,8 +1547,17 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
         production.contains("fn remote_proposal_origin_matches_fetch("),
         "later Proposal stages omitted the single authenticated Fetch-origin oracle"
     );
+    let remote_certified_body = production
+        .split("fn remote_proposal_origin_matches_fetch(")
+        .nth(1)
+        .expect("remote Proposal origin matcher has one declaration")
+        .split("impl CertifiedFetchReplayEvidenceV1 {")
+        .next()
+        .expect("certified Fetch implementation follows remote Proposal matching");
     assert_eq!(
-        remote.matches("fn exactly_matches_origin_fetch(").count(),
+        remote_certified_body
+            .matches("fn exactly_matches_origin_fetch(")
+            .count(),
         3,
         "Store, Stored, and the retained family must all recheck one exact Fetch origin"
     );
@@ -1804,183 +1813,10 @@ fn invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only() {
         );
     }
 }
-#[test]
-#[allow(clippy::too_many_lines)]
-fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_mints() {
-    let source = replay_authority_source_for_test();
-    let production = source
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("replay authority has one production prefix");
-    let live = production
-        .split("struct LiveWalPersistedReplaySealV1")
-        .nth(1)
-        .expect("live WAL replay seal has one declaration")
-        .split("/// Canonical inert replay evidence for one exact signed broadcast effect.")
-        .next()
-        .expect("direct signed evidence follows live WAL seal");
-    for required in [
-        "LiveWalPersistedReplayStateV1::ApplyPending",
-        "LiveWalPersistedPendingV1::PayloadFree",
-        "LiveWalPersistedPendingV1::ValidateSignBound",
-        "LiveWalPersistedPendingV1::ApplyPending",
-        "LiveWalPersistedPendingV1::ApplyBound",
-        "from_exact_live_append(\n        cause: ExactLiveWalPersistedContinuationCause",
-        "bind_exact_validate_sign_pending(",
-        "exactly_binds_validate_sign_pending(&self)",
-        "project_validate_apply_successor(predecessor_effect, &self.effect)",
-        "exactly_matches_apply_effect(&self.effect, receipt)",
-    ] {
-        assert!(live.contains(required), "live WAL seal omitted {required}");
-    }
-    let live_projection = production
-        .split("fn exact_live_wal_replay_projection(")
-        .nth(1)
-        .expect("live WAL role projection has one definition")
-        .split("fn canonical_wal_source(")
-        .next()
-        .expect("live WAL role projection stays bounded");
-    for required in [
-        "ReplayWalRoleV1::PROPOSAL_INTENT",
-        "ReplayWalRoleV1::PREPARE_INTENT",
-        "ReplayWalRoleV1::LOCK_AND_COMMIT",
-        "ReplayWalRoleV1::TIMEOUT_INTENT",
-        "ReplayWalRoleV1::DECISION",
-        "ReplayWalRoleV1::INSTALL_TIMEOUT",
-    ] {
-        assert!(
-            live_projection.contains(required),
-            "live WAL role projection omitted {required}"
-        );
-    }
-    for forbidden in [
-        "#[derive(Clone",
-        "#[derive(Copy",
-        "Decode",
-        "pub(super) fn locator(",
-        "pub(super) fn action(",
-        "pub(super) fn source(",
-        "pub(super) fn effect(",
-        "pub(super) fn pending(",
-        "exactly_binds_payload_free_pending",
-        "into_parts",
-        "RecoveredWalFrameIdentity",
-        "!= [0; 32]",
-        "== [0; 32]",
-        "is_zero()",
-    ] {
-        assert!(
-            !live.contains(forbidden),
-            "live WAL seal exposed or reserved forbidden surface {forbidden}"
-        );
-    }
-    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test()
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("adapter has one production prefix");
-    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test()
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("runtime has one production prefix");
-    let work_registry = reviewed_lifecycle_work_registry_source_for_test()
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("work registry has one production prefix");
-    assert_eq!(
-        adapter
-            .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
-            .count(),
-        4,
-        "only local ProposalIntent, recovered Proposal-Prepare, sealed Ready-Sign, and Decision-Apply cuts mint live replay authority"
-    );
-    assert_eq!(
-        adapter
-            .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
-            .count(),
-        3,
-        "only local ProposalIntent, recovered Proposal-Prepare, and sealed Ready-Sign derive frame-bound pending owners"
-    );
-    let local_proposal_intent = adapter
-        .split("if let reducer::WalRecord::ProposalIntent(proposal) = entry.record() {")
-        .nth(1)
-        .expect("local ProposalIntent WAL append has one implementation")
-        .split("if let reducer::WalRecord::Decision(certificate) = entry.record() {")
-        .next()
-        .expect("local ProposalIntent WAL append stays bounded");
-    assert_eq!(
-        local_proposal_intent
-            .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
-            .count(),
-        1
-    );
-    assert_eq!(
-        local_proposal_intent
-            .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
-            .count(),
-        1
-    );
-    assert!(local_proposal_intent.contains("LiveProposalIntentWalSignHandoffV1::from_exact("));
-    let recovered_proposal_prepare = adapter
-        .split("pub(in crate::sumeragi) fn append_recovered_lifecycle_proposal_prepare_wal(")
-        .nth(1)
-        .expect("recovered Proposal-Prepare WAL append has one implementation")
-        .split("/// Project an inert exact-body lookup for the reducer-produced next Vote.")
-        .next()
-        .expect("recovered Proposal-Prepare WAL append stays bounded");
-    assert_eq!(
-        recovered_proposal_prepare
-            .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
-            .count(),
-        1
-    );
-    assert_eq!(
-        recovered_proposal_prepare
-            .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
-            .count(),
-        1
-    );
-    let ready_sign = adapter
-        .split("// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN")
-        .nth(1)
-        .expect("sealed Ready-Sign segment exists")
-        .split("// READY_DURABLE_VALIDATE_LIVE_SIGN_END")
-        .next()
-        .expect("sealed Ready-Sign segment is bounded");
-    assert_eq!(
-        ready_sign
-            .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
-            .count(),
-        1
-    );
-    assert_eq!(
-        ready_sign
-            .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
-            .count(),
-        1
-    );
-    assert!(ready_sign.contains("LiveWalFrameIdentity::from_append_receipt("));
-    assert!(ready_sign.contains("bind_exact_validate_sign_pending(child_pending)"));
-    assert!(
-        !adapter.contains("drive_exact_persisted_continuation"),
-        "the retired generic persisted-continuation driver must stay absent"
-    );
-    assert_eq!(runtime.matches("fn from_exact_live_wal_append(").count(), 1);
-    assert_eq!(
-        work_registry.matches(".complete_exact_apply(").count(),
-        1,
-        "only the retained Validate completion supplies an Apply receipt"
-    );
-    assert!(!adapter.contains("RecoveredWalFrameIdentity::for_test"));
-    for outside in [
-        reviewed_lifecycle_ledger_source_for_test(),
-        include_str!("../v2_effects.rs"),
-        include_str!("../v2_worker.rs"),
-        include_str!("../v2_runner.rs"),
-    ] {
-        assert!(!outside.contains("SealedLiveWalPersistedEffectV1"));
-        assert!(!outside.contains("drive_exact_persisted_continuation"));
-    }
-}
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    #[allow(clippy::too_many_lines)]
+    live_wal_replay_seal_is_linear_nondecodable_and_has_only_specialized_production_mints
+);
 #[test]
 fn record_matching_rejects_substitution_of_every_external_coordinate() {
     let fixture = Fixture::new();

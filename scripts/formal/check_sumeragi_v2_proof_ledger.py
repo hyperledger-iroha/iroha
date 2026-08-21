@@ -851,7 +851,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
     "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "d2f24737c0a9ed5fddc579101ab48ea8a1820ef83508319b9942f6381a65109b",
-    "effect_candidate_retain": "2ddf84d44bb686dab2766b7367b9731318e01ddbdf0aa693de069c7238661920",
+    "effect_candidate_retain": "56512d3347fa9d328c342e3982e6b03f3a9699fcc4ed7daeac854277838d59f4",
     "relay_retry": "052e90cc19d9416a0546c0938c57592da456a5bf98d9c9d64939dc4469d258ac",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
@@ -22348,18 +22348,10 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         )
     else:
         integration_source = integration_path.read_text(encoding="utf-8")
-    integration_context = (
-        (
-            "#",
-            "[",
-            "cfg",
-            "(",
-            "test",
-            ")",
-            "]",
-            "mod",
-            "prepare_qc_split_tests",
-        ),
+    integration_test_path, integration_test_source = (
+        _read_locked_commit_progress_witness_test_provider(
+            repo_root, integration_path, integration_source, errors
+        )
     )
     for helper_name, expected_sha256 in (
         _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256.items()
@@ -22388,12 +22380,12 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         _LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256.items()
     ):
         item = _require_rust_item(
-            integration_path, integration_source, test_name, errors
+            integration_test_path, integration_test_source, test_name, errors
         )
         _require_rust_item_context(
-            integration_path,
+            integration_test_path,
             item,
-            integration_context,
+            (),
             f"locked-Commit progress-witness regression {test_name}",
             errors,
             expected_attributes=("#[test]",),
@@ -22403,7 +22395,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         observed_sha256 = _rust_item_token_sha256(item)
         if observed_sha256 != expected_sha256:
             errors.append(
-                f"{integration_path}:{item.line}: locked-Commit "
+                f"{integration_test_path}:{item.line}: locked-Commit "
                 f"progress-witness regression {test_name} must match exact "
                 f"reviewed token digest {expected_sha256}; found "
                 f"{observed_sha256}"
@@ -28391,10 +28383,9 @@ assert!(matches!(
 enum FairV2IngressSource {
     Validator(PeerId),
     Authenticated(PeerId),
-    Anonymous,
 }
 """,
-        "three-way fair-ingress source ownership inventory",
+        "two-way authenticated fair-ingress source ownership inventory",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -28404,10 +28395,9 @@ enum FairV2IngressSource {
 enum FairV2IngressSourceClass {
     Validator,
     Authenticated,
-    Anonymous,
 }
 """,
-        "three-way fair-ingress source-class inventory",
+        "two-way authenticated fair-ingress source-class inventory",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -28419,7 +28409,6 @@ impl FairV2IngressSource {
         match self {
             Self::Validator(_) => FairV2IngressSourceClass::Validator,
             Self::Authenticated(_) => FairV2IngressSourceClass::Authenticated,
-            Self::Anonymous => FairV2IngressSourceClass::Anonymous,
         }
     }
 }
@@ -28486,14 +28475,10 @@ pub(crate) struct FairV2Ingress {
         core_path,
         push,
         """
-let is_current_validator_origin = inbound
-    .sender()
-    .is_some_and(|peer| state.roster.contains(peer));
+let is_current_validator_origin = state.roster.contains(inbound.sender());
 let is_historical_recovery_response =
     message_kind == FairV2IngressMessageKind::LaneHistoricalRecoveryResponse;
-let authenticated_historical_recovery_response = is_historical_recovery_response
-    && inbound.sender().is_some()
-    && inbound.via().is_some();
+let authenticated_historical_recovery_response = is_historical_recovery_response;
 if is_transport_completion
     && !is_current_validator_origin
     && !authenticated_historical_recovery_response
@@ -28524,15 +28509,13 @@ let wire_key = Some(FairV2IngressWireKey {
         core_path,
         push,
         """
-let source = match inbound.via() {
-    Some(peer) if state.roster.contains(peer) => {
-        FairV2IngressSource::Validator(peer.clone())
-    }
-    Some(peer) => FairV2IngressSource::Authenticated(peer.clone()),
-    None => FairV2IngressSource::Anonymous,
+let source = if state.roster.contains(inbound.via()) {
+    FairV2IngressSource::Validator(inbound.via.clone())
+} else {
+    FairV2IngressSource::Authenticated(inbound.via.clone())
 };
 """,
-        "validator, authenticated non-validator, and anonymous source ownership separated from semantic origin",
+        "validator and authenticated non-validator ownership separated from semantic origin",
         errors,
     )
     _require_rust_token_sequence(
@@ -28597,7 +28580,7 @@ if self
     return Err(FairV2IngressPushError::Full(inbound));
 }
 """,
-        "authenticated non-validator lane cap excludes validator and anonymous lanes",
+        "authenticated non-validator lane cap excludes validator lanes",
         errors,
     )
     _require_rust_token_sequence(
@@ -29022,9 +29005,7 @@ let (mut completion_ready, mut progress_ready, mut normal_ready) = if fifo_ready
         core_path,
         dequeue,
         """
-if !matches!(source, FairV2IngressSource::Anonymous)
-    && fair_v2_ingress_is_certified_fence_escape(&entry.inbound)
-{
+if fair_v2_ingress_is_certified_fence_escape(&entry.inbound) {
     lane.certified_fence_escape_len = lane
         .certified_fence_escape_len
         .checked_sub(1)
@@ -30351,13 +30332,13 @@ let mut emitter = Emitter::new();
         (
             "pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!("
             "5 * MAX_VALIDATORS_PER_HEIGHT + 3 * "
-            "QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get() + 2);",
-            "exact default 5N+3H+2 outer-ingress message geometry",
+            "QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get());",
+            "exact default 5N+3H outer-ingress message geometry",
         ),
         (
             "pub const QUEUE_BODY_BYTES: NonZeroUsize = "
             "nonzero!(231_usize * 1024 * 1024);",
-            "reviewed N+H+1 aggregate outer-ingress byte reserve",
+            "reviewed aggregate outer-ingress byte reserve",
         ),
         (
             "pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = "
@@ -30461,7 +30442,7 @@ let minimum_body_queue_capacity = sumeragi_v2_body_ingress_required_message_capa
     self.queues.authenticated_non_validator_sources.get(),
 )
 """,
-        "actual N=1 minimum 3H+7 ingress-message geometry",
+        "actual N=1 minimum 3H+5 ingress-message geometry",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -30469,9 +30450,9 @@ let minimum_body_queue_capacity = sumeragi_v2_body_ingress_required_message_capa
         actual_source,
         """
 let minimum_body_sources = authenticated_non_validator_source_capacity
-    .checked_add(2)
+    .checked_add(1)
 """,
-        "actual N=1 minimum H+2 ingress-byte partitions",
+        "actual N=1 minimum H+1 ingress-byte partitions",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -30527,7 +30508,7 @@ let minimum_body_messages = actual::sumeragi_v2_body_ingress_required_message_ca
     queues.authenticated_non_validator_sources.get(),
 );
 """,
-        "user N=1 minimum 3H+7 ingress-message geometry",
+        "user N=1 minimum 3H+5 ingress-message geometry",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -30537,9 +30518,9 @@ let minimum_body_messages = actual::sumeragi_v2_body_ingress_required_message_ca
 let minimum_body_sources = queues
     .authenticated_non_validator_sources
     .get()
-    .checked_add(2);
+    .checked_add(1);
 """,
-        "user N=1 minimum H+2 ingress-byte partitions",
+        "user N=1 minimum H+1 ingress-byte partitions",
         errors,
     )
 
@@ -30570,7 +30551,7 @@ actual::sumeragi_v2_body_ingress_required_byte_capacity(validator_count,
     LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES, LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES,
 )
 """,
-        "localnet aggregate bytes scale by N+H+1",
+        "localnet aggregate bytes scale by N+H",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -30602,9 +30583,9 @@ queues.insert(
         (
             "taira_default",
             "authenticated_non_validator_sources = 2\n"
-            "body_bytes = 346030080\n"
+            "body_bytes = 311427072\n"
             "body_source_bytes = 34603008",
-            "default seven-validator Taira profile pins H=2 and ten source partitions",
+            "default seven-validator Taira profile pins H=2 and nine source partitions",
         ),
         (
             "taira_default",
@@ -30630,9 +30611,9 @@ queues.insert(
         (
             "taira_config",
             "authenticated_non_validator_sources = 2\n"
-            "body_bytes = 242221056\n"
+            "body_bytes = 207618048\n"
             "body_source_bytes = 34603008",
-            "production Taira profile pins H=2 and seven source partitions",
+            "production Taira profile pins H=2 and six source partitions",
         ),
         (
             "taira_genesis",
@@ -56802,7 +56783,6 @@ def _autonomous_retirement_source_contract_errors(
     )
     return errors
 
-
 def _exact_output_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -57800,9 +57780,12 @@ Some(retained)
     _require_rust_token_sequence(
         ingress_path,
         ingress_seam_items["ingress::matches_semantic_origin"][1],
-        "self.validate_exact() && self.first.semantic_origin.as_ref() == origin",
+        "self.validate_exact() && &self.first.semantic_origin == origin",
         "semantic-origin validation must compare the independently retained canonical request origin",
         errors,
+    )
+    _require_exact_output_mandatory_identity_markers(
+        ingress_path, ingress_seam_items, effects_path, worker_path, errors
     )
     _require_rust_token_sequence(
         ingress_path,
@@ -57835,7 +57818,7 @@ self.first.lifecycle_ordinal == self.latest.lifecycle_ordinal
     && self.first.encoded_bytes.as_ref() == self.latest.encoded_bytes.as_ref()
     && self.first.encoded_len == self.latest.encoded_len
     && self.leader_wire_token.as_ref().is_none_or(|token| {
-        self.first.semantic_origin.as_ref().is_some_and(|origin| &token.identity.semantic_origin == origin)
+        token.identity.semantic_origin == self.first.semantic_origin
             && token.identity.canonical_wire_hash == self.first.wire_key.hash && token.slot.semantic_origin == token.identity.semantic_origin
             && token.slot.phase == token.identity.phase && token.source_class == token.identity.phase.source_class()
             && (token.source_class == FairV2IngressLeaderWireSourceClass::Chunk) == token.slot.chunk_index.is_some()
@@ -57869,7 +57852,7 @@ let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
 ));
 if !ingress_ownership.validate_exact()
     || !ingress_ownership.matches_message(&message)
-    || !ingress_ownership.matches_semantic_origin(Some(authenticated_sender))
+    || !ingress_ownership.matches_semantic_origin(authenticated_sender)
 {
 """,
         "payload chunk effect consumption must reject a changed envelope or semantic origin before mutation",
@@ -57900,7 +57883,7 @@ if let Some(ownership) = ingress_ownership {
         """
 if !ingress_ownership.validate_exact()
     || !ingress_ownership.matches_message(&chunk_message)
-    || !ingress_ownership.matches_semantic_origin(Some(&sender))
+    || !ingress_ownership.matches_semantic_origin(&sender)
 {
 """,
         "payload chunk routing must bind canonical bytes and semantic sender before buffering or effect mutation",
@@ -57965,13 +57948,13 @@ match result {
 if ingress_ownership.as_ref().is_some_and(|ownership| {
     !ownership.validate_exact()
         || !ownership.matches_message(&message)
-        || !ownership.matches_semantic_origin(sender.as_ref())
+        || !ownership.matches_semantic_origin(&sender)
         || !ownership.matches_reply_routes(reply_routes.as_ref())
 }) {
     return V2LaneIngressOutcome::Rejected;
 }
 """,
-        "lane ingress must bind semantic origin, canonical message, and the complete source route set before service",
+        "lane ingress must bind its mandatory semantic origin, canonical message, and the complete source route set before service",
         errors,
     )
     _require_rust_token_sequence(
@@ -58954,7 +58937,9 @@ if self.pending_server_closures.is_empty() {
         lifecycle_runner_path,
         lifecycle_runner_items.get("ordinary_active"),
         """
-let rollover_ready = if ready_to_finish {
+let finalization_ready =
+    ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);
+let rollover_ready = if finalization_ready {
     activated.with_runner_runtime(
         &mut active_runner,
         |_owner, executor, services, _local_proposal| {
@@ -58974,7 +58959,6 @@ let rollover_ready = if ready_to_finish {
     false
 };
 if ready_to_finish && !rollover_ready {
-    committed_lane_status_publisher.publish_if_changed(&lane_work);
     let _ = wake_rx.recv_timeout(IDLE_POLL);
     continue;
 }
@@ -69342,6 +69326,7 @@ def validate_ledger(
     errors.extend(
         _queue_plan_semantic_request_production_source_fidelity_errors(ROOT_DIR)
     )
+    errors.extend(_lifecycle_capacity_production_source_fidelity_errors(ROOT_DIR))
     errors.extend(_exact_output_production_source_fidelity_errors(ROOT_DIR))
     errors.extend(
         _kura_application_receipt_production_source_fidelity_errors(ROOT_DIR)

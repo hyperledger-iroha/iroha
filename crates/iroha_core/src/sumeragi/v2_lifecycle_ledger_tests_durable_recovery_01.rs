@@ -141,6 +141,28 @@ impl RecoveryFixture {
         certified_sources: Option<Vec<PeerId>>,
         corrupt_qc: bool,
     ) -> LifecycleLedgerRecordV1 {
+        self.fetch_record_with_block_signature(
+            store,
+            view,
+            marker,
+            ordinal,
+            certified_sources,
+            corrupt_qc,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn fetch_record_with_block_signature(
+        &self,
+        store: &mut V2BodyStore,
+        view: u64,
+        marker: u8,
+        ordinal: u128,
+        certified_sources: Option<Vec<PeerId>>,
+        corrupt_qc: bool,
+        block_signature_override: Option<(u64, usize)>,
+    ) -> LifecycleLedgerRecordV1 {
         let context = self.verified.context();
         let round = wire::ConsensusRound {
             context_id: context.id(),
@@ -149,6 +171,8 @@ impl RecoveryFixture {
         };
         let leader = context.leader(view);
         let leader_index = usize::try_from(leader).expect("fixture leader fits usize");
+        let (block_signature_index, block_signer_index) =
+            block_signature_override.unwrap_or((u64::from(leader), leader_index));
         let header = BlockHeader::new(
             NonZeroU64::new(context.height).expect("fixture height is non-zero"),
             None,
@@ -158,10 +182,10 @@ impl RecoveryFixture {
             view,
         );
         let block_signature =
-            SignatureOf::try_from_hash(self.keys[leader_index].private_key(), header.hash())
+            SignatureOf::try_from_hash(self.keys[block_signer_index].private_key(), header.hash())
                 .expect("sign durable Ready-Fetch block");
         let block = SignedBlock::presigned(
-            BlockSignature::new(u64::from(leader), block_signature),
+            BlockSignature::new(block_signature_index, block_signature),
             header,
             Vec::new(),
         );

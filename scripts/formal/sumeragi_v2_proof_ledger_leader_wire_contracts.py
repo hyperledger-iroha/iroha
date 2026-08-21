@@ -561,10 +561,12 @@ index
             """
 let earlier = v2_commit_certificate_request(0, &fixture.validator);
 assert!(matches!(
-    fixture.ingress.try_push(InboundBlockMessage::new(
-        earlier,
-        Some(fixture.validator.clone()),
-    )),
+    fixture
+        .ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            earlier,
+            fixture.validator.clone(),
+        )),
     Ok(super::FairV2IngressPushDisposition::Enqueued)
 ));
 let earlier_ordinal = fixture
@@ -578,10 +580,12 @@ let earlier_ordinal = fixture
     .expect("ordinary traffic owns its physical occurrence")
     .admission_ordinal;
 assert!(matches!(
-    fixture.ingress.try_push(InboundBlockMessage::new(
-        fixture.message.clone(),
-        Some(fixture.validator.clone()),
-    )),
+    fixture
+        .ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            fixture.message.clone(),
+            fixture.validator.clone(),
+        )),
     Ok(super::FairV2IngressPushDisposition::Enqueued)
 ));
 let retry_ordinal = fixture
@@ -656,7 +660,105 @@ assert!(
             errors,
         )
 
+    restored_older_owner = regression_items.get(
+        "restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire"
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        restored_older_owner,
+        """
+fixture
+    .ingress
+    .try_push(InboundBlockMessage::from_authenticated_peer(
+        earlier_message,
+        fixture.alternate_validator.clone(),
+    ))
+""",
+        "the physical predecessor must enter through one mandatory authenticated peer identity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        restored_older_owner,
+        """
+assert!(
+    earlier_token.scheduler_ordinal > fixture.token.scheduler_ordinal,
+    "the fresh lifecycle has a newer logical identity"
+);
+assert!(matches!(
+    fixture
+        .ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            fixture.message.clone(),
+            fixture.validator.clone(),
+        )),
+    Ok(super::FairV2IngressPushDisposition::Enqueued)
+));
+let replay_physical_ordinal = fixture
+    .ingress
+    .state
+    .lock()
+    .lanes
+    .values()
+    .flat_map(|lane| lane.entries.iter())
+    .find(|entry| entry.leader_wire_token.as_ref() == Some(&fixture.token))
+    .expect("restored lifecycle owns one replay carrier")
+    .admission_ordinal;
+assert!(
+    earlier_physical_ordinal < replay_physical_ordinal,
+    "the replay carrier is physically newer despite its older logical identity"
+);
+""",
+        "the older logical replay must remain behind the freshly authenticated physical predecessor",
+        errors,
+    )
+
     return errors
+
+
+def _require_exact_output_mandatory_identity_markers(
+    ingress_path: Path,
+    ingress_seam_items: dict[str, tuple[Path, RustItem | None]],
+    effects_path: Path,
+    worker_path: Path,
+    errors: list[str],
+) -> None:
+    """Bind mandatory authenticated identities and the v11 process-local domain."""
+
+    for path, item_key, marker, description in (
+        (
+            ingress_path,
+            "ingress::matches_semantic_origin",
+            "origin: &PeerId",
+            "semantic-origin validation must require one authenticated peer identity",
+        ),
+        (
+            effects_path,
+            "effects::accept_payload_chunk_with_ingress_ownership",
+            "authenticated_sender: &PeerId",
+            "payload chunk effect consumption must require an authenticated peer identity",
+        ),
+        (
+            worker_path,
+            "worker::route_payload_chunk",
+            "sender: PeerId",
+            "payload chunk routing must own one authenticated peer identity",
+        ),
+    ):
+        _require_rust_token_sequence(
+            path,
+            ingress_seam_items[item_key][1],
+            marker,
+            description,
+            errors,
+        )
+    projection_item = ingress_seam_items["ingress::process_local_projection_hash"][1]
+    projection_domain = b"iroha:sumeragi:v2:fair-ingress-owner:v11"
+    if projection_item is not None and projection_item.source.encode().count(projection_domain) != 1:
+        errors.append(
+            f"{ingress_path}:{projection_item.line}: fair-ingress process-local "
+            "projection must contain exactly one v11 domain separator"
+        )
 
 
 def _postmerge_exact_output_strengthening_errors(

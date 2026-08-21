@@ -5,14 +5,34 @@ Last updated: 2026-08-21
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## First-release hard-cut closeout
+
+The current candidate has one canonical release profile and no `BuildLine` or
+top-level Nexus enablement selector. Nexus routing is mandatory for both the
+canonical single-lane catalog and custom multilane catalogs; optional elastic
+capacity is controlled only by the subordinate `nexus.autoscale.enabled`
+policy. The six-field lifecycle status and byte-identical OpenAPI mirrors are
+recorded in `status.md`. For this hard-cut tranche, remaining work is limited
+to:
+
+- Run the focused and workspace Rust Cargo tests and strict all-target Clippy
+  from the settled candidate.
+- Reconcile the remaining source-file budget ratchets without raising the
+  reviewed ceilings merely to absorb merge growth.
+- Regenerate the exact context/genesis goldens from that candidate and attach
+  the required authorized signatures, including clean OpenAPI provenance.
+- Recompute and verify the source, formal, and release seals from one immutable
+  tree; mutable-tree checks are not release evidence.
+
 ## Workspace review closure
 
-- Run the remaining release-wide workspace matrix against the regenerated
-  eight-limb Blake2b-256 FastPQ proof/trace fixtures and the first-release AXT
-  hard cut. Retired single-field metadata proofs, pre-incarnation handles, and
-  pre-ratchet snapshots must not be accepted or migrated by relabelling;
-  pre-transition-set block results and fixtures must be regenerated rather
-  than defaulting the required set to empty.
+- Run the remaining focused AXT/FastPQ/Core suites and release-wide workspace
+  matrix against the regenerated eight-limb Blake2b-256 FastPQ proof/trace
+  fixtures and the first-release AXT hard cut. Retired single-field metadata
+  proofs, pre-incarnation handles, and pre-ratchet snapshots must not be
+  accepted or migrated by relabelling; pre-transition-set block results and
+  fixtures must be regenerated rather than defaulting the required set to
+  empty.
 
 - TODO: add an authenticated cancellation/rebind protocol for an exact pending
   QueuePlan whose fresh dataspace/role topology changes (for example after an
@@ -55,6 +75,11 @@ Completed history lives in [`status.md`](./status.md).
   Ship the corrected IPA parameter derivation and Poseidon byte framing as one
   first-release fixture/proof hard cut; do not mix artifacts generated under
   the retired derivations with corrected nodes.
+- Keep T256/MKHE acceleration qualification fail closed: the fixed T256 suite
+  disables generic Rayon fan-out and the MKHE NTT remains fixed-order scalar.
+  Qualify no parallel, SIMD/NEON, Metal, or CUDA/GPU backend until fixed-shape
+  output/KAT parity, secret-handling review, and implementation-derived peak-RSS
+  evidence close; no hardware acceleration is currently claimed.
 - For OpenAPI, first commit the final repaired inputs, regenerate the bundle
   from that clean exact commit with truthful provenance, and commit the
   generated outputs in a descendant. Refresh SF1 rows and projections only
@@ -26877,12 +26902,12 @@ included in each edge-triggered record.
 
 Reliable transport ownership now covers the bounded local seams in both
 directions. For outer ingress, the exact non-empty-roster count geometry is
-`5N+3H+2`: each validator transport hop owns generic, ordinary Progress,
+`5N+3H`: each validator transport hop owns generic, ordinary Progress,
 certified-fence-escape, TimeoutVote, and TransportCompletion positions; each of
 the at most `H` simultaneously materialized authenticated non-validator lanes
-owns generic, certified-fence-escape, and TransportCompletion positions; and
-the persistent anonymous lane owns the final pair. The no-roster diagnostic
-minimum is `3H+1`. Semantic origin remains
+owns generic, certified-fence-escape, and TransportCompletion positions.
+Identityless ingress owns no capacity partition; the no-roster diagnostic
+minimum is `3H`. Semantic origin remains
 available to the protocol, but authenticated `via` owns count, bytes, fairness,
 and reservations, so relay identity churn cannot multiply capacity or borrow a
 validator reserve. Semantic duplicate/alternate-route attachment precedes the
@@ -26943,10 +26968,10 @@ feature-independent 8,258-byte raw public-key ceiling covers non-roster
 observers and rotated responders. Configure and open both fail closed when any
 count, byte partition, topic frame, global encrypted frame, or queue owner is
 undersized. Shipping defaults are 17 MiB for global/consensus/block-sync,
-2 MiB for control, `H=2`, 518 ingress entries, a 33 MiB source partition, and
-231 MiB aggregate body ownership. Kagami localnet scales aggregate
-body bytes by `N + H + 1` and reject validator rosters above the protocol
-maximum of 128. The independent P2P wire-prefix boundary is also closed: the
+2 MiB for control, `H=2`, 161 ingress entries, a 33 MiB source partition, and
+231 MiB aggregate body ownership. Kagami localnet scales aggregate body bytes
+by `N + H` and rejects validator rosters above the protocol maximum of 31. The
+independent P2P wire-prefix boundary is also closed: the
 wire body has the inclusive `u32::MAX` ceiling, while runtime configuration is
 limited to a deterministic 2,147,483,643-byte body so prefix plus body remains
 representable in one buffer on 32-bit and 64-bit hosts. Daemon and network

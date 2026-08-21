@@ -1215,7 +1215,6 @@ allow_tool_prefixes = ["iroha."]
     let source_partitions = peers
         .len()
         .checked_add(authenticated_non_validator_sources)
-        .and_then(|count| count.checked_add(1))
         .expect("profile ingress source-partition count must fit usize");
     let body_bytes = source_partitions
         .checked_mul(body_source_bytes)
@@ -2758,7 +2757,6 @@ mod tests {
             let expected_body_bytes = peers
                 .len()
                 .checked_add(authenticated_non_validator_sources)
-                .and_then(|count| count.checked_add(1))
                 .and_then(|count| count.checked_mul(body_source_bytes))
                 .expect("test profile ingress geometry fits usize")
                 .max(default_body_bytes);
@@ -2769,7 +2767,7 @@ mod tests {
                      body_bytes = {expected_body_bytes}\n\
                      body_source_bytes = {body_source_bytes}\n"
                 )),
-                "profile {} must allocate one isolated byte partition per validator, authenticated non-validator source, and anonymous source",
+                "profile {} must allocate one isolated byte partition per validator and authenticated non-validator source",
                 profile.slug
             );
         }

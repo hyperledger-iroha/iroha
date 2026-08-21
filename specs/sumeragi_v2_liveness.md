@@ -561,13 +561,11 @@ restore all five reservations after any service step. Each simultaneously
 materialized authenticated non-validator lane has three owners: one generic
 message slot, one certified-fence-escape slot, and one TransportCompletion slot for either a current-roster
 completion forwarded through that source or a proof-carrying historical lane
-response from an authenticated predecessor signer. The anonymous lane has the
-same two owners when the roster is non-empty, while its no-roster diagnostic
-geometry needs only the generic slot because no anonymous completion can be
-valid. If `H` is the
-configured maximum number of simultaneously materialized authenticated
-non-validator lanes, the exact non-empty-roster count minimum is therefore
-`5 * roster_len + 3 * H + 2`; the no-roster minimum is `3 * H + 1`.
+response from an authenticated predecessor signer. Identityless ingress has no
+production lane or capacity partition. If `H` is the configured maximum number
+of simultaneously materialized authenticated non-validator lanes, the exact
+count minimum is therefore `5 * roster_len + 3 * H`; setting `roster_len = 0`
+gives the diagnostic minimum `3 * H`.
 `H` is independent of exact-output reply-route capacity `R`, which is derived
 from the effective `network.max_total_connections`. Root validation resolves
 the selected lane profile before deriving `R`, so `lane_profile = "home"` with
@@ -600,9 +598,9 @@ the coalescing authority ends when the consumer removes the queued occurrence.
 
 Count bounds are paired with canonical-wire byte bounds. The
 `sumeragi.queues.body_source_bytes` quota isolates each frozen-roster validator,
-each of the `H` authenticated non-validator source lanes, and the anonymous
-lane, while `sumeragi.queues.body_bytes` bounds their aggregate ownership at no
-less than `(roster_len + H + 1) * body_source_bytes`. Roster installation fails
+and each of the `H` authenticated non-validator source lanes, while
+`sumeragi.queues.body_bytes` bounds their aggregate ownership at no less than
+`(roster_len + H) * body_source_bytes`. Roster installation fails
 closed if the aggregate cannot provide every source partition. Each
 authenticated source retains an isolated certified-fence-escape byte reserve;
 each validator additionally retains an isolated timeout-vote byte reserve, and
@@ -687,18 +685,18 @@ aggregate, consensus-topic, control-topic, block-sync-topic, or outbound-high
 requirement is undersized. Production defaults are 17 MiB for the global
 encrypted cap and the configured consensus and block-sync topic caps, 2 MiB
 for control, 128 MiB per peer for the high-priority encrypted-frame queue, and
-130 outer-ingress entries (`4 * 31 + 2 * 2 + 2`). The effective consensus and
+161 outer-ingress entries (`5 * 31 + 3 * 2`). The effective consensus and
 block-sync plaintext ceiling is the 17 MiB global cap minus the 28-byte AEAD
 expansion.
 
 Kagami-generated localnets inherit those 17/17/2/17 MiB frame caps, the
-130-entry count bound, and a 33 MiB per-source byte partition. They accept only
+161-entry count bound, and a 33 MiB per-source byte partition. They accept only
 exact `3f + 1` rosters from 4 through 31 validators and set aggregate
-body-ingress bytes from the validator, authenticated non-validator, and
-anonymous source partitions, retaining the reviewed four-validator floor.
-The checked-in Taira template carries the same four-validator per-source
-baseline. Disposable Taira networks inherit their full geometry directly from
-Kagami instead of passing through a second renderer.
+body-ingress bytes from the validator and authenticated non-validator source
+partitions, giving a 198 MiB four-validator baseline when `H = 2`. The checked-in
+Taira template carries the same four-validator per-source baseline. Disposable
+Taira networks inherit their full 4, 7, 10, …, 31 geometry directly from Kagami
+instead of passing through a second renderer.
 
 The peer sender extends that ownership boundary through encrypted stream I/O.
 It retains at most one bounded plaintext retry in each safety, ordinary-high,
@@ -1582,8 +1580,8 @@ fail-stop regressions are pinned alongside them in the current inventory.
 Daemon saturation now returns the exact occurrence to its durable remote
 source under an explicit source-release disposition; the former route-era
 "reconstruction" names are retired and no capability is synthesized.
-The current inventory retains the five-per-validator, three-per-materialized
-authenticated-non-validator, and two-anonymous owners (`5N+3H+2` total)
+The current inventory retains the five-per-validator and
+three-per-materialized-authenticated-non-validator owners (`5N+3H` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
@@ -1811,7 +1809,7 @@ adapter-owned successor activation, runner ingress
 handoff, watchdog predecessor/successor separation, and recovery-derived
 successor identity. The worker leg also pins rejection of an unissued future
 physical acquisition and exact latest-consumer rebind across unavailable-body
-recovery. The authoritative ingress leg pins `5N+3H+2` count potential, the
+recovery. The authoritative ingress leg pins `5N+3H` count potential, the
 certified-fence-escape, TimeoutVote, and TransportCompletion byte reserves, frozen-layout wire-size
 activation, cross-validator isolation, and fair service; the
 adapter/runtime legs pin the independent `2N+3` Busy-deferred partitions and
